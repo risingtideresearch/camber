@@ -5,8 +5,9 @@
   "description": "Constant-camber boat-hull line drawing tool",
   "type": "module",
   "scripts": {
-    "build": "esbuild src/main.ts --bundle --format=esm --outfile=dist/camber.js --sourcemap",
+    "build": "esbuild src/main.ts --bundle --format=esm --outfile=dist/camber.js --sourcemap && esbuild src/interp.ts --bundle --format=esm --outfile=dist/interpolate.js --sourcemap",
     "watch": "esbuild src/main.ts --bundle --format=esm --outfile=dist/camber.js --sourcemap --watch",
+    "watch:interp": "esbuild src/interp.ts --bundle --format=esm --outfile=dist/interpolate.js --sourcemap --watch",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

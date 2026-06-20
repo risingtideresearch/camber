@@ -4,6 +4,7 @@ import { resetModel, state } from "./model.js";
 import { render, draw3d } from "./render.js";
 import { initInteraction } from "./interaction.js";
 import { downloadStep } from "./step.js";
+import { downloadJson, importJson } from "./json.js";
 
 function reset(): void {
   resetModel();
@@ -34,6 +35,18 @@ exportStep.addEventListener("click", () => {
     alert("STEP export failed: " + (e instanceof Error ? e.message : String(e)));
   }
 });
+
+const exportJson = document.getElementById("exportJson") as HTMLButtonElement;
+exportJson.addEventListener("click", () => {
+  try {
+    downloadJson();
+  } catch (e) {
+    alert("JSON export failed: " + (e instanceof Error ? e.message : String(e)));
+  }
+});
+
+const importJsonBtn = document.getElementById("importJson") as HTMLButtonElement;
+importJsonBtn.addEventListener("click", () => importJson(render));
 
 initInteraction();
 reset();

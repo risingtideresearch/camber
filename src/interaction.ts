@@ -19,7 +19,7 @@ import { svgL, svgP, svgA, svgF, cv3d } from "./dom.js";
 import { render, draw3d } from "./render.js";
 
 interface Drag {
-  kind: "slider" | "sheer" | "trim" | "transom" | "stn" | "rot";
+  kind: "slider" | "sheer" | "trim" | "transom" | "stn" | "knuckle" | "rot";
   svg?: SVGSVGElement;
   vbw?: number;
   vbh?: number;
@@ -27,6 +27,7 @@ interface Drag {
   which?: "aft" | "fore";
   px0?: number;
   py0?: number;
+  k0?: number;
   yaw0?: number;
   pitch0?: number;
 }
@@ -36,7 +37,7 @@ let drag: Drag | null = null;
 const isStn = (svg: SVGSVGElement): boolean => svg === svgA || svg === svgF;
 
 export function startDrag(
-  d: { kind: Drag["kind"]; idx?: number; which?: "aft" | "fore" },
+  d: { kind: Drag["kind"]; idx?: number; which?: "aft" | "fore"; k0?: number },
   svg: SVGSVGElement,
   e: PointerEvent,
 ): void {
@@ -45,7 +46,20 @@ export function startDrag(
     svg,
     vbw: isStn(svg) ? STW : 1000,
     vbh: isStn(svg) ? STH : svg === svgP ? PH : LH,
+    px0: e.clientX, // anchor for relative (horizontal) drags like the knuckle edit
   };
+  // mark the acted-on control point so the renderer can highlight it
+  const tgt =
+    d.kind === "sheer"
+      ? "plan"
+      : d.kind === "trim"
+        ? "trim"
+        : d.kind === "transom"
+          ? "transom"
+          : d.kind === "stn" || d.kind === "knuckle"
+            ? d.which!
+            : null;
+  state.active = tgt ? { tgt, idx: d.idx! } : null;
   e.stopPropagation();
   e.preventDefault();
 }
@@ -131,31 +145,32 @@ function addStationPoint(which: "aft" | "fore", n: number, d: number): void {
       bt = t;
     }
   }
-  arr.splice(best, 0, { n: clamp(n, NMIN, NMAX), d: clamp(d, 0, DMAX), c: false });
+  arr.splice(best, 0, { n: clamp(n, NMIN, NMAX), d: clamp(d, 0, DMAX), k: 0 });
   const oa = other[best - 1],
     ob = other[best];
-  other.splice(best, 0, { n: lerp(oa.n, ob.n, bt), d: lerp(oa.d, ob.d, bt), c: false });
+  other.splice(best, 0, { n: lerp(oa.n, ob.n, bt), d: lerp(oa.d, ob.d, bt), k: 0 });
 }
 function removeStationPoint(idx: number): void {
   if (state.AFT.length <= 3 || idx <= 0 || idx >= state.AFT.length - 1) return; // keep the sheer point and the deepest point
   state.AFT.splice(idx, 1);
   state.FORE.splice(idx, 1);
 }
-function toggleStationCorner(idx: number): void {
-  // corner ⇒ kink; two adjacent corners ⇒ straight
-  const c = !state.AFT[idx].c;
-  state.AFT[idx].c = c;
-  state.FORE[idx].c = c;
-}
 
-// ---------- edit tools: move / pen / delete / corner ----------
+// ---------- edit tools: move / pen / delete / knuckle ----------
 function vbCoords(svg: SVGSVGElement, e: PointerEvent, w: number, h: number): [number, number] {
   const r = svg.getBoundingClientRect();
   return [((e.clientX - r.left) * w) / r.width, ((e.clientY - r.top) * h) / r.height];
 }
 
 function setToolCursor(): void {
-  const cur = state.tool === "pen" ? "crosshair" : state.tool === "move" ? "default" : "pointer";
+  const cur =
+    state.tool === "pen"
+      ? "crosshair"
+      : state.tool === "move"
+        ? "default"
+        : state.tool === "knuckle"
+          ? "ew-resize"
+          : "pointer";
   [svgL, svgP, svgA, svgF].forEach((s) => (s.style.cursor = cur));
 }
 
@@ -183,10 +198,11 @@ export function stnPointDown(
     render();
     return;
   }
-  if (state.tool === "corner") {
-    toggleStationCorner(idx);
-    setTool("move");
-    render();
+  if (state.tool === "knuckle") {
+    // drag left/right across the point to set its knuckle (0 = smooth, 1 = hard corner)
+    const arr = which === "aft" ? state.AFT : state.FORE;
+    if (idx > 0 && idx < arr.length - 1)
+      startDrag({ kind: "knuckle", which, idx, k0: arr[idx].k }, svg, e);
     return;
   }
   if (state.tool === "move" && !end) startDrag({ kind: "stn", which, idx }, svg, e);
@@ -199,10 +215,10 @@ export function sheerPointDown(idx: number, svg: SVGSVGElement, e: PointerEvent)
     render();
     return;
   }
-  if (state.tool === "corner") {
+  if (state.tool === "knuckle") {
     setTool("move");
     return;
-  } // the sheer has no corner points
+  } // the sheer has no knuckle points
   if (state.tool === "move") startDrag({ kind: "sheer", idx }, svg, e);
 }
 export function trimPointDown(idx: number, svg: SVGSVGElement, e: PointerEvent): void {
@@ -213,10 +229,10 @@ export function trimPointDown(idx: number, svg: SVGSVGElement, e: PointerEvent):
     render();
     return;
   }
-  if (state.tool === "corner") {
+  if (state.tool === "knuckle") {
     setTool("move");
     return;
-  } // the sheer trim has no corner points
+  } // the sheer trim has no knuckle points
   if (state.tool === "move") startDrag({ kind: "trim", idx }, svg, e);
 }
 export function transomPointDown(idx: number, svg: SVGSVGElement, e: PointerEvent): void {
@@ -267,10 +283,22 @@ export function initInteraction(): void {
       const lo = arr[i - 1].d,
         hi = i < arr.length - 1 ? arr[i + 1].d : DMAX; // keep d descending so the section never curls up
       cp.d = clamp(invD(vy), lo, hi);
+    } else if (drag.kind === "knuckle") {
+      // horizontal drag sets the knuckle: right → harder (k→1), left → smoother (k→0).
+      const arr = drag.which === "aft" ? state.AFT : state.FORE,
+        w = drag.svg!.getBoundingClientRect().width || 1,
+        dk = (e.clientX - drag.px0!) / (w * 0.5); // half the panel width = full 0..1 sweep
+      arr[drag.idx!].k = clamp(drag.k0! + dk, 0, 1);
     }
     render();
   });
-  window.addEventListener("pointerup", () => (drag = null));
+  window.addEventListener("pointerup", () => {
+    drag = null;
+    if (state.active) {
+      state.active = null; // drop the highlight
+      render();
+    }
+  });
 
   // pen: click empty space in an editor to add a point there, then return to the move tool
   svgL.addEventListener("pointerdown", (e) => {

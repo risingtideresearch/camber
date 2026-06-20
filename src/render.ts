@@ -14,9 +14,10 @@ import {
   transomEdge,
   xTransom,
   chordParam,
-  pieceEval,
+  knuckleEval,
   type Section,
   type StationCP,
+  type ActiveTarget,
 } from "./model.js";
 import {
   PXpad,
@@ -418,10 +419,10 @@ function drawStation(
   const curve = (pts: StationCP[], c: string, op: number, dash?: string) => {
     const ns = pts.map((p) => p.n),
       ds = pts.map((p) => p.d),
-      cor = pts.map((p) => !!p.c),
+      ks = pts.map((p) => p.k),
       ts = chordParam(ns, ds);
-    const nf = pieceEval(ts, ns, cor),
-      df = pieceEval(ts, ds, cor),
+    const nf = knuckleEval(ts, ns, ks),
+      df = knuckleEval(ts, ds, ks),
       tm = ts[ts.length - 1],
       out: [number, number][] = [],
       N = 120;
@@ -446,25 +447,23 @@ function drawStation(
   curve(arr, col, 1); // this station
   arr.forEach((p, idx) => {
     const end = idx === 0,
-      s = end ? 4 : 6;
-    const node = p.c
-      ? el("rect", {
-          x: snX(p.n) - s,
-          y: snY(p.d) - s,
-          width: 2 * s,
-          height: 2 * s,
-          fill: end ? "#fff" : col,
-          stroke: end ? col : "#fff",
-          "stroke-width": 1.8,
-        })
-      : el("circle", {
-          cx: snX(p.n),
-          cy: snY(p.d),
-          r: s,
-          fill: end ? "#fff" : col,
-          stroke: end ? col : "#fff",
-          "stroke-width": 1.8,
-        });
+      s = end ? 4 : 6,
+      // knuckle applies only to interior points; node morphs round (k=0) → square (k=1) via corner radius
+      inner = idx > 0 && idx < arr.length - 1,
+      k = inner ? Math.min(Math.max(p.k, 0), 1) : 0,
+      rad = (1 - k) * s;
+    halo(svg, which, idx, snX(p.n), snY(p.d), s + 4);
+    const node = el("rect", {
+      x: snX(p.n) - s,
+      y: snY(p.d) - s,
+      width: 2 * s,
+      height: 2 * s,
+      rx: rad,
+      ry: rad,
+      fill: end ? "#fff" : col,
+      stroke: end ? col : "#fff",
+      "stroke-width": 1.8,
+    });
     node.addEventListener("pointerdown", (e) => stnPointDown(which, idx, end, svg, e));
     svg.append(node);
   });
@@ -989,17 +988,31 @@ export function draw3d(rebuild?: boolean): void {
 }
 
 // ---------- control-point dots ----------
+const HILITE = "#f59e0b"; // accent ring on the control point a tool is currently acting on
+
+// draw a halo behind a control point if it is the one being acted on by a tool
+function halo(svg: SVGSVGElement, tgt: ActiveTarget, idx: number, sx: number, sy: number, r: number): void {
+  const a = state.active;
+  if (!a || a.tgt !== tgt || a.idx !== idx) return;
+  svg.append(
+    el("circle", { cx: sx, cy: sy, r, fill: "none", stroke: HILITE, "stroke-width": 3, opacity: 0.95 }),
+  );
+}
+
 function cpDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
+  halo(svg, "plan", idx, sx, sy, 9);
   const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: COL.sheer, stroke: "#fff", "stroke-width": 1.5 });
   c.addEventListener("pointerdown", (e) => sheerPointDown(idx, svg, e));
   svg.append(c);
 }
 function trimDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
+  halo(svg, "trim", idx, sx, sy, 9);
   const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: COL.sheer, stroke: "#fff", "stroke-width": 1.5 });
   c.addEventListener("pointerdown", (e) => trimPointDown(idx, svg, e));
   svg.append(c);
 }
 function transomDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
+  halo(svg, "transom", idx, sx, sy, 9);
   const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: "var(--transom)", stroke: "#fff", "stroke-width": 1.5 });
   c.addEventListener("pointerdown", (e) => transomPointDown(idx, svg, e));
   svg.append(c);

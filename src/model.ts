@@ -2,7 +2,7 @@
 
 import { clamp, lerp, V, type Vec3 } from "./math.js";
 import { hobbySamplerX } from "./hobby.js";
-import { pchipSlopes, hermiteEval } from "./pchip.js";
+import { knuckleSlopes, hermiteEvalLR } from "./pchip.js";
 
 // ---------- types ----------
 export interface SheerCP {
@@ -20,7 +20,7 @@ export interface TransomCP {
 export interface StationCP {
   n: number;
   d: number;
-  c: boolean;
+  k: number; // knuckle ∈ [0,1]: 0 = smooth, 1 = hard corner; blends. (ignored on the end points)
 }
 export interface Sheer {
   cp: SheerCP[];
@@ -79,24 +79,30 @@ const TRANSOM_DEF: [number, number][] = [
 ];
 // station sections in the local frame: d = down from the sheer, n = inboard offset. Point 0 = sheer,
 // pinned at the origin. The curve descends from the sheer; the centerline clip closes the bottom.
-const AFT_DEF: [number, number][] = [
-  [0, 0],
-  [90, 320],
-  [260, 640],
-  [560, 880],
-  [980, 1000],
-]; // fuller (transom)
-const FORE_DEF: [number, number][] = [
-  [0, 0],
-  [150, 430],
-  [400, 840],
-  [720, 1120],
-  [1020, 1220],
-]; // deeper / finer (bow)
+// [n, d, k] — k is the knuckle at that point (ignored on point 0 and the last point). The bilge point
+// (index 2) is a hard chine aft (k=1) that fades to a round bilge forward (k=0): a hard-chine planing
+// stern blending into a soft bow along the length of the one hull.
+const AFT_DEF: [number, number, number][] = [
+  [0, 0, 0],
+  [90, 320, 0],
+  [260, 640, 1],
+  [560, 880, 0],
+  [980, 1000, 0],
+]; // fuller (transom), hard chine at the bilge
+const FORE_DEF: [number, number, number][] = [
+  [0, 0, 0],
+  [150, 430, 0],
+  [400, 840, 0],
+  [720, 1120, 0],
+  [1020, 1220, 0],
+]; // deeper / finer (bow), round bilge
 
 // ---------- mutable model + view state ----------
-export type Tool = "move" | "pen" | "delete" | "corner";
+export type Tool = "move" | "pen" | "delete" | "knuckle";
 export type View3D = "trimmed" | "sheet";
+
+// which control point a tool is currently acting on, so the renderer can highlight it
+export type ActiveTarget = "plan" | "trim" | "transom" | "aft" | "fore";
 
 export interface State {
   sheer: Sheer;
@@ -107,6 +113,7 @@ export interface State {
   view3d: View3D;
   zebra: boolean;
   tool: Tool;
+  active: { tgt: ActiveTarget; idx: number } | null;
 }
 
 export const state: State = {
@@ -118,6 +125,7 @@ export const state: State = {
   view3d: "trimmed", // "trimmed" = clipped + mirrored hull; "sheet" = untrimmed one side
   zebra: false, // zebra-stripe fairness check on the 3D surface
   tool: "move",
+  active: null, // the control point currently being dragged/edited (highlighted in the editors)
 };
 
 export function resetModel(): void {
@@ -128,8 +136,8 @@ export function resetModel(): void {
     yf: () => 0,
     zf: () => 0,
   };
-  state.AFT = AFT_DEF.map((c) => ({ n: c[0], d: c[1], c: false }));
-  state.FORE = FORE_DEF.map((c) => ({ n: c[0], d: c[1], c: false }));
+  state.AFT = AFT_DEF.map((c) => ({ n: c[0], d: c[1], k: c[2] }));
+  state.FORE = FORE_DEF.map((c) => ({ n: c[0], d: c[1], k: c[2] }));
   state.x0 = 2000;
 }
 
@@ -165,55 +173,35 @@ export function chordParam(ns: number[], ds: number[]): number[] {
   return ts;
 }
 
-// piecewise monotone-Hermite evaluator: the curve is split into independent PCHIP runs at "corner"
-// points, so corners are kinks, runs never overshoot, and a two-point run comes out perfectly straight.
-export function pieceEval(
+// knuckle-aware monotone-Hermite evaluator: one continuous Hermite chain with per-point left/right
+// tangents blended toward the secants by k. k=0 is plain (smooth) PCHIP; an isolated k=1 is a knuckle; two
+// adjacent k=1 points bound a perfectly straight segment. Replaces the old run-splitting corner model.
+export function knuckleEval(
   ts: number[],
   fs: number[],
-  corners: boolean[],
+  ks: number[],
 ): (u: number) => number {
-  const n = ts.length,
-    bnd = [0];
-  for (let i = 1; i < n - 1; i++) if (corners[i]) bnd.push(i);
-  bnd.push(n - 1);
-  const runs: {
-    t0: number;
-    t1: number;
-    tt: number[];
-    ff: number[];
-    m: number[];
-  }[] = [];
-  for (let k = 0; k < bnd.length - 1; k++) {
-    const a = bnd[k],
-      b = bnd[k + 1],
-      tt = ts.slice(a, b + 1),
-      ff = fs.slice(a, b + 1);
-    runs.push({ t0: ts[a], t1: ts[b], tt, ff, m: pchipSlopes(tt, ff) });
-  }
-  return (u: number) => {
-    let r = runs[0];
-    for (const rr of runs) {
-      r = rr;
-      if (u <= rr.t1 + 1e-9) break;
-    }
-    return hermiteEval(r.tt, r.ff, r.m, clamp(u, r.t0, r.t1));
-  };
+  const { L: lo, R: hi } = knuckleSlopes(ts, fs, ks),
+    t0 = ts[0],
+    t1 = ts[ts.length - 1];
+  return (u: number) => hermiteEvalLR(ts, fs, lo, hi, clamp(u, t0, t1));
 }
 
-// the blended station section at x, as continuous n(u)/d(u) over u in [0,tmax], corner-aware
+// the blended station section at x, as continuous n(u)/d(u) over u in [0,tmax]. The knuckle value k is
+// blended along the hull just like n and d, so a chine can fade from hard (aft) to soft (fore).
 export function stationAt(x: number): Station {
   const f = clamp(x / L, 0, 1),
     m = state.AFT.length,
     ns: number[] = [],
     ds: number[] = [],
-    cor: boolean[] = [];
+    ks: number[] = [];
   for (let i = 0; i < m; i++) {
     ns.push(lerp(state.AFT[i].n, state.FORE[i].n, f));
     ds.push(lerp(state.AFT[i].d, state.FORE[i].d, f));
-    cor.push(!!state.AFT[i].c);
+    ks.push(lerp(state.AFT[i].k, state.FORE[i].k, f));
   }
   const ts = chordParam(ns, ds);
-  return { tmax: ts[m - 1], n: pieceEval(ts, ns, cor), d: pieceEval(ts, ds, cor) };
+  return { tmax: ts[m - 1], n: knuckleEval(ts, ns, ks), d: knuckleEval(ts, ds, ks) };
 }
 
 // the transom plane in profile: longitudinal position x of the cut at height z (linear through the two

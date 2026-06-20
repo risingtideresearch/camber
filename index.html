@@ -17,7 +17,8 @@
   header{padding:16px 24px 0;}
   header h1{margin:0;font-size:18px;}
   header p{margin:4px 0 0;color:var(--mut);font-size:13px;max-width:820px;}
-  .wrap{display:flex;flex-direction:column;gap:14px;padding:14px 24px 32px;max-width:1500px;}
+  .wrap{display:flex;flex-direction:column;gap:14px;padding:14px 24px 32px;max-width:1500px;
+        user-select:none;-webkit-user-select:none;} /* drawing tool: don't select text while dragging */
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;}
   .card.aftcard{border-top:3px solid var(--aft);}
   .card.forecard{border-top:3px solid var(--fore);}
@@ -63,11 +64,13 @@
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M10.5 2.3l3.2 3.2-8 8-3.7.5.5-3.7z"/><path d="M9 3.8l3.2 3.2"/></svg>Pen</button>
         <button class="tool" data-tool="delete" title="Delete — remove points">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M3 4.3h10M6 4.3V2.4h4v1.9M4.8 4.3l.7 9.3h5l.7-9.3M6.6 6.6v4.6M9.4 6.6v4.6"/></svg>Delete</button>
-        <button class="tool" data-tool="corner" title="Corner — toggle straight segment">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M3.4 2.6v10h10"/><rect x="2" y="1.2" width="2.8" height="2.8" fill="currentColor" stroke="none"/><rect x="11.2" y="11.1" width="2.8" height="2.8" fill="currentColor" stroke="none"/></svg>Corner</button>
+        <button class="tool" data-tool="knuckle" title="Knuckle — drag left/right across a point: left = smooth, right = hard corner">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M3.4 2.6v10h10"/><rect x="2" y="1.2" width="2.8" height="2.8" fill="currentColor" stroke="none"/><rect x="11.2" y="11.1" width="2.8" height="2.8" fill="currentColor" stroke="none"/></svg>Knuckle</button>
       </div>
       <button id="reset">Reset</button>
       <button id="exportStep" title="Export the hull surfaces as a STEP (ISO 10303) file">Export STEP</button>
+      <button id="exportJson" title="Export the editable hull model (sheer, transom, aft/fore stations) as JSON">Export JSON</button>
+      <button id="importJson" title="Load a hull model from a JSON file (replaces the current model)">Import JSON</button>
       <div class="legend">
         <div><span class="sw" style="background:var(--sheer)"></span>Sheer (plan &amp; trim)</div>
         <div><span class="sw" style="background:var(--deck)"></span>Flat deck (ref)</div>
