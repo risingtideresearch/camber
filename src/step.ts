@@ -1,0 +1,420 @@
+// ---------- STEP (ISO 10303-21, AP214) export of the trimmed hull ----------
+// The hull is sampled into a rectangular grid of stations (u) × along-section points (v). A genuine
+// bicubic B-spline surface is interpolated through that grid (Piegl & Tiller, "The NURBS Book",
+// Algorithm A9.4 — global surface interpolation), so the exported surface passes exactly through the
+// station sections and is fair between them. The starboard half is emitted as one B_SPLINE_SURFACE_-
+// WITH_KNOTS face; the port half is its y-mirror; the transom is a single planar face. All three live
+// in one OPEN_SHELL (the hull is open along the deck/sheer edge).
+
+import { V, type Vec3 } from "./math.js";
+import { L, sweptSection, transomEdge, state, prepare } from "./model.js";
+
+// ---------- B-spline numerics ----------
+
+// largest knot span index containing u (Piegl & Tiller A2.1)
+function findSpan(n: number, p: number, u: number, U: number[]): number {
+  if (u >= U[n + 1]) return n;
+  if (u <= U[p]) return p;
+  let low = p,
+    high = n + 1,
+    mid = (low + high) >> 1;
+  while (u < U[mid] || u >= U[mid + 1]) {
+    if (u < U[mid]) high = mid;
+    else low = mid;
+    mid = (low + high) >> 1;
+  }
+  return mid;
+}
+
+// the p+1 nonzero basis functions at u, for indices [span-p .. span] (A2.2)
+function basisFuns(span: number, u: number, p: number, U: number[]): number[] {
+  const N = new Array(p + 1).fill(0),
+    left = new Array(p + 1).fill(0),
+    right = new Array(p + 1).fill(0);
+  N[0] = 1;
+  for (let j = 1; j <= p; j++) {
+    left[j] = u - U[span + 1 - j];
+    right[j] = U[span + j] - u;
+    let saved = 0;
+    for (let r = 0; r < j; r++) {
+      const temp = N[r] / (right[r + 1] + left[j - r]);
+      N[r] = saved + right[r + 1] * temp;
+      saved = left[j - r] * temp;
+    }
+    N[j] = saved;
+  }
+  return N;
+}
+
+// chord-length parameters through a set of points, normalised to [0,1]
+function chordParams(pts: Vec3[]): number[] {
+  const n = pts.length,
+    d: number[] = [0];
+  let total = 0;
+  for (let i = 1; i < n; i++) {
+    total += Math.max(Math.hypot(...V.sub(pts[i], pts[i - 1])), 1e-9);
+    d.push(total);
+  }
+  return d.map((x) => x / (total || 1));
+}
+
+// averaged parameters across a family of point rows (A9.3-style averaging)
+function averagedParams(rows: Vec3[][]): number[] {
+  const cnt = rows[0].length,
+    acc = new Array(cnt).fill(0);
+  for (const r of rows) {
+    const t = chordParams(r);
+    for (let i = 0; i < cnt; i++) acc[i] += t[i];
+  }
+  return acc.map((x) => x / rows.length);
+}
+
+// clamped knot vector from data parameters by averaging (Eq. 9.8)
+function knotsFromParams(ub: number[], p: number): number[] {
+  const n = ub.length - 1,
+    U: number[] = [];
+  for (let i = 0; i <= p; i++) U.push(0);
+  for (let j = 1; j <= n - p; j++) {
+    let s = 0;
+    for (let i = j; i <= j + p - 1; i++) s += ub[i];
+    U.push(s / p);
+  }
+  for (let i = 0; i <= p; i++) U.push(1);
+  return U;
+}
+
+// LU decomposition (Doolittle, partial pivoting) of a square matrix, in place on a copy
+function luDecompose(A: number[][]): { LU: number[][]; piv: number[] } {
+  const n = A.length,
+    LU = A.map((r) => r.slice()),
+    piv = Array.from({ length: n }, (_, i) => i);
+  for (let k = 0; k < n; k++) {
+    let mx = Math.abs(LU[k][k]),
+      pr = k;
+    for (let i = k + 1; i < n; i++)
+      if (Math.abs(LU[i][k]) > mx) {
+        mx = Math.abs(LU[i][k]);
+        pr = i;
+      }
+    if (pr !== k) {
+      [LU[k], LU[pr]] = [LU[pr], LU[k]];
+      [piv[k], piv[pr]] = [piv[pr], piv[k]];
+    }
+    const d = LU[k][k] || 1e-12;
+    for (let i = k + 1; i < n; i++) {
+      LU[i][k] /= d;
+      for (let j = k + 1; j < n; j++) LU[i][j] -= LU[i][k] * LU[k][j];
+    }
+  }
+  return { LU, piv };
+}
+function luSolve(LU: number[][], piv: number[], b: number[]): number[] {
+  const n = LU.length,
+    y = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    let s = b[piv[i]];
+    for (let j = 0; j < i; j++) s -= LU[i][j] * y[j];
+    y[i] = s;
+  }
+  const x = new Array(n).fill(0);
+  for (let i = n - 1; i >= 0; i--) {
+    let s = y[i];
+    for (let j = i + 1; j < n; j++) s -= LU[i][j] * x[j];
+    x[i] = s / (LU[i][i] || 1e-12);
+  }
+  return x;
+}
+
+// collocation matrix N[k][i] = N_{i,p}(ub[k]) for a clamped curve through ub with knots U
+function collocation(ub: number[], p: number, U: number[]): number[][] {
+  const n = ub.length - 1,
+    A = Array.from({ length: n + 1 }, () => new Array(n + 1).fill(0));
+  for (let k = 0; k <= n; k++) {
+    const span = findSpan(n, p, ub[k], U),
+      bf = basisFuns(span, ub[k], p, U);
+    for (let t = 0; t <= p; t++) A[k][span - p + t] = bf[t];
+  }
+  return A;
+}
+
+// global bicubic interpolation: returns the (nu+1)×(nv+1) control net through grid Q plus the knots
+function interpSurface(Q: Vec3[][]): {
+  net: Vec3[][];
+  p: number;
+  q: number;
+  U: number[];
+  Vk: number[];
+} {
+  const nu = Q.length - 1,
+    nv = Q[0].length - 1,
+    p = Math.min(3, nu),
+    q = Math.min(3, nv);
+  const ub = averagedParams(transpose(Q)), // u runs across stations → average down columns
+    vb = averagedParams(Q); // v runs along a station → average across rows
+  const U = knotsFromParams(ub, p),
+    Vk = knotsFromParams(vb, q);
+  const mk = (): number[][] =>
+    Array.from({ length: nu + 1 }, () => new Array<number>(nv + 1).fill(0));
+
+  // pass 1: interpolate down u for each column l → intermediate control points R[i][l] (per coord)
+  const Au = luDecompose(collocation(ub, p, U)),
+    R = [mk(), mk(), mk()];
+  for (let l = 0; l <= nv; l++)
+    for (let c = 0; c < 3; c++) {
+      const sol = luSolve(Au.LU, Au.piv, Q.map((row) => row[l][c]));
+      for (let i = 0; i <= nu; i++) R[c][i][l] = sol[i];
+    }
+  // pass 2: interpolate along v for each row i → final control net P[i][l] (per coord)
+  const Av = luDecompose(collocation(vb, q, Vk)),
+    P = [mk(), mk(), mk()];
+  for (let i = 0; i <= nu; i++)
+    for (let c = 0; c < 3; c++) {
+      const sol = luSolve(Av.LU, Av.piv, R[c][i]);
+      for (let l = 0; l <= nv; l++) P[c][i][l] = sol[l];
+    }
+  const net: Vec3[][] = Array.from({ length: nu + 1 }, (_, i) =>
+    Array.from({ length: nv + 1 }, (_, l): Vec3 => [P[0][i][l], P[1][i][l], P[2][i][l]]),
+  );
+  return { net, p, q, U, Vk };
+}
+
+function transpose(Q: Vec3[][]): Vec3[][] {
+  const r = Q.length,
+    c = Q[0].length,
+    out: Vec3[][] = Array.from({ length: c }, () => new Array(r));
+  for (let i = 0; i < r; i++) for (let j = 0; j < c; j++) out[j][i] = Q[i][j];
+  return out;
+}
+
+// a full knot vector → distinct values and their multiplicities (STEP wants the compressed form)
+function compressKnots(U: number[]): { knots: number[]; mults: number[] } {
+  const knots: number[] = [],
+    mults: number[] = [];
+  for (const u of U) {
+    const last = knots.length - 1;
+    if (last >= 0 && Math.abs(u - knots[last]) < 1e-12) mults[last]++;
+    else {
+      knots.push(u);
+      mults.push(1);
+    }
+  }
+  return { knots, mults };
+}
+
+// ---------- hull sampling ----------
+
+// a rectangular grid of trimmed starboard sections (rows = stations fore→aft, M+1 points each), keeping
+// only the sections that actually carry hull (skip the ones cut away entirely by the transom)
+function hullGrid(NS: number, M: number): Vec3[][] {
+  const rows: Vec3[][] = [];
+  for (let i = 0; i <= NS; i++) {
+    const x = (L * i) / NS,
+      s = sweptSection(x, M, true);
+    if (!s.aft) rows.push(s.pts);
+  }
+  // drop accidental duplicate stations (coincident rows break the interpolation matrix)
+  const out: Vec3[][] = [];
+  for (const r of rows) {
+    const prev = out[out.length - 1];
+    if (!prev || Math.hypot(...V.sub(r[0], prev[0])) > 1e-6) out.push(r);
+  }
+  return out;
+}
+
+// ---------- STEP text builder ----------
+
+function fmt(x: number): string {
+  const v = Math.abs(x) < 1e-9 ? 0 : x;
+  return String(+v.toFixed(6));
+}
+
+class StepDoc {
+  private lines: string[] = [];
+  private id = 0;
+  add(body: string): number {
+    const i = ++this.id;
+    this.lines.push(`#${i}=${body};`);
+    return i;
+  }
+  point(p: Vec3): number {
+    return this.add(`CARTESIAN_POINT('',(${fmt(p[0])},${fmt(p[1])},${fmt(p[2])}))`);
+  }
+  dir(d: Vec3): number {
+    return this.add(`DIRECTION('',(${fmt(d[0])},${fmt(d[1])},${fmt(d[2])}))`);
+  }
+  body(schema: string): string {
+    const head = [
+      "ISO-10303-21;",
+      "HEADER;",
+      "FILE_DESCRIPTION(('camber hull surface'),'2;1');",
+      `FILE_NAME('camber.step','${DATE}',(''),(''),'camber','camber','');`,
+      `FILE_SCHEMA(('${schema}'));`,
+      "ENDSEC;",
+      "DATA;",
+    ];
+    return head.join("\n") + "\n" + this.lines.join("\n") + "\nENDSEC;\nEND-ISO-10303-21;\n";
+  }
+}
+
+let DATE = "2026-01-01T00:00:00"; // stamped at export time (no Date.now in module scope)
+
+// emit a B-spline surface as one bounded ADVANCED_FACE, reusing shared control points; returns face id
+function emitSurfaceFace(
+  d: StepDoc,
+  net: Vec3[][],
+  p: number,
+  q: number,
+  U: number[],
+  Vk: number[],
+): number {
+  const nu = net.length - 1,
+    nv = net[0].length - 1;
+  const cp = net.map((row) => row.map((pt) => d.point(pt))); // shared cartesian points
+  const surfRows = cp.map((row) => `(${row.map((id) => `#${id}`).join(",")})`).join(",");
+  const uk = compressKnots(U),
+    vk = compressKnots(Vk);
+  const surf = d.add(
+    `B_SPLINE_SURFACE_WITH_KNOTS('',${p},${q},(${surfRows}),.UNSPECIFIED.,.F.,.F.,.F.,` +
+      `(${uk.mults.join(",")}),(${vk.mults.join(",")}),` +
+      `(${uk.knots.map(fmt).join(",")}),(${vk.knots.map(fmt).join(",")}),.UNSPECIFIED.)`,
+  );
+  // four corner vertices (clamped surface interpolates the corners exactly)
+  const v00 = d.add(`VERTEX_POINT('',#${cp[0][0]})`),
+    vn0 = d.add(`VERTEX_POINT('',#${cp[nu][0]})`),
+    v0m = d.add(`VERTEX_POINT('',#${cp[0][nv]})`),
+    vnm = d.add(`VERTEX_POINT('',#${cp[nu][nv]})`);
+  // boundary curves as B-spline curves reusing the net's edge rows/columns
+  const curve = (ids: number[], deg: number, K: number[]): number => {
+    const k = compressKnots(K);
+    return d.add(
+      `B_SPLINE_CURVE_WITH_KNOTS('',${deg},(${ids.map((i) => `#${i}`).join(",")}),` +
+        `.UNSPECIFIED.,.F.,.F.,(${k.mults.join(",")}),(${k.knots.map(fmt).join(",")}),.UNSPECIFIED.)`,
+    );
+  };
+  const colAt = (l: number) => cp.map((row) => row[l]); // varies in u
+  const rowAt = (i: number) => cp[i].slice(); // varies in v
+  const cV0 = curve(colAt(0), p, U), // v=0 edge, varies u: v00→vn0
+    cVn = curve(colAt(nv), p, U), // v=max edge, varies u: v0m→vnm
+    cU0 = curve(rowAt(0), q, Vk), // u=0 edge, varies v: v00→v0m
+    cUn = curve(rowAt(nu), q, Vk); // u=max edge, varies v: vn0→vnm
+  const eV0 = d.add(`EDGE_CURVE('',#${v00},#${vn0},#${cV0},.T.)`),
+    eUn = d.add(`EDGE_CURVE('',#${vn0},#${vnm},#${cUn},.T.)`),
+    eVn = d.add(`EDGE_CURVE('',#${v0m},#${vnm},#${cVn},.T.)`),
+    eU0 = d.add(`EDGE_CURVE('',#${v00},#${v0m},#${cU0},.T.)`);
+  // CCW loop in (u,v): (0,0)→(n,0)→(n,m)→(0,m)→(0,0)
+  const o1 = d.add(`ORIENTED_EDGE('',*,*,#${eV0},.T.)`),
+    o2 = d.add(`ORIENTED_EDGE('',*,*,#${eUn},.T.)`),
+    o3 = d.add(`ORIENTED_EDGE('',*,*,#${eVn},.F.)`),
+    o4 = d.add(`ORIENTED_EDGE('',*,*,#${eU0},.F.)`);
+  const loop = d.add(`EDGE_LOOP('',(#${o1},#${o2},#${o3},#${o4}))`),
+    bound = d.add(`FACE_OUTER_BOUND('',#${loop},.T.)`);
+  return d.add(`ADVANCED_FACE('',(#${bound}),#${surf},.T.)`);
+}
+
+// emit the planar transom face from the starboard transom edge (top→bottom, bottom forced to centerline)
+function emitTransomFace(d: StepDoc, edge: Vec3[]): number | null {
+  if (edge.length < 2) return null;
+  const sb = edge.map((p) => p.slice() as Vec3);
+  sb[sb.length - 1] = [sb[sb.length - 1][0], 0, sb[sb.length - 1][2]]; // close on the keel
+  const pt = [...sb].reverse().map((p) => [p[0], -p[1], p[2]] as Vec3); // port: bottom→top
+  const [ta, tb] = state.sheer.transom,
+    slope = (tb.x - ta.x) / (tb.z - ta.z || 1),
+    nrm = V.norm([1, 0, -slope]); // transom plane normal (no y component)
+  const sbCp = sb.map((p) => d.point(p)),
+    ptCp = pt.map((p) => d.point(p));
+  const vTopS = d.add(`VERTEX_POINT('',#${sbCp[0]})`),
+    vBot = d.add(`VERTEX_POINT('',#${sbCp[sbCp.length - 1]})`),
+    vTopP = d.add(`VERTEX_POINT('',#${ptCp[ptCp.length - 1]})`);
+  const polyCurve = (ids: number[]): number => {
+    const n = ids.length - 1,
+      mults = [2, ...new Array(Math.max(0, n - 1)).fill(1), 2],
+      knots = Array.from({ length: n + 1 }, (_, i) => i);
+    return d.add(
+      `B_SPLINE_CURVE_WITH_KNOTS('',1,(${ids.map((i) => `#${i}`).join(",")}),` +
+        `.UNSPECIFIED.,.F.,.F.,(${mults.join(",")}),(${knots.map(fmt).join(",")}),.UNSPECIFIED.)`,
+    );
+  };
+  const cSb = polyCurve(sbCp), // top_s → bottom
+    cPt = polyCurve(ptCp), // bottom → top_p
+    topPt = d.point(sb[0]),
+    topDir = d.dir([0, 1, 0]), // top edge runs across the breadth (in-plane, +y)
+    topVec = d.add(`VECTOR('',#${topDir},1.0)`),
+    topLine = d.add(`LINE('',#${topPt},#${topVec})`);
+  const eSb = d.add(`EDGE_CURVE('',#${vTopS},#${vBot},#${cSb},.T.)`),
+    ePt = d.add(`EDGE_CURVE('',#${vBot},#${vTopP},#${cPt},.T.)`),
+    eTop = d.add(`EDGE_CURVE('',#${vTopP},#${vTopS},#${topLine},.T.)`);
+  const o1 = d.add(`ORIENTED_EDGE('',*,*,#${eSb},.T.)`),
+    o2 = d.add(`ORIENTED_EDGE('',*,*,#${ePt},.T.)`),
+    o3 = d.add(`ORIENTED_EDGE('',*,*,#${eTop},.T.)`);
+  const loop = d.add(`EDGE_LOOP('',(#${o1},#${o2},#${o3}))`),
+    bound = d.add(`FACE_OUTER_BOUND('',#${loop},.T.)`);
+  const origin = d.point(sb[0]),
+    zAx = d.dir(nrm),
+    xAx = d.dir([0, 1, 0]),
+    place = d.add(`AXIS2_PLACEMENT_3D('',#${origin},#${zAx},#${xAx})`),
+    plane = d.add(`PLANE('',#${place})`);
+  return d.add(`ADVANCED_FACE('',(#${bound}),#${plane},.T.)`);
+}
+
+// ---------- public API ----------
+
+export function buildStep(date: string): string {
+  DATE = date;
+  prepare(); // ensure the sheer samplers are current
+  const grid = hullGrid(64, 24);
+  if (grid.length < 4) throw new Error("hull has too few sections to export");
+
+  const d = new StepDoc();
+  const faces: number[] = [];
+  const sb = interpSurface(grid);
+  faces.push(emitSurfaceFace(d, sb.net, sb.p, sb.q, sb.U, sb.Vk));
+  const port = sb.net.map((row) => row.map((p) => [p[0], -p[1], p[2]] as Vec3));
+  faces.push(emitSurfaceFace(d, port, sb.p, sb.q, sb.U, sb.Vk));
+  const tf = emitTransomFace(d, transomEdge());
+  if (tf) faces.push(tf);
+
+  const shell = d.add(`OPEN_SHELL('',(${faces.map((f) => `#${f}`).join(",")}))`),
+    ssm = d.add(`SHELL_BASED_SURFACE_MODEL('',(#${shell}))`);
+  // geometric context: millimetres, 0.01 mm accuracy
+  const o = d.point([0, 0, 0]),
+    z = d.dir([0, 0, 1]),
+    x = d.dir([1, 0, 0]),
+    axis = d.add(`AXIS2_PLACEMENT_3D('',#${o},#${z},#${x})`);
+  const lu = d.add("( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) )"),
+    au = d.add("( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) )"),
+    su = d.add("( NAMED_UNIT(*) SI_UNIT($,.STERADIAN.) SOLID_ANGLE_UNIT() )"),
+    unc = d.add(`UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(0.01),#${lu},'accuracy','')`),
+    ctx = d.add(
+      `( GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#${unc})) ` +
+        `GLOBAL_UNIT_ASSIGNED_CONTEXT((#${lu},#${au},#${su})) REPRESENTATION_CONTEXT('camber','3D') )`,
+    );
+  const rep = d.add(`MANIFOLD_SURFACE_SHAPE_REPRESENTATION('camber',(#${axis},#${ssm}),#${ctx})`);
+  // product structure so the geometry is attached to a part
+  const appctx = d.add("APPLICATION_CONTEXT('automotive design')");
+  d.add(`APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2000,#${appctx})`);
+  const pctx = d.add(`PRODUCT_CONTEXT('',#${appctx},'mechanical')`),
+    prod = d.add(`PRODUCT('camber','camber hull','',(#${pctx}))`),
+    pdf = d.add(`PRODUCT_DEFINITION_FORMATION('','',#${prod})`),
+    pdctx = d.add(`PRODUCT_DEFINITION_CONTEXT('part definition',#${appctx},'design')`),
+    pd = d.add(`PRODUCT_DEFINITION('','',#${pdf},#${pdctx})`),
+    pds = d.add(`PRODUCT_DEFINITION_SHAPE('','',#${pd})`);
+  d.add(`SHAPE_DEFINITION_REPRESENTATION(#${pds},#${rep})`);
+
+  return d.body("AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }");
+}
+
+// build the STEP text for the current model and trigger a browser download
+export function downloadStep(): void {
+  const now = new Date(); // called from a user gesture, not module scope
+  const stamp = now.toISOString().replace(/\.\d+Z$/, "");
+  const text = buildStep(stamp);
+  const blob = new Blob([text], { type: "application/step" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "camber-hull.step";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

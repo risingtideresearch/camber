@@ -3,6 +3,7 @@
 import { resetModel, state } from "./model.js";
 import { render, draw3d } from "./render.js";
 import { initInteraction } from "./interaction.js";
+import { downloadStep } from "./step.js";
 
 function reset(): void {
   resetModel();
@@ -24,6 +25,15 @@ toggleZebra.addEventListener("click", () => {
 });
 
 document.getElementById("reset")!.addEventListener("click", reset);
+
+const exportStep = document.getElementById("exportStep") as HTMLButtonElement;
+exportStep.addEventListener("click", () => {
+  try {
+    downloadStep();
+  } catch (e) {
+    alert("STEP export failed: " + (e instanceof Error ? e.message : String(e)));
+  }
+});
 
 initInteraction();
 reset();
