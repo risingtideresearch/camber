@@ -1,0 +1,16 @@
+{
+  "name": "camber",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Constant-camber boat-hull line drawing tool",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --format=esm --outfile=dist/camber.js --sourcemap",
+    "watch": "esbuild src/main.ts --bundle --format=esm --outfile=dist/camber.js --sourcemap --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

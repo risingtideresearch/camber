@@ -1,0 +1,954 @@
+// ---------- rendering: the five 2D views + the shaded 3D hull ----------
+
+import { V, type Vec3 } from "./math.js";
+import {
+  state,
+  L,
+  DMAX,
+  prepare,
+  clippedSection,
+  sweptSection,
+  stationAt,
+  frameAt,
+  contour,
+  transomEdge,
+  chordParam,
+  pieceEval,
+  type Section,
+  type StationCP,
+} from "./model.js";
+import {
+  PXpad,
+  mapX,
+  Ptop,
+  ZMIN,
+  ZMAX,
+  PZbase,
+  zScreenP,
+  LH,
+  Lcen,
+  yStar,
+  yPort,
+  snX,
+  snY,
+  NMIN,
+  NMAX,
+} from "./view.js";
+import {
+  el,
+  poly,
+  COL,
+  sampleX,
+  svgP,
+  svgL,
+  svgA,
+  svgF,
+  svgC,
+  svgB,
+  cv3d,
+} from "./dom.js";
+import {
+  startDrag,
+  sheerPointDown,
+  trimPointDown,
+  transomPointDown,
+  stnPointDown,
+} from "./interaction.js";
+
+type Proj = (p: Vec3) => [number, number];
+
+function gridX(svg: SVGSVGElement, top: number, bot: number): void {
+  for (let q = 0; q <= 4; q++) {
+    const x = mapX((L * q) / 4);
+    svg.append(
+      el("line", { x1: x, y1: top, x2: x, y2: bot, stroke: "#edf2f7", "stroke-width": 1 }),
+    );
+  }
+}
+
+// the draggable cut handle: a triangle + an invisible vertical hit band at x0. The visible red line is
+// the station's true-angle trace, drawn by the caller (drawPlan/drawProfile) from the swept section.
+function stationLine(svg: SVGSVGElement, top: number, bot: number): void {
+  const x = mapX(state.x0);
+  const hit = el("line", {
+    x1: x,
+    y1: top,
+    x2: x,
+    y2: bot,
+    stroke: "#000",
+    "stroke-width": 16,
+    opacity: 0,
+    style: "cursor:ew-resize",
+  });
+  hit.addEventListener("pointerdown", (e) => startDrag({ kind: "slider" }, svg, e));
+  svg.append(hit);
+  const tri = el("path", {
+    d: `M${x - 6} ${top} L${x + 6} ${top} L${x} ${top + 9} Z`,
+    fill: "var(--slider)",
+    style: "cursor:ew-resize",
+  });
+  tri.addEventListener("pointerdown", (e) => startDrag({ kind: "slider" }, svg, e));
+  svg.append(tri);
+}
+
+// the swept station at x0 projected into a 2D view → its true heading/rake (not a plain vertical cut)
+function cutTrace(svg: SVGSVGElement, proj: Proj): void {
+  const cut = clippedSection(state.x0, 40);
+  svg.append(
+    el("path", {
+      d: poly(cut.pts.map(proj)),
+      fill: "none",
+      stroke: "var(--slider)",
+      "stroke-width": 2,
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round",
+    }),
+  );
+}
+
+// ---------- render ----------
+export function render(): void {
+  prepare();
+  const NSEC = 64,
+    sections: Section[] = [];
+  for (let i = 0; i <= NSEC; i++) sections.push(clippedSection((L * i) / NSEC, 18));
+  let zmin = 0;
+  for (const s of sections) {
+    if (s.aft) continue;
+    for (const p of s.pts) zmin = Math.min(zmin, p[2]);
+  }
+  drawPlan(sections, zmin);
+  drawProfile(sections, zmin);
+  drawStation(svgA, state.AFT, COL.aft, "aft", state.FORE, COL.fore);
+  drawStation(svgF, state.FORE, COL.fore, "fore", state.AFT, COL.aft);
+  drawCutStation(svgC);
+  (document.getElementById("cutTag") as HTMLElement).textContent = `CUT · x=${Math.round(state.x0)}`;
+  drawBodyPlan(svgB);
+  draw3d(true);
+  const profVal = document.getElementById("profVal") as HTMLElement;
+  profVal.textContent = `x = ${Math.round(state.x0)} (${((state.x0 / L) * 100).toFixed(0)}% LOA)`;
+  const h = clippedSection(state.x0, 18);
+  // (label uses the live cut)
+  const kz = h.pts[h.pts.length - 1][2];
+  profVal.textContent = h.open
+    ? `x=${Math.round(state.x0)} · section open`
+    : `x=${Math.round(state.x0)} · draft ${Math.round(-kz)}`;
+}
+
+function drawPlan(sections: Section[], zmin: number): void {
+  const svg = svgL;
+  svg.replaceChildren();
+  gridX(svg, 8, LH - 8);
+  // waterlines (constant z): traced contours, mirrored
+  const NWL = 7;
+  for (let k = 1; k <= NWL; k++) {
+    const zk = (zmin * k) / (NWL + 1);
+    for (const run of contour(sections, zk, 2)) {
+      svg.append(
+        el("path", {
+          d: poly(run.map((p) => [mapX(p[0]), yStar(p[1])])),
+          fill: "none",
+          stroke: COL.wl,
+          "stroke-width": 1,
+          opacity: 0.55,
+          "stroke-linejoin": "round",
+          "stroke-linecap": "round",
+        }),
+      );
+      svg.append(
+        el("path", {
+          d: poly(run.map((p) => [mapX(p[0]), yPort(p[1])])),
+          fill: "none",
+          stroke: COL.wl,
+          "stroke-width": 1,
+          opacity: 0.32,
+          "stroke-linejoin": "round",
+          "stroke-linecap": "round",
+        }),
+      );
+    }
+  }
+  svg.append(
+    el("line", {
+      x1: PXpad,
+      y1: Lcen,
+      x2: 1000 - PXpad,
+      y2: Lcen,
+      stroke: "var(--keel)",
+      "stroke-width": 1.5,
+      opacity: 0.5,
+      "stroke-dasharray": "4 4",
+    }),
+  );
+  const cl = el("text", {
+    x: PXpad - 4,
+    y: Lcen - 4,
+    "text-anchor": "end",
+    "font-size": 10,
+    fill: "var(--keel)",
+  });
+  cl.textContent = "CL";
+  svg.append(cl);
+  stationLine(svg, 8, LH - 8);
+  const xs = sampleX();
+  svg.append(
+    el("path", {
+      d: poly(xs.map((x) => [mapX(x), yStar(state.sheer.yf(x))])),
+      fill: "none",
+      stroke: COL.sheer,
+      "stroke-width": 2.4,
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round",
+    }),
+  );
+  svg.append(
+    el("path", {
+      d: poly(xs.map((x) => [mapX(x), yPort(state.sheer.yf(x))])),
+      fill: "none",
+      stroke: COL.sheer,
+      "stroke-width": 2.4,
+      opacity: 0.5,
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round",
+    }),
+  );
+  // transom footprint in plan (centerline → sheer at the stern)
+  const te = transomEdge();
+  if (te.length > 1) {
+    svg.append(
+      el("path", {
+        d: poly(te.map((p) => [mapX(p[0]), yStar(p[1])])),
+        fill: "none",
+        stroke: "var(--transom)",
+        "stroke-width": 2.2,
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round",
+      }),
+    );
+    svg.append(
+      el("path", {
+        d: poly(te.map((p) => [mapX(p[0]), yPort(p[1])])),
+        fill: "none",
+        stroke: "var(--transom)",
+        "stroke-width": 2.2,
+        opacity: 0.5,
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round",
+      }),
+    );
+  }
+  // cut station — true plan heading (the fan angle), mirrored to the port side
+  const cut = clippedSection(state.x0, 40);
+  svg.append(
+    el("path", {
+      d: poly(cut.pts.map((p) => [mapX(p[0]), yPort(p[1])])),
+      fill: "none",
+      stroke: "var(--slider)",
+      "stroke-width": 2,
+      opacity: 0.4,
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round",
+    }),
+  );
+  cutTrace(svg, (p) => [mapX(p[0]), yStar(p[1])]);
+  svg.append(
+    el("circle", {
+      cx: mapX(state.x0),
+      cy: yStar(state.sheer.yf(state.x0)),
+      r: 3.2,
+      fill: "#fff",
+      stroke: COL.sheer,
+      "stroke-width": 1.5,
+    }),
+  );
+  state.sheer.cp.forEach((cp, idx) => cpDot(svg, idx, mapX(cp.x), yStar(cp.y)));
+}
+
+function drawProfile(sections: Section[], _zmin: number): void {
+  const svg = svgP;
+  svg.replaceChildren();
+  gridX(svg, Ptop - 4, PZbase);
+  stationLine(svg, Ptop - 4, PZbase);
+  // buttocks (constant y): traced contours in profile
+  const ymax = Math.max(...state.sheer.cp.map((p) => p.y)),
+    NBT = 5;
+  for (let k = 1; k <= NBT; k++) {
+    const yk = (ymax * k) / (NBT + 1);
+    for (const run of contour(sections, yk, 1))
+      svg.append(
+        el("path", {
+          d: poly(run.map((p) => [mapX(p[0]), zScreenP(p[2])])),
+          fill: "none",
+          stroke: COL.bt,
+          "stroke-width": 1,
+          opacity: 0.5,
+          "stroke-linejoin": "round",
+          "stroke-linecap": "round",
+        }),
+      );
+  }
+  // flat deck at z = 0 — now just a construction reference; the real top edge is the sheer trim below it
+  svg.append(
+    el("line", {
+      x1: PXpad,
+      y1: zScreenP(0),
+      x2: 1000 - PXpad,
+      y2: zScreenP(0),
+      stroke: COL.deck,
+      "stroke-width": 1.5,
+      "stroke-dasharray": "6 4",
+    }),
+  );
+  const dl = el("text", {
+    x: 1000 - PXpad,
+    y: zScreenP(0) - 5,
+    "text-anchor": "end",
+    "font-size": 10,
+    fill: COL.deck,
+  });
+  dl.textContent = "flat deck";
+  svg.append(dl);
+  // emergent keel (rocker / stem) — only where the section actually closes on the centerline
+  const keel = sections.filter((s) => s.keel).map((s) => s.pts[s.pts.length - 1]);
+  if (keel.length > 1)
+    svg.append(
+      el("path", {
+        d: poly(keel.map((p) => [mapX(p[0]), zScreenP(p[2])])),
+        fill: "none",
+        stroke: COL.keel,
+        "stroke-width": 2.4,
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round",
+      }),
+    );
+  // sheer trim line (real sheer in profile) — the swept sheet is cut to this, kept below the deck
+  const xs = sampleX();
+  svg.append(
+    el("path", {
+      d: poly(xs.map((x) => [mapX(x), zScreenP(state.sheer.zf(x))])),
+      fill: "none",
+      stroke: COL.sheer,
+      "stroke-width": 2.4,
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round",
+    }),
+  );
+  // transom: the construction line through the two control points (dashed) + the actual cut edge (solid)
+  const [ta, tb] = state.sheer.transom;
+  svg.append(
+    el("line", {
+      x1: mapX(ta.x),
+      y1: zScreenP(ta.z),
+      x2: mapX(tb.x),
+      y2: zScreenP(tb.z),
+      stroke: "var(--transom)",
+      "stroke-width": 1.3,
+      opacity: 0.6,
+      "stroke-dasharray": "5 4",
+    }),
+  );
+  const te = transomEdge();
+  if (te.length > 1)
+    svg.append(
+      el("path", {
+        d: poly(te.map((p) => [mapX(p[0]), zScreenP(p[2])])),
+        fill: "none",
+        stroke: "var(--transom)",
+        "stroke-width": 2.4,
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round",
+      }),
+    );
+  const ttl = el("text", {
+    x: mapX(ta.x) + 6,
+    y: zScreenP(ta.z) - 4,
+    "font-size": 10,
+    fill: "var(--transom)",
+  });
+  ttl.textContent = "transom";
+  svg.append(ttl);
+  // cut station — true profile rake (the fan shifts x as the section runs inboard to the keel)
+  cutTrace(svg, (p) => [mapX(p[0]), zScreenP(p[2])]);
+  const h = clippedSection(state.x0, 18);
+  if (h.keel)
+    svg.append(
+      el("circle", {
+        cx: mapX(h.pts[h.pts.length - 1][0]),
+        cy: zScreenP(h.pts[h.pts.length - 1][2]),
+        r: 3.2,
+        fill: "#fff",
+        stroke: COL.keel,
+        "stroke-width": 1.5,
+      }),
+    );
+  svg.append(
+    el("circle", {
+      cx: mapX(state.x0),
+      cy: zScreenP(state.sheer.zf(state.x0)),
+      r: 3.2,
+      fill: "#fff",
+      stroke: COL.sheer,
+      "stroke-width": 1.5,
+    }),
+  );
+  state.sheer.trim.forEach((cp, idx) => trimDot(svg, idx, mapX(cp.x), zScreenP(cp.z)));
+  state.sheer.transom.forEach((cp, idx) => transomDot(svg, idx, mapX(cp.x), zScreenP(cp.z)));
+}
+
+function drawStation(
+  svg: SVGSVGElement,
+  arr: StationCP[],
+  col: string,
+  which: "aft" | "fore",
+  ghost: StationCP[],
+  gcol: string,
+): void {
+  svg.replaceChildren();
+  // axes: sheer point at origin (top-left), n inboard →, d down ↓
+  svg.append(
+    el("line", { x1: snX(NMIN), y1: snY(0), x2: snX(NMAX), y2: snY(0), stroke: "#edf2f7", "stroke-width": 1 }),
+  );
+  svg.append(
+    el("line", { x1: snX(0), y1: snY(0), x2: snX(0), y2: snY(DMAX), stroke: "#e2e8f0", "stroke-width": 1.2 }),
+  );
+  const sh = el("text", { x: snX(0) + 6, y: snY(0) - 6, "font-size": 10, fill: COL.mut || "#718096" });
+  sh.textContent = "sheer";
+  svg.append(sh);
+  const curve = (pts: StationCP[], c: string, op: number, dash?: string) => {
+    const ns = pts.map((p) => p.n),
+      ds = pts.map((p) => p.d),
+      cor = pts.map((p) => !!p.c),
+      ts = chordParam(ns, ds);
+    const nf = pieceEval(ts, ns, cor),
+      df = pieceEval(ts, ds, cor),
+      tm = ts[ts.length - 1],
+      out: [number, number][] = [],
+      N = 120;
+    for (let i = 0; i <= N; i++) {
+      const u = (tm * i) / N;
+      out.push([snX(nf(u)), snY(df(u))]);
+    }
+    svg.append(
+      el("path", {
+        d: poly(out),
+        fill: "none",
+        stroke: c,
+        "stroke-width": 2.4,
+        opacity: op,
+        ...(dash ? { "stroke-dasharray": dash } : {}),
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round",
+      }),
+    );
+  };
+  curve(ghost, gcol, 0.18); // faint ghost of the other station
+  curve(arr, col, 1); // this station
+  arr.forEach((p, idx) => {
+    const end = idx === 0,
+      s = end ? 4 : 6;
+    const node = p.c
+      ? el("rect", {
+          x: snX(p.n) - s,
+          y: snY(p.d) - s,
+          width: 2 * s,
+          height: 2 * s,
+          fill: end ? "#fff" : col,
+          stroke: end ? col : "#fff",
+          "stroke-width": 1.8,
+        })
+      : el("circle", {
+          cx: snX(p.n),
+          cy: snY(p.d),
+          r: s,
+          fill: end ? "#fff" : col,
+          stroke: end ? col : "#fff",
+          "stroke-width": 1.8,
+        });
+    node.addEventListener("pointerdown", (e) => stnPointDown(which, idx, end, svg, e));
+    svg.append(node);
+  });
+}
+
+// the interpolated (blended) station at the red cut x0, with both trims marked: the sheer trim
+// (horizontal, at depth -z_sheer(x0)) and the centerline trim (vertical, at the n where the section
+// reaches the boat centerline y=0). The bold arc between them is what survives into the final shape.
+function drawCutStation(svg: SVGSVGElement): void {
+  svg.replaceChildren();
+  svg.append(
+    el("line", { x1: snX(NMIN), y1: snY(0), x2: snX(NMAX), y2: snY(0), stroke: "#edf2f7", "stroke-width": 1 }),
+  );
+  svg.append(
+    el("line", { x1: snX(0), y1: snY(0), x2: snX(0), y2: snY(DMAX), stroke: "#e2e8f0", "stroke-width": 1.2 }),
+  );
+  const sh = el("text", { x: snX(0) + 6, y: snY(0) - 6, "font-size": 10, fill: "#718096" });
+  sh.textContent = "sheer";
+  svg.append(sh);
+
+  const st = stationAt(state.x0),
+    fr = frameAt(state.x0);
+  const dtrim = Math.max(0, Math.min(-state.sheer.zf(state.x0), DMAX)); // sheer-trim depth below the flat deck
+  const yAt = (u: number) => fr.p[1] + st.n(u) * fr.n[1]; // world y along the section (the d-axis is vertical)
+  const ncl = Math.abs(fr.n[1]) > 1e-6 ? -fr.p[1] / fr.n[1] : NMAX; // inboard offset where the section meets y=0
+
+  // full interpolated station, faint and dashed (the raw swept curve, deck to keel)
+  const full: [number, number][] = [],
+    N = 200;
+  for (let i = 0; i <= N; i++) {
+    const u = (st.tmax * i) / N;
+    full.push([snX(st.n(u)), snY(st.d(u))]);
+  }
+  svg.append(
+    el("path", {
+      d: poly(full),
+      fill: "none",
+      stroke: COL.station,
+      "stroke-width": 1.4,
+      opacity: 0.4,
+      "stroke-dasharray": "5 4",
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round",
+    }),
+  );
+
+  // kept span [umin,umax]: top at the sheer trim, bottom at the centerline — mirrors sweptSection
+  let umin = 0,
+    umax = st.tmax,
+    open = true;
+  const FN = 240;
+  if (dtrim > 0) {
+    umin = st.tmax;
+    for (let i = 1; i <= FN; i++) {
+      const u = (st.tmax * i) / FN;
+      if (st.d(u) >= dtrim) {
+        const da = st.d((st.tmax * (i - 1)) / FN);
+        umin = (st.tmax * (i - 1 + (dtrim - da) / (st.d(u) - da || 1))) / FN;
+        break;
+      }
+    }
+  }
+  let prev = yAt(0);
+  for (let i = 1; i <= FN; i++) {
+    const u = (st.tmax * i) / FN,
+      y = yAt(u);
+    if (prev >= 0 && y < 0) {
+      umax = (st.tmax * (i - 1 + prev / (prev - y))) / FN;
+      open = false;
+      break;
+    }
+    prev = y;
+  }
+  const empty = umin >= umax - 1e-6; // keel shallower than the trim ⇒ nothing kept
+
+  // kept arc, bold
+  if (!empty) {
+    const kept: [number, number][] = [],
+      KN = 120;
+    for (let i = 0; i <= KN; i++) {
+      const u = umin + ((umax - umin) * i) / KN;
+      kept.push([snX(st.n(u)), snY(st.d(u))]);
+    }
+    svg.append(
+      el("path", {
+        d: poly(kept),
+        fill: "none",
+        stroke: COL.station,
+        "stroke-width": 2.6,
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round",
+      }),
+    );
+  }
+
+  // sheer trim (horizontal at d=dtrim) + the point where the section starts
+  if (dtrim > 0) {
+    svg.append(
+      el("line", {
+        x1: snX(NMIN),
+        y1: snY(dtrim),
+        x2: snX(NMAX),
+        y2: snY(dtrim),
+        stroke: COL.sheer,
+        "stroke-width": 1.5,
+        "stroke-dasharray": "5 4",
+      }),
+    );
+    const tl = el("text", { x: snX(NMIN) + 4, y: snY(dtrim) - 4, "font-size": 10, fill: COL.sheer });
+    tl.textContent = "sheer trim";
+    svg.append(tl);
+    if (!empty)
+      svg.append(
+        el("circle", {
+          cx: snX(st.n(umin)),
+          cy: snY(st.d(umin)),
+          r: 4,
+          fill: "#fff",
+          stroke: COL.sheer,
+          "stroke-width": 1.6,
+        }),
+      );
+  }
+  // centerline trim (vertical at n=ncl) + the keel point where the section closes
+  const nclC = Math.max(NMIN, Math.min(ncl, NMAX));
+  svg.append(
+    el("line", {
+      x1: snX(nclC),
+      y1: snY(0),
+      x2: snX(nclC),
+      y2: snY(DMAX),
+      stroke: COL.keel,
+      "stroke-width": 1.5,
+      opacity: open ? 0.4 : 1,
+      "stroke-dasharray": "5 4",
+    }),
+  );
+  const cl = el("text", {
+    x: snX(nclC) - 4,
+    y: snY(DMAX) - 6,
+    "text-anchor": "end",
+    "font-size": 10,
+    fill: COL.keel,
+  });
+  cl.textContent = "centerline";
+  svg.append(cl);
+  if (!open && !empty)
+    svg.append(
+      el("circle", {
+        cx: snX(st.n(umax)),
+        cy: snY(st.d(umax)),
+        r: 4,
+        fill: "#fff",
+        stroke: COL.keel,
+        "stroke-width": 1.6,
+      }),
+    );
+}
+
+// classic body plan: the trimmed hull stations overlaid on one cross-section frame, sharing a
+// centerline — forward stations on the right half, aft stations on the left (mirrored). Each section
+// already carries both trims (sheer trim at the top, centerline trim at the keel).
+function drawBodyPlan(svg: SVGSVGElement): void {
+  svg.replaceChildren();
+  const NB = 24,
+    secs: { f: number; s: Section }[] = [];
+  for (let i = 0; i <= NB; i++) {
+    const x = (L * i) / NB,
+      s = clippedSection(x, 40);
+    if (!s.aft) secs.push({ f: x / L, s });
+  }
+  let ymax = 1,
+    zmin = 0;
+  for (const o of secs)
+    for (const p of o.s.pts) {
+      ymax = Math.max(ymax, Math.abs(p[1]));
+      zmin = Math.min(zmin, p[2]);
+    }
+  const W = 360,
+    H = 360,
+    pad = 26;
+  const sc = Math.min((W - 2 * pad) / (2 * ymax), (H - 2 * pad) / (0 - zmin || 1));
+  const cx = W / 2,
+    top = pad + 6;
+  const Y = (y: number) => cx + y * sc,
+    Z = (z: number) => top - z * sc; // z=0 at top (deck), keel below
+  // deck reference + centerline
+  svg.append(
+    el("line", { x1: pad, y1: Z(0), x2: W - pad, y2: Z(0), stroke: COL.deck, "stroke-width": 1.3, "stroke-dasharray": "6 4" }),
+  );
+  svg.append(
+    el("line", { x1: cx, y1: Z(0) - 6, x2: cx, y2: Z(zmin), stroke: COL.keel, "stroke-width": 1.2, opacity: 0.6, "stroke-dasharray": "4 4" }),
+  );
+  const tA = el("text", { x: pad, y: Z(0) - 6, "font-size": 10, fill: COL.aft });
+  tA.textContent = "AFT";
+  svg.append(tA);
+  const tF = el("text", { x: W - pad, y: Z(0) - 6, "text-anchor": "end", "font-size": 10, fill: COL.fore });
+  tF.textContent = "FWD";
+  svg.append(tF);
+  // stations: fore on the right (+y), aft mirrored to the left (−y)
+  for (const o of secs) {
+    const fwd = o.f >= 0.5,
+      col = fwd ? COL.fore : COL.aft,
+      sgn = fwd ? 1 : -1;
+    const pts = o.s.pts.map((p): [number, number] => [Y(sgn * p[1]), Z(p[2])]);
+    svg.append(
+      el("path", {
+        d: poly(pts),
+        fill: "none",
+        stroke: col,
+        "stroke-width": 1.2,
+        opacity: 0.75,
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round",
+      }),
+    );
+  }
+  // highlight the live cut station
+  const cut = clippedSection(state.x0, 40),
+    fwd = state.x0 / L >= 0.5,
+    sgn = fwd ? 1 : -1;
+  if (!cut.aft)
+    svg.append(
+      el("path", {
+        d: poly(cut.pts.map((p): [number, number] => [Y(sgn * p[1]), Z(p[2])])),
+        fill: "none",
+        stroke: COL.station,
+        "stroke-width": 2.4,
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round",
+      }),
+    );
+}
+
+// ---------- 3D shaded hull (WebGL) ----------
+// Orthographic camera that reproduces the old projection: yaw spins about the vertical (z = up), pitch
+// tilts. The vertex shader maps world (x,y,z) to NDC the same way the SVG renderer mapped to screen, and
+// fills a real depth buffer so the transom/hull overlap correctly. Per-pixel Phong + specular; a zebra
+// mode bands the surface by the reflected eye direction so unfair (non-smooth) spots show as kinked lines.
+const S3D = 0.2,
+  VW3 = 1000,
+  VH3 = 460;
+let GL: WebGLRenderingContext | null = null,
+  prog: WebGLProgram | null = null,
+  loc: Record<string, any> = {},
+  posBuf: WebGLBuffer | null = null,
+  nrmBuf: WebGLBuffer | null = null;
+
+interface Mesh {
+  pos: Float32Array;
+  nrm: Float32Array;
+  count: number;
+}
+
+const VERT_SRC = `
+attribute vec3 aPos; attribute vec3 aNormal;
+uniform float uc1,us1,uc2,us2,uS3D,uVW,uVH,ucxm,uczm,uDepth;
+varying vec3 vN; varying vec3 vW;
+void main(){
+  float X=aPos.x-ucxm, Z=aPos.z-uczm, y=aPos.y;
+  float X1=X*uc1 - y*us1;
+  float Y1=X*us1 + y*uc1;
+  float ndcx=X1*uS3D*2.0/uVW;
+  float ndcy=(Y1*us2 + Z*uc2)*uS3D*2.0/uVH;
+  float ndcz=(uc2*Y1 - us2*Z)/uDepth;        // nearer (old depth large) → smaller → passes LESS test
+  gl_Position=vec4(ndcx,ndcy,ndcz,1.0);
+  vN=aNormal; vW=aPos;
+}`;
+const FRAG_SRC = `
+precision highp float;
+varying vec3 vN; varying vec3 vW;
+uniform vec3 uLight,uView,uBase; uniform float uStripes; uniform int uZebra;
+void main(){
+  vec3 N=normalize(vN), V=normalize(uView);
+  if(dot(N,V)<0.0) N=-N;                      // two-sided
+  vec3 Lc=normalize(uLight);
+  float diff=max(dot(N,Lc),0.0);
+  vec3 H=normalize(Lc+V);
+  float spec=pow(max(dot(N,H),0.0),48.0);
+  if(uZebra==1){
+    vec3 R=reflect(-V,N);
+    float band=sin(atan(R.z,R.y)*uStripes);
+    float s=smoothstep(-0.14,0.14,band);
+    vec3 col=mix(vec3(0.07,0.09,0.15),vec3(0.97,0.98,1.0),s)*(0.66+0.34*diff);
+    gl_FragColor=vec4(col,1.0);
+  } else {
+    vec3 col=uBase*0.30 + uBase*diff*0.85 + vec3(1.0)*spec*0.55;
+    gl_FragColor=vec4(clamp(col,0.0,1.0),1.0);
+  }
+}`;
+
+function glShader(gl: WebGLRenderingContext, type: number, src: string): WebGLShader {
+  const s = gl.createShader(type)!;
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+    throw new Error(gl.getShaderInfoLog(s) || "shader compile error");
+  return s;
+}
+function initGL(): void {
+  GL = cv3d.getContext("webgl", { antialias: true, alpha: true, premultipliedAlpha: false });
+  const gl = GL!;
+  prog = gl.createProgram()!;
+  gl.attachShader(prog, glShader(gl, gl.VERTEX_SHADER, VERT_SRC));
+  gl.attachShader(prog, glShader(gl, gl.FRAGMENT_SHADER, FRAG_SRC));
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+  loc = {};
+  ["aPos", "aNormal"].forEach((n) => (loc[n] = gl.getAttribLocation(prog!, n)));
+  ["uc1", "us1", "uc2", "us2", "uS3D", "uVW", "uVH", "ucxm", "uczm", "uDepth", "uLight", "uView", "uBase", "uStripes", "uZebra"].forEach(
+    (n) => (loc[n] = gl.getUniformLocation(prog!, n)),
+  );
+  posBuf = gl.createBuffer();
+  nrmBuf = gl.createBuffer();
+  gl.enable(gl.DEPTH_TEST);
+  gl.clearColor(0, 0, 0, 0);
+}
+
+// the hull as a regular grid of forward (non-aft) stations × along-station points, for smooth normals.
+// Station spacing densifies toward both ends (stem & transom) but keeps a nonzero endpoint derivative,
+// so stations never collapse into near-coincident rows at the bow tip (which made degenerate facets).
+function hullRows(M: number): Vec3[][] {
+  const N = 130,
+    rows: Vec3[][] = [];
+  for (let i = 0; i <= N; i++) {
+    const f = i / N,
+      g = f - (0.7 * Math.sin(2 * Math.PI * f)) / (2 * Math.PI);
+    const s = sweptSection(L * g, M, true);
+    if (!s.aft) rows.push(s.pts);
+  }
+  return rows;
+}
+// smooth per-vertex normals on a grid via central differences (orientation is irrelevant — shader is two-sided)
+function gridNormal(rows: Vec3[][], i: number, j: number): Vec3 {
+  const R = rows.length,
+    C = rows[0].length;
+  const a = rows[Math.min(i + 1, R - 1)][j],
+    b = rows[Math.max(i - 1, 0)][j];
+  const c = rows[i][Math.min(j + 1, C - 1)],
+    d = rows[i][Math.max(j - 1, 0)];
+  return V.norm(V.cross(V.sub(c, d), V.sub(a, b)));
+}
+function pushTri(
+  P: number[],
+  Nn: number[],
+  p0: Vec3,
+  n0: Vec3,
+  p1: Vec3,
+  n1: Vec3,
+  p2: Vec3,
+  n2: Vec3,
+): void {
+  P.push(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], p2[0], p2[1], p2[2]);
+  Nn.push(n0[0], n0[1], n0[2], n1[0], n1[1], n1[2], n2[0], n2[1], n2[2]);
+}
+// build expanded triangle soup (positions + smooth normals). mirror ⇒ add the port half + the transom.
+function buildHullMesh(mirror: boolean): Mesh {
+  const M = 44,
+    rows = hullRows(M),
+    R = rows.length,
+    C = M + 1,
+    P: number[] = [],
+    Nn: number[] = [];
+  const nrm = rows.map((_, i) => rows[i].map((_, j) => gridNormal(rows, i, j)));
+  for (let i = 0; i < R - 1; i++)
+    for (let j = 0; j < C - 1; j++) {
+      const a = rows[i][j],
+        b = rows[i + 1][j],
+        c = rows[i + 1][j + 1],
+        d = rows[i][j + 1];
+      const na = nrm[i][j],
+        nb = nrm[i + 1][j],
+        nc = nrm[i + 1][j + 1],
+        nd = nrm[i][j + 1];
+      pushTri(P, Nn, a, na, b, nb, c, nc);
+      pushTri(P, Nn, a, na, c, nc, d, nd); // starboard
+      if (mirror) {
+        const ma: Vec3 = [a[0], -a[1], a[2]],
+          mb: Vec3 = [b[0], -b[1], b[2]],
+          mc: Vec3 = [c[0], -c[1], c[2]],
+          md: Vec3 = [d[0], -d[1], d[2]];
+        const ka: Vec3 = [na[0], -na[1], na[2]],
+          kb: Vec3 = [nb[0], -nb[1], nb[2]],
+          kc: Vec3 = [nc[0], -nc[1], nc[2]],
+          kd: Vec3 = [nd[0], -nd[1], nd[2]];
+        pushTri(P, Nn, ma, ka, mc, kc, mb, kb);
+        pushTri(P, Nn, ma, ka, md, kd, mc, kc); // port (reversed winding)
+      }
+    }
+  return { pos: new Float32Array(P), nrm: new Float32Array(Nn), count: P.length / 3 };
+}
+function buildTransomMesh(): Mesh {
+  const e = transomEdge();
+  if (e.length < 2) return { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 };
+  const [ta, tb] = state.sheer.transom,
+    slope = (tb.x - ta.x) / (tb.z - ta.z || 1),
+    nt = V.norm([1, 0, -slope]),
+    P: number[] = [],
+    Nn: number[] = [];
+  for (let i = 0; i < e.length - 1; i++) {
+    const a = e[i],
+      b = e[i + 1],
+      as: Vec3 = [a[0], a[1], a[2]],
+      ap: Vec3 = [a[0], -a[1], a[2]],
+      bs: Vec3 = [b[0], b[1], b[2]],
+      bp: Vec3 = [b[0], -b[1], b[2]];
+    pushTri(P, Nn, as, nt, ap, nt, bp, nt);
+    pushTri(P, Nn, as, nt, bp, nt, bs, nt);
+  }
+  return { pos: new Float32Array(P), nrm: new Float32Array(Nn), count: P.length / 3 };
+}
+function drawMesh(gl: WebGLRenderingContext, mesh: Mesh, base: number[]): void {
+  if (!mesh.count) return;
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, mesh.pos, gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(loc.aPos);
+  gl.vertexAttribPointer(loc.aPos, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, mesh.nrm, gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(loc.aNormal);
+  gl.vertexAttribPointer(loc.aNormal, 3, gl.FLOAT, false, 0, 0);
+  gl.uniform3fv(loc.uBase, base);
+  gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
+}
+let meshHull: Mesh | null = null,
+  meshTrans: Mesh | null = null;
+export function draw3d(rebuild?: boolean): void {
+  if (!GL) initGL();
+  const mirror = state.view3d === "trimmed";
+  if (rebuild !== false || !meshHull) {
+    meshHull = buildHullMesh(mirror);
+    meshTrans = mirror ? buildTransomMesh() : null;
+  }
+  const gl = GL!,
+    cv = gl.canvas as HTMLCanvasElement,
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.round(cv.clientWidth * dpr),
+    h = Math.round((cv.clientWidth * dpr * VH3) / VW3);
+  if (cv.width !== w || cv.height !== h) {
+    cv.width = w;
+    cv.height = h;
+  }
+  gl.viewport(0, 0, cv.width, cv.height);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.useProgram(prog);
+  const c1 = Math.cos(state.rot.yaw),
+    s1 = Math.sin(state.rot.yaw),
+    c2 = Math.cos(state.rot.pitch),
+    s2 = Math.sin(state.rot.pitch);
+  gl.uniform1f(loc.uc1, c1);
+  gl.uniform1f(loc.us1, s1);
+  gl.uniform1f(loc.uc2, c2);
+  gl.uniform1f(loc.us2, s2);
+  gl.uniform1f(loc.uS3D, S3D);
+  gl.uniform1f(loc.uVW, VW3);
+  gl.uniform1f(loc.uVH, VH3);
+  gl.uniform1f(loc.ucxm, L / 2);
+  gl.uniform1f(loc.uczm, (ZMIN + ZMAX) / 2);
+  gl.uniform1f(loc.uDepth, 3000);
+  const view = V.norm([-c2 * s1, -c2 * c1, s2]); // surface→eye direction (orthographic)
+  gl.uniform3fv(loc.uView, view);
+  // light tracks the camera (so the face we're looking at is lit, not the inside of the hull), biased up
+  gl.uniform3fv(loc.uLight, V.norm([view[0] + 0.12, view[1] + 0.06, view[2] + 0.34]));
+  gl.uniform1f(loc.uStripes, 11.0);
+  gl.uniform1i(loc.uZebra, state.zebra ? 1 : 0);
+  drawMesh(gl, meshHull, [0.3, 0.5, 0.72]);
+  if (meshTrans) {
+    gl.uniform1i(loc.uZebra, 0);
+    drawMesh(gl, meshTrans, [0.74, 0.55, 0.37]);
+  } // transom always solid
+}
+
+// ---------- control-point dots ----------
+function cpDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
+  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: COL.sheer, stroke: "#fff", "stroke-width": 1.5 });
+  c.addEventListener("pointerdown", (e) => sheerPointDown(idx, svg, e));
+  svg.append(c);
+}
+function trimDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
+  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: COL.sheer, stroke: "#fff", "stroke-width": 1.5 });
+  c.addEventListener("pointerdown", (e) => trimPointDown(idx, svg, e));
+  svg.append(c);
+}
+function transomDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
+  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: "var(--transom)", stroke: "#fff", "stroke-width": 1.5 });
+  c.addEventListener("pointerdown", (e) => transomPointDown(idx, svg, e));
+  svg.append(c);
+}
