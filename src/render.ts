@@ -12,6 +12,7 @@ import {
   frameAt,
   contour,
   transomEdge,
+  xTransom,
   chordParam,
   pieceEval,
   type Section,
@@ -782,16 +783,15 @@ function initGL(): void {
   gl.clearColor(0, 0, 0, 0);
 }
 
-// the hull as a regular grid of forward (non-aft) stations × along-station points, for smooth normals.
-// Station spacing densifies toward both ends (stem & transom) but keeps a nonzero endpoint derivative,
-// so stations never collapse into near-coincident rows at the bow tip (which made degenerate facets).
-function hullRows(M: number): Vec3[][] {
-  const N = 130,
-    rows: Vec3[][] = [];
+// A fair section grid for the trimmed hull: each row is one station from the sheer-trim (top) down to
+// the keel, sampled uniformly in x and WITHOUT the transom cut. Because the rows are never renormalised
+// to a clipped sub-span, adjacent stations stay parallel (no sliver shear), so the surface is smooth all
+// the way aft. The transom is then taken out by clipping this grid against the transom plane (below),
+// which yields an exact, shared hull/transom edge instead of two independently sampled curves.
+function bilgeRows(N: number, M: number): Vec3[][] {
+  const rows: Vec3[][] = [];
   for (let i = 0; i <= N; i++) {
-    const f = i / N,
-      g = f - (0.7 * Math.sin(2 * Math.PI * f)) / (2 * Math.PI);
-    const s = sweptSection(L * g, M, true);
+    const s = sweptSection((L * i) / N, M, true, false); // no transom clip → fair, full sections
     if (!s.aft) rows.push(s.pts);
   }
   return rows;
@@ -819,59 +819,110 @@ function pushTri(
   P.push(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], p2[0], p2[1], p2[2]);
   Nn.push(n0[0], n0[1], n0[2], n1[0], n1[1], n1[2], n2[0], n2[1], n2[2]);
 }
-// build expanded triangle soup (positions + smooth normals). mirror ⇒ add the port half + the transom.
-function buildHullMesh(mirror: boolean): Mesh {
+
+// the transom plane gate: forward of the raked cut (kept) where this is ≥ 0
+const transomGate = (p: Vec3): number => p[0] - xTransom(p[2]);
+const lerpV = (a: Vec3, b: Vec3, t: number): Vec3 => [
+  a[0] + (b[0] - a[0]) * t,
+  a[1] + (b[1] - a[1]) * t,
+  a[2] + (b[2] - a[2]) * t,
+];
+interface PN {
+  p: Vec3;
+  n: Vec3;
+}
+// Sutherland–Hodgman clip of a quad against transomGate ≥ 0, carrying per-vertex normals. Returns the
+// kept (forward) polygon and, if the quad straddles the plane, the cut segment lying on the transom.
+function clipQuad(poly: PN[]): { inside: PN[]; cut: [Vec3, Vec3] | null } {
+  const out: PN[] = [],
+    cutPts: Vec3[] = [];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i],
+      b = poly[(i + 1) % poly.length],
+      ga = transomGate(a.p),
+      gb = transomGate(b.p);
+    if (ga >= 0) out.push(a);
+    if (ga >= 0 !== gb >= 0) {
+      const t = ga / (ga - gb),
+        ip = lerpV(a.p, b.p, t),
+        inrm = V.norm(lerpV(a.n, b.n, t));
+      out.push({ p: ip, n: inrm });
+      cutPts.push(ip);
+    }
+  }
+  return { inside: out, cut: cutPts.length === 2 ? [cutPts[0], cutPts[1]] : null };
+}
+
+// build the hull triangle soup by clipping the fair grid against the transom plane; also collect the cut
+// segments so the transom panel can be built from the very same edge. mirror ⇒ add the port half.
+function buildHullMesh(mirror: boolean): { hull: Mesh; cuts: [Vec3, Vec3][] } {
   const M = 44,
-    rows = hullRows(M),
+    rows = bilgeRows(180, M),
     R = rows.length,
     C = M + 1,
     P: number[] = [],
-    Nn: number[] = [];
+    Nn: number[] = [],
+    cuts: [Vec3, Vec3][] = [];
   const nrm = rows.map((_, i) => rows[i].map((_, j) => gridNormal(rows, i, j)));
+  const emit = (a: PN, b: PN, c: PN): void => {
+    pushTri(P, Nn, a.p, a.n, b.p, b.n, c.p, c.n);
+    if (mirror) {
+      const m = (q: PN): PN => ({ p: [q.p[0], -q.p[1], q.p[2]], n: [q.n[0], -q.n[1], q.n[2]] });
+      const ma = m(a),
+        mb = m(b),
+        mc = m(c);
+      pushTri(P, Nn, ma.p, ma.n, mc.p, mc.n, mb.p, mb.n); // reversed winding for the mirror
+    }
+  };
   for (let i = 0; i < R - 1; i++)
     for (let j = 0; j < C - 1; j++) {
-      const a = rows[i][j],
-        b = rows[i + 1][j],
-        c = rows[i + 1][j + 1],
-        d = rows[i][j + 1];
-      const na = nrm[i][j],
-        nb = nrm[i + 1][j],
-        nc = nrm[i + 1][j + 1],
-        nd = nrm[i][j + 1];
-      pushTri(P, Nn, a, na, b, nb, c, nc);
-      pushTri(P, Nn, a, na, c, nc, d, nd); // starboard
-      if (mirror) {
-        const ma: Vec3 = [a[0], -a[1], a[2]],
-          mb: Vec3 = [b[0], -b[1], b[2]],
-          mc: Vec3 = [c[0], -c[1], c[2]],
-          md: Vec3 = [d[0], -d[1], d[2]];
-        const ka: Vec3 = [na[0], -na[1], na[2]],
-          kb: Vec3 = [nb[0], -nb[1], nb[2]],
-          kc: Vec3 = [nc[0], -nc[1], nc[2]],
-          kd: Vec3 = [nd[0], -nd[1], nd[2]];
-        pushTri(P, Nn, ma, ka, mc, kc, mb, kb);
-        pushTri(P, Nn, ma, ka, md, kd, mc, kc); // port (reversed winding)
+      const quad: PN[] = [
+        { p: rows[i][j], n: nrm[i][j] },
+        { p: rows[i + 1][j], n: nrm[i + 1][j] },
+        { p: rows[i + 1][j + 1], n: nrm[i + 1][j + 1] },
+        { p: rows[i][j + 1], n: nrm[i][j + 1] },
+      ];
+      const { inside, cut } = clipQuad(quad);
+      if (cut) cuts.push(cut);
+      for (let k = 1; k + 1 < inside.length; k++) emit(inside[0], inside[k], inside[k + 1]); // fan
+    }
+  return { hull: { pos: new Float32Array(P), nrm: new Float32Array(Nn), count: P.length / 3 }, cuts };
+}
+
+// the ordered starboard transom edge (sheer→keel) recovered from the hull-clip cut segments: collapse to
+// a single half-breadth-vs-depth curve, snap the bottom onto the centerline so the two halves meet cleanly
+function transomCurve(cuts: [Vec3, Vec3][]): Vec3[] {
+  const pts: Vec3[] = [];
+  const seen = new Set<string>();
+  for (const seg of cuts)
+    for (const q of seg) {
+      const key = Math.round(q[2] / 4) + "," + Math.round(q[1] / 4);
+      if (!seen.has(key)) {
+        seen.add(key);
+        pts.push(q);
       }
     }
-  return { pos: new Float32Array(P), nrm: new Float32Array(Nn), count: P.length / 3 };
+  pts.sort((a, b) => b[2] - a[2]); // top (z high, at the sheer) → bottom (z low, at the keel)
+  if (pts.length) pts[pts.length - 1] = [pts[pts.length - 1][0], 0, pts[pts.length - 1][2]];
+  return pts;
 }
-function buildTransomMesh(): Mesh {
-  const e = transomEdge();
+
+// the flat transom panel, built from the shared hull edge so it meets the hull with no gap or overlap
+function buildTransomMesh(cuts: [Vec3, Vec3][]): Mesh {
+  const e = transomCurve(cuts);
   if (e.length < 2) return { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 };
   const [ta, tb] = state.sheer.transom,
     slope = (tb.x - ta.x) / (tb.z - ta.z || 1),
-    nt = V.norm([1, 0, -slope]),
+    nt = V.norm([-1, 0, slope]), // outward (aft-facing)
     P: number[] = [],
     Nn: number[] = [];
   for (let i = 0; i < e.length - 1; i++) {
     const a = e[i],
       b = e[i + 1],
-      as: Vec3 = [a[0], a[1], a[2]],
       ap: Vec3 = [a[0], -a[1], a[2]],
-      bs: Vec3 = [b[0], b[1], b[2]],
       bp: Vec3 = [b[0], -b[1], b[2]];
-    pushTri(P, Nn, as, nt, ap, nt, bp, nt);
-    pushTri(P, Nn, as, nt, bp, nt, bs, nt);
+    pushTri(P, Nn, a, nt, ap, nt, bp, nt);
+    pushTri(P, Nn, a, nt, bp, nt, b, nt);
   }
   return { pos: new Float32Array(P), nrm: new Float32Array(Nn), count: P.length / 3 };
 }
@@ -894,8 +945,9 @@ export function draw3d(rebuild?: boolean): void {
   if (!GL) initGL();
   const mirror = state.view3d === "trimmed";
   if (rebuild !== false || !meshHull) {
-    meshHull = buildHullMesh(mirror);
-    meshTrans = mirror ? buildTransomMesh() : null;
+    const built = buildHullMesh(mirror);
+    meshHull = built.hull;
+    meshTrans = mirror ? buildTransomMesh(built.cuts) : null;
   }
   const gl = GL!,
     cv = gl.canvas as HTMLCanvasElement,

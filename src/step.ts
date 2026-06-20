@@ -7,7 +7,7 @@
 // in one OPEN_SHELL (the hull is open along the deck/sheer edge).
 
 import { V, type Vec3 } from "./math.js";
-import { L, sweptSection, transomEdge, state, prepare } from "./model.js";
+import { L, sweptSection, xTransom, state, prepare } from "./model.js";
 
 // ---------- B-spline numerics ----------
 
@@ -203,22 +203,41 @@ function compressKnots(U: number[]): { knots: number[]; mults: number[] } {
 
 // ---------- hull sampling ----------
 
-// a rectangular grid of trimmed starboard sections (rows = stations fore→aft, M+1 points each), keeping
-// only the sections that actually carry hull (skip the ones cut away entirely by the transom)
-function hullGrid(NS: number, M: number): Vec3[][] {
-  const rows: Vec3[][] = [];
-  for (let i = 0; i <= NS; i++) {
-    const x = (L * i) / NS,
-      s = sweptSection(x, M, true);
-    if (!s.aft) rows.push(s.pts);
+// A rectangular grid of the starboard hull whose AFT boundary row is exactly the transom intersection
+// curve. Columns are constant depth-fractions (j=0 sheer-trim → j=M keel); for each column we find where
+// that fraction crosses the transom plane and sweep forward from there to the bow. Because the sections
+// are full (sheer→keel, never renormalised to a clipped sliver), the surface stays fair right to the
+// stern, and row 0 lies on the transom plane so the hull and transom share an exact edge.
+function trimmedHullGrid(NS: number, M: number): Vec3[][] {
+  const cols = M + 1,
+    gate = (p: Vec3): number => p[0] - xTransom(p[2]),
+    fair = (x: number): Vec3[] => sweptSection(x, M, true, false).pts;
+  // per column, locate the aft crossing of the transom plane (first inside transition scanning forward)
+  const SCAN = 240,
+    xaf = new Array<number>(cols).fill(0),
+    found = new Array<boolean>(cols).fill(false);
+  let prev = fair(0);
+  for (let k = 1; k <= SCAN; k++) {
+    const x = (L * k) / SCAN,
+      cur = fair(x);
+    for (let j = 0; j < cols; j++) {
+      if (found[j]) continue;
+      const ga = gate(prev[j]),
+        gb = gate(cur[j]);
+      if (ga < 0 && gb >= 0) {
+        xaf[j] = (L * (k - 1 + ga / (ga - gb))) / SCAN;
+        found[j] = true;
+      }
+    }
+    prev = cur;
   }
-  // drop accidental duplicate stations (coincident rows break the interpolation matrix)
-  const out: Vec3[][] = [];
-  for (const r of rows) {
-    const prev = out[out.length - 1];
-    if (!prev || Math.hypot(...V.sub(r[0], prev[0])) > 1e-6) out.push(r);
-  }
-  return out;
+  const grid: Vec3[][] = Array.from({ length: NS + 1 }, () => new Array<Vec3>(cols));
+  for (let j = 0; j < cols; j++)
+    for (let i = 0; i <= NS; i++) {
+      const x = xaf[j] + (L - xaf[j]) * (i / NS); // sweep forward from the transom edge to the bow
+      grid[i][j] = fair(x)[j];
+    }
+  return grid;
 }
 
 // ---------- STEP text builder ----------
@@ -311,47 +330,42 @@ function emitSurfaceFace(
   return d.add(`ADVANCED_FACE('',(#${bound}),#${surf},.T.)`);
 }
 
-// emit the planar transom face from the starboard transom edge (top→bottom, bottom forced to centerline)
-function emitTransomFace(d: StepDoc, edge: Vec3[]): number | null {
-  if (edge.length < 2) return null;
-  const sb = edge.map((p) => p.slice() as Vec3);
-  sb[sb.length - 1] = [sb[sb.length - 1][0], 0, sb[sb.length - 1][2]]; // close on the keel
-  const pt = [...sb].reverse().map((p) => [p[0], -p[1], p[2]] as Vec3); // port: bottom→top
-  const [ta, tb] = state.sheer.transom,
-    slope = (tb.x - ta.x) / (tb.z - ta.z || 1),
-    nrm = V.norm([1, 0, -slope]); // transom plane normal (no y component)
-  const sbCp = sb.map((p) => d.point(p)),
-    ptCp = pt.map((p) => d.point(p));
-  const vTopS = d.add(`VERTEX_POINT('',#${sbCp[0]})`),
-    vBot = d.add(`VERTEX_POINT('',#${sbCp[sbCp.length - 1]})`),
-    vTopP = d.add(`VERTEX_POINT('',#${ptCp[ptCp.length - 1]})`);
-  const polyCurve = (ids: number[]): number => {
-    const n = ids.length - 1,
-      mults = [2, ...new Array(Math.max(0, n - 1)).fill(1), 2],
-      knots = Array.from({ length: n + 1 }, (_, i) => i);
-    return d.add(
-      `B_SPLINE_CURVE_WITH_KNOTS('',1,(${ids.map((i) => `#${i}`).join(",")}),` +
-        `.UNSPECIFIED.,.F.,.F.,(${mults.join(",")}),(${knots.map(fmt).join(",")}),.UNSPECIFIED.)`,
-    );
-  };
-  const cSb = polyCurve(sbCp), // top_s → bottom
-    cPt = polyCurve(ptCp), // bottom → top_p
-    topPt = d.point(sb[0]),
-    topDir = d.dir([0, 1, 0]), // top edge runs across the breadth (in-plane, +y)
-    topVec = d.add(`VECTOR('',#${topDir},1.0)`),
-    topLine = d.add(`LINE('',#${topPt},#${topVec})`);
-  const eSb = d.add(`EDGE_CURVE('',#${vTopS},#${vBot},#${cSb},.T.)`),
-    ePt = d.add(`EDGE_CURVE('',#${vBot},#${vTopP},#${cPt},.T.)`),
-    eTop = d.add(`EDGE_CURVE('',#${vTopP},#${vTopS},#${topLine},.T.)`);
-  const o1 = d.add(`ORIENTED_EDGE('',*,*,#${eSb},.T.)`),
-    o2 = d.add(`ORIENTED_EDGE('',*,*,#${ePt},.T.)`),
-    o3 = d.add(`ORIENTED_EDGE('',*,*,#${eTop},.T.)`);
+// Emit the planar transom face. Its starboard/port boundary curves reuse the hull surfaces' aft control
+// rows (net[0] and its mirror) with the same degree/knots, so they are the IDENTICAL B-spline curves as
+// the two hull faces' aft edges — the kernel sews them into one watertight skin. The face is closed at
+// the top by a straight line across the breadth at the sheer and meets itself at the keel on centerline.
+function emitTransomFace(d: StepDoc, net: Vec3[][], q: number, Vk: number[]): number | null {
+  const nv = net[0].length - 1;
+  if (nv < 1) return null;
+  const sbRow = net[0].map((p) => [p[0], p[1], p[2]] as Vec3);
+  sbRow[nv] = [sbRow[nv][0], 0, sbRow[nv][2]]; // keel on the centerline (shared apex)
+  const ptRow = sbRow.map((p) => [p[0], -p[1], p[2]] as Vec3);
+  const sbCp = sbRow.map((p) => d.point(p)),
+    ptCp = ptRow.map((p, i) => (i === nv ? sbCp[nv] : d.point(p))); // share the keel point
+  const vSheerS = d.add(`VERTEX_POINT('',#${sbCp[0]})`),
+    vKeel = d.add(`VERTEX_POINT('',#${sbCp[nv]})`),
+    vSheerP = d.add(`VERTEX_POINT('',#${ptCp[0]})`);
+  const k = compressKnots(Vk),
+    curve = (ids: number[]): number =>
+      d.add(
+        `B_SPLINE_CURVE_WITH_KNOTS('',${q},(${ids.map((i) => `#${i}`).join(",")}),` +
+          `.UNSPECIFIED.,.F.,.F.,(${k.mults.join(",")}),(${k.knots.map(fmt).join(",")}),.UNSPECIFIED.)`,
+      );
+  const cSb = curve(sbCp), // sheerS → keel (matches the starboard hull aft edge)
+    cPt = curve(ptCp), // sheerP → keel (matches the port hull aft edge)
+    topVec = d.add(`VECTOR('',#${d.dir([0, 1, 0])},1.0)`),
+    topLine = d.add(`LINE('',#${ptCp[0]},#${topVec})`); // across the breadth at the sheer
+  const eSb = d.add(`EDGE_CURVE('',#${vSheerS},#${vKeel},#${cSb},.T.)`),
+    ePt = d.add(`EDGE_CURVE('',#${vSheerP},#${vKeel},#${cPt},.T.)`),
+    eTop = d.add(`EDGE_CURVE('',#${vSheerP},#${vSheerS},#${topLine},.T.)`);
+  const o1 = d.add(`ORIENTED_EDGE('',*,*,#${eSb},.T.)`), // sheerS → keel
+    o2 = d.add(`ORIENTED_EDGE('',*,*,#${ePt},.F.)`), // keel → sheerP
+    o3 = d.add(`ORIENTED_EDGE('',*,*,#${eTop},.T.)`); // sheerP → sheerS
   const loop = d.add(`EDGE_LOOP('',(#${o1},#${o2},#${o3}))`),
     bound = d.add(`FACE_OUTER_BOUND('',#${loop},.T.)`);
-  const origin = d.point(sb[0]),
-    zAx = d.dir(nrm),
-    xAx = d.dir([0, 1, 0]),
-    place = d.add(`AXIS2_PLACEMENT_3D('',#${origin},#${zAx},#${xAx})`),
+  const [ta, tb] = state.sheer.transom,
+    slope = (tb.x - ta.x) / (tb.z - ta.z || 1),
+    place = d.add(`AXIS2_PLACEMENT_3D('',#${d.point(sbRow[0])},#${d.dir(V.norm([1, 0, -slope]))},#${d.dir([0, 1, 0])})`),
     plane = d.add(`PLANE('',#${place})`);
   return d.add(`ADVANCED_FACE('',(#${bound}),#${plane},.T.)`);
 }
@@ -361,7 +375,7 @@ function emitTransomFace(d: StepDoc, edge: Vec3[]): number | null {
 export function buildStep(date: string): string {
   DATE = date;
   prepare(); // ensure the sheer samplers are current
-  const grid = hullGrid(64, 24);
+  const grid = trimmedHullGrid(48, 24);
   if (grid.length < 4) throw new Error("hull has too few sections to export");
 
   const d = new StepDoc();
@@ -370,7 +384,7 @@ export function buildStep(date: string): string {
   faces.push(emitSurfaceFace(d, sb.net, sb.p, sb.q, sb.U, sb.Vk));
   const port = sb.net.map((row) => row.map((p) => [p[0], -p[1], p[2]] as Vec3));
   faces.push(emitSurfaceFace(d, port, sb.p, sb.q, sb.U, sb.Vk));
-  const tf = emitTransomFace(d, transomEdge());
+  const tf = emitTransomFace(d, sb.net, sb.q, sb.Vk);
   if (tf) faces.push(tf);
 
   const shell = d.add(`OPEN_SHELL('',(${faces.map((f) => `#${f}`).join(",")}))`),

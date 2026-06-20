@@ -229,7 +229,7 @@ export function xTransom(z: number): number {
 // reaches the centerline. Untrimmed, it runs the full station from the deck — the raw swept sheet.
 // Because the flat sheer makes the station's d-axis point straight down, z = -d(u): the sheer trim at
 // z = z_s(x) is simply the station depth d = -z_s(x).
-export function sweptSection(x: number, M: number, trim: boolean): Section {
+export function sweptSection(x: number, M: number, trim: boolean, clipTransom = true): Section {
   const fr = frameAt(x),
     st = stationAt(x);
   const W = (u: number): Vec3 => {
@@ -281,7 +281,7 @@ export function sweptSection(x: number, M: number, trim: boolean): Section {
     aft = empty,
     keel = trim && !open && !empty;
   if (empty) ua = ub = umax;
-  if (trim && !empty) {
+  if (trim && !empty && clipTransom) {
     const SN = 200,
       g = (u: number) => {
         const w = W(u);
