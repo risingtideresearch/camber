@@ -109,6 +109,9 @@ export interface State {
   AFT: StationCP[];
   FORE: StationCP[];
   x0: number;
+  waterline: number; // depth (≥0) of the design waterline below the sheer origin (deck datum at x=0, z=0)
+  deckRake: number; // deck rake angle (rad, +ve = bow up): a rigid rotation of the whole hull about the
+  // transverse (y) axis through the sheer origin. Everything is built deck-flat (z=0); the boat floats at this rake.
   rot: { yaw: number; pitch: number };
   view3d: View3D;
   zebra: boolean;
@@ -121,6 +124,8 @@ export const state: State = {
   AFT: [],
   FORE: [],
   x0: 2000,
+  waterline: 600,
+  deckRake: 0,
   rot: { yaw: -0.62, pitch: 0.42 },
   view3d: "trimmed", // "trimmed" = clipped + mirrored hull; "sheet" = untrimmed one side
   zebra: false, // zebra-stripe fairness check on the 3D surface
@@ -139,7 +144,18 @@ export function resetModel(): void {
   state.AFT = AFT_DEF.map((c) => ({ n: c[0], d: c[1], k: c[2] }));
   state.FORE = FORE_DEF.map((c) => ({ n: c[0], d: c[1], k: c[2] }));
   state.x0 = 2000;
+  state.waterline = 600;
+  state.deckRake = 0;
 }
+
+// ---------- deck rake (world frame) ----------
+// The hull is built deck-flat (deck = z = 0). The deck rake is a rigid rotation of the whole hull by
+// state.deckRake about the transverse (y) axis through the sheer origin (x=0, z=0). worldZ is the true
+// vertical height of a deck-frame point once floated at that rake; the waterline is the horizontal plane
+// at worldZ = −waterline, so immersion(x,z) > 0 means the point is submerged.
+export const worldZ = (x: number, z: number): number =>
+  x * Math.sin(state.deckRake) + z * Math.cos(state.deckRake);
+export const immersion = (x: number, z: number): number => -state.waterline - worldZ(x, z);
 
 export function prepare(): void {
   const sheer = state.sheer;

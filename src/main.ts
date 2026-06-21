@@ -11,7 +11,33 @@ function reset(): void {
   state.selected = null; // the old selection no longer refers to a meaningful point
   render(); // render() runs prepare() to build the sheer samplers before drawing
   refreshSelUI();
+  syncTrim();
 }
+
+// ---------- waterline + deck-rake controls ----------
+const wlRange = document.getElementById("wlRange") as HTMLInputElement;
+const wlVal = document.getElementById("wlVal") as HTMLElement;
+const rakeRange = document.getElementById("rakeRange") as HTMLInputElement;
+const rakeVal = document.getElementById("rakeVal") as HTMLElement;
+
+function syncTrim(): void {
+  wlRange.value = String(state.waterline);
+  wlVal.textContent = String(Math.round(state.waterline));
+  const deg = (state.deckRake * 180) / Math.PI;
+  rakeRange.value = String(deg);
+  rakeVal.textContent = `${deg.toFixed(1)}°`;
+}
+wlRange.addEventListener("input", () => {
+  state.waterline = parseFloat(wlRange.value);
+  wlVal.textContent = String(Math.round(state.waterline));
+  render();
+});
+rakeRange.addEventListener("input", () => {
+  const deg = parseFloat(rakeRange.value);
+  state.deckRake = (deg * Math.PI) / 180;
+  rakeVal.textContent = `${deg.toFixed(1)}°`;
+  render();
+});
 
 const toggle3d = document.getElementById("toggle3d") as HTMLButtonElement;
 toggle3d.addEventListener("click", () => {
@@ -52,6 +78,7 @@ importJsonBtn.addEventListener("click", () =>
   importJson(() => {
     render(); // loadHull already cleared the selection
     refreshSelUI();
+    syncTrim(); // waterline / deck rake may have come from the file
   }),
 );
 

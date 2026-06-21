@@ -1,6 +1,6 @@
 // ---------- rendering: the five 2D views + the shaded 3D hull ----------
 
-import { V, type Vec3 } from "./math.js";
+import { V, lerp, type Vec3 } from "./math.js";
 import {
   state,
   L,
@@ -15,6 +15,7 @@ import {
   xTransom,
   chordParam,
   knuckleEval,
+  immersion,
   type Section,
   type StationCP,
   type ActiveTarget,
@@ -108,6 +109,60 @@ function cutTrace(svg: SVGSVGElement, proj: Proj): void {
   );
 }
 
+// ---------- design waterline (the horizontal world plane at worldZ = −state.waterline) ----------
+// immersion stats for a cut section: draft = deepest point below the WL, beam = breadth at the WL.
+function waterlineStats(sec: Section): { draft: number; beam: number; wet: boolean } {
+  let draft = 0,
+    beam = 0,
+    wet = false;
+  for (let i = 0; i < sec.pts.length; i++) {
+    const p = sec.pts[i],
+      imm = immersion(p[0], p[2]);
+    if (imm > 0) wet = true;
+    if (imm > draft) draft = imm;
+    if (i > 0) {
+      const a = sec.pts[i - 1],
+        ai = immersion(a[0], a[2]);
+      if (ai < 0 !== imm < 0 && ai !== imm) {
+        const t = (0 - ai) / (imm - ai);
+        beam = Math.max(beam, 2 * Math.abs(lerp(a[1], p[1], t)));
+      }
+    }
+  }
+  return { draft, beam, wet };
+}
+// the design-waterline contour in plan (x,y): where each section crosses worldZ = −waterline
+function dwlContour(sections: Section[]): [number, number][][] {
+  const runs: [number, number][][] = [];
+  let run: [number, number][] = [];
+  for (const s of sections) {
+    if (s.aft) {
+      if (run.length > 1) runs.push(run);
+      run = [];
+      continue;
+    }
+    let f: [number, number] | null = null;
+    for (let j = 0; j < s.pts.length - 1; j++) {
+      const a = s.pts[j],
+        b = s.pts[j + 1],
+        ia = immersion(a[0], a[2]),
+        ib = immersion(b[0], b[2]);
+      if (ia < 0 !== ib < 0 && ia !== ib) {
+        const t = (0 - ia) / (ib - ia);
+        f = [lerp(a[0], b[0], t), lerp(a[1], b[1], t)];
+        break;
+      }
+    }
+    if (f) run.push(f);
+    else {
+      if (run.length > 1) runs.push(run);
+      run = [];
+    }
+  }
+  if (run.length > 1) runs.push(run);
+  return runs;
+}
+
 // ---------- render ----------
 export function render(): void {
   prepare();
@@ -130,11 +185,12 @@ export function render(): void {
   const profVal = document.getElementById("profVal") as HTMLElement;
   profVal.textContent = `x = ${Math.round(state.x0)} (${((state.x0 / L) * 100).toFixed(0)}% LOA)`;
   const h = clippedSection(state.x0, 18);
-  // (label uses the live cut)
-  const kz = h.pts[h.pts.length - 1][2];
-  profVal.textContent = h.open
-    ? `x=${Math.round(state.x0)} · section open`
-    : `x=${Math.round(state.x0)} · draft ${Math.round(-kz)}`;
+  // (label uses the live cut) — draft + breadth are measured against the design waterline
+  const wl = waterlineStats(h),
+    open = h.open ? " · open" : "";
+  profVal.textContent = wl.wet
+    ? `x=${Math.round(state.x0)}${open} · draft ${Math.round(wl.draft)} · WL beam ${Math.round(wl.beam)}`
+    : `x=${Math.round(state.x0)}${open} · above WL`;
 }
 
 function drawPlan(sections: Section[], zmin: number): void {
@@ -239,6 +295,31 @@ function drawPlan(sections: Section[], zmin: number): void {
       }),
     );
   }
+  // design-waterline footprint (where the hull meets the WL plane), mirrored to both sides
+  for (const run of dwlContour(sections)) {
+    svg.append(
+      el("path", {
+        d: poly(run.map((p) => [mapX(p[0]), yStar(p[1])])),
+        fill: "none",
+        stroke: COL.wl,
+        "stroke-width": 2,
+        opacity: 0.9,
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round",
+      }),
+    );
+    svg.append(
+      el("path", {
+        d: poly(run.map((p) => [mapX(p[0]), yPort(p[1])])),
+        fill: "none",
+        stroke: COL.wl,
+        "stroke-width": 2,
+        opacity: 0.6,
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round",
+      }),
+    );
+  }
   // cut station — true plan heading (the fan angle), mirrored to the port side
   const cut = clippedSection(state.x0, 40);
   svg.append(
@@ -310,6 +391,30 @@ function drawProfile(sections: Section[], _zmin: number): void {
   });
   dl.textContent = "flat deck";
   svg.append(dl);
+  // design waterline: horizontal in world ⇒ a raked line in this deck-frame profile (slope = the rake)
+  const wlS = Math.sin(state.deckRake),
+    wlC = Math.cos(state.deckRake),
+    zWL = (x: number) => (-state.waterline - x * wlS) / wlC;
+  svg.append(
+    el("line", {
+      x1: mapX(0),
+      y1: zScreenP(zWL(0)),
+      x2: mapX(L),
+      y2: zScreenP(zWL(L)),
+      stroke: COL.wl,
+      "stroke-width": 1.8,
+      opacity: 0.9,
+    }),
+  );
+  const wll = el("text", {
+    x: mapX(L) - 4,
+    y: zScreenP(zWL(L)) - 5,
+    "text-anchor": "end",
+    "font-size": 10,
+    fill: COL.wl,
+  });
+  wll.textContent = "DWL";
+  svg.append(wll);
   // emergent keel (rocker / stem) — only where the section actually closes on the centerline
   const keel = sections.filter((s) => s.keel).map((s) => s.pts[s.pts.length - 1]);
   if (keel.length > 1)
@@ -621,6 +726,25 @@ function drawCutStation(svg: SVGSVGElement): void {
         "stroke-width": 1.6,
       }),
     );
+  // design waterline at this station: the depth where worldZ = −waterline (combines sinkage + rake)
+  const dWL = (state.waterline + state.x0 * Math.sin(state.deckRake)) / Math.cos(state.deckRake);
+  if (dWL > 0 && dWL < DMAX) {
+    svg.append(
+      el("line", {
+        x1: snX(NMIN),
+        y1: snY(dWL),
+        x2: snX(NMAX),
+        y2: snY(dWL),
+        stroke: COL.wl,
+        "stroke-width": 1.5,
+        opacity: 0.9,
+        "stroke-dasharray": "5 4",
+      }),
+    );
+    const wt = el("text", { x: snX(NMAX) - 4, y: snY(dWL) - 4, "text-anchor": "end", "font-size": 10, fill: COL.wl });
+    wt.textContent = "WL";
+    svg.append(wt);
+  }
 }
 
 // classic body plan: the trimmed hull stations overlaid on one cross-section frame, sharing a
@@ -720,22 +844,25 @@ interface Mesh {
 
 const VERT_SRC = `
 attribute vec3 aPos; attribute vec3 aNormal;
-uniform float uc1,us1,uc2,us2,uS3D,uVW,uVH,ucxm,uczm,uDepth;
+uniform float uc1,us1,uc2,us2,uS3D,uVW,uVH,ucxm,uczm,uDepth,uRakeC,uRakeS;
 varying vec3 vN; varying vec3 vW;
 void main(){
-  float X=aPos.x-ucxm, Z=aPos.z-uczm, y=aPos.y;
+  float rx=aPos.x*uRakeC - aPos.z*uRakeS;     // deck rake: rotate the hull about y through the sheer origin
+  float rz=aPos.x*uRakeS + aPos.z*uRakeC;
+  float X=rx-ucxm, Z=rz-uczm, y=aPos.y;
   float X1=X*uc1 - y*us1;
   float Y1=X*us1 + y*uc1;
   float ndcx=X1*uS3D*2.0/uVW;
   float ndcy=(Y1*us2 + Z*uc2)*uS3D*2.0/uVH;
   float ndcz=(uc2*Y1 - us2*Z)/uDepth;        // nearer (old depth large) → smaller → passes LESS test
   gl_Position=vec4(ndcx,ndcy,ndcz,1.0);
-  vN=aNormal; vW=aPos;
+  vN=vec3(aNormal.x*uRakeC - aNormal.z*uRakeS, aNormal.y, aNormal.x*uRakeS + aNormal.z*uRakeC);
+  vW=aPos;
 }`;
 const FRAG_SRC = `
 precision highp float;
 varying vec3 vN; varying vec3 vW;
-uniform vec3 uLight,uView,uBase; uniform float uStripes; uniform int uZebra;
+uniform vec3 uLight,uView,uBase; uniform float uStripes,uAlpha; uniform int uZebra;
 void main(){
   vec3 N=normalize(vN), V=normalize(uView);
   if(dot(N,V)<0.0) N=-N;                      // two-sided
@@ -748,10 +875,10 @@ void main(){
     float band=sin(atan(R.z,R.y)*uStripes);
     float s=smoothstep(-0.14,0.14,band);
     vec3 col=mix(vec3(0.07,0.09,0.15),vec3(0.97,0.98,1.0),s)*(0.66+0.34*diff);
-    gl_FragColor=vec4(col,1.0);
+    gl_FragColor=vec4(col,uAlpha);
   } else {
     vec3 col=uBase*0.30 + uBase*diff*0.85 + vec3(1.0)*spec*0.55;
-    gl_FragColor=vec4(clamp(col,0.0,1.0),1.0);
+    gl_FragColor=vec4(clamp(col,0.0,1.0),uAlpha);
   }
 }`;
 
@@ -773,13 +900,32 @@ function initGL(): void {
   gl.useProgram(prog);
   loc = {};
   ["aPos", "aNormal"].forEach((n) => (loc[n] = gl.getAttribLocation(prog!, n)));
-  ["uc1", "us1", "uc2", "us2", "uS3D", "uVW", "uVH", "ucxm", "uczm", "uDepth", "uLight", "uView", "uBase", "uStripes", "uZebra"].forEach(
+  ["uc1", "us1", "uc2", "us2", "uS3D", "uVW", "uVH", "ucxm", "uczm", "uDepth", "uRakeC", "uRakeS", "uLight", "uView", "uBase", "uStripes", "uAlpha", "uZebra"].forEach(
     (n) => (loc[n] = gl.getUniformLocation(prog!, n)),
   );
   posBuf = gl.createBuffer();
   nrmBuf = gl.createBuffer();
   gl.enable(gl.DEPTH_TEST);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); // for the translucent waterline plane
   gl.clearColor(0, 0, 0, 0);
+}
+
+// the design-waterline plane: a horizontal quad (world frame) at worldZ = −waterline, drawn translucent
+function buildWaterMesh(): Mesh {
+  const z = -state.waterline,
+    y = 1400,
+    x0 = -300,
+    x1 = L + 300;
+  const a: Vec3 = [x0, -y, z],
+    b: Vec3 = [x1, -y, z],
+    c: Vec3 = [x1, y, z],
+    d: Vec3 = [x0, y, z],
+    up: Vec3 = [0, 0, 1],
+    P: number[] = [],
+    Nn: number[] = [];
+  pushTri(P, Nn, a, up, b, up, c, up);
+  pushTri(P, Nn, a, up, c, up, d, up);
+  return { pos: new Float32Array(P), nrm: new Float32Array(Nn), count: P.length / 3 };
 }
 
 // A fair section grid for the trimmed hull: each row is one station from the sheer-trim (top) down to
@@ -983,6 +1129,9 @@ export function draw3d(rebuild?: boolean): void {
   gl.uniform1f(loc.ucxm, L / 2);
   gl.uniform1f(loc.uczm, (ZMIN + ZMAX) / 2);
   gl.uniform1f(loc.uDepth, 3000);
+  gl.uniform1f(loc.uRakeC, Math.cos(state.deckRake)); // deck rake floats the hull at its trim
+  gl.uniform1f(loc.uRakeS, Math.sin(state.deckRake));
+  gl.uniform1f(loc.uAlpha, 1.0);
   const view = V.norm([-c2 * s1, -c2 * c1, s2]); // surface→eye direction (orthographic)
   gl.uniform3fv(loc.uView, view);
   // light tracks the camera (so the face we're looking at is lit, not the inside of the hull), biased up
@@ -994,6 +1143,18 @@ export function draw3d(rebuild?: boolean): void {
     gl.uniform1i(loc.uZebra, 0);
     drawMesh(gl, meshTrans, [0.74, 0.55, 0.37]);
   } // transom always solid
+  // translucent waterline plane last — horizontal in world (rake identity), no depth write so the hull
+  // shows through where it pierces the surface
+  gl.uniform1f(loc.uRakeC, 1);
+  gl.uniform1f(loc.uRakeS, 0);
+  gl.uniform1f(loc.uAlpha, 0.34);
+  gl.uniform1i(loc.uZebra, 0);
+  gl.enable(gl.BLEND);
+  gl.depthMask(false);
+  drawMesh(gl, buildWaterMesh(), [0.23, 0.5, 0.78]);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+  gl.uniform1f(loc.uAlpha, 1.0);
 }
 
 // ---------- control-point dots ----------

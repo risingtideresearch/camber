@@ -58,6 +58,9 @@
   .selinfo .sel-knuckle[hidden]{display:none;}
   .selinfo .sel-knuckle input{vertical-align:middle;}
   #selDelete:disabled{opacity:.4;cursor:not-allowed;}
+  .ctl{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);}
+  .ctl input[type=range]{width:92px;vertical-align:middle;}
+  .ctl .ctlval{font-weight:600;color:var(--ink);min-width:38px;}
 </style>
 </head>
 <body>
@@ -81,6 +84,12 @@
       <button id="exportStep" title="Export the hull surfaces as a STEP (ISO 10303) file">Export STEP</button>
       <button id="exportJson" title="Export the editable hull model (sheer, transom, aft/fore stations) as JSON">Export JSON</button>
       <button id="importJson" title="Load a hull model from a JSON file (replaces the current model)">Import JSON</button>
+      <label class="ctl" title="Design waterline — depth below the sheer origin (deck datum)">WL
+        <input type="range" id="wlRange" min="0" max="1400" step="10">
+        <span class="ctlval" id="wlVal"></span></label>
+      <label class="ctl" title="Deck rake — bow-up trim angle; rotates the whole hull about the sheer origin">Rake
+        <input type="range" id="rakeRange" min="-12" max="12" step="0.5">
+        <span class="ctlval" id="rakeVal"></span></label>
       <div class="legend">
         <div><span class="sw" style="background:var(--sheer)"></span>Sheer (plan &amp; trim)</div>
         <div><span class="sw" style="background:var(--deck)"></span>Flat deck (ref)</div>

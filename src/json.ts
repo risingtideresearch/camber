@@ -52,6 +52,8 @@ export interface HullData {
 }
 export interface ParsedDoc {
   length: number;
+  waterline: number; // depth below the sheer origin
+  deckRake: number; // radians
   topology: { sheerPlan: number; sheerTrim: number; section: number };
   variants: HullData[];
 }
@@ -106,6 +108,8 @@ export function buildJson(): string {
   const s = state.sheer;
   const doc = {
     length: L,
+    waterline: state.waterline,
+    deckRakeDeg: (state.deckRake * 180) / Math.PI,
     topology: {
       sheerPlan: s.cp.length,
       sheerTrim: s.trim.length,
@@ -170,6 +174,10 @@ export function parseDocument(text: string): ParsedDoc {
   if (!("topology" in doc) || !("variants" in doc))
     throw new Error("not a HullDocument (missing topology and/or variants)");
   const length = num(doc.length, "length");
+  // waterline + deck rake are optional (older documents predate them); default to 0 = WL at the deck, no rake
+  const waterline = typeof doc.waterline === "number" && isFinite(doc.waterline) ? doc.waterline : 0;
+  const deckRakeDeg =
+    typeof doc.deckRakeDeg === "number" && isFinite(doc.deckRakeDeg) ? doc.deckRakeDeg : 0;
   const t = obj(doc.topology, "topology");
   const nPlan = intCount(t.sheerPlan, "topology.sheerPlan", 2);
   const nTrim = intCount(t.sheerTrim, "topology.sheerTrim", 2);
@@ -218,7 +226,13 @@ export function parseDocument(text: string): ParsedDoc {
     };
   });
 
-  return { length, topology: { sheerPlan: nPlan, sheerTrim: nTrim, section: nSec }, variants };
+  return {
+    length,
+    waterline,
+    deckRake: (deckRakeDeg * Math.PI) / 180,
+    topology: { sheerPlan: nPlan, sheerTrim: nTrim, section: nSec },
+    variants,
+  };
 }
 
 // load a parsed variant into the live model
@@ -236,6 +250,8 @@ export function loadHull(v: HullData): void {
 export function loadJsonText(text: string): number {
   const parsed = parseDocument(text);
   loadHull(parsed.variants[0]);
+  state.waterline = parsed.waterline;
+  state.deckRake = parsed.deckRake;
   return parsed.variants.length;
 }
 
