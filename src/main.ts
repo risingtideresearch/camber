@@ -2,13 +2,15 @@
 
 import { resetModel, state } from "./model.js";
 import { render, draw3d } from "./render.js";
-import { initInteraction } from "./interaction.js";
+import { initInteraction, refreshSelUI } from "./interaction.js";
 import { downloadStep } from "./step.js";
 import { downloadJson, importJson } from "./json.js";
 
 function reset(): void {
   resetModel();
+  state.selected = null; // the old selection no longer refers to a meaningful point
   render(); // render() runs prepare() to build the sheer samplers before drawing
+  refreshSelUI();
 }
 
 const toggle3d = document.getElementById("toggle3d") as HTMLButtonElement;
@@ -46,7 +48,12 @@ exportJson.addEventListener("click", () => {
 });
 
 const importJsonBtn = document.getElementById("importJson") as HTMLButtonElement;
-importJsonBtn.addEventListener("click", () => importJson(render));
+importJsonBtn.addEventListener("click", () =>
+  importJson(() => {
+    render(); // loadHull already cleared the selection
+    refreshSelUI();
+  }),
+);
 
 initInteraction();
 reset();

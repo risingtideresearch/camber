@@ -98,10 +98,10 @@ const FORE_DEF: [number, number, number][] = [
 ]; // deeper / finer (bow), round bilge
 
 // ---------- mutable model + view state ----------
-export type Tool = "move" | "pen" | "delete" | "knuckle";
+export type Tool = "select" | "add";
 export type View3D = "trimmed" | "sheet";
 
-// which control point a tool is currently acting on, so the renderer can highlight it
+// which kind of control point is currently selected, so the renderer can highlight it
 export type ActiveTarget = "plan" | "trim" | "transom" | "aft" | "fore";
 
 export interface State {
@@ -113,7 +113,7 @@ export interface State {
   view3d: View3D;
   zebra: boolean;
   tool: Tool;
-  active: { tgt: ActiveTarget; idx: number } | null;
+  selected: { tgt: ActiveTarget; idx: number } | null;
 }
 
 export const state: State = {
@@ -124,8 +124,8 @@ export const state: State = {
   rot: { yaw: -0.62, pitch: 0.42 },
   view3d: "trimmed", // "trimmed" = clipped + mirrored hull; "sheet" = untrimmed one side
   zebra: false, // zebra-stripe fairness check on the 3D surface
-  tool: "move",
-  active: null, // the control point currently being dragged/edited (highlighted in the editors)
+  tool: "select", // "select" = click a point to select (then drag/delete/knuckle); "add" = click to add
+  selected: null, // the persistently selected control point (highlighted in the editors)
 };
 
 export function resetModel(): void {

@@ -228,7 +228,7 @@ export function loadHull(v: HullData): void {
   state.sheer.transom = v.transom;
   state.AFT = v.aft;
   state.FORE = v.fore;
-  state.active = null;
+  state.selected = null;
   state.x0 = clamp(state.x0, 0, L);
 }
 

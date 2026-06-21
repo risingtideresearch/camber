@@ -51,6 +51,13 @@
   .toolbar .tool svg{width:14px;height:14px;display:block;}
   .toolbar .tool.active{background:var(--ink);color:#fff;}
   .toolbar .tool.active:hover{background:var(--ink);}
+  .selinfo{display:inline-flex;gap:12px;align-items:center;padding:0 4px;}
+  .selinfo[hidden]{display:none;}
+  .selinfo .sel-label{font-weight:600;color:var(--ink);font-size:13px;}
+  .selinfo .sel-knuckle{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:var(--mut);}
+  .selinfo .sel-knuckle[hidden]{display:none;}
+  .selinfo .sel-knuckle input{vertical-align:middle;}
+  #selDelete:disabled{opacity:.4;cursor:not-allowed;}
 </style>
 </head>
 <body>
@@ -58,14 +65,17 @@
   <div class="card">
     <div class="barrow">
       <div class="toolbar" id="toolbar">
-        <button class="tool active" data-tool="move" title="Move — drag points">
-          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 1.4l9.6 5.3-4.3.9-1 4.4z"/></svg>Move</button>
-        <button class="tool" data-tool="pen" title="Pen — add points">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M10.5 2.3l3.2 3.2-8 8-3.7.5.5-3.7z"/><path d="M9 3.8l3.2 3.2"/></svg>Pen</button>
-        <button class="tool" data-tool="delete" title="Delete — remove points">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M3 4.3h10M6 4.3V2.4h4v1.9M4.8 4.3l.7 9.3h5l.7-9.3M6.6 6.6v4.6M9.4 6.6v4.6"/></svg>Delete</button>
-        <button class="tool" data-tool="knuckle" title="Knuckle — drag left/right across a point: left = smooth, right = hard corner">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M3.4 2.6v10h10"/><rect x="2" y="1.2" width="2.8" height="2.8" fill="currentColor" stroke="none"/><rect x="11.2" y="11.1" width="2.8" height="2.8" fill="currentColor" stroke="none"/></svg>Knuckle</button>
+        <button class="tool active" data-tool="select" title="Select — click a point to select it, then drag to move, Delete to remove, or set its knuckle">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 1.4l9.6 5.3-4.3.9-1 4.4z"/></svg>Select</button>
+        <button class="tool" data-tool="add" title="Add — click empty space in an editor to add a control point there">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>Add</button>
+      </div>
+      <div class="selinfo" id="selinfo" hidden>
+        <span class="sel-label" id="selLabel"></span>
+        <label class="sel-knuckle" id="selKnuckleWrap" hidden>Knuckle
+          <input type="range" id="selKnuckle" min="0" max="1" step="0.01" title="0 = smooth · 1 = hard corner">
+        </label>
+        <button id="selDelete" title="Delete the selected point (Delete / Backspace)">Delete</button>
       </div>
       <button id="reset">Reset</button>
       <button id="exportStep" title="Export the hull surfaces as a STEP (ISO 10303) file">Export STEP</button>

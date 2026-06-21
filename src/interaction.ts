@@ -1,7 +1,7 @@
 // ---------- pointer interaction: dragging points, the cut slider, 3D rotation, and the edit tools ----------
 
 import { clamp, lerp } from "./math.js";
-import { state, L, NMIN, NMAX, DMAX } from "./model.js";
+import { state, L, NMIN, NMAX, DMAX, type ActiveTarget, type StationCP } from "./model.js";
 import {
   invX,
   invY,
@@ -19,7 +19,7 @@ import { svgL, svgP, svgA, svgF, cv3d } from "./dom.js";
 import { render, draw3d } from "./render.js";
 
 interface Drag {
-  kind: "slider" | "sheer" | "trim" | "transom" | "stn" | "knuckle" | "rot";
+  kind: "slider" | "sheer" | "trim" | "transom" | "stn" | "rot";
   svg?: SVGSVGElement;
   vbw?: number;
   vbh?: number;
@@ -27,7 +27,6 @@ interface Drag {
   which?: "aft" | "fore";
   px0?: number;
   py0?: number;
-  k0?: number;
   yaw0?: number;
   pitch0?: number;
 }
@@ -37,7 +36,7 @@ let drag: Drag | null = null;
 const isStn = (svg: SVGSVGElement): boolean => svg === svgA || svg === svgF;
 
 export function startDrag(
-  d: { kind: Drag["kind"]; idx?: number; which?: "aft" | "fore"; k0?: number },
+  d: { kind: Drag["kind"]; idx?: number; which?: "aft" | "fore" },
   svg: SVGSVGElement,
   e: PointerEvent,
 ): void {
@@ -46,9 +45,9 @@ export function startDrag(
     svg,
     vbw: isStn(svg) ? STW : 1000,
     vbh: isStn(svg) ? STH : svg === svgP ? PH : LH,
-    px0: e.clientX, // anchor for relative (horizontal) drags like the knuckle edit
+    px0: e.clientX,
   };
-  // mark the acted-on control point so the renderer can highlight it
+  // a drag on a control point selects it (persistently); the x-cut slider / rotation leave the selection
   const tgt =
     d.kind === "sheer"
       ? "plan"
@@ -56,10 +55,10 @@ export function startDrag(
         ? "trim"
         : d.kind === "transom"
           ? "transom"
-          : d.kind === "stn" || d.kind === "knuckle"
+          : d.kind === "stn"
             ? d.which!
             : null;
-  state.active = tgt ? { tgt, idx: d.idx! } : null;
+  if (tgt) select(tgt, d.idx!);
   e.stopPropagation();
   e.preventDefault();
 }
@@ -94,27 +93,29 @@ function moveTransom(d: Drag, vx: number, vy: number): void {
   cp.z = clamp(invZp(vy), ZTRIMMIN, 0);
 }
 
-// ---------- add / remove control points ----------
-function addSheerPoint(x: number, y: number): void {
+// ---------- add / remove control points ---------- (add* return the inserted index)
+function addSheerPoint(x: number, y: number): number {
   const cp = state.sheer.cp,
     n = cp.length;
   x = clamp(x, cp[0].x + 80, cp[n - 1].x - 80);
   let k = cp.findIndex((p) => p.x > x);
   if (k < 1) k = n - 1;
   cp.splice(k, 0, { x, y: clamp(y, 0, YMAX) });
+  return k;
 }
 function removeSheerPoint(idx: number): void {
   const cp = state.sheer.cp;
   if (cp.length <= 3 || idx <= 0 || idx >= cp.length - 1) return; // keep both ends and a minimum of 3
   cp.splice(idx, 1);
 }
-function addTrimPoint(x: number, z: number): void {
+function addTrimPoint(x: number, z: number): number {
   const cp = state.sheer.trim,
     n = cp.length;
   x = clamp(x, cp[0].x + 80, cp[n - 1].x - 80);
   let k = cp.findIndex((p) => p.x > x);
   if (k < 1) k = n - 1;
   cp.splice(k, 0, { x, z: clamp(z, ZTRIMMIN, 0) });
+  return k;
 }
 function removeTrimPoint(idx: number): void {
   const cp = state.sheer.trim;
@@ -123,7 +124,7 @@ function removeTrimPoint(idx: number): void {
 }
 // add a station point: insert into the clicked array where clicked, and into the other array at the
 // matching spot along the same segment, so AFT/FORE stay index-aligned for blending.
-function addStationPoint(which: "aft" | "fore", n: number, d: number): void {
+function addStationPoint(which: "aft" | "fore", n: number, d: number): number {
   const arr = which === "aft" ? state.AFT : state.FORE,
     other = which === "aft" ? state.FORE : state.AFT;
   let best = 1,
@@ -149,6 +150,7 @@ function addStationPoint(which: "aft" | "fore", n: number, d: number): void {
   const oa = other[best - 1],
     ob = other[best];
   other.splice(best, 0, { n: lerp(oa.n, ob.n, bt), d: lerp(oa.d, ob.d, bt), k: 0 });
+  return best;
 }
 function removeStationPoint(idx: number): void {
   if (state.AFT.length <= 3 || idx <= 0 || idx >= state.AFT.length - 1) return; // keep the sheer point and the deepest point
@@ -156,21 +158,14 @@ function removeStationPoint(idx: number): void {
   state.FORE.splice(idx, 1);
 }
 
-// ---------- edit tools: move / pen / delete / knuckle ----------
+// ---------- tools (select / add) + the selected-point actions ----------
 function vbCoords(svg: SVGSVGElement, e: PointerEvent, w: number, h: number): [number, number] {
   const r = svg.getBoundingClientRect();
   return [((e.clientX - r.left) * w) / r.width, ((e.clientY - r.top) * h) / r.height];
 }
 
 function setToolCursor(): void {
-  const cur =
-    state.tool === "pen"
-      ? "crosshair"
-      : state.tool === "move"
-        ? "default"
-        : state.tool === "knuckle"
-          ? "ew-resize"
-          : "pointer";
+  const cur = state.tool === "add" ? "crosshair" : "default";
   [svgL, svgP, svgA, svgF].forEach((s) => (s.style.cursor = cur));
 }
 
@@ -183,7 +178,89 @@ export function setTool(name: typeof state.tool): void {
   setToolCursor();
 }
 
-// click on a point: act per active tool. Pen does nothing on a point (adds happen on empty space).
+// ---------- selection ----------
+const arrOf = (tgt: ActiveTarget): StationCP[] => (tgt === "aft" ? state.AFT : state.FORE);
+
+export function select(tgt: ActiveTarget, idx: number): void {
+  state.selected = { tgt, idx };
+  refreshSelUI();
+  render(); // draw the highlight immediately (selecting need not involve a drag)
+}
+export function clearSelection(): void {
+  if (!state.selected) return;
+  state.selected = null;
+  refreshSelUI();
+  render();
+}
+
+// can the selected point be deleted? ends are pinned; the sheer/trim/station keep a minimum of 3; the
+// transom is a fixed pair of points.
+function canDelete(s: { tgt: ActiveTarget; idx: number }): boolean {
+  if (s.tgt === "transom") return false;
+  if (s.tgt === "plan") return state.sheer.cp.length > 3 && s.idx > 0 && s.idx < state.sheer.cp.length - 1;
+  if (s.tgt === "trim") return state.sheer.trim.length > 3 && s.idx > 0 && s.idx < state.sheer.trim.length - 1;
+  const arr = arrOf(s.tgt); // aft / fore
+  return arr.length > 3 && s.idx > 0 && s.idx < arr.length - 1;
+}
+
+// station interior points carry a knuckle (k); the sheer/trim/transom do not.
+function hasKnuckle(s: { tgt: ActiveTarget; idx: number }): boolean {
+  if (s.tgt !== "aft" && s.tgt !== "fore") return false;
+  const arr = arrOf(s.tgt);
+  return s.idx > 0 && s.idx < arr.length - 1;
+}
+
+function labelFor(s: { tgt: ActiveTarget; idx: number }): string {
+  const name = {
+    plan: "Sheer (plan)",
+    trim: "Sheer trim",
+    transom: "Transom",
+    aft: "Aft station",
+    fore: "Fore station",
+  }[s.tgt];
+  return `${name} · point ${s.idx + 1}`;
+}
+
+export function deleteSelected(): void {
+  const s = state.selected;
+  if (!s || !canDelete(s)) return;
+  if (s.tgt === "plan") removeSheerPoint(s.idx);
+  else if (s.tgt === "trim") removeTrimPoint(s.idx);
+  else removeStationPoint(s.idx); // aft / fore (removes the matching index from both halves)
+  state.selected = null;
+  refreshSelUI();
+  render();
+}
+
+function setSelectedKnuckle(k: number): void {
+  const s = state.selected;
+  if (!s || !hasKnuckle(s)) return;
+  arrOf(s.tgt)[s.idx].k = clamp(k, 0, 1);
+  render();
+}
+
+// reflect the current selection in the contextual toolbar panel (label, delete button, knuckle slider)
+export function refreshSelUI(): void {
+  const info = document.getElementById("selinfo")!,
+    label = document.getElementById("selLabel")!,
+    del = document.getElementById("selDelete") as HTMLButtonElement,
+    kwrap = document.getElementById("selKnuckleWrap")!,
+    krange = document.getElementById("selKnuckle") as HTMLInputElement;
+  const s = state.selected;
+  if (!s) {
+    info.hidden = true;
+    return;
+  }
+  info.hidden = false;
+  label.textContent = labelFor(s);
+  del.disabled = !canDelete(s);
+  const knuckle = hasKnuckle(s);
+  kwrap.hidden = !knuckle;
+  if (knuckle) krange.value = String(arrOf(s.tgt)[s.idx].k);
+}
+
+// click on a point → select it (and, if it can move, start dragging). The pinned sheer-origin (idx 0 of
+// a station) selects but does not drag.
 export function stnPointDown(
   which: "aft" | "fore",
   idx: number,
@@ -192,54 +269,23 @@ export function stnPointDown(
   e: PointerEvent,
 ): void {
   e.stopPropagation();
-  if (state.tool === "delete") {
-    if (!end) removeStationPoint(idx);
-    setTool("move");
-    render();
+  if (end) {
+    select(which, idx);
     return;
   }
-  if (state.tool === "knuckle") {
-    // drag left/right across the point to set its knuckle (0 = smooth, 1 = hard corner)
-    const arr = which === "aft" ? state.AFT : state.FORE;
-    if (idx > 0 && idx < arr.length - 1)
-      startDrag({ kind: "knuckle", which, idx, k0: arr[idx].k }, svg, e);
-    return;
-  }
-  if (state.tool === "move" && !end) startDrag({ kind: "stn", which, idx }, svg, e);
+  startDrag({ kind: "stn", which, idx }, svg, e);
 }
 export function sheerPointDown(idx: number, svg: SVGSVGElement, e: PointerEvent): void {
   e.stopPropagation();
-  if (state.tool === "delete") {
-    removeSheerPoint(idx);
-    setTool("move");
-    render();
-    return;
-  }
-  if (state.tool === "knuckle") {
-    setTool("move");
-    return;
-  } // the sheer has no knuckle points
-  if (state.tool === "move") startDrag({ kind: "sheer", idx }, svg, e);
+  startDrag({ kind: "sheer", idx }, svg, e);
 }
 export function trimPointDown(idx: number, svg: SVGSVGElement, e: PointerEvent): void {
   e.stopPropagation();
-  if (state.tool === "delete") {
-    removeTrimPoint(idx);
-    setTool("move");
-    render();
-    return;
-  }
-  if (state.tool === "knuckle") {
-    setTool("move");
-    return;
-  } // the sheer trim has no knuckle points
-  if (state.tool === "move") startDrag({ kind: "trim", idx }, svg, e);
+  startDrag({ kind: "trim", idx }, svg, e);
 }
 export function transomPointDown(idx: number, svg: SVGSVGElement, e: PointerEvent): void {
   e.stopPropagation();
-  if (state.tool === "move") startDrag({ kind: "transom", idx }, svg, e);
-  // only the two transom points; no add/delete
-  else setTool("move");
+  startDrag({ kind: "transom", idx }, svg, e);
 }
 
 // ---------- wire up the global / per-svg pointer listeners (called once at startup) ----------
@@ -283,50 +329,51 @@ export function initInteraction(): void {
       const lo = arr[i - 1].d,
         hi = i < arr.length - 1 ? arr[i + 1].d : DMAX; // keep d descending so the section never curls up
       cp.d = clamp(invD(vy), lo, hi);
-    } else if (drag.kind === "knuckle") {
-      // horizontal drag sets the knuckle: right → harder (k→1), left → smoother (k→0).
-      const arr = drag.which === "aft" ? state.AFT : state.FORE,
-        w = drag.svg!.getBoundingClientRect().width || 1,
-        dk = (e.clientX - drag.px0!) / (w * 0.5); // half the panel width = full 0..1 sweep
-      arr[drag.idx!].k = clamp(drag.k0! + dk, 0, 1);
     }
     render();
   });
   window.addEventListener("pointerup", () => {
-    drag = null;
-    if (state.active) {
-      state.active = null; // drop the highlight
-      render();
-    }
+    drag = null; // selection persists after a drag, so the point stays highlighted and editable
   });
 
-  // pen: click empty space in an editor to add a point there, then return to the move tool
-  svgL.addEventListener("pointerdown", (e) => {
-    if (state.tool !== "pen") return;
-    const [vx, vy] = vbCoords(svgL, e, 1000, LH);
-    addSheerPoint(invX(vx), invY(vy));
-    setTool("move");
-    render();
+  // delete the selected point with Delete/Backspace (unless typing in the knuckle slider)
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Delete" && e.key !== "Backspace") return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+    if (state.selected) {
+      e.preventDefault();
+      deleteSelected();
+    }
   });
-  svgP.addEventListener("pointerdown", (e) => {
-    if (state.tool !== "pen") return;
-    const [vx, vy] = vbCoords(svgP, e, 1000, PH);
-    addTrimPoint(invX(vx), invZp(vy));
-    setTool("move");
-    render();
-  });
-  svgA.addEventListener("pointerdown", (e) => {
-    if (state.tool !== "pen") return;
-    const [vx, vy] = vbCoords(svgA, e, STW, STH);
-    addStationPoint("aft", invN(vx), invD(vy));
-    setTool("move");
-    render();
-  });
-  svgF.addEventListener("pointerdown", (e) => {
-    if (state.tool !== "pen") return;
-    const [vx, vy] = vbCoords(svgF, e, STW, STH);
-    addStationPoint("fore", invN(vx), invD(vy));
-    setTool("move");
-    render();
-  });
+  document.getElementById("selDelete")!.addEventListener("click", deleteSelected);
+  document
+    .getElementById("selKnuckle")!
+    .addEventListener("input", (e) => setSelectedKnuckle(parseFloat((e.target as HTMLInputElement).value)));
+
+  // editor backgrounds: in "add" mode click empty space to add a point there (then back to select, with
+  // the new point selected); in "select" mode an empty click clears the selection.
+  const onBg = (
+    svg: SVGSVGElement,
+    w: number,
+    h: number,
+    add: (vx: number, vy: number) => { tgt: ActiveTarget; idx: number },
+  ): void => {
+    svg.addEventListener("pointerdown", (e) => {
+      if (state.tool === "add") {
+        const [vx, vy] = vbCoords(svg, e, w, h),
+          { tgt, idx } = add(vx, vy);
+        setTool("select");
+        select(tgt, idx); // select() re-renders with the new point highlighted
+      } else {
+        clearSelection();
+      }
+    });
+  };
+  onBg(svgL, 1000, LH, (vx, vy) => ({ tgt: "plan", idx: addSheerPoint(invX(vx), invY(vy)) }));
+  onBg(svgP, 1000, PH, (vx, vy) => ({ tgt: "trim", idx: addTrimPoint(invX(vx), invZp(vy)) }));
+  onBg(svgA, STW, STH, (vx, vy) => ({ tgt: "aft", idx: addStationPoint("aft", invN(vx), invD(vy)) }));
+  onBg(svgF, STW, STH, (vx, vy) => ({ tgt: "fore", idx: addStationPoint("fore", invN(vx), invD(vy)) }));
+
+  refreshSelUI();
 }

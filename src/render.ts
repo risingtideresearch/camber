@@ -787,10 +787,12 @@ function initGL(): void {
 // to a clipped sub-span, adjacent stations stay parallel (no sliver shear), so the surface is smooth all
 // the way aft. The transom is then taken out by clipping this grid against the transom plane (below),
 // which yields an exact, shared hull/transom edge instead of two independently sampled curves.
-function bilgeRows(N: number, M: number): Vec3[][] {
+function bilgeRows(N: number, M: number, trim: boolean): Vec3[][] {
   const rows: Vec3[][] = [];
   for (let i = 0; i <= N; i++) {
-    const s = sweptSection((L * i) / N, M, true, false); // no transom clip → fair, full sections
+    // trimmed: sheer-trim → keel, no transom clip (done later by clipQuad). untrimmed: the raw swept
+    // sheet, full station deck → tmax with no trims at all.
+    const s = sweptSection((L * i) / N, M, trim, false);
     if (!s.aft) rows.push(s.pts);
   }
   return rows;
@@ -854,9 +856,11 @@ function clipQuad(poly: PN[]): { inside: PN[]; cut: [Vec3, Vec3] | null } {
 
 // build the hull triangle soup by clipping the fair grid against the transom plane; also collect the cut
 // segments so the transom panel can be built from the very same edge. mirror ⇒ add the port half.
-function buildHullMesh(mirror: boolean): { hull: Mesh; cuts: [Vec3, Vec3][] } {
+// trimmed ⇒ clip the fair grid against the transom plane, collect the cut edge, and mirror to the port
+// half (a closed hull). Untrimmed ⇒ emit the raw swept sheet as-is: one side, no sheer/transom/keel trim.
+function buildHullMesh(trimmed: boolean): { hull: Mesh; cuts: [Vec3, Vec3][] } {
   const M = 44,
-    rows = bilgeRows(180, M),
+    rows = bilgeRows(180, M, trimmed),
     R = rows.length,
     C = M + 1,
     P: number[] = [],
@@ -865,7 +869,7 @@ function buildHullMesh(mirror: boolean): { hull: Mesh; cuts: [Vec3, Vec3][] } {
   const nrm = rows.map((_, i) => rows[i].map((_, j) => gridNormal(rows, i, j)));
   const emit = (a: PN, b: PN, c: PN): void => {
     pushTri(P, Nn, a.p, a.n, b.p, b.n, c.p, c.n);
-    if (mirror) {
+    if (trimmed) {
       const m = (q: PN): PN => ({ p: [q.p[0], -q.p[1], q.p[2]], n: [q.n[0], -q.n[1], q.n[2]] });
       const ma = m(a),
         mb = m(b),
@@ -881,6 +885,11 @@ function buildHullMesh(mirror: boolean): { hull: Mesh; cuts: [Vec3, Vec3][] } {
         { p: rows[i + 1][j + 1], n: nrm[i + 1][j + 1] },
         { p: rows[i][j + 1], n: nrm[i][j + 1] },
       ];
+      if (!trimmed) {
+        emit(quad[0], quad[1], quad[2]); // raw sheet: the whole quad, untrimmed
+        emit(quad[0], quad[2], quad[3]);
+        continue;
+      }
       const { inside, cut } = clipQuad(quad);
       if (cut) cuts.push(cut);
       for (let k = 1; k + 1 < inside.length; k++) emit(inside[0], inside[k], inside[k + 1]); // fan
@@ -942,11 +951,11 @@ let meshHull: Mesh | null = null,
   meshTrans: Mesh | null = null;
 export function draw3d(rebuild?: boolean): void {
   if (!GL) initGL();
-  const mirror = state.view3d === "trimmed";
+  const trimmed = state.view3d === "trimmed";
   if (rebuild !== false || !meshHull) {
-    const built = buildHullMesh(mirror);
+    const built = buildHullMesh(trimmed);
     meshHull = built.hull;
-    meshTrans = mirror ? buildTransomMesh(built.cuts) : null;
+    meshTrans = trimmed ? buildTransomMesh(built.cuts) : null;
   }
   const gl = GL!,
     cv = gl.canvas as HTMLCanvasElement,
@@ -990,9 +999,9 @@ export function draw3d(rebuild?: boolean): void {
 // ---------- control-point dots ----------
 const HILITE = "#f59e0b"; // accent ring on the control point a tool is currently acting on
 
-// draw a halo behind a control point if it is the one being acted on by a tool
+// draw a halo behind a control point if it is the currently selected one
 function halo(svg: SVGSVGElement, tgt: ActiveTarget, idx: number, sx: number, sy: number, r: number): void {
-  const a = state.active;
+  const a = state.selected;
   if (!a || a.tgt !== tgt || a.idx !== idx) return;
   svg.append(
     el("circle", { cx: sx, cy: sy, r, fill: "none", stroke: HILITE, "stroke-width": 3, opacity: 0.95 }),
