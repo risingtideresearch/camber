@@ -203,11 +203,11 @@ function canDelete(s: { tgt: ActiveTarget; idx: number }): boolean {
   return arr.length > 3 && s.idx > 0 && s.idx < arr.length - 1;
 }
 
-// station interior points carry a knuckle (k); the sheer/trim/transom do not.
+// section points carry a knuckle (k) — including the last (keel) point, whose knuckle bends the final
+// segment into the keel (a hard chine to the keel). Only the pinned sheer point (idx 0) and the
+// sheer/trim/transom do not.
 function hasKnuckle(s: { tgt: ActiveTarget; idx: number }): boolean {
-  if (s.tgt !== "aft" && s.tgt !== "fore") return false;
-  const arr = arrOf(s.tgt);
-  return s.idx > 0 && s.idx < arr.length - 1;
+  return (s.tgt === "aft" || s.tgt === "fore") && s.idx > 0;
 }
 
 function labelFor(s: { tgt: ActiveTarget; idx: number }): string {

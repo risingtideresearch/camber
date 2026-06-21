@@ -553,9 +553,10 @@ function drawStation(
   arr.forEach((p, idx) => {
     const end = idx === 0,
       s = end ? 4 : 6,
-      // knuckle applies only to interior points; node morphs round (k=0) → square (k=1) via corner radius
-      inner = idx > 0 && idx < arr.length - 1,
-      k = inner ? Math.min(Math.max(p.k, 0), 1) : 0,
+      // knuckle applies to every point but the pinned sheer point (idx 0) — including the keel point;
+      // the node morphs round (k=0) → square (k=1) via corner radius to show its sharpness
+      knuck = idx > 0,
+      k = knuck ? Math.min(Math.max(p.k, 0), 1) : 0,
       rad = (1 - k) * s;
     halo(svg, which, idx, snX(p.n), snY(p.d), s + 4);
     const node = el("rect", {
@@ -572,6 +573,15 @@ function drawStation(
     node.addEventListener("pointerdown", (e) => stnPointDown(which, idx, end, svg, e));
     svg.append(node);
   });
+  // when ANY station point is selected, show the linked pair in BOTH editors: the correspondent (same
+  // index) on the ghost = the other station, and — in whichever editor isn't the selected one — on this
+  // live curve too (in the selected editor that point already carries the solid selection halo).
+  const a = state.selected,
+    si = selStationIdx();
+  if (a && si !== null) {
+    linkDot(svg, snX(ghost[si].n), snY(ghost[si].d), gcol);
+    if (a.tgt !== which) linkDot(svg, snX(arr[si].n), snY(arr[si].d), col);
+  }
 }
 
 // the interpolated (blended) station at the red cut x0, with both trims marked: the sheer trim
@@ -744,6 +754,18 @@ function drawCutStation(svg: SVGSVGElement): void {
     const wt = el("text", { x: snX(NMAX) - 4, y: snY(dWL) - 4, "text-anchor": "end", "font-size": 10, fill: COL.wl });
     wt.textContent = "WL";
     svg.append(wt);
+  }
+
+  // mark where the currently selected station point lands on this interpolated station (its blend by f)
+  const selIdx = selStationIdx();
+  if (selIdx !== null) {
+    const f = Math.min(Math.max(state.x0 / L, 0), 1);
+    linkDot(
+      svg,
+      snX(lerp(state.AFT[selIdx].n, state.FORE[selIdx].n, f)),
+      snY(lerp(state.AFT[selIdx].d, state.FORE[selIdx].d, f)),
+      COL.station,
+    );
   }
 }
 
@@ -925,6 +947,67 @@ function buildWaterMesh(): Mesh {
     Nn: number[] = [];
   pushTri(P, Nn, a, up, b, up, c, up);
   pushTri(P, Nn, a, up, c, up, d, up);
+  return { pos: new Float32Array(P), nrm: new Float32Array(Nn), count: P.length / 3 };
+}
+
+// the "longitudinal" of a single template-point index: the locus that control point traces as the section
+// sweeps from stern to bow. At each x the blended point (lerp of the aft/fore control point by f = x/L) is
+// placed into the world by the frame there — the same construction the hull surface uses — so the curve
+// rides exactly on the swept sheet (it is the keel line when idx is the keel point, a chine line at a
+// knuckle, etc.). Each sample is trimmed exactly as the hull is — by the sheer-trim line, the centerline,
+// and the transom plane — so the line stops where the hull does (an overshooting keel point, for instance,
+// only shows where it actually reaches the centerline). Drawn as a thin camera-facing ribbon (GL line
+// width is unreliable), starboard plus its port mirror, nudged toward the eye by BIAS so it sits just
+// proud of the surface without z-fighting.
+function buildLongitudinalMesh(idx: number, view: Vec3): Mesh {
+  const aft = state.AFT,
+    fore = state.FORE;
+  if (idx < 0 || idx >= aft.length) return { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 };
+  const N = 160,
+    HW = 5, // ribbon half-width (mm) — a thin guide line
+    BIAS = 22, // shift toward the eye (mm) so the line floats just above the hull it lies on
+    off = V.scale(view, BIAS);
+  const W: Vec3[] = [],
+    keep: boolean[] = []; // each sample trimmed the same way the hull surface is
+  for (let i = 0; i <= N; i++) {
+    const x = (L * i) / N,
+      f = Math.min(Math.max(x / L, 0), 1),
+      n = lerp(aft[idx].n, fore[idx].n, f),
+      d = lerp(aft[idx].d, fore[idx].d, f),
+      fr = frameAt(x),
+      w: Vec3 = [
+        fr.p[0] + n * fr.n[0] + d * fr.d[0],
+        fr.p[1] + n * fr.n[1] + d * fr.d[1],
+        fr.p[2] + n * fr.n[2] + d * fr.d[2],
+      ];
+    W.push(w);
+    // kept iff below the sheer-trim line (depth ≥ trim depth), not past the centerline (world y ≥ 0),
+    // and forward of the raked transom plane (x ≥ xTransom(z)) — the same three clips the hull gets.
+    keep.push(d >= -state.sheer.zf(x) && w[1] >= 0 && w[0] >= xTransom(w[2]));
+  }
+  const P: number[] = [],
+    Nn: number[] = [];
+  const emitSide = (sgn: number) => {
+    const M = W.map((p): Vec3 => [p[0], sgn * p[1], p[2]]); // sgn = -1 mirrors to port
+    const Ls: Vec3[] = [],
+      Rs: Vec3[] = [];
+    for (let i = 0; i <= N; i++) {
+      const t = V.norm(V.sub(M[Math.min(i + 1, N)], M[Math.max(i - 1, 0)]));
+      let w = V.cross(t, view); // ribbon width axis ⟂ tangent and the eye ⇒ always faces the camera
+      if (V.dot(w, w) < 1e-9) w = V.cross(t, [0, 0, 1]);
+      const wn = V.scale(V.norm(w), HW),
+        c = M[i];
+      Ls.push([c[0] + wn[0] + off[0], c[1] + wn[1] + off[1], c[2] + wn[2] + off[2]]);
+      Rs.push([c[0] - wn[0] + off[0], c[1] - wn[1] + off[1], c[2] - wn[2] + off[2]]);
+    }
+    for (let i = 0; i < N; i++) {
+      if (!keep[i] || !keep[i + 1]) continue; // break the ribbon across trimmed-away spans
+      pushTri(P, Nn, Ls[i], view, Rs[i], view, Rs[i + 1], view);
+      pushTri(P, Nn, Ls[i], view, Rs[i + 1], view, Ls[i + 1], view);
+    }
+  };
+  emitSide(1);
+  emitSide(-1);
   return { pos: new Float32Array(P), nrm: new Float32Array(Nn), count: P.length / 3 };
 }
 
@@ -1143,6 +1226,12 @@ export function draw3d(rebuild?: boolean): void {
     gl.uniform1i(loc.uZebra, 0);
     drawMesh(gl, meshTrans, [0.74, 0.55, 0.37]);
   } // transom always solid
+  // selected station point → draw its longitudinal (swept locus along x) on top of the hull, in amber
+  const li = selStationIdx();
+  if (li !== null) {
+    gl.uniform1i(loc.uZebra, 0);
+    drawMesh(gl, buildLongitudinalMesh(li, view), [0.96, 0.62, 0.04]); // matches the 2D link-marker amber
+  }
   // translucent waterline plane last — horizontal in world (rake identity), no depth write so the hull
   // shows through where it pierces the surface
   gl.uniform1f(loc.uRakeC, 1);
@@ -1167,6 +1256,21 @@ function halo(svg: SVGSVGElement, tgt: ActiveTarget, idx: number, sx: number, sy
   svg.append(
     el("circle", { cx: sx, cy: sy, r, fill: "none", stroke: HILITE, "stroke-width": 3, opacity: 0.95 }),
   );
+}
+
+// mark the point that CORRESPONDS (same index) to the current selection — on the other station's ghost
+// curve and on the interpolated station. A dashed accent ring (vs. the solid selection halo) over a dot
+// in `col`, so it reads as "linked to the selected point" rather than "selected".
+function linkDot(svg: SVGSVGElement, sx: number, sy: number, col: string): void {
+  svg.append(
+    el("circle", { cx: sx, cy: sy, r: 8, fill: "none", stroke: HILITE, "stroke-width": 2, opacity: 0.9, "stroke-dasharray": "3 3" }),
+  );
+  svg.append(el("circle", { cx: sx, cy: sy, r: 3.5, fill: col, stroke: "#fff", "stroke-width": 1.2 }));
+}
+// the selected station-point index, or null when the selection isn't a station point (aft/fore share length)
+function selStationIdx(): number | null {
+  const a = state.selected;
+  return a && (a.tgt === "aft" || a.tgt === "fore") && a.idx < state.AFT.length ? a.idx : null;
 }
 
 function cpDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {

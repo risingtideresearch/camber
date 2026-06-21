@@ -20,7 +20,7 @@ export interface TransomCP {
 export interface StationCP {
   n: number;
   d: number;
-  k: number; // knuckle ∈ [0,1]: 0 = smooth, 1 = hard corner; blends. (ignored on the end points)
+  k: number; // knuckle ∈ [0,1]: 0 = smooth, 1 = hard corner; blends. (point 0, the pinned sheer, is left smooth)
 }
 export interface Sheer {
   cp: SheerCP[];
@@ -79,7 +79,8 @@ const TRANSOM_DEF: [number, number][] = [
 ];
 // station sections in the local frame: d = down from the sheer, n = inboard offset. Point 0 = sheer,
 // pinned at the origin. The curve descends from the sheer; the centerline clip closes the bottom.
-// [n, d, k] — k is the knuckle at that point (ignored on point 0 and the last point). The bilge point
+// [n, d, k] — k is the knuckle at that point (point 0, the pinned sheer, is left smooth; the last point's
+// knuckle bends the final segment, so a hard chine can run into the keel). The bilge point
 // (index 2) is a hard chine aft (k=1) that fades to a round bilge forward (k=0): a hard-chine planing
 // stern blending into a soft bow along the length of the one hull.
 const AFT_DEF: [number, number, number][] = [

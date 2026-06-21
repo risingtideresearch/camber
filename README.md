@@ -190,7 +190,7 @@ a bounded interval is convex, so it blends like everything else.
 ```
 PlanPoint    { dx: number,  y: number }                 // dx > 0 (≥ 0 for point 0); y ≥ 0 (half-breadth at z = 0)
 TrimPoint    { dx: number,  depth: number }             // dx > 0 (≥ 0 for point 0); depth ≥ 0 (below the flat deck)
-SectionPoint { dd: number,  n: number,  k: number }     // dd > 0 (= 0 for pt 0, the sheer); n ∈ ℝ (n < 0 = tumblehome); k ∈ [0,1] (knuckle, ignored on the end points)
+SectionPoint { dd: number,  n: number,  k: number }     // dd > 0 (= 0 for pt 0, the sheer); n ∈ ℝ (n < 0 = tumblehome); k ∈ [0,1] (knuckle; the pinned sheer point at index 0 is left smooth)
 ```
 
 The valid region of a variant is thus the product of: positive orthants (every later plan/
