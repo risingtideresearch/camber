@@ -1,13 +1,12 @@
 # Swept-Camber Hull Data Model
 
-This document defines a parametric description of a boat hull built by the
-**constant-camber** method: a single transverse template is **swept along the sheer**,
-its shape blending from a stern template to a bow template as it runs. Every quantity is a
-concrete authored number — there are no ranges and no constraints — and the
-parameterization is chosen so that it is **stable under interpolation**: given two or more
-valid hull designs, any blend of them is again a valid hull. Design exploration happens by
-moving through the space *between* concrete designs, and optimization runs over that space
-directly.
+This document defines a parametric description of a boat hull inspired by Jim Brown's
+[constant-camber](https://smalltridesign.com/Trimaran-Articles/Construction-Methods/Constant-Camber.html) method, and elaborated by JP Donovan. As with the traditional constant camber, a transverse section is swept along the sheer; in our version, its shape blends from a stern template to a bow template as it runs. The
+parameterization is very parsimonious and well suited to optimization methods.
+
+It is also chosen so that it is **stable under interpolation**: given two or more
+valid hull designs, any blend of them is again a valid hull. Design exploration can thus also happen by
+moving through the space *between* multiple authored variants.
 
 The traditional constant-camber technique builds a hull by sweeping one mould of fixed
 transverse curvature along a guide, so every panel comes off the same jig. This model keeps
@@ -15,6 +14,10 @@ the sweep and generalizes the mould: instead of one fixed section it carries two
 **aft** template and a **fore** template — and interpolates between them along the length.
 A constant-camber hull in the classical sense is the special case where the two templates
 are equal.
+
+## Demo
+
+Try it here: [https://risingtideresearch.github.io/camber/](https://risingtideresearch.github.io/camber/).
 
 ## Design philosophy
 
