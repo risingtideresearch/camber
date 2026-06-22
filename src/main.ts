@@ -5,6 +5,13 @@ import { render, draw3d } from "./render.js";
 import { initInteraction, refreshSelUI } from "./interaction.js";
 import { downloadStep } from "./step.js";
 import { downloadJson, importJson } from "./json.js";
+import { svgL, svgP } from "./dom.js";
+import { LH, PH } from "./view.js";
+
+// the plan / profile panels are sized to the isometric scale (see view.ts); set their viewBox heights
+// from the derived constants so the SVG aspect matches the to-scale drawing (no stretching).
+svgL.setAttribute("viewBox", `0 0 1000 ${LH}`);
+svgP.setAttribute("viewBox", `0 0 1000 ${PH}`);
 
 function reset(): void {
   resetModel();
