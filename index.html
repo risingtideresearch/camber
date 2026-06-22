@@ -32,6 +32,15 @@
   .tab.tabadd:disabled{opacity:.4;cursor:not-allowed;}
   .tabsep{width:1px;align-self:stretch;background:var(--line);margin:2px 3px;}
   .sidepanel svg{display:block;width:100%;height:auto;}
+  /* the toolbar, relocated to a vertical column in the side */
+  .toolcol{display:flex;flex-direction:column;gap:12px;}
+  .toolcol .toolbar{align-self:flex-start;}
+  .toolcol .selinfo{flex-wrap:wrap;}
+  .toolcol .ctl{display:flex;align-items:center;gap:8px;}
+  .toolcol .ctl input[type=range]{flex:1;width:auto;}
+  .toolacts{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .toolacts button{width:100%;}
+  .toolcol .legend{flex-direction:column;gap:7px;}
   .row{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;}
   .row .main{flex:1 1 560px;display:flex;flex-direction:column;gap:14px;}
   .row .side{flex:0 1 300px;display:flex;flex-direction:column;gap:14px;}
@@ -73,43 +82,6 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="card">
-    <div class="barrow">
-      <div class="toolbar" id="toolbar">
-        <button class="tool active" data-tool="select" title="Select — click a point to select it, then drag to move, Delete to remove, or set its knuckle">
-          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 1.4l9.6 5.3-4.3.9-1 4.4z"/></svg>Select</button>
-        <button class="tool" data-tool="add" title="Add — click empty space in an editor to add a control point there">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>Add</button>
-      </div>
-      <div class="selinfo" id="selinfo" hidden>
-        <span class="sel-label" id="selLabel"></span>
-        <label class="sel-knuckle" id="selKnuckleWrap" hidden>Knuckle
-          <input type="range" id="selKnuckle" min="0" max="1" step="0.01" title="0 = smooth · 1 = hard corner">
-        </label>
-        <button id="selDelete" title="Delete the selected point (Delete / Backspace)">Delete</button>
-      </div>
-      <button id="reset">Reset</button>
-      <button id="exportStep" title="Export the hull surfaces as a STEP (ISO 10303) file">Export STEP</button>
-      <button id="exportJson" title="Export the editable hull model (sheer, transom, aft/fore stations) as JSON">Export JSON</button>
-      <button id="importJson" title="Load a hull model from a JSON file (replaces the current model)">Import JSON</button>
-      <label class="ctl" title="Design waterline — depth below the sheer origin (deck datum)">WL
-        <input type="range" id="wlRange" min="0" max="1400" step="10">
-        <span class="ctlval" id="wlVal"></span></label>
-      <label class="ctl" title="Deck rake — bow-up trim angle; rotates the whole hull about the sheer origin">Rake
-        <input type="range" id="rakeRange" min="-12" max="12" step="0.5">
-        <span class="ctlval" id="rakeVal"></span></label>
-      <div class="legend">
-        <div><span class="sw" style="background:var(--sheer)"></span>Sheer (plan &amp; trim)</div>
-        <div><span class="sw" style="background:var(--deck)"></span>Flat deck (ref)</div>
-        <div><span class="sw" style="background:var(--keel)"></span>Keel (emergent)</div>
-        <div><span class="sw" style="background:var(--transom)"></span>Transom</div>
-        <div><span class="sw" style="background:var(--wl)"></span>Waterlines</div>
-        <div><span class="sw" style="background:var(--bt)"></span>Buttocks</div>
-        <div><span class="sw" style="background:var(--aft)"></span>Templates &amp; blend</div>
-      </div>
-    </div>
-  </div>
-
   <div class="row">
     <div class="main">
       <div class="card">
@@ -142,6 +114,42 @@
           <div id="templateCards"></div>
           <svg id="svgCut" viewBox="0 0 360 360"></svg>
           <svg id="svgBody" viewBox="0 0 360 360"></svg>
+        </div>
+      </div>
+      <div class="card toolcol">
+        <div class="toolbar" id="toolbar">
+          <button class="tool active" data-tool="select" title="Select — click a point to select it, then drag to move, Delete to remove, or set its knuckle">
+            <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 1.4l9.6 5.3-4.3.9-1 4.4z"/></svg>Select</button>
+          <button class="tool" data-tool="add" title="Add — click empty space in an editor to add a control point there">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>Add</button>
+        </div>
+        <div class="selinfo" id="selinfo" hidden>
+          <span class="sel-label" id="selLabel"></span>
+          <label class="sel-knuckle" id="selKnuckleWrap" hidden>Knuckle
+            <input type="range" id="selKnuckle" min="0" max="1" step="0.01" title="0 = smooth · 1 = hard corner">
+          </label>
+          <button id="selDelete" title="Delete the selected point (Delete / Backspace)">Delete</button>
+        </div>
+        <label class="ctl" title="Design waterline — depth below the sheer origin (deck datum)">WL
+          <input type="range" id="wlRange" min="0" max="1400" step="10">
+          <span class="ctlval" id="wlVal"></span></label>
+        <label class="ctl" title="Deck rake — bow-up trim angle; rotates the whole hull about the sheer origin">Rake
+          <input type="range" id="rakeRange" min="-12" max="12" step="0.5">
+          <span class="ctlval" id="rakeVal"></span></label>
+        <div class="toolacts">
+          <button id="reset">Reset</button>
+          <button id="importJson" title="Load a hull model from a JSON file (replaces the current model)">Import JSON</button>
+          <button id="exportStep" title="Export the hull surfaces as a STEP (ISO 10303) file">Export STEP</button>
+          <button id="exportJson" title="Export the editable hull model (sheer, transom, templates, weight curve) as JSON">Export JSON</button>
+        </div>
+        <div class="legend">
+          <div><span class="sw" style="background:var(--sheer)"></span>Sheer (plan &amp; trim)</div>
+          <div><span class="sw" style="background:var(--deck)"></span>Flat deck (ref)</div>
+          <div><span class="sw" style="background:var(--keel)"></span>Keel (emergent)</div>
+          <div><span class="sw" style="background:var(--transom)"></span>Transom</div>
+          <div><span class="sw" style="background:var(--wl)"></span>Waterlines</div>
+          <div><span class="sw" style="background:var(--bt)"></span>Buttocks</div>
+          <div><span class="sw" style="background:var(--aft)"></span>Templates &amp; blend</div>
         </div>
       </div>
     </div>
