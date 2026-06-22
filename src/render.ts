@@ -867,7 +867,7 @@ interface Mesh {
 const VERT_SRC = `
 attribute vec3 aPos; attribute vec3 aNormal;
 uniform float uc1,us1,uc2,us2,uS3D,uVW,uVH,ucxm,uczm,uDepth,uRakeC,uRakeS;
-varying vec3 vN; varying vec3 vW;
+varying vec3 vN; varying vec3 vW; varying float vWZ;
 void main(){
   float rx=aPos.x*uRakeC - aPos.z*uRakeS;     // deck rake: rotate the hull about y through the sheer origin
   float rz=aPos.x*uRakeS + aPos.z*uRakeC;
@@ -880,18 +880,20 @@ void main(){
   gl_Position=vec4(ndcx,ndcy,ndcz,1.0);
   vN=vec3(aNormal.x*uRakeC - aNormal.z*uRakeS, aNormal.y, aNormal.x*uRakeS + aNormal.z*uRakeC);
   vW=aPos;
+  vWZ=rz;                                      // true (raked) world height, for the waterline boot-top
 }`;
 const FRAG_SRC = `
 precision highp float;
-varying vec3 vN; varying vec3 vW;
-uniform vec3 uLight,uView,uBase; uniform float uStripes,uAlpha; uniform int uZebra;
+varying vec3 vN; varying vec3 vW; varying float vWZ;
+uniform vec3 uLight,uView,uBase; uniform float uStripes,uAlpha,uWaterZ,uPaint; uniform int uZebra;
 void main(){
   vec3 N=normalize(vN), V=normalize(uView);
   if(dot(N,V)<0.0) N=-N;                      // two-sided
   vec3 Lc=normalize(uLight);
-  float diff=max(dot(N,Lc),0.0);
+  // half-Lambert: wrap the light around so the terminator is soft (less harsh) and the form still reads
+  float diff=dot(N,Lc)*0.5+0.5; diff*=diff;
   vec3 H=normalize(Lc+V);
-  float spec=pow(max(dot(N,H),0.0),48.0);
+  float spec=pow(max(dot(N,H),0.0),26.0);     // broader, gentler highlight than a tight 48
   if(uZebra==1){
     vec3 R=reflect(-V,N);
     float band=sin(atan(R.z,R.y)*uStripes);
@@ -899,7 +901,12 @@ void main(){
     vec3 col=mix(vec3(0.07,0.09,0.15),vec3(0.97,0.98,1.0),s)*(0.66+0.34*diff);
     gl_FragColor=vec4(col,uAlpha);
   } else {
-    vec3 col=uBase*0.30 + uBase*diff*0.85 + vec3(1.0)*spec*0.55;
+    // below the design waterline the hull wears bottom paint: a darker body, but still glossy so the
+    // surface reads. A soft 8mm boot-top (smoothstep) avoids an aliased paint line; uPaint gates it off.
+    float sub=(1.0 - smoothstep(uWaterZ-4.0, uWaterZ+4.0, vWZ)) * uPaint;
+    vec3 body=uBase*0.34 + uBase*diff*0.80;
+    body=mix(body, uBase*(0.14 + 0.34*diff), sub);  // darken the diffuse body below the DWL
+    vec3 col=body + vec3(1.0)*spec*0.40;            // softer specular highlight on top (still glossy)
     gl_FragColor=vec4(clamp(col,0.0,1.0),uAlpha);
   }
 }`;
@@ -922,32 +929,13 @@ function initGL(): void {
   gl.useProgram(prog);
   loc = {};
   ["aPos", "aNormal"].forEach((n) => (loc[n] = gl.getAttribLocation(prog!, n)));
-  ["uc1", "us1", "uc2", "us2", "uS3D", "uVW", "uVH", "ucxm", "uczm", "uDepth", "uRakeC", "uRakeS", "uLight", "uView", "uBase", "uStripes", "uAlpha", "uZebra"].forEach(
+  ["uc1", "us1", "uc2", "us2", "uS3D", "uVW", "uVH", "ucxm", "uczm", "uDepth", "uRakeC", "uRakeS", "uLight", "uView", "uBase", "uStripes", "uAlpha", "uZebra", "uWaterZ", "uPaint"].forEach(
     (n) => (loc[n] = gl.getUniformLocation(prog!, n)),
   );
   posBuf = gl.createBuffer();
   nrmBuf = gl.createBuffer();
   gl.enable(gl.DEPTH_TEST);
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); // for the translucent waterline plane
   gl.clearColor(0, 0, 0, 0);
-}
-
-// the design-waterline plane: a horizontal quad (world frame) at worldZ = −waterline, drawn translucent
-function buildWaterMesh(): Mesh {
-  const z = -state.waterline,
-    y = 1400,
-    x0 = -300,
-    x1 = L + 300;
-  const a: Vec3 = [x0, -y, z],
-    b: Vec3 = [x1, -y, z],
-    c: Vec3 = [x1, y, z],
-    d: Vec3 = [x0, y, z],
-    up: Vec3 = [0, 0, 1],
-    P: number[] = [],
-    Nn: number[] = [];
-  pushTri(P, Nn, a, up, b, up, c, up);
-  pushTri(P, Nn, a, up, c, up, d, up);
-  return { pos: new Float32Array(P), nrm: new Float32Array(Nn), count: P.length / 3 };
 }
 
 // the "longitudinal" of a single template-point index: the locus that control point traces as the section
@@ -1217,10 +1205,23 @@ export function draw3d(rebuild?: boolean): void {
   gl.uniform1f(loc.uAlpha, 1.0);
   const view = V.norm([-c2 * s1, -c2 * c1, s2]); // surface→eye direction (orthographic)
   gl.uniform3fv(loc.uView, view);
-  // light tracks the camera (so the face we're looking at is lit, not the inside of the hull), biased up
-  gl.uniform3fv(loc.uLight, V.norm([view[0] + 0.12, view[1] + 0.06, view[2] + 0.34]));
+  // key light at the lower-left of the screen, raking (well off the view axis) so 3/4 views read as
+  // form instead of flat front-lighting, with a smaller toward-eye term to keep the visible faces lit.
+  // right/up are the screen axes expressed in world; left = −right, down = −up.
+  const right: Vec3 = [c1, -s1, 0],
+    up: Vec3 = [s2 * s1, s2 * c1, c2];
+  gl.uniform3fv(
+    loc.uLight,
+    V.norm([
+      0.5 * view[0] - 0.85 * right[0] - 0.85 * up[0],
+      0.5 * view[1] - 0.85 * right[1] - 0.85 * up[1],
+      0.5 * view[2] - 0.85 * right[2] - 0.85 * up[2],
+    ]),
+  );
   gl.uniform1f(loc.uStripes, 11.0);
   gl.uniform1i(loc.uZebra, state.zebra ? 1 : 0);
+  gl.uniform1f(loc.uWaterZ, -state.waterline); // boot-top height in world z; below it the hull is bottom-painted
+  gl.uniform1f(loc.uPaint, 1.0); // hull + transom take bottom paint
   drawMesh(gl, meshHull, [0.3, 0.5, 0.72]);
   if (meshTrans) {
     gl.uniform1i(loc.uZebra, 0);
@@ -1230,20 +1231,9 @@ export function draw3d(rebuild?: boolean): void {
   const li = selStationIdx();
   if (li !== null) {
     gl.uniform1i(loc.uZebra, 0);
+    gl.uniform1f(loc.uPaint, 0.0); // guide ribbon keeps its amber above and below the waterline
     drawMesh(gl, buildLongitudinalMesh(li, view), [0.96, 0.62, 0.04]); // matches the 2D link-marker amber
   }
-  // translucent waterline plane last — horizontal in world (rake identity), no depth write so the hull
-  // shows through where it pierces the surface
-  gl.uniform1f(loc.uRakeC, 1);
-  gl.uniform1f(loc.uRakeS, 0);
-  gl.uniform1f(loc.uAlpha, 0.34);
-  gl.uniform1i(loc.uZebra, 0);
-  gl.enable(gl.BLEND);
-  gl.depthMask(false);
-  drawMesh(gl, buildWaterMesh(), [0.23, 0.5, 0.78]);
-  gl.depthMask(true);
-  gl.disable(gl.BLEND);
-  gl.uniform1f(loc.uAlpha, 1.0);
 }
 
 // ---------- control-point dots ----------
