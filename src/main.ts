@@ -13,6 +13,9 @@ import { LH, PH } from "./view.js";
 svgL.setAttribute("viewBox", `0 0 1000 ${LH}`);
 svgP.setAttribute("viewBox", `0 0 1000 ${PH}`);
 
+// the 3D canvas fills a viewport-relative box now, so reflow it on resize (mesh is cached; just redraw)
+window.addEventListener("resize", () => draw3d(false));
+
 function reset(): void {
   resetModel();
   state.selected = null; // the old selection no longer refers to a meaningful point

@@ -1031,9 +1031,6 @@ function drawBodyPlan(svg: SVGSVGElement): void {
 // tilts. The vertex shader maps world (x,y,z) to NDC the same way the SVG renderer mapped to screen, and
 // fills a real depth buffer so the transom/hull overlap correctly. Per-pixel Phong + specular; a zebra
 // mode bands the surface by the reflected eye direction so unfair (non-smooth) spots show as kinked lines.
-const S3D = 0.2,
-  VW3 = 1000,
-  VH3 = 460;
 let GL: WebGLRenderingContext | null = null,
   prog: WebGLProgram | null = null,
   loc: Record<string, any> = {},
@@ -1048,7 +1045,7 @@ interface Mesh {
 
 const VERT_SRC = `
 attribute vec3 aPos; attribute vec3 aNormal;
-uniform float uc1,us1,uc2,us2,uS3D,uVW,uVH,ucxm,uczm,uDepth,uRakeC,uRakeS;
+uniform float uc1,us1,uc2,us2,uKX,uKY,uCX,uCY,ucxm,uczm,uDepth,uRakeC,uRakeS;
 varying vec3 vN; varying vec3 vW; varying float vWZ;
 void main(){
   float rx=aPos.x*uRakeC - aPos.z*uRakeS;     // deck rake: rotate the hull about y through the sheer origin
@@ -1056,8 +1053,9 @@ void main(){
   float X=rx-ucxm, Z=rz-uczm, y=aPos.y;
   float X1=X*uc1 - y*us1;
   float Y1=X*us1 + y*uc1;
-  float ndcx=X1*uS3D*2.0/uVW;
-  float ndcy=(Y1*us2 + Z*uc2)*uS3D*2.0/uVH;
+  float sx=X1, sy=Y1*us2 + Z*uc2;            // screen-space position (world units), boat-centered
+  float ndcx=(sx-uCX)*uKX;                    // fit-to-box: per-axis scale → isometric at any canvas aspect
+  float ndcy=(sy-uCY)*uKY;
   float ndcz=(uc2*Y1 - us2*Z)/uDepth;        // nearer (old depth large) → smaller → passes LESS test
   gl_Position=vec4(ndcx,ndcy,ndcz,1.0);
   vN=vec3(aNormal.x*uRakeC - aNormal.z*uRakeS, aNormal.y, aNormal.x*uRakeS + aNormal.z*uRakeC);
@@ -1111,7 +1109,7 @@ function initGL(): void {
   gl.useProgram(prog);
   loc = {};
   ["aPos", "aNormal"].forEach((n) => (loc[n] = gl.getAttribLocation(prog!, n)));
-  ["uc1", "us1", "uc2", "us2", "uS3D", "uVW", "uVH", "ucxm", "uczm", "uDepth", "uRakeC", "uRakeS", "uLight", "uView", "uBase", "uStripes", "uAlpha", "uZebra", "uWaterZ", "uPaint"].forEach(
+  ["uc1", "us1", "uc2", "us2", "uKX", "uKY", "uCX", "uCY", "ucxm", "uczm", "uDepth", "uRakeC", "uRakeS", "uLight", "uView", "uBase", "uStripes", "uAlpha", "uZebra", "uWaterZ", "uPaint"].forEach(
     (n) => (loc[n] = gl.getUniformLocation(prog!, n)),
   );
   posBuf = gl.createBuffer();
@@ -1350,7 +1348,39 @@ function drawMesh(gl: WebGLRenderingContext, mesh: Mesh, base: number[]): void {
   gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
 }
 let meshHull: Mesh | null = null,
-  meshTrans: Mesh | null = null;
+  meshTrans: Mesh | null = null,
+  meshBBox: number[] | null = null; // [x0,y0,z0, x1,y1,z1] world bounds of the hull mesh, for fit-to-box
+
+function computeBBox(pos: Float32Array): number[] | null {
+  if (!pos.length) return null;
+  let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+  for (let i = 0; i < pos.length; i += 3) {
+    const x = pos[i], y = pos[i + 1], z = pos[i + 2];
+    if (x < x0) x0 = x;
+    if (y < y0) y0 = y;
+    if (z < z0) z0 = z;
+    if (x > x1) x1 = x;
+    if (y > y1) y1 = y;
+    if (z > z1) z1 = z;
+  }
+  return [x0, y0, z0, x1, y1, z1];
+}
+
+// project a world point to screen space (world units), boat-centered — mirrors the vertex shader so the
+// CPU can frame the camera to the mesh bounding box
+function screenXY(
+  px: number, py: number, pz: number,
+  c1: number, s1: number, c2: number, s2: number, rc: number, rs: number, cxm: number, czm: number,
+): [number, number] {
+  const rx = px * rc - pz * rs,
+    rz = px * rs + pz * rc,
+    X = rx - cxm,
+    Z = rz - czm,
+    X1 = X * c1 - py * s1,
+    Y1 = X * s1 + py * c1;
+  return [X1, Y1 * s2 + Z * c2];
+}
+
 export function draw3d(rebuild?: boolean): void {
   if (!GL) initGL();
   const trimmed = state.view3d === "trimmed";
@@ -1358,12 +1388,13 @@ export function draw3d(rebuild?: boolean): void {
     const built = buildHullMesh(trimmed);
     meshHull = built.hull;
     meshTrans = trimmed ? buildTransomMesh(built.cuts) : null;
+    meshBBox = computeBBox(meshHull.pos);
   }
   const gl = GL!,
     cv = gl.canvas as HTMLCanvasElement,
     dpr = Math.min(window.devicePixelRatio || 1, 2);
   const w = Math.round(cv.clientWidth * dpr),
-    h = Math.round((cv.clientWidth * dpr * VH3) / VW3);
+    h = Math.round(cv.clientHeight * dpr); // fill the canvas's CSS box (any aspect)
   if (cv.width !== w || cv.height !== h) {
     cv.width = w;
     cv.height = h;
@@ -1379,11 +1410,32 @@ export function draw3d(rebuild?: boolean): void {
   gl.uniform1f(loc.us1, s1);
   gl.uniform1f(loc.uc2, c2);
   gl.uniform1f(loc.us2, s2);
-  gl.uniform1f(loc.uS3D, S3D);
-  gl.uniform1f(loc.uVW, VW3);
-  gl.uniform1f(loc.uVH, VH3);
-  gl.uniform1f(loc.ucxm, L / 2);
-  gl.uniform1f(loc.uczm, (ZMIN + ZMAX) / 2);
+  // fit-to-box: project the mesh's 8 bbox corners with the current rotation, then choose a single (px/world)
+  // scale that fits both the width and height of the canvas with a margin — keeps the view isometric at any aspect
+  const cxm = L / 2,
+    czm = (ZMIN + ZMAX) / 2,
+    rc = Math.cos(state.deckRake),
+    rs = Math.sin(state.deckRake),
+    bb = meshBBox ?? [0, -1000, ZMIN, L, 1000, 0];
+  let sxmin = Infinity, sxmax = -Infinity, symin = Infinity, symax = -Infinity;
+  for (let ix = 0; ix < 2; ix++)
+    for (let iy = 0; iy < 2; iy++)
+      for (let iz = 0; iz < 2; iz++) {
+        const [sx, sy] = screenXY(bb[ix ? 3 : 0], bb[iy ? 4 : 1], bb[iz ? 5 : 2], c1, s1, c2, s2, rc, rs, cxm, czm);
+        if (sx < sxmin) sxmin = sx;
+        if (sx > sxmax) sxmax = sx;
+        if (sy < symin) symin = sy;
+        if (sy > symax) symax = sy;
+      }
+  const exX = Math.max(sxmax - sxmin, 1),
+    exY = Math.max(symax - symin, 1),
+    pxScale = 0.92 * Math.min(w / exX, h / exY);
+  gl.uniform1f(loc.uKX, (pxScale * 2) / w);
+  gl.uniform1f(loc.uKY, (pxScale * 2) / h);
+  gl.uniform1f(loc.uCX, (sxmin + sxmax) / 2);
+  gl.uniform1f(loc.uCY, (symin + symax) / 2);
+  gl.uniform1f(loc.ucxm, cxm);
+  gl.uniform1f(loc.uczm, czm);
   gl.uniform1f(loc.uDepth, 3000);
   gl.uniform1f(loc.uRakeC, Math.cos(state.deckRake)); // deck rake floats the hull at its trim
   gl.uniform1f(loc.uRakeS, Math.sin(state.deckRake));
