@@ -1381,6 +1381,30 @@ function screenXY(
   return [X1, Y1 * s2 + Z * c2];
 }
 
+// the screen-space extent (and center) of the bbox's 8 corners under a given rotation
+function projExtent(
+  bb: number[], c1: number, s1: number, c2: number, s2: number, rc: number, rs: number, cxm: number, czm: number,
+): { exX: number; exY: number; cX: number; cY: number } {
+  let sxmin = Infinity, sxmax = -Infinity, symin = Infinity, symax = -Infinity;
+  for (let ix = 0; ix < 2; ix++)
+    for (let iy = 0; iy < 2; iy++)
+      for (let iz = 0; iz < 2; iz++) {
+        const [sx, sy] = screenXY(bb[ix ? 3 : 0], bb[iy ? 4 : 1], bb[iz ? 5 : 2], c1, s1, c2, s2, rc, rs, cxm, czm);
+        if (sx < sxmin) sxmin = sx;
+        if (sx > sxmax) sxmax = sx;
+        if (sy < symin) symin = sy;
+        if (sy > symax) symax = sy;
+      }
+  return { exX: Math.max(sxmax - sxmin, 1), exY: Math.max(symax - symin, 1), cX: (sxmin + sxmax) / 2, cY: (symin + symax) / 2 };
+}
+
+// the zoom is fixed: it frames a NOMINAL hull box (≈ the default hull's overall size) at a reference
+// orientation, so it depends only on the canvas size — not on the live rotation, the edited geometry, or
+// the rake. The live hull then just sits inside that fixed frame, centered.
+const REF_YAW = -0.62,
+  REF_PITCH = 0.42,
+  NOMINAL: number[] = [0, -950, -1300, 4000, 950, 0]; // [x0,y0,z0, x1,y1,z1]
+
 export function draw3d(rebuild?: boolean): void {
   if (!GL) initGL();
   const trimmed = state.view3d === "trimmed";
@@ -1410,30 +1434,21 @@ export function draw3d(rebuild?: boolean): void {
   gl.uniform1f(loc.us1, s1);
   gl.uniform1f(loc.uc2, c2);
   gl.uniform1f(loc.us2, s2);
-  // fit-to-box: project the mesh's 8 bbox corners with the current rotation, then choose a single (px/world)
-  // scale that fits both the width and height of the canvas with a margin — keeps the view isometric at any aspect
+  // Framing: a FIXED zoom (no auto-zoom). The scale frames the nominal hull box at the reference
+  // orientation, unraked, so it changes only with the canvas size. The center tracks the LIVE rotation and
+  // the live hull bounds, so the hull pivots in place, staying centered, at a constant size.
   const cxm = L / 2,
     czm = (ZMIN + ZMAX) / 2,
     rc = Math.cos(state.deckRake),
     rs = Math.sin(state.deckRake),
-    bb = meshBBox ?? [0, -1000, ZMIN, L, 1000, 0];
-  let sxmin = Infinity, sxmax = -Infinity, symin = Infinity, symax = -Infinity;
-  for (let ix = 0; ix < 2; ix++)
-    for (let iy = 0; iy < 2; iy++)
-      for (let iz = 0; iz < 2; iz++) {
-        const [sx, sy] = screenXY(bb[ix ? 3 : 0], bb[iy ? 4 : 1], bb[iz ? 5 : 2], c1, s1, c2, s2, rc, rs, cxm, czm);
-        if (sx < sxmin) sxmin = sx;
-        if (sx > sxmax) sxmax = sx;
-        if (sy < symin) symin = sy;
-        if (sy > symax) symax = sy;
-      }
-  const exX = Math.max(sxmax - sxmin, 1),
-    exY = Math.max(symax - symin, 1),
-    pxScale = 0.92 * Math.min(w / exX, h / exY);
+    bb = meshBBox ?? NOMINAL;
+  const ref = projExtent(NOMINAL, Math.cos(REF_YAW), Math.sin(REF_YAW), Math.cos(REF_PITCH), Math.sin(REF_PITCH), 1, 0, cxm, czm),
+    live = projExtent(bb, c1, s1, c2, s2, rc, rs, cxm, czm),
+    pxScale = 0.92 * Math.min(w / ref.exX, h / ref.exY);
   gl.uniform1f(loc.uKX, (pxScale * 2) / w);
   gl.uniform1f(loc.uKY, (pxScale * 2) / h);
-  gl.uniform1f(loc.uCX, (sxmin + sxmax) / 2);
-  gl.uniform1f(loc.uCY, (symin + symax) / 2);
+  gl.uniform1f(loc.uCX, live.cX);
+  gl.uniform1f(loc.uCY, live.cY);
   gl.uniform1f(loc.ucxm, cxm);
   gl.uniform1f(loc.uczm, czm);
   gl.uniform1f(loc.uDepth, 3000);
