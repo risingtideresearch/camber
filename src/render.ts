@@ -50,6 +50,7 @@ import {
   svgB,
   svgW,
   tplCards,
+  sideTabs,
   tplColor,
   cv3d,
 } from "./dom.js";
@@ -183,11 +184,10 @@ export function render(): void {
   }
   drawPlan(sections, zmin);
   drawProfile(sections, zmin);
-  drawTemplates();
   drawWeights(svgW);
   drawCutStation(svgC);
-  (document.getElementById("cutTag") as HTMLElement).textContent = `CUT · x=${Math.round(state.x0)}`;
   drawBodyPlan(svgB);
+  drawSidePanels(); // template editors + Cut + Body share one tab strip; show the active one
   draw3d(true);
   const profVal = document.getElementById("profVal") as HTMLElement;
   profVal.textContent = `x = ${Math.round(state.x0)} (${((state.x0 / L) * 100).toFixed(0)}% LOA)`;
@@ -586,63 +586,99 @@ function drawStation(svg: SVGSVGElement, ti: number): void {
   if (si !== null) linkDot(svg, snX(arr[si].n), snY(arr[si].d), col);
 }
 
-// the persistent per-template editor <svg> elements. They are rebuilt only when the template COUNT
-// changes — never on a plain redraw — so a drag started on one stays attached to the DOM (a recreated
-// svg would report a zero-size getBoundingClientRect and break the pointer-to-model coordinate mapping).
+// ---------- the side panel: one tab strip over the per-template editors plus the Cut and Body views ----------
+// The per-template editor <svg>s are persistent — rebuilt only when the template COUNT changes, never on a
+// plain redraw — so a drag started on one stays bound to a live, measurable element (a recreated svg reports
+// a zero-size getBoundingClientRect and breaks the pointer-to-model mapping). Cut and Body are the fixed page
+// svgs. The tab strip shows exactly one panel at a time.
 let tplEls: SVGSVGElement[] = [];
+let sideTab: number | "cut" | "body" = 0; // active tab: a template index, or the Cut / Body view
+let prevTplCount = 0;
 
-// (re)build the template card DOM structure (called only when the number of templates changes)
-function buildTemplateCards(): void {
+function buildTemplateSvgs(): void {
   tplCards.replaceChildren();
   tplEls = [];
-  const K = state.templates.length;
   state.templates.forEach((_, j) => {
-    const card = document.createElement("div");
-    card.className = "card tplcard";
-    card.style.borderTop = `3px solid ${tplColor(j)}`;
-    const cap = document.createElement("div");
-    cap.className = "cap";
-    const title = document.createElement("span");
-    title.textContent = `Template ${j + 1}`;
-    const right = document.createElement("span");
-    right.style.cssText = "display:flex;gap:8px;align-items:center;";
-    const tag = document.createElement("span");
-    tag.className = "tag";
-    tag.style.background = tplColor(j);
-    tag.textContent = `T${j + 1}`;
-    right.append(tag);
-    if (K > 1) {
-      const rm = document.createElement("button");
-      rm.className = "tplrm";
-      rm.title = "Remove this template";
-      rm.textContent = "✕";
-      rm.addEventListener("click", () => removeTemplate(j));
-      right.append(rm);
-    }
-    cap.append(title, right);
-    card.append(cap);
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg") as SVGSVGElement;
     svg.setAttribute("viewBox", "0 0 360 360");
     svg.addEventListener("pointerdown", (e) => templateBgDown(j, svg, e as PointerEvent));
-    card.append(svg);
-    tplCards.append(card);
+    tplCards.append(svg);
     tplEls.push(svg);
   });
-  const addRow = document.createElement("div");
-  addRow.className = "tpladd";
-  const addBtn = document.createElement("button");
-  addBtn.textContent = "+ Add template";
-  addBtn.title = "Add another section template (enters the blend at zero weight; raise it in the blend editor)";
-  addBtn.disabled = K >= 7;
-  addBtn.addEventListener("click", () => addTemplate());
-  addRow.append(addBtn);
-  tplCards.append(addRow);
 }
 
-// redraw the per-template editors; reuse the existing svg elements unless the template count changed
-function drawTemplates(): void {
-  if (tplEls.length !== state.templates.length) buildTemplateCards();
+// show only the active panel; the others stay drawn but hidden, so switching tabs is instant
+function applySideTab(): void {
+  tplEls.forEach((svg, j) => (svg.style.display = sideTab === j ? "" : "none"));
+  svgC.style.display = sideTab === "cut" ? "" : "none";
+  svgB.style.display = sideTab === "body" ? "" : "none";
+}
+
+function setSideTab(t: number | "cut" | "body"): void {
+  sideTab = t;
+  applySideTab();
+  buildSideTabs();
+}
+
+// the tab strip: one tab per template (its accent color; the active one carries a ✕ to remove it), a "+" to
+// add a template, then the Cut and Body views.
+function buildSideTabs(): void {
+  sideTabs.replaceChildren();
+  const K = state.templates.length;
+  state.templates.forEach((_, j) => {
+    const active = sideTab === j,
+      tab = document.createElement("button");
+    tab.className = "tab tpltab" + (active ? " active" : "");
+    tab.style.setProperty("--tab", tplColor(j));
+    const lbl = document.createElement("span");
+    lbl.textContent = `T${j + 1}`;
+    tab.append(lbl);
+    if (active && K > 1) {
+      const x = document.createElement("span");
+      x.className = "tabx";
+      x.textContent = "✕";
+      x.title = "Remove this template";
+      x.addEventListener("click", (e) => {
+        e.stopPropagation();
+        removeTemplate(j);
+      });
+      tab.append(x);
+    }
+    tab.addEventListener("click", () => setSideTab(j));
+    sideTabs.append(tab);
+  });
+  const add = document.createElement("button");
+  add.className = "tab tabadd";
+  add.textContent = "+";
+  add.title = "Add a section template (enters the blend at zero weight; raise it in the blend editor)";
+  add.disabled = K >= 7;
+  add.addEventListener("click", () => addTemplate());
+  sideTabs.append(add);
+  const sep = document.createElement("span");
+  sep.className = "tabsep";
+  sideTabs.append(sep);
+  for (const v of [["cut", "Cut"], ["body", "Body"]] as const) {
+    const tab = document.createElement("button");
+    tab.className = "tab" + (sideTab === v[0] ? " active" : "");
+    tab.textContent = v[1];
+    tab.addEventListener("click", () => setSideTab(v[0]));
+    sideTabs.append(tab);
+  }
+}
+
+// redraw the side panel: (re)build the template svgs when the count changes, draw each, refresh the tabs
+function drawSidePanels(): void {
+  const K = state.templates.length;
+  if (tplEls.length !== K) {
+    const grew = K > prevTplCount && prevTplCount > 0; // a freshly added template becomes active
+    buildTemplateSvgs();
+    if (grew) sideTab = K - 1;
+    prevTplCount = K;
+  }
+  if (typeof sideTab === "number" && sideTab >= K) sideTab = K - 1; // a removed template → clamp
   tplEls.forEach((svg, j) => drawStation(svg, j));
+  buildSideTabs();
+  applySideTab();
 }
 
 // the weight curve as a stacked-band ribbon over x: band j is template j's share of the blend, the bands

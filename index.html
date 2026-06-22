@@ -20,14 +20,18 @@
   .wrap{display:flex;flex-direction:column;gap:14px;padding:14px 24px 32px;max-width:1500px;
         user-select:none;-webkit-user-select:none;} /* drawing tool: don't select text while dragging */
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;}
-  .card.cutcard{border-top:3px solid var(--slider);}
-  .card.bodycard{border-top:3px solid var(--keel);}
-  #templateCards{display:flex;flex-direction:column;gap:14px;}
-  .tplcard .cap{align-items:center;}
-  .tplrm{border:0;background:none;color:var(--mut);font-size:13px;line-height:1;padding:2px 5px;border-radius:6px;}
-  .tplrm:hover{color:#fff;background:var(--slider);}
-  .tpladd{display:flex;}
-  .tpladd button{flex:1;border-style:dashed;color:var(--mut);padding:8px;}
+  .tabstrip{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px;}
+  .tab{border:1px solid var(--line);background:#fff;border-radius:7px;padding:4px 11px;font:inherit;font-size:12px;
+       color:#4a5568;cursor:pointer;display:inline-flex;align-items:center;gap:6px;line-height:1.4;}
+  .tab:hover{background:#f1f5f9;}
+  .tab.tpltab{color:var(--tab);font-weight:600;}
+  .tab.active{background:var(--tab,var(--ink));border-color:var(--tab,var(--ink));color:#fff;}
+  .tab .tabx{font-size:10px;opacity:.85;}
+  .tab .tabx:hover{opacity:1;}
+  .tab.tabadd{font-weight:700;color:var(--mut);padding:4px 9px;}
+  .tab.tabadd:disabled{opacity:.4;cursor:not-allowed;}
+  .tabsep{width:1px;align-self:stretch;background:var(--line);margin:2px 3px;}
+  .sidepanel svg{display:block;width:100%;height:auto;}
   .row{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;}
   .row .main{flex:1 1 560px;display:flex;flex-direction:column;gap:14px;}
   .row .side{flex:0 1 300px;display:flex;flex-direction:column;gap:14px;}
@@ -132,16 +136,13 @@
       </div>
     </div>
     <div class="side">
-      <div id="templateCards"></div>
-      <div class="card cutcard">
-        <div class="cap"><span>Interpolated station · trims</span>
-          <span class="tag" id="cutTag" style="background:var(--slider)">CUT</span></div>
-        <svg id="svgCut" viewBox="0 0 360 360"></svg>
-      </div>
-      <div class="card bodycard">
-        <div class="cap"><span>Lines · body plan</span>
-          <span class="tag" style="background:var(--keel)">STATIONS</span></div>
-        <svg id="svgBody" viewBox="0 0 360 360"></svg>
+      <div class="card sidecard">
+        <div class="tabstrip" id="sideTabs"></div>
+        <div class="sidepanel">
+          <div id="templateCards"></div>
+          <svg id="svgCut" viewBox="0 0 360 360"></svg>
+          <svg id="svgBody" viewBox="0 0 360 360"></svg>
+        </div>
       </div>
     </div>
   </div>
