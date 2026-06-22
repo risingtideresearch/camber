@@ -2,7 +2,13 @@
 
 import { clamp, lerp, V, type Vec3 } from "./math.js";
 import { hobbySamplerX } from "./hobby.js";
-import { knuckleSlopes, hermiteEvalLR } from "./pchip.js";
+import {
+  knuckleSlopes,
+  hermiteEvalLR,
+  pchipSlopes,
+  hermiteEval,
+  naturalCubicSlopes,
+} from "./pchip.js";
 
 // ---------- types ----------
 export interface SheerCP {
@@ -21,6 +27,12 @@ export interface StationCP {
   n: number;
   d: number;
   k: number; // knuckle ∈ [0,1]: 0 = smooth, 1 = hard corner; blends. (point 0, the pinned sheer, is left smooth)
+}
+// a control point of the longitudinal weight curve: at station x, the barycentric mix `w` of the
+// templates (w[j] ≥ 0, Σ w[j] = 1 — a point in the (K−1)-simplex). The curve is faired between these.
+export interface WeightCP {
+  x: number;
+  w: number[]; // length = template count K; in the simplex
 }
 export interface Sheer {
   cp: SheerCP[];
@@ -83,56 +95,75 @@ const TRANSOM_DEF: [number, number][] = [
 // knuckle bends the final segment, so a hard chine can run into the keel). The bilge point
 // (index 2) is a hard chine aft (k=1) that fades to a round bilge forward (k=0): a hard-chine planing
 // stern blending into a soft bow along the length of the one hull.
-const AFT_DEF: [number, number, number][] = [
-  [0, 0, 0],
-  [90, 320, 0],
-  [260, 640, 1],
-  [560, 880, 0],
-  [980, 1000, 0],
-]; // fuller (transom), hard chine at the bilge
-const FORE_DEF: [number, number, number][] = [
-  [0, 0, 0],
-  [150, 430, 0],
-  [400, 840, 0],
-  [720, 1120, 0],
-  [1020, 1220, 0],
-]; // deeper / finer (bow), round bilge
+// the default family of section templates (the old aft → fore pair). Each is one template; the weight
+// curve below blends them along the hull. More templates can be added in the editor.
+const TEMPLATE_DEFS: [number, number, number][][] = [
+  [
+    [0, 0, 0],
+    [90, 320, 0],
+    [260, 640, 1],
+    [560, 880, 0],
+    [980, 1000, 0],
+  ], // fuller (transom), hard chine at the bilge
+  [
+    [0, 0, 0],
+    [150, 430, 0],
+    [400, 840, 0],
+    [720, 1120, 0],
+    [1020, 1220, 0],
+  ], // deeper / finer (bow), round bilge
+];
+// the default weight curve: full weight on template 0 at the transom, handing off linearly to the last
+// template at the bow — i.e. exactly the old linear aft→fore tween (a straight edge of the simplex).
+function defaultWeights(k: number): WeightCP[] {
+  const e = (j: number) => Array.from({ length: k }, (_, i) => (i === j ? 1 : 0));
+  return [
+    { x: 0, w: e(0) },
+    { x: L, w: e(k - 1) },
+  ];
+}
 
 // ---------- mutable model + view state ----------
 export type Tool = "select" | "add";
 export type View3D = "trimmed" | "sheet";
+// curve fairing: "pchip" = C¹ monotone, shape-preserving (the default, guarantees the invariants);
+// "c2" = C² natural cubic (curvature-continuous; the weight curve runs it in logit space to stay in the
+// simplex, the station curves run it directly — experimental, drops the knuckles and the no-overshoot guard).
+export type Fairing = "pchip" | "c2";
 
-// which kind of control point is currently selected, so the renderer can highlight it
-export type ActiveTarget = "plan" | "trim" | "transom" | "aft" | "fore";
+// which kind of control point is currently selected, so the renderer can highlight it. A "template"
+// selection also carries which template (state.selected.ti); a "weight" selection is a weight CP.
+export type ActiveTarget = "plan" | "trim" | "transom" | "template" | "weight";
 
 export interface State {
   sheer: Sheer;
-  AFT: StationCP[];
-  FORE: StationCP[];
+  templates: StationCP[][]; // K ≥ 1 section templates, index-aligned (all share the section count)
+  weights: WeightCP[]; // the longitudinal blend path through the simplex; ≥ 2 control points
+  weightFn: (x: number) => number[]; // evaluated weight curve x → simplex; rebuilt by prepare()
   x0: number;
   waterline: number; // depth (≥0) of the design waterline below the sheer origin (deck datum at x=0, z=0)
   deckRake: number; // deck rake angle (rad, +ve = bow up): a rigid rotation of the whole hull about the
   // transverse (y) axis through the sheer origin. Everything is built deck-flat (z=0); the boat floats at this rake.
-  tweenMid: number; // fore/aft tween midpoint as a fraction of length ∈ (0,1): the x where a station is the
-  // 50/50 blend of AFT and FORE. 0.5 = plain linear tween; smaller biases the blend aft, larger biases it forward.
   rot: { yaw: number; pitch: number };
   view3d: View3D;
   zebra: boolean;
+  fairing: Fairing; // which curve fairing to use (session toggle; not part of the saved model)
   tool: Tool;
-  selected: { tgt: ActiveTarget; idx: number } | null;
+  selected: { tgt: ActiveTarget; idx: number; ti?: number } | null;
 }
 
 export const state: State = {
   sheer: null as unknown as Sheer,
-  AFT: [],
-  FORE: [],
+  templates: [],
+  weights: [],
+  weightFn: () => [1],
   x0: 2000,
   waterline: 600,
   deckRake: 0,
-  tweenMid: 0.5,
   rot: { yaw: -0.62, pitch: 0.42 },
   view3d: "trimmed", // "trimmed" = clipped + mirrored hull; "sheet" = untrimmed one side
   zebra: false, // zebra-stripe fairness check on the 3D surface
+  fairing: "pchip", // C¹ shape-preserving by default; "c2" switches to the natural-cubic fairing
   tool: "select", // "select" = click a point to select (then drag/delete/knuckle); "add" = click to add
   selected: null, // the persistently selected control point (highlighted in the editors)
 };
@@ -145,12 +176,11 @@ export function resetModel(): void {
     yf: () => 0,
     zf: () => 0,
   };
-  state.AFT = AFT_DEF.map((c) => ({ n: c[0], d: c[1], k: c[2] }));
-  state.FORE = FORE_DEF.map((c) => ({ n: c[0], d: c[1], k: c[2] }));
+  state.templates = TEMPLATE_DEFS.map((t) => t.map((c) => ({ n: c[0], d: c[1], k: c[2] })));
+  state.weights = defaultWeights(state.templates.length);
   state.x0 = 2000;
   state.waterline = 600;
   state.deckRake = 0;
-  state.tweenMid = 0.5;
 }
 
 // ---------- deck rake (world frame) ----------
@@ -166,6 +196,90 @@ export function prepare(): void {
   const sheer = state.sheer;
   sheer.yf = hobbySamplerX(sheer.cp.map((p) => [p.x, p.y])); // Hobby curve through the plan control points
   sheer.zf = hobbySamplerX(sheer.trim.map((p) => [p.x, p.z])); // profile sheer-trim curve, z(x) ≤ 0
+  state.weightFn = buildWeightSampler(state.weights); // the longitudinal blend path through the simplex
+}
+
+// ---------- the weight curve: a shape-preserving interpolation through the simplex ----------
+// The longitudinal blend weights w(x) ∈ Δ^{K−1}. Control points carry (x, w). Each barycentric component
+// wⱼ(x) is interpolated across the control x's with the same monotone PCHIP fairing the section templates
+// use: it passes through the authored values and, being shape-preserving, never overshoots, so each
+// component stays in [0,1]. Renormalizing the vector to Σ = 1 lands it back on the simplex. The curve thus
+// hits every control point exactly (at a control station the components already sum to 1, so the
+// renormalization is the identity there) yet stays valid and C¹ — and tracks the control points tightly,
+// unlike an approximating B-spline that would smooth past the interior ones.
+
+// project a vector onto the simplex the cheap way: clamp negatives (float noise) away, renormalize to Σ=1
+function normSimplex(w: number[]): number[] {
+  let s = 0;
+  const c = w.map((v) => {
+    const x = v > 0 ? v : 0;
+    s += x;
+    return x;
+  });
+  return s > 0 ? c.map((v) => v / s) : c.map(() => 1 / c.length);
+}
+
+export function buildWeightSampler(weights: WeightCP[]): (x: number) => number[] {
+  const cps = weights.length;
+  if (cps <= 1) {
+    const w = cps ? normSimplex(weights[0].w) : [1];
+    return () => w.slice();
+  }
+  const K = weights[0].w.length,
+    xs = weights.map((c) => c.x),
+    xLo = xs[0],
+    xHi = xs[cps - 1];
+  if (state.fairing === "c2") {
+    // C² path: interpolate the softmax pre-image (log-weights) with a natural cubic — overshoot there is
+    // harmless — then softmax back, so the curve is curvature-continuous and always in the (open) simplex.
+    // A pure-template control point (a 0 weight) is clamped to ε, so corners sit a hair inside the simplex.
+    const eps = 1e-4,
+      logs: { ys: number[]; m: number[] }[] = [];
+    for (let j = 0; j < K; j++) {
+      const ys = weights.map((c) => Math.log(Math.max(c.w[j], eps)));
+      logs.push({ ys, m: naturalCubicSlopes(xs, ys) });
+    }
+    return (x: number) => {
+      const xc = clamp(x, xLo, xHi),
+        u = logs.map((c) => hermiteEval(xs, c.ys, c.m, xc)),
+        mx = Math.max(...u);
+      let s = 0;
+      const e = u.map((v) => {
+        const ev = Math.exp(v - mx);
+        s += ev;
+        return ev;
+      });
+      return e.map((v) => v / s); // softmax → open simplex
+    };
+  }
+  // C¹ default: per-component shape-preserving (PCHIP) interpolation, renormalized onto the simplex
+  const comps: { ys: number[]; m: number[] }[] = [];
+  for (let j = 0; j < K; j++) {
+    const ys = weights.map((c) => c.w[j]);
+    comps.push({ ys, m: pchipSlopes(xs, ys) });
+  }
+  return (x: number) => {
+    const xc = clamp(x, xLo, xHi);
+    return normSimplex(comps.map((c) => hermiteEval(xs, c.ys, c.m, xc)));
+  };
+}
+
+// fair a station-curve component (n or d) through its points: the C¹ knuckle-aware monotone Hermite by
+// default, or — in "c2" mode — a curvature-continuous natural cubic (knuckles and the no-overshoot
+// monotonicity guard do not apply in that mode; it is for comparing fairness, not for guaranteed validity).
+export function fairEval(ts: number[], fs: number[], ks: number[]): (u: number) => number {
+  if (state.fairing === "c2") {
+    const m = naturalCubicSlopes(ts, fs),
+      t0 = ts[0],
+      t1 = ts[ts.length - 1];
+    return (u: number) => hermiteEval(ts, fs, m, clamp(u, t0, t1));
+  }
+  return knuckleEval(ts, fs, ks);
+}
+
+// the blend weights at station x, a point in the (K−1)-simplex
+export function weightsAt(x: number): number[] {
+  return state.weightFn(x);
 }
 
 // ---------- the constant-camber sweep ----------
@@ -208,32 +322,34 @@ export function knuckleEval(
   return (u: number) => hermiteEvalLR(ts, fs, lo, hi, clamp(u, t0, t1));
 }
 
-// the blended station section at x, as continuous n(u)/d(u) over u in [0,tmax]. The knuckle value k is
-// blended along the hull just like n and d, so a chine can fade from hard (aft) to soft (fore).
-// reparameterized fore/aft tween fraction: maps the longitudinal fraction g = x/L → f ∈ [0,1]
-// monotonically via f = gᵖ, with the exponent picked so f = 0.5 exactly at g = tweenMid. tweenMid = 0.5
-// gives p = 1 (the plain linear tween); a smaller midpoint pulls the 50/50 blend aft, a larger one forward.
-// Power-law keeps the blend smooth and strictly increasing, so no crease appears at the midpoint.
-export function tweenFraction(x: number): number {
-  const g = clamp(x / L, 0, 1),
-    mid = clamp(state.tweenMid, 0.05, 0.95);
-  const p = Math.log(0.5) / Math.log(mid);
-  return Math.pow(g, p);
-}
-
+// the blended station section at x, as continuous n(u)/d(u) over u in [0,tmax]. At each station the
+// templates are mixed by the weight curve w(x) — section(x)[i] = Σⱼ w[j]·templates[j][i] — componentwise
+// in (n, d, k). The knuckle k is blended along the hull just like n and d, so a chine can fade from hard
+// to soft as the weight curve hands off between a creased template and a smooth one.
 export function stationAt(x: number): Station {
-  const f = tweenFraction(x),
-    m = state.AFT.length,
+  const w = weightsAt(x),
+    tpl = state.templates,
+    K = tpl.length,
+    m = tpl[0].length,
     ns: number[] = [],
     ds: number[] = [],
     ks: number[] = [];
   for (let i = 0; i < m; i++) {
-    ns.push(lerp(state.AFT[i].n, state.FORE[i].n, f));
-    ds.push(lerp(state.AFT[i].d, state.FORE[i].d, f));
-    ks.push(lerp(state.AFT[i].k, state.FORE[i].k, f));
+    let n = 0,
+      d = 0,
+      k = 0;
+    for (let j = 0; j < K; j++) {
+      const p = tpl[j][i];
+      n += w[j] * p.n;
+      d += w[j] * p.d;
+      k += w[j] * p.k;
+    }
+    ns.push(n);
+    ds.push(d);
+    ks.push(k);
   }
   const ts = chordParam(ns, ds);
-  return { tmax: ts[m - 1], n: knuckleEval(ts, ns, ks), d: knuckleEval(ts, ds, ks) };
+  return { tmax: ts[m - 1], n: fairEval(ts, ns, ks), d: fairEval(ts, ds, ks) };
 }
 
 // the transom plane in profile: longitudinal position x of the cut at height z (linear through the two

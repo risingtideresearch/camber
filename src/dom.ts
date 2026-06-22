@@ -31,10 +31,12 @@ const byId = (id: string): SVGSVGElement =>
 
 export const svgP = byId("svgProfile"),
   svgL = byId("svgPlan"),
-  svgA = byId("svgAft"),
-  svgF = byId("svgFore"),
   svgC = byId("svgCut"),
-  svgB = byId("svgBody");
+  svgB = byId("svgBody"),
+  svgW = byId("svgWeights");
+
+// the container the dynamic per-template station editors are rendered into
+export const tplCards = document.getElementById("templateCards") as HTMLElement;
 
 export const cv3d = document.getElementById("cv3d") as HTMLCanvasElement;
 
@@ -49,6 +51,12 @@ export const COL = {
   deck: getCSS("--deck"),
   mut: getCSS("--mut"),
 };
+
+// per-template accent colors, cycled. Template 0 is the old "aft" blue; later ones fan toward purple/amber.
+const TPL_PALETTE = ["#2b6cb0", "#7c3aed", "#dd6b20", "#0f766e", "#b45309", "#be185d", "#0369a1"];
+export function tplColor(i: number): string {
+  return TPL_PALETTE[((i % TPL_PALETTE.length) + TPL_PALETTE.length) % TPL_PALETTE.length];
+}
 
 // a uniform sampling of x across the hull length, used by the plan/profile sweep curves
 export function sampleX(): number[] {

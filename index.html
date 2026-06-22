@@ -20,10 +20,14 @@
   .wrap{display:flex;flex-direction:column;gap:14px;padding:14px 24px 32px;max-width:1500px;
         user-select:none;-webkit-user-select:none;} /* drawing tool: don't select text while dragging */
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;}
-  .card.aftcard{border-top:3px solid var(--aft);}
-  .card.forecard{border-top:3px solid var(--fore);}
   .card.cutcard{border-top:3px solid var(--slider);}
   .card.bodycard{border-top:3px solid var(--keel);}
+  #templateCards{display:flex;flex-direction:column;gap:14px;}
+  .tplcard .cap{align-items:center;}
+  .tplrm{border:0;background:none;color:var(--mut);font-size:13px;line-height:1;padding:2px 5px;border-radius:6px;}
+  .tplrm:hover{color:#fff;background:var(--slider);}
+  .tpladd{display:flex;}
+  .tpladd button{flex:1;border-style:dashed;color:var(--mut);padding:8px;}
   .row{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;}
   .row .main{flex:1 1 560px;display:flex;flex-direction:column;gap:14px;}
   .row .side{flex:0 1 300px;display:flex;flex-direction:column;gap:14px;}
@@ -90,9 +94,6 @@
       <label class="ctl" title="Deck rake — bow-up trim angle; rotates the whole hull about the sheer origin">Rake
         <input type="range" id="rakeRange" min="-12" max="12" step="0.5">
         <span class="ctlval" id="rakeVal"></span></label>
-      <label class="ctl" title="Fore/aft tween midpoint — where along the length the section is the 50/50 blend of aft and fore. 50% = even tween; lower biases aft, higher biases forward.">Mid
-        <input type="range" id="midRange" min="20" max="80" step="1">
-        <span class="ctlval" id="midVal"></span></label>
       <div class="legend">
         <div><span class="sw" style="background:var(--sheer)"></span>Sheer (plan &amp; trim)</div>
         <div><span class="sw" style="background:var(--deck)"></span>Flat deck (ref)</div>
@@ -100,8 +101,7 @@
         <div><span class="sw" style="background:var(--transom)"></span>Transom</div>
         <div><span class="sw" style="background:var(--wl)"></span>Waterlines</div>
         <div><span class="sw" style="background:var(--bt)"></span>Buttocks</div>
-        <div><span class="sw" style="background:var(--aft)"></span>Aft station</div>
-        <div><span class="sw" style="background:var(--fore)"></span>Fore station</div>
+        <div><span class="sw" style="background:var(--aft)"></span>Templates &amp; blend</div>
       </div>
     </div>
   </div>
@@ -125,16 +125,14 @@
           <span class="val" id="profVal">—</span></div>
         <svg id="svgProfile" viewBox="0 0 1000 300"></svg>
       </div>
+      <div class="card">
+        <div class="cap"><span>Blend · weight curve (template mix along x)</span>
+          <span class="val">stacked share · drag boundaries / ◇ to retime</span></div>
+        <svg id="svgWeights" viewBox="0 0 1000 176"></svg>
+      </div>
     </div>
     <div class="side">
-      <div class="card aftcard">
-        <div class="cap"><span>Aft station</span><span class="tag" style="background:var(--aft)">AFT · x=0</span></div>
-        <svg id="svgAft" viewBox="0 0 360 360"></svg>
-      </div>
-      <div class="card forecard">
-        <div class="cap"><span>Fore station</span><span class="tag" style="background:var(--fore)">FORE · x=L</span></div>
-        <svg id="svgFore" viewBox="0 0 360 360"></svg>
-      </div>
+      <div id="templateCards"></div>
       <div class="card cutcard">
         <div class="cap"><span>Interpolated station · trims</span>
           <span class="tag" id="cutTag" style="background:var(--slider)">CUT</span></div>

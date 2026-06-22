@@ -176,7 +176,7 @@ type Coord = () => number;
 function decodeDoc(z: Coord): string {
   const P = state.sheer.cp.length, // sheerPlan count
     Q = state.sheer.trim.length, // sheerTrim count
-    S = state.AFT.length; // section count (aft & fore share it)
+    S = state.templates[0].length; // section count (every template shares it)
   const DEPTH_MAX = -ZTRIMMIN;
 
   // #2 helper: a base ± ½Δ residual pair, consuming two coordinates. Δ=0 (second coord 0) ⇒ aft & fore

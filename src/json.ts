@@ -18,6 +18,7 @@ import {
   type TrimCP,
   type TransomCP,
   type StationCP,
+  type WeightCP,
 } from "./model.js";
 
 // ---------- on-disk types ----------
@@ -34,6 +35,10 @@ interface SectionPoint {
   n: number;
   k: number;
 }
+interface WeightPoint {
+  dx: number;
+  w: number[]; // barycentric weights over the templates; in the simplex
+}
 interface Transom {
   x: number;
   depthTop: number;
@@ -47,15 +52,20 @@ export interface HullData {
   cp: SheerCP[];
   trim: TrimCP[];
   transom: TransomCP[];
-  aft: StationCP[];
-  fore: StationCP[];
+  templates: StationCP[][]; // K templates, index-aligned
+  weights: WeightCP[]; // the longitudinal blend path
 }
 export interface ParsedDoc {
   length: number;
   waterline: number; // depth below the sheer origin
   deckRake: number; // radians
-  tweenMid: number; // fore/aft tween midpoint, fraction of length
-  topology: { sheerPlan: number; sheerTrim: number; section: number };
+  topology: {
+    sheerPlan: number;
+    sheerTrim: number;
+    section: number;
+    templateCount: number;
+    weightPoints: number;
+  };
   variants: HullData[];
 }
 
@@ -66,6 +76,8 @@ const encTrim = (trim: TrimCP[]): TrimPoint[] =>
   trim.map((p, i) => ({ dx: i === 0 ? p.x : p.x - trim[i - 1].x, depth: -p.z }));
 const encSection = (pts: StationCP[]): SectionPoint[] =>
   pts.map((p, i) => ({ dd: i === 0 ? 0 : p.d - pts[i - 1].d, n: p.n, k: p.k }));
+const encWeights = (w: WeightCP[]): WeightPoint[] =>
+  w.map((p, i) => ({ dx: i === 0 ? p.x : p.x - w[i - 1].x, w: p.w.slice() }));
 function encTransom(t: TransomCP[]): Transom {
   const [top, bot] = t; // [0] = top edge (near sheer), [1] = bottom edge (near keel)
   return {
@@ -98,6 +110,19 @@ function decSection(pts: SectionPoint[]): StationCP[] {
     return { n: p.n, d, k: clamp(p.k, 0, 1) };
   });
 }
+function decWeights(pts: WeightPoint[]): WeightCP[] {
+  let x = 0;
+  return pts.map((p, i) => {
+    x = i === 0 ? p.dx : x + p.dx;
+    let s = 0;
+    const w = p.w.map((v) => {
+      const c = v > 0 ? v : 0;
+      s += c;
+      return c;
+    });
+    return { x, w: s > 0 ? w.map((v) => v / s) : w.map(() => 1 / w.length) };
+  });
+}
 function decTransom(t: Transom): TransomCP[] {
   const top: TransomCP = { x: t.x, z: -t.depthTop };
   const z = -(t.depthTop + t.dDepthBot); // bottom-edge height
@@ -111,19 +136,20 @@ export function buildJson(): string {
     length: L,
     waterline: state.waterline,
     deckRakeDeg: (state.deckRake * 180) / Math.PI,
-    tweenMid: state.tweenMid,
     topology: {
       sheerPlan: s.cp.length,
       sheerTrim: s.trim.length,
-      section: state.AFT.length,
+      section: state.templates[0].length,
+      templateCount: state.templates.length,
+      weightPoints: state.weights.length,
     },
     variants: [
       {
         sheerPlan: encPlan(s.cp),
         sheerTrim: encTrim(s.trim),
         transom: encTransom(s.transom),
-        aft: encSection(state.AFT),
-        fore: encSection(state.FORE),
+        templates: state.templates.map(encSection),
+        weights: encWeights(state.weights),
       },
     ],
   };
@@ -168,6 +194,22 @@ function points<T>(
   if (v.length !== count) throw new Error(`${ctx} must have ${count} points (matching the topology)`);
   return v.map((p, i) => field(obj(p, `${ctx}[${i}]`), i));
 }
+// a length-K barycentric weight vector of finite numbers (validity — simplex membership — is enforced
+// on decode by clamping negatives and renormalizing, exactly as a convex blend would stay in the simplex)
+function weightVec(v: unknown, ctx: string, k: number): number[] {
+  if (!Array.isArray(v) || v.length !== k)
+    throw new Error(`${ctx} must be an array of ${k} weights (one per template)`);
+  return v.map((x, i) => num(x, `${ctx}[${i}]`));
+}
+// the default straight blend path: full weight on template 0 at the stern, handing off to the last
+// template at the bow — the multi-template analog of the old linear x/L tween (an edge of the simplex)
+function linearPath(k: number, length: number): WeightCP[] {
+  const e = (j: number) => Array.from({ length: k }, (_, i) => (i === j ? 1 : 0));
+  return [
+    { x: 0, w: e(0) },
+    { x: length, w: e(k - 1) },
+  ];
+}
 
 // parse + validate a HullDocument and decode every variant to absolute model coordinates. Throws on
 // any structural problem; nothing is committed until the whole document validates.
@@ -180,13 +222,14 @@ export function parseDocument(text: string): ParsedDoc {
   const waterline = typeof doc.waterline === "number" && isFinite(doc.waterline) ? doc.waterline : 0;
   const deckRakeDeg =
     typeof doc.deckRakeDeg === "number" && isFinite(doc.deckRakeDeg) ? doc.deckRakeDeg : 0;
-  // tween midpoint optional (older documents predate it); default to 0.5 = plain linear fore/aft tween
-  const tweenMid =
-    typeof doc.tweenMid === "number" && isFinite(doc.tweenMid) ? doc.tweenMid : 0.5;
   const t = obj(doc.topology, "topology");
   const nPlan = intCount(t.sheerPlan, "topology.sheerPlan", 2);
   const nTrim = intCount(t.sheerTrim, "topology.sheerTrim", 2);
   const nSec = intCount(t.section, "topology.section", 2);
+  // templateCount / weightPoints are optional: a legacy two-template (aft/fore) document predates them,
+  // and reads as K = 2 templates on a straight (linear) blend path.
+  const nTpl = "templateCount" in t ? intCount(t.templateCount, "topology.templateCount", 1) : 2;
+  const nWt = "weightPoints" in t ? intCount(t.weightPoints, "topology.weightPoints", 1) : 2;
 
   if (!Array.isArray(doc.variants) || doc.variants.length < 1)
     throw new Error("variants must be a non-empty array");
@@ -206,14 +249,35 @@ export function parseDocument(text: string): ParsedDoc {
         depth: num(o.depth, `${c}.sheerTrim[${i}].depth`),
       })),
     );
-    const section = (key: "aft" | "fore") =>
+    const secList = (arr: unknown, ctx: string) =>
       decSection(
-        points(v[key], `${c}.${key}`, nSec, (o, i) => ({
-          dd: num(o.dd, `${c}.${key}[${i}].dd`),
-          n: num(o.n, `${c}.${key}[${i}].n`),
+        points(arr, ctx, nSec, (o, i) => ({
+          dd: num(o.dd, `${ctx}[${i}].dd`),
+          n: num(o.n, `${ctx}[${i}].n`),
           k: typeof o.k === "number" ? o.k : 0, // k optional, defaults to 0 (smooth)
         })),
       );
+    // templates: the new `templates` array, or the legacy aft/fore pair (→ two templates)
+    let templates: StationCP[][];
+    if ("templates" in v) {
+      if (!Array.isArray(v.templates) || v.templates.length !== nTpl)
+        throw new Error(`${c}.templates must be an array of ${nTpl} templates (matching the topology)`);
+      templates = v.templates.map((tp, ti) => secList(tp, `${c}.templates[${ti}]`));
+    } else if ("aft" in v && "fore" in v) {
+      templates = [secList(v.aft, `${c}.aft`), secList(v.fore, `${c}.fore`)];
+    } else {
+      throw new Error(`${c} has no templates (and no legacy aft/fore pair)`);
+    }
+    // weights: the new `weights` path, or a default straight path corner-to-corner of the simplex
+    const weights =
+      "weights" in v
+        ? decWeights(
+            points(v.weights, `${c}.weights`, nWt, (o, i) => ({
+              dx: num(o.dx, `${c}.weights[${i}].dx`),
+              w: weightVec(o.w, `${c}.weights[${i}].w`, nTpl),
+            })),
+          )
+        : linearPath(nTpl, length);
     const to = obj(v.transom, `${c}.transom`);
     const transom = decTransom({
       x: num(to.x, `${c}.transom.x`),
@@ -226,8 +290,8 @@ export function parseDocument(text: string): ParsedDoc {
       cp,
       trim,
       transom,
-      aft: section("aft"),
-      fore: section("fore"),
+      templates,
+      weights,
     };
   });
 
@@ -235,8 +299,13 @@ export function parseDocument(text: string): ParsedDoc {
     length,
     waterline,
     deckRake: (deckRakeDeg * Math.PI) / 180,
-    tweenMid,
-    topology: { sheerPlan: nPlan, sheerTrim: nTrim, section: nSec },
+    topology: {
+      sheerPlan: nPlan,
+      sheerTrim: nTrim,
+      section: nSec,
+      templateCount: nTpl,
+      weightPoints: nWt,
+    },
     variants,
   };
 }
@@ -246,8 +315,8 @@ export function loadHull(v: HullData): void {
   state.sheer.cp = v.cp;
   state.sheer.trim = v.trim;
   state.sheer.transom = v.transom;
-  state.AFT = v.aft;
-  state.FORE = v.fore;
+  state.templates = v.templates;
+  state.weights = v.weights;
   state.selected = null;
   state.x0 = clamp(state.x0, 0, L);
 }
@@ -258,7 +327,6 @@ export function loadJsonText(text: string): number {
   loadHull(parsed.variants[0]);
   state.waterline = parsed.waterline;
   state.deckRake = parsed.deckRake;
-  state.tweenMid = parsed.tweenMid;
   return parsed.variants.length;
 }
 

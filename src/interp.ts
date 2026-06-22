@@ -12,7 +12,7 @@
 // all loaded hulls must agree on point counts and length.
 
 import { clamp } from "./math.js";
-import { state, L, prepare, type Sheer, type StationCP } from "./model.js";
+import { state, L, prepare, type Sheer, type StationCP, type WeightCP } from "./model.js";
 import { draw3d } from "./render.js";
 import { downloadStep } from "./step.js";
 import { downloadJson, parseDocument, type HullData } from "./json.js";
@@ -25,21 +25,43 @@ interface Hull {
 
 // the loaded family (2–5 hulls) and the topology the first one fixes
 const hulls: Hull[] = [];
-let topo: { plan: number; trim: number; section: number; length: number } | null = null;
+let topo: {
+  plan: number;
+  trim: number;
+  section: number;
+  templates: number;
+  weights: number;
+  length: number;
+} | null = null;
 const palette: string[] = ["#2b6cb0", "#dd6b20", "#0f766e", "#7c3aed", "#b45309"];
 
 // check a freshly parsed hull against the family's topology (the first hull fixes it). Throws on
 // mismatch — only hulls of one topology (and length) can blend.
 function checkTopology(data: HullData, length: number): void {
-  const t = { plan: data.cp.length, trim: data.trim.length, section: data.aft.length, length };
+  const t = {
+    plan: data.cp.length,
+    trim: data.trim.length,
+    section: data.templates[0].length,
+    templates: data.templates.length,
+    weights: data.weights.length,
+    length,
+  };
   if (!topo) {
     topo = t;
     return;
   }
-  if (t.plan !== topo.plan || t.trim !== topo.trim || t.section !== topo.section)
+  if (
+    t.plan !== topo.plan ||
+    t.trim !== topo.trim ||
+    t.section !== topo.section ||
+    t.templates !== topo.templates ||
+    t.weights !== topo.weights
+  )
     throw new Error(
-      `topology mismatch — plan/trim/section counts ${t.plan}/${t.trim}/${t.section}, ` +
-        `the family has ${topo.plan}/${topo.trim}/${topo.section}. Only one topology can blend.`,
+      `topology mismatch — plan/trim/section/templates/weights counts ` +
+        `${t.plan}/${t.trim}/${t.section}/${t.templates}/${t.weights}, the family has ` +
+        `${topo.plan}/${topo.trim}/${topo.section}/${topo.templates}/${topo.weights}. ` +
+        `Only one topology can blend.`,
     );
   if (Math.abs(t.length - topo.length) > 1e-6)
     throw new Error(`length mismatch — ${t.length} vs the family's ${topo.length}. Lengths must match.`);
@@ -62,16 +84,23 @@ function blend(): void {
     x: hulls.reduce((a, h, k) => a + w[k] * h.data.transom[i].x, 0),
     z: hulls.reduce((a, h, k) => a + w[k] * h.data.transom[i].z, 0),
   }));
-  const stn = (which: "aft" | "fore"): StationCP[] =>
-    hulls[0].data[which].map((_, i) => ({
-      n: hulls.reduce((a, h, k) => a + w[k] * h.data[which][i].n, 0),
-      d: hulls.reduce((a, h, k) => a + w[k] * h.data[which][i].d, 0),
-      k: hulls.reduce((a, h, kk) => a + w[kk] * h.data[which][i].k, 0),
-    }));
+  // each template j, blended point-for-point across the family (templates are index-aligned)
+  const templates: StationCP[][] = hulls[0].data.templates.map((tpl, j) =>
+    tpl.map((_, i) => ({
+      n: hulls.reduce((a, h, k) => a + w[k] * h.data.templates[j][i].n, 0),
+      d: hulls.reduce((a, h, k) => a + w[k] * h.data.templates[j][i].d, 0),
+      k: hulls.reduce((a, h, kk) => a + w[kk] * h.data.templates[j][i].k, 0),
+    })),
+  );
+  // the weight curve, blended control point by control point (a convex blend of simplex points → simplex)
+  const weights: WeightCP[] = hulls[0].data.weights.map((wp, i) => ({
+    x: hulls.reduce((a, h, k) => a + w[k] * h.data.weights[i].x, 0),
+    w: wp.w.map((_, j) => hulls.reduce((a, h, k) => a + w[k] * h.data.weights[i].w[j], 0)),
+  }));
 
   state.sheer = { cp: plan, trim, transom, yf: () => 0, zf: () => 0 } as Sheer;
-  state.AFT = stn("aft");
-  state.FORE = stn("fore");
+  state.templates = templates;
+  state.weights = weights;
 }
 
 // ---------- redraw: blend (if any hulls) then draw the 3D hull ----------

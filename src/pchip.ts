@@ -24,6 +24,42 @@ export function pchipSlopes(xs: number[], ys: number[]): number[] {
   return m;
 }
 
+// Natural cubic spline tangents (second derivative = 0 at both ends): C² across all knots, unlike the
+// C¹ PCHIP above. Returns the first-derivative at each knot so the same `hermiteEval` reproduces the
+// curve. Not shape-preserving — it can overshoot — so it is only used in spaces where overshoot is
+// harmless (the logit pre-image of the weight simplex) or where curvature continuity is wanted over the
+// monotonicity guarantee (the optional C² station fairing).
+export function naturalCubicSlopes(xs: number[], ys: number[]): number[] {
+  const n = xs.length;
+  if (n === 1) return [0];
+  const h = Array(n - 1),
+    d = Array(n - 1);
+  for (let i = 0; i < n - 1; i++) {
+    h[i] = xs[i + 1] - xs[i];
+    d[i] = (ys[i + 1] - ys[i]) / h[i];
+  }
+  if (n === 2) return [d[0], d[0]]; // two points → straight line
+  // solve the tridiagonal system for the second derivatives M (M[0] = M[n-1] = 0, the natural BC)
+  const M = Array(n).fill(0),
+    b = Array(n).fill(0),
+    r = Array(n).fill(0);
+  for (let i = 1; i <= n - 2; i++) {
+    b[i] = (h[i - 1] + h[i]) / 3;
+    r[i] = d[i] - d[i - 1];
+  }
+  for (let i = 2; i <= n - 2; i++) {
+    const w = h[i - 1] / 6 / b[i - 1];
+    b[i] -= w * (h[i - 1] / 6);
+    r[i] -= w * r[i - 1];
+  }
+  for (let i = n - 2; i >= 1; i--) M[i] = (r[i] - (h[i] / 6) * M[i + 1]) / b[i];
+  // first derivatives at the knots, recovered from the second derivatives
+  const m = Array(n);
+  for (let i = 0; i < n - 1; i++) m[i] = d[i] - (h[i] * (2 * M[i] + M[i + 1])) / 6;
+  m[n - 1] = d[n - 2] + (h[n - 2] * (2 * M[n - 1] + M[n - 2])) / 6;
+  return m;
+}
+
 function pchipEnd(h0: number, h1: number, d0: number, d1: number): number {
   let m = ((2 * h0 + h1) * d0 - h0 * d1) / (h0 + h1);
   if (Math.sign(m) !== Math.sign(d0)) m = 0;

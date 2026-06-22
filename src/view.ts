@@ -39,5 +39,12 @@ export const snY = (d: number): number => STpad + d * STsc;
 export const invN = (vx: number): number => (vx - STpad) / STsc + NMIN;
 export const invD = (vy: number): number => (vy - STpad) / STsc;
 
+// weight-curve editor (longitudinal x across — shared mapX — stacked weight 0..1 up)
+export const WH = 176,
+  Wtop = 16,
+  Wbot = 20;
+export const wY = (w: number): number => WH - Wbot - w * (WH - Wtop - Wbot); // w ∈ [0,1]; 0 at the bottom
+export const invW = (vy: number): number => (WH - Wbot - vy) / (WH - Wtop - Wbot);
+
 // re-export the domain bounds the views also use
 export { NMIN, NMAX, DMAX };

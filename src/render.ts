@@ -14,7 +14,8 @@ import {
   transomEdge,
   xTransom,
   chordParam,
-  knuckleEval,
+  fairEval,
+  weightsAt,
   immersion,
   type Section,
   type StationCP,
@@ -36,6 +37,7 @@ import {
   snY,
   NMIN,
   NMAX,
+  wY,
 } from "./view.js";
 import {
   el,
@@ -44,10 +46,11 @@ import {
   sampleX,
   svgP,
   svgL,
-  svgA,
-  svgF,
   svgC,
   svgB,
+  svgW,
+  tplCards,
+  tplColor,
   cv3d,
 } from "./dom.js";
 import {
@@ -56,6 +59,10 @@ import {
   trimPointDown,
   transomPointDown,
   stnPointDown,
+  templateBgDown,
+  weightHandleDown,
+  addTemplate,
+  removeTemplate,
 } from "./interaction.js";
 
 type Proj = (p: Vec3) => [number, number];
@@ -176,8 +183,8 @@ export function render(): void {
   }
   drawPlan(sections, zmin);
   drawProfile(sections, zmin);
-  drawStation(svgA, state.AFT, COL.aft, "aft", state.FORE, COL.fore);
-  drawStation(svgF, state.FORE, COL.fore, "fore", state.AFT, COL.aft);
+  drawTemplates();
+  drawWeights(svgW);
   drawCutStation(svgC);
   (document.getElementById("cutTag") as HTMLElement).textContent = `CUT · x=${Math.round(state.x0)}`;
   drawBodyPlan(svgB);
@@ -502,15 +509,39 @@ function drawProfile(sections: Section[], _zmin: number): void {
   state.sheer.transom.forEach((cp, idx) => transomDot(svg, idx, mapX(cp.x), zScreenP(cp.z)));
 }
 
-function drawStation(
-  svg: SVGSVGElement,
-  arr: StationCP[],
-  col: string,
-  which: "aft" | "fore",
-  ghost: StationCP[],
-  gcol: string,
-): void {
+// one section-template editor (template `ti`): the other templates ghosted faint behind it, this one
+// solid with draggable nodes. Built into a fresh svg by drawTemplates each render.
+function stnCurve(svg: SVGSVGElement, pts: StationCP[], c: string, op: number): void {
+  const ns = pts.map((p) => p.n),
+    ds = pts.map((p) => p.d),
+    ks = pts.map((p) => p.k),
+    ts = chordParam(ns, ds);
+  const nf = fairEval(ts, ns, ks),
+    df = fairEval(ts, ds, ks),
+    tm = ts[ts.length - 1],
+    out: [number, number][] = [],
+    N = 120;
+  for (let i = 0; i <= N; i++) {
+    const u = (tm * i) / N;
+    out.push([snX(nf(u)), snY(df(u))]);
+  }
+  svg.append(
+    el("path", {
+      d: poly(out),
+      fill: "none",
+      stroke: c,
+      "stroke-width": 2.4,
+      opacity: op,
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round",
+    }),
+  );
+}
+
+function drawStation(svg: SVGSVGElement, ti: number): void {
   svg.replaceChildren();
+  const col = tplColor(ti),
+    arr = state.templates[ti];
   // axes: sheer point at origin (top-left), n inboard →, d down ↓
   svg.append(
     el("line", { x1: snX(NMIN), y1: snY(0), x2: snX(NMAX), y2: snY(0), stroke: "#edf2f7", "stroke-width": 1 }),
@@ -521,35 +552,11 @@ function drawStation(
   const sh = el("text", { x: snX(0) + 6, y: snY(0) - 6, "font-size": 10, fill: COL.mut || "#718096" });
   sh.textContent = "sheer";
   svg.append(sh);
-  const curve = (pts: StationCP[], c: string, op: number, dash?: string) => {
-    const ns = pts.map((p) => p.n),
-      ds = pts.map((p) => p.d),
-      ks = pts.map((p) => p.k),
-      ts = chordParam(ns, ds);
-    const nf = knuckleEval(ts, ns, ks),
-      df = knuckleEval(ts, ds, ks),
-      tm = ts[ts.length - 1],
-      out: [number, number][] = [],
-      N = 120;
-    for (let i = 0; i <= N; i++) {
-      const u = (tm * i) / N;
-      out.push([snX(nf(u)), snY(df(u))]);
-    }
-    svg.append(
-      el("path", {
-        d: poly(out),
-        fill: "none",
-        stroke: c,
-        "stroke-width": 2.4,
-        opacity: op,
-        ...(dash ? { "stroke-dasharray": dash } : {}),
-        "stroke-linejoin": "round",
-        "stroke-linecap": "round",
-      }),
-    );
-  };
-  curve(ghost, gcol, 0.18); // faint ghost of the other station
-  curve(arr, col, 1); // this station
+  // faint ghosts of every other template, then this one solid
+  state.templates.forEach((tpl, j) => {
+    if (j !== ti) stnCurve(svg, tpl, tplColor(j), 0.16);
+  });
+  stnCurve(svg, arr, col, 1);
   arr.forEach((p, idx) => {
     const end = idx === 0,
       s = end ? 4 : 6,
@@ -558,7 +565,7 @@ function drawStation(
       knuck = idx > 0,
       k = knuck ? Math.min(Math.max(p.k, 0), 1) : 0,
       rad = (1 - k) * s;
-    halo(svg, which, idx, snX(p.n), snY(p.d), s + 4);
+    halo(svg, "template", idx, snX(p.n), snY(p.d), s + 4, ti);
     const node = el("rect", {
       x: snX(p.n) - s,
       y: snY(p.d) - s,
@@ -570,18 +577,156 @@ function drawStation(
       stroke: end ? col : "#fff",
       "stroke-width": 1.8,
     });
-    node.addEventListener("pointerdown", (e) => stnPointDown(which, idx, end, svg, e));
+    node.addEventListener("pointerdown", (e) => stnPointDown(ti, idx, end, svg, e));
     svg.append(node);
   });
-  // when ANY station point is selected, show the linked pair in BOTH editors: the correspondent (same
-  // index) on the ghost = the other station, and — in whichever editor isn't the selected one — on this
-  // live curve too (in the selected editor that point already carries the solid selection halo).
-  const a = state.selected,
-    si = selStationIdx();
-  if (a && si !== null) {
-    linkDot(svg, snX(ghost[si].n), snY(ghost[si].d), gcol);
-    if (a.tgt !== which) linkDot(svg, snX(arr[si].n), snY(arr[si].d), col);
+  // when ANY template point is selected, cross-mark the corresponding index on this template's curve so
+  // the linked point is visible across every editor (the selected point itself carries the solid halo).
+  const si = selStationIdx();
+  if (si !== null) linkDot(svg, snX(arr[si].n), snY(arr[si].d), col);
+}
+
+// the persistent per-template editor <svg> elements. They are rebuilt only when the template COUNT
+// changes — never on a plain redraw — so a drag started on one stays attached to the DOM (a recreated
+// svg would report a zero-size getBoundingClientRect and break the pointer-to-model coordinate mapping).
+let tplEls: SVGSVGElement[] = [];
+
+// (re)build the template card DOM structure (called only when the number of templates changes)
+function buildTemplateCards(): void {
+  tplCards.replaceChildren();
+  tplEls = [];
+  const K = state.templates.length;
+  state.templates.forEach((_, j) => {
+    const card = document.createElement("div");
+    card.className = "card tplcard";
+    card.style.borderTop = `3px solid ${tplColor(j)}`;
+    const cap = document.createElement("div");
+    cap.className = "cap";
+    const title = document.createElement("span");
+    title.textContent = `Template ${j + 1}`;
+    const right = document.createElement("span");
+    right.style.cssText = "display:flex;gap:8px;align-items:center;";
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.style.background = tplColor(j);
+    tag.textContent = `T${j + 1}`;
+    right.append(tag);
+    if (K > 1) {
+      const rm = document.createElement("button");
+      rm.className = "tplrm";
+      rm.title = "Remove this template";
+      rm.textContent = "✕";
+      rm.addEventListener("click", () => removeTemplate(j));
+      right.append(rm);
+    }
+    cap.append(title, right);
+    card.append(cap);
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg") as SVGSVGElement;
+    svg.setAttribute("viewBox", "0 0 360 360");
+    svg.addEventListener("pointerdown", (e) => templateBgDown(j, svg, e as PointerEvent));
+    card.append(svg);
+    tplCards.append(card);
+    tplEls.push(svg);
+  });
+  const addRow = document.createElement("div");
+  addRow.className = "tpladd";
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "+ Add template";
+  addBtn.title = "Add another section template (enters the blend at zero weight; raise it in the blend editor)";
+  addBtn.disabled = K >= 7;
+  addBtn.addEventListener("click", () => addTemplate());
+  addRow.append(addBtn);
+  tplCards.append(addRow);
+}
+
+// redraw the per-template editors; reuse the existing svg elements unless the template count changed
+function drawTemplates(): void {
+  if (tplEls.length !== state.templates.length) buildTemplateCards();
+  tplEls.forEach((svg, j) => drawStation(svg, j));
+}
+
+// the weight curve as a stacked-band ribbon over x: band j is template j's share of the blend, the bands
+// summing to 1 at every station. Control points carry an x-handle (interior CPs) and the band-boundary
+// handles that edit the simplex split. The red cut slider scrubs x here too.
+function drawWeights(svg: SVGSVGElement): void {
+  svg.replaceChildren();
+  const K = state.templates.length,
+    top = wY(1),
+    bot = wY(0);
+  gridX(svg, top, bot);
+  // horizontal guides at 0 / ½ / 1
+  for (const g of [0, 0.5, 1])
+    svg.append(
+      el("line", { x1: mapX(0), y1: wY(g), x2: mapX(L), y2: wY(g), stroke: "#edf2f7", "stroke-width": 1 }),
+    );
+  // stacked bands from the sampled curve
+  const NS = 120,
+    xs: number[] = [],
+    cum: number[][] = [];
+  for (let i = 0; i <= NS; i++) {
+    const x = (L * i) / NS,
+      w = weightsAt(x),
+      c = [0];
+    let s = 0;
+    for (let j = 0; j < K; j++) {
+      s += w[j];
+      c.push(s);
+    }
+    xs.push(x);
+    cum.push(c);
   }
+  for (let j = 0; j < K; j++) {
+    const upper = xs.map((x, i): [number, number] => [mapX(x), wY(cum[i][j + 1])]),
+      lower = xs.map((x, i): [number, number] => [mapX(x), wY(cum[i][j])]).reverse();
+    svg.append(
+      el("path", { d: poly(upper.concat(lower)) + "Z", fill: tplColor(j), opacity: 0.5, stroke: "none" }),
+    );
+  }
+  stationLine(svg, top, bot); // scrub the cut x from here too
+  // control points: vertical guide + x-handle (interior only) + the K−1 band-boundary handles
+  state.weights.forEach((cp, i) => {
+    const n = state.weights.length,
+      x = mapX(cp.x),
+      sel = state.selected && state.selected.tgt === "weight" && state.selected.idx === i;
+    svg.append(
+      el("line", { x1: x, y1: top, x2: x, y2: bot, stroke: "#fff", "stroke-width": 1, opacity: 0.75 }),
+    );
+    const C: number[] = [];
+    let s = 0;
+    for (let j = 0; j < K; j++) {
+      s += cp.w[j];
+      C.push(s);
+    }
+    for (let b = 0; b < K - 1; b++) {
+      const hy = wY(C[b]);
+      if (sel) svg.append(el("circle", { cx: x, cy: hy, r: 8, fill: "none", stroke: HILITE, "stroke-width": 3, opacity: 0.95 }));
+      const h = el("circle", {
+        cx: x,
+        cy: hy,
+        r: 5,
+        fill: "#fff",
+        stroke: tplColor(b),
+        "stroke-width": 2,
+        style: "cursor:ns-resize",
+      });
+      h.addEventListener("pointerdown", (e) => weightHandleDown(i, "bnd", b, svg, e as PointerEvent));
+      svg.append(h);
+    }
+    if (i > 0 && i < n - 1) {
+      const xh = el("rect", {
+        x: x - 4.5,
+        y: top - 11,
+        width: 9,
+        height: 9,
+        fill: sel ? HILITE : "#fff",
+        stroke: COL.mut,
+        "stroke-width": 1.5,
+        style: "cursor:ew-resize",
+      });
+      xh.addEventListener("pointerdown", (e) => weightHandleDown(i, "x", 0, svg, e as PointerEvent));
+      svg.append(xh);
+    }
+  });
 }
 
 // the interpolated (blended) station at the red cut x0, with both trims marked: the sheer trim
@@ -756,16 +901,17 @@ function drawCutStation(svg: SVGSVGElement): void {
     svg.append(wt);
   }
 
-  // mark where the currently selected station point lands on this interpolated station (its blend by f)
+  // mark where the currently selected template point lands on this interpolated station (its blend by w(x0))
   const selIdx = selStationIdx();
   if (selIdx !== null) {
-    const f = Math.min(Math.max(state.x0 / L, 0), 1);
-    linkDot(
-      svg,
-      snX(lerp(state.AFT[selIdx].n, state.FORE[selIdx].n, f)),
-      snY(lerp(state.AFT[selIdx].d, state.FORE[selIdx].d, f)),
-      COL.station,
-    );
+    const wt = weightsAt(state.x0);
+    let bn = 0,
+      bd = 0;
+    state.templates.forEach((tpl, j) => {
+      bn += wt[j] * tpl[selIdx].n;
+      bd += wt[j] * tpl[selIdx].d;
+    });
+    linkDot(svg, snX(bn), snY(bd), COL.station);
   }
 }
 
@@ -948,9 +1094,8 @@ function initGL(): void {
 // width is unreliable), starboard plus its port mirror, nudged toward the eye by BIAS so it sits just
 // proud of the surface without z-fighting.
 function buildLongitudinalMesh(idx: number, view: Vec3): Mesh {
-  const aft = state.AFT,
-    fore = state.FORE;
-  if (idx < 0 || idx >= aft.length) return { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 };
+  const tpl = state.templates;
+  if (idx < 0 || idx >= tpl[0].length) return { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 };
   const N = 160,
     HW = 5, // ribbon half-width (mm) — a thin guide line
     BIAS = 22, // shift toward the eye (mm) so the line floats just above the hull it lies on
@@ -959,10 +1104,14 @@ function buildLongitudinalMesh(idx: number, view: Vec3): Mesh {
     keep: boolean[] = []; // each sample trimmed the same way the hull surface is
   for (let i = 0; i <= N; i++) {
     const x = (L * i) / N,
-      f = Math.min(Math.max(x / L, 0), 1),
-      n = lerp(aft[idx].n, fore[idx].n, f),
-      d = lerp(aft[idx].d, fore[idx].d, f),
-      fr = frameAt(x),
+      wt = weightsAt(x); // the blend at this station mixes the same template point across all templates
+    let n = 0,
+      d = 0;
+    for (let j = 0; j < tpl.length; j++) {
+      n += wt[j] * tpl[j][idx].n;
+      d += wt[j] * tpl[j][idx].d;
+    }
+    const fr = frameAt(x),
       w: Vec3 = [
         fr.p[0] + n * fr.n[0] + d * fr.d[0],
         fr.p[1] + n * fr.n[1] + d * fr.d[1],
@@ -1239,10 +1388,19 @@ export function draw3d(rebuild?: boolean): void {
 // ---------- control-point dots ----------
 const HILITE = "#f59e0b"; // accent ring on the control point a tool is currently acting on
 
-// draw a halo behind a control point if it is the currently selected one
-function halo(svg: SVGSVGElement, tgt: ActiveTarget, idx: number, sx: number, sy: number, r: number): void {
+// draw a halo behind a control point if it is the currently selected one (for templates, `ti` must match)
+function halo(
+  svg: SVGSVGElement,
+  tgt: ActiveTarget,
+  idx: number,
+  sx: number,
+  sy: number,
+  r: number,
+  ti?: number,
+): void {
   const a = state.selected;
   if (!a || a.tgt !== tgt || a.idx !== idx) return;
+  if (ti !== undefined && a.ti !== ti) return;
   svg.append(
     el("circle", { cx: sx, cy: sy, r, fill: "none", stroke: HILITE, "stroke-width": 3, opacity: 0.95 }),
   );
@@ -1257,10 +1415,10 @@ function linkDot(svg: SVGSVGElement, sx: number, sy: number, col: string): void 
   );
   svg.append(el("circle", { cx: sx, cy: sy, r: 3.5, fill: col, stroke: "#fff", "stroke-width": 1.2 }));
 }
-// the selected station-point index, or null when the selection isn't a station point (aft/fore share length)
+// the selected template-point index, or null when the selection isn't a template point
 function selStationIdx(): number | null {
   const a = state.selected;
-  return a && (a.tgt === "aft" || a.tgt === "fore") && a.idx < state.AFT.length ? a.idx : null;
+  return a && a.tgt === "template" && a.idx < state.templates[0].length ? a.idx : null;
 }
 
 function cpDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
