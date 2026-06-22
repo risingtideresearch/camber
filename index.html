@@ -90,6 +90,9 @@
       <label class="ctl" title="Deck rake — bow-up trim angle; rotates the whole hull about the sheer origin">Rake
         <input type="range" id="rakeRange" min="-12" max="12" step="0.5">
         <span class="ctlval" id="rakeVal"></span></label>
+      <label class="ctl" title="Fore/aft tween midpoint — where along the length the section is the 50/50 blend of aft and fore. 50% = even tween; lower biases aft, higher biases forward.">Mid
+        <input type="range" id="midRange" min="20" max="80" step="1">
+        <span class="ctlval" id="midVal"></span></label>
       <div class="legend">
         <div><span class="sw" style="background:var(--sheer)"></span>Sheer (plan &amp; trim)</div>
         <div><span class="sw" style="background:var(--deck)"></span>Flat deck (ref)</div>

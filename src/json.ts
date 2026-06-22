@@ -54,6 +54,7 @@ export interface ParsedDoc {
   length: number;
   waterline: number; // depth below the sheer origin
   deckRake: number; // radians
+  tweenMid: number; // fore/aft tween midpoint, fraction of length
   topology: { sheerPlan: number; sheerTrim: number; section: number };
   variants: HullData[];
 }
@@ -110,6 +111,7 @@ export function buildJson(): string {
     length: L,
     waterline: state.waterline,
     deckRakeDeg: (state.deckRake * 180) / Math.PI,
+    tweenMid: state.tweenMid,
     topology: {
       sheerPlan: s.cp.length,
       sheerTrim: s.trim.length,
@@ -178,6 +180,9 @@ export function parseDocument(text: string): ParsedDoc {
   const waterline = typeof doc.waterline === "number" && isFinite(doc.waterline) ? doc.waterline : 0;
   const deckRakeDeg =
     typeof doc.deckRakeDeg === "number" && isFinite(doc.deckRakeDeg) ? doc.deckRakeDeg : 0;
+  // tween midpoint optional (older documents predate it); default to 0.5 = plain linear fore/aft tween
+  const tweenMid =
+    typeof doc.tweenMid === "number" && isFinite(doc.tweenMid) ? doc.tweenMid : 0.5;
   const t = obj(doc.topology, "topology");
   const nPlan = intCount(t.sheerPlan, "topology.sheerPlan", 2);
   const nTrim = intCount(t.sheerTrim, "topology.sheerTrim", 2);
@@ -230,6 +235,7 @@ export function parseDocument(text: string): ParsedDoc {
     length,
     waterline,
     deckRake: (deckRakeDeg * Math.PI) / 180,
+    tweenMid,
     topology: { sheerPlan: nPlan, sheerTrim: nTrim, section: nSec },
     variants,
   };
@@ -252,6 +258,7 @@ export function loadJsonText(text: string): number {
   loadHull(parsed.variants[0]);
   state.waterline = parsed.waterline;
   state.deckRake = parsed.deckRake;
+  state.tweenMid = parsed.tweenMid;
   return parsed.variants.length;
 }
 

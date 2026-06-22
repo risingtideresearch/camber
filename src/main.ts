@@ -19,6 +19,8 @@ const wlRange = document.getElementById("wlRange") as HTMLInputElement;
 const wlVal = document.getElementById("wlVal") as HTMLElement;
 const rakeRange = document.getElementById("rakeRange") as HTMLInputElement;
 const rakeVal = document.getElementById("rakeVal") as HTMLElement;
+const midRange = document.getElementById("midRange") as HTMLInputElement;
+const midVal = document.getElementById("midVal") as HTMLElement;
 
 function syncTrim(): void {
   wlRange.value = String(state.waterline);
@@ -26,6 +28,9 @@ function syncTrim(): void {
   const deg = (state.deckRake * 180) / Math.PI;
   rakeRange.value = String(deg);
   rakeVal.textContent = `${deg.toFixed(1)}°`;
+  const midPct = Math.round(state.tweenMid * 100);
+  midRange.value = String(midPct);
+  midVal.textContent = `${midPct}%`;
 }
 wlRange.addEventListener("input", () => {
   state.waterline = parseFloat(wlRange.value);
@@ -36,6 +41,12 @@ rakeRange.addEventListener("input", () => {
   const deg = parseFloat(rakeRange.value);
   state.deckRake = (deg * Math.PI) / 180;
   rakeVal.textContent = `${deg.toFixed(1)}°`;
+  render();
+});
+midRange.addEventListener("input", () => {
+  const pct = parseFloat(midRange.value);
+  state.tweenMid = pct / 100;
+  midVal.textContent = `${Math.round(pct)}%`;
   render();
 });
 

@@ -113,6 +113,8 @@ export interface State {
   waterline: number; // depth (≥0) of the design waterline below the sheer origin (deck datum at x=0, z=0)
   deckRake: number; // deck rake angle (rad, +ve = bow up): a rigid rotation of the whole hull about the
   // transverse (y) axis through the sheer origin. Everything is built deck-flat (z=0); the boat floats at this rake.
+  tweenMid: number; // fore/aft tween midpoint as a fraction of length ∈ (0,1): the x where a station is the
+  // 50/50 blend of AFT and FORE. 0.5 = plain linear tween; smaller biases the blend aft, larger biases it forward.
   rot: { yaw: number; pitch: number };
   view3d: View3D;
   zebra: boolean;
@@ -127,6 +129,7 @@ export const state: State = {
   x0: 2000,
   waterline: 600,
   deckRake: 0,
+  tweenMid: 0.5,
   rot: { yaw: -0.62, pitch: 0.42 },
   view3d: "trimmed", // "trimmed" = clipped + mirrored hull; "sheet" = untrimmed one side
   zebra: false, // zebra-stripe fairness check on the 3D surface
@@ -147,6 +150,7 @@ export function resetModel(): void {
   state.x0 = 2000;
   state.waterline = 600;
   state.deckRake = 0;
+  state.tweenMid = 0.5;
 }
 
 // ---------- deck rake (world frame) ----------
@@ -206,8 +210,19 @@ export function knuckleEval(
 
 // the blended station section at x, as continuous n(u)/d(u) over u in [0,tmax]. The knuckle value k is
 // blended along the hull just like n and d, so a chine can fade from hard (aft) to soft (fore).
+// reparameterized fore/aft tween fraction: maps the longitudinal fraction g = x/L → f ∈ [0,1]
+// monotonically via f = gᵖ, with the exponent picked so f = 0.5 exactly at g = tweenMid. tweenMid = 0.5
+// gives p = 1 (the plain linear tween); a smaller midpoint pulls the 50/50 blend aft, a larger one forward.
+// Power-law keeps the blend smooth and strictly increasing, so no crease appears at the midpoint.
+export function tweenFraction(x: number): number {
+  const g = clamp(x / L, 0, 1),
+    mid = clamp(state.tweenMid, 0.05, 0.95);
+  const p = Math.log(0.5) / Math.log(mid);
+  return Math.pow(g, p);
+}
+
 export function stationAt(x: number): Station {
-  const f = clamp(x / L, 0, 1),
+  const f = tweenFraction(x),
     m = state.AFT.length,
     ns: number[] = [],
     ds: number[] = [],
