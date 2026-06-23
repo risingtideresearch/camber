@@ -219,6 +219,25 @@ function removeWeightPoint(idx: number): void {
   state.weights.splice(idx, 1);
 }
 
+// add a blend control point at the midpoint of the widest gap between adjacent control points (the
+// "+ blend point" button) — its weight is read off the current curve so the path is unchanged, then
+// it is selected ready to drag.
+export function addBlendPoint(): void {
+  const w = state.weights;
+  if (w.length < 2) return;
+  let bi = 0,
+    bg = -1;
+  for (let i = 0; i < w.length - 1; i++) {
+    const g = w[i + 1].x - w[i].x;
+    if (g > bg) {
+      bg = g;
+      bi = i;
+    }
+  }
+  const idx = addWeightPoint((w[bi].x + w[bi + 1].x) / 2);
+  select("weight", idx);
+}
+
 // ---------- add / remove whole templates ----------
 // a new template starts as a copy of the last and enters every weight CP at zero weight, so the hull is
 // unchanged on add; raise its weight in the blend editor to bring it into the mix.

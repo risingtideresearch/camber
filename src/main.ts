@@ -2,7 +2,7 @@
 
 import { resetModel, state } from "./model.js";
 import { render, draw3d } from "./render.js";
-import { initInteraction, refreshSelUI } from "./interaction.js";
+import { initInteraction, refreshSelUI, addBlendPoint } from "./interaction.js";
 import { downloadStep } from "./step.js";
 import { downloadJson, importJson } from "./json.js";
 import { svgL, svgP } from "./dom.js";
@@ -62,6 +62,8 @@ toggleZebra.addEventListener("click", () => {
   toggleZebra.classList.toggle("on", state.zebra);
   draw3d(false);
 });
+
+document.getElementById("addBlendBtn")!.addEventListener("click", () => addBlendPoint());
 
 document.getElementById("reset")!.addEventListener("click", reset);
 

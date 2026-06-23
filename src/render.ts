@@ -709,6 +709,8 @@ function drawWideTabs(): void {
     });
     wideTabs.append(tab);
   }
+  const addBtn = document.getElementById("addBlendBtn") as HTMLButtonElement | null;
+  if (addBtn) addBtn.hidden = wideTab !== "blend"; // the "+ blend point" button is only for the blend view
   applyWide();
 }
 
