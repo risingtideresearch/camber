@@ -51,6 +51,7 @@ import {
   svgW,
   tplCards,
   sideTabs,
+  wideTabs,
   tplColor,
   cv3d,
 } from "./dom.js";
@@ -188,6 +189,7 @@ export function render(): void {
   drawCutStation(svgC);
   drawBodyPlan(svgB);
   drawSidePanels(); // template editors + Cut + Body share one tab strip; show the active one
+  drawWideTabs(); // plan / profile / blend share one tab strip in the bottom panel
   draw3d(true);
   const profVal = document.getElementById("profVal") as HTMLElement;
   profVal.textContent = `x = ${Math.round(state.x0)} (${((state.x0 / L) * 100).toFixed(0)}% LOA)`;
@@ -679,6 +681,35 @@ function drawSidePanels(): void {
   tplEls.forEach((svg, j) => drawStation(svg, j));
   buildSideTabs();
   applySideTab();
+}
+
+// ---------- the bottom wide panel: plan / profile / blend share one tab strip, one shown at a time ----------
+type WideTab = "plan" | "profile" | "blend";
+let wideTab: WideTab = "plan";
+const WIDE: { key: WideTab; label: string; svg: () => SVGSVGElement }[] = [
+  { key: "plan", label: "Plan", svg: () => svgL },
+  { key: "profile", label: "Profile", svg: () => svgP },
+  { key: "blend", label: "Blend", svg: () => svgW },
+];
+
+function applyWide(): void {
+  for (const v of WIDE) v.svg().style.display = wideTab === v.key ? "" : "none";
+}
+
+function drawWideTabs(): void {
+  wideTabs.replaceChildren();
+  for (const v of WIDE) {
+    const tab = document.createElement("button");
+    tab.className = "tab" + (wideTab === v.key ? " active" : "");
+    tab.textContent = v.label;
+    tab.addEventListener("click", () => {
+      wideTab = v.key;
+      applyWide();
+      drawWideTabs();
+    });
+    wideTabs.append(tab);
+  }
+  applyWide();
 }
 
 // the weight curve as a stacked-band ribbon over x: band j is template j's share of the blend, the bands

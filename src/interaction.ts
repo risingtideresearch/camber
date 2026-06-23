@@ -12,15 +12,13 @@ import {
   type StationCP,
   type WeightCP,
 } from "./model.js";
-import { invX, invY, invZp, invN, invD, invW, YMAX, ZTRIMMIN, PH, LH, STW, STH, WH } from "./view.js";
+import { invX, invY, invZp, invN, invD, invW, YMAX, ZTRIMMIN } from "./view.js";
 import { svgL, svgP, svgW, tplCards } from "./dom.js";
 import { render, draw3d } from "./render.js";
 
 interface Drag {
   kind: "slider" | "sheer" | "trim" | "transom" | "stn" | "weight" | "rot";
   svg?: SVGSVGElement;
-  vbw?: number;
-  vbh?: number;
   idx?: number;
   ti?: number; // template index, for a "stn" drag
   wpart?: "x" | "bnd"; // which part of a weight control point is being dragged
@@ -41,16 +39,20 @@ type DragSpec = {
   bnd?: number;
 };
 
-// the viewBox dimensions of the svg a drag targets, by drag kind
-function vbDims(kind: Drag["kind"], svg: SVGSVGElement): [number, number] {
-  if (kind === "stn") return [STW, STH];
-  if (kind === "weight") return [1000, WH];
-  return [1000, svg === svgP ? PH : LH];
+// map a client (screen) point to the svg's viewBox coordinates via its CTM — handles any CSS scaling and
+// preserveAspectRatio letterboxing (the editor svgs are fit-to-box, so their box ≠ their viewBox aspect)
+function svgPoint(svg: SVGSVGElement, clientX: number, clientY: number): [number, number] {
+  const m = svg.getScreenCTM();
+  if (!m) return [0, 0];
+  const pt = svg.createSVGPoint();
+  pt.x = clientX;
+  pt.y = clientY;
+  const p = pt.matrixTransform(m.inverse());
+  return [p.x, p.y];
 }
 
 export function startDrag(d: DragSpec, svg: SVGSVGElement, e: PointerEvent): void {
-  const [vbw, vbh] = vbDims(d.kind, svg);
-  drag = { ...d, svg, vbw, vbh, px0: e.clientX };
+  drag = { ...d, svg, px0: e.clientX };
   // a drag on a control point selects it (persistently); the x-cut slider / rotation leave the selection
   if (d.kind === "sheer") select("plan", d.idx!);
   else if (d.kind === "trim") select("trim", d.idx!);
@@ -62,8 +64,7 @@ export function startDrag(d: DragSpec, svg: SVGSVGElement, e: PointerEvent): voi
 }
 
 function getVB(d: Drag, e: PointerEvent): [number, number] {
-  const r = d.svg!.getBoundingClientRect();
-  return [((e.clientX - r.left) * d.vbw!) / r.width, ((e.clientY - r.top) * d.vbh!) / r.height];
+  return svgPoint(d.svg!, e.clientX, e.clientY);
 }
 
 function moveSheer(d: Drag, vx: number, vy: number): void {
@@ -245,9 +246,8 @@ export function removeTemplate(ti: number): void {
 }
 
 // ---------- tools (select / add) + the selected-point actions ----------
-function vbCoords(svg: SVGSVGElement, e: PointerEvent, w: number, h: number): [number, number] {
-  const r = svg.getBoundingClientRect();
-  return [((e.clientX - r.left) * w) / r.width, ((e.clientY - r.top) * h) / r.height];
+function vbCoords(svg: SVGSVGElement, e: PointerEvent): [number, number] {
+  return svgPoint(svg, e.clientX, e.clientY);
 }
 
 function setToolCursor(): void {
@@ -395,7 +395,7 @@ export function weightHandleDown(
 // background pointerdown on a (dynamic) template editor: add a point in "add" mode, else clear selection
 export function templateBgDown(ti: number, svg: SVGSVGElement, e: PointerEvent): void {
   if (state.tool === "add") {
-    const [vx, vy] = vbCoords(svg, e, STW, STH),
+    const [vx, vy] = vbCoords(svg, e),
       idx = addTemplatePoint(ti, invN(vx), invD(vy));
     setTool("select");
     select("template", idx, ti);
@@ -473,13 +473,11 @@ export function initInteraction(): void {
   // the new point selected); in "select" mode an empty click clears the selection.
   const onBg = (
     svg: SVGSVGElement,
-    w: number,
-    h: number,
     add: (vx: number, vy: number) => { tgt: ActiveTarget; idx: number },
   ): void => {
     svg.addEventListener("pointerdown", (e) => {
       if (state.tool === "add") {
-        const [vx, vy] = vbCoords(svg, e, w, h),
+        const [vx, vy] = vbCoords(svg, e),
           { tgt, idx } = add(vx, vy);
         setTool("select");
         select(tgt, idx); // select() re-renders with the new point highlighted
@@ -488,12 +486,12 @@ export function initInteraction(): void {
       }
     });
   };
-  onBg(svgL, 1000, LH, (vx, vy) => ({ tgt: "plan", idx: addSheerPoint(invX(vx), invY(vy)) }));
-  onBg(svgP, 1000, PH, (vx, vy) => ({ tgt: "trim", idx: addTrimPoint(invX(vx), invZp(vy)) }));
+  onBg(svgL, (vx, vy) => ({ tgt: "plan", idx: addSheerPoint(invX(vx), invY(vy)) }));
+  onBg(svgP, (vx, vy) => ({ tgt: "trim", idx: addTrimPoint(invX(vx), invZp(vy)) }));
   // the weight editor (persistent element): add a blend control point at the clicked x
   svgW.addEventListener("pointerdown", (e) => {
     if (state.tool === "add") {
-      const [vx] = vbCoords(svgW, e, 1000, WH),
+      const [vx] = vbCoords(svgW, e),
         idx = addWeightPoint(invX(vx));
       setTool("select");
       select("weight", idx);
