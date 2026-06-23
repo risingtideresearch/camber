@@ -1525,7 +1525,8 @@ export function draw3d(rebuild?: boolean): void {
 
 // ---------- control-point dots ----------
 const HILITE = "#f59e0b"; // amber "linked" marker (cut station + the 3D guide ribbon)
-const SEL = "#ef4444"; // the currently selected control point is drawn in this red
+const SEL = "#ef4444"; // selected control point red — in the section editors (no red cut slider there)
+const SELB = "#2563eb"; // selected control point blue — in plan/profile, where the red cut slider lives
 
 // is the given point the current selection? (for templates, the template index `ti` must match too)
 function isSelected(tgt: ActiveTarget, idx: number, ti?: number): boolean {
@@ -1558,17 +1559,17 @@ function selStationIdx(): number | null {
 }
 
 function cpDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
-  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: isSelected("plan", idx) ? SEL : COL.sheer, stroke: "#fff", "stroke-width": 1.5 });
+  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: isSelected("plan", idx) ? SELB : COL.sheer, stroke: "#fff", "stroke-width": 1.5 });
   c.addEventListener("pointerdown", (e) => sheerPointDown(idx, svg, e));
   svg.append(c);
 }
 function trimDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
-  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: isSelected("trim", idx) ? SEL : COL.sheer, stroke: "#fff", "stroke-width": 1.5 });
+  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: isSelected("trim", idx) ? SELB : COL.sheer, stroke: "#fff", "stroke-width": 1.5 });
   c.addEventListener("pointerdown", (e) => trimPointDown(idx, svg, e));
   svg.append(c);
 }
 function transomDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
-  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: isSelected("transom", idx) ? SEL : "var(--transom)", stroke: "#fff", "stroke-width": 1.5 });
+  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: isSelected("transom", idx) ? SELB : "var(--transom)", stroke: "#fff", "stroke-width": 1.5 });
   c.addEventListener("pointerdown", (e) => transomPointDown(idx, svg, e));
   svg.append(c);
 }
