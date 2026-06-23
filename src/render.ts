@@ -566,8 +566,8 @@ function drawStation(svg: SVGSVGElement, ti: number): void {
       // the node morphs round (k=0) → square (k=1) via corner radius to show its sharpness
       knuck = idx > 0,
       k = knuck ? Math.min(Math.max(p.k, 0), 1) : 0,
-      rad = (1 - k) * s;
-    halo(svg, "template", idx, snX(p.n), snY(p.d), s + 4, ti);
+      rad = (1 - k) * s,
+      sel = isSelected("template", idx, ti); // the selected node is drawn solid red
     const node = el("rect", {
       x: snX(p.n) - s,
       y: snY(p.d) - s,
@@ -575,17 +575,20 @@ function drawStation(svg: SVGSVGElement, ti: number): void {
       height: 2 * s,
       rx: rad,
       ry: rad,
-      fill: end ? "#fff" : col,
-      stroke: end ? col : "#fff",
+      fill: sel ? SEL : end ? "#fff" : col,
+      stroke: sel ? "#fff" : end ? col : "#fff",
       "stroke-width": 1.8,
     });
     node.addEventListener("pointerdown", (e) => stnPointDown(ti, idx, end, svg, e));
     svg.append(node);
   });
-  // when ANY template point is selected, cross-mark the corresponding index on this template's curve so
-  // the linked point is visible across every editor (the selected point itself carries the solid halo).
+  // when a template point is selected, mark the corresponding index on every OTHER template's ghost curve
+  // with a small red ✕, so you can see where that control point lands on the other sections.
   const si = selStationIdx();
-  if (si !== null) linkDot(svg, snX(arr[si].n), snY(arr[si].d), col);
+  if (si !== null)
+    state.templates.forEach((tpl, j) => {
+      if (j !== ti) redX(svg, snX(tpl[si].n), snY(tpl[si].d));
+    });
 }
 
 // ---------- the side panel: one tab strip over the per-template editors plus the Cut and Body views ----------
@@ -768,13 +771,12 @@ function drawWeights(svg: SVGSVGElement): void {
     }
     for (let b = 0; b < K - 1; b++) {
       const hy = wY(C[b]);
-      if (sel) svg.append(el("circle", { cx: x, cy: hy, r: 8, fill: "none", stroke: HILITE, "stroke-width": 3, opacity: 0.95 }));
       const h = el("circle", {
         cx: x,
         cy: hy,
         r: 5,
-        fill: "#fff",
-        stroke: tplColor(b),
+        fill: sel ? SEL : "#fff", // selected blend point → red handles
+        stroke: sel ? "#fff" : tplColor(b),
         "stroke-width": 2,
         style: "cursor:ns-resize",
       });
@@ -787,7 +789,7 @@ function drawWeights(svg: SVGSVGElement): void {
         y: top - 11,
         width: 9,
         height: 9,
-        fill: sel ? HILITE : "#fff",
+        fill: sel ? SEL : "#fff",
         stroke: COL.mut,
         "stroke-width": 1.5,
         style: "cursor:ew-resize",
@@ -1522,29 +1524,27 @@ export function draw3d(rebuild?: boolean): void {
 }
 
 // ---------- control-point dots ----------
-const HILITE = "#f59e0b"; // accent ring on the control point a tool is currently acting on
+const HILITE = "#f59e0b"; // amber "linked" marker (cut station + the 3D guide ribbon)
+const SEL = "#ef4444"; // the currently selected control point is drawn in this red
 
-// draw a halo behind a control point if it is the currently selected one (for templates, `ti` must match)
-function halo(
-  svg: SVGSVGElement,
-  tgt: ActiveTarget,
-  idx: number,
-  sx: number,
-  sy: number,
-  r: number,
-  ti?: number,
-): void {
+// is the given point the current selection? (for templates, the template index `ti` must match too)
+function isSelected(tgt: ActiveTarget, idx: number, ti?: number): boolean {
   const a = state.selected;
-  if (!a || a.tgt !== tgt || a.idx !== idx) return;
-  if (ti !== undefined && a.ti !== ti) return;
-  svg.append(
-    el("circle", { cx: sx, cy: sy, r, fill: "none", stroke: HILITE, "stroke-width": 3, opacity: 0.95 }),
-  );
+  return !!a && a.tgt === tgt && a.idx === idx && (ti === undefined || a.ti === ti);
 }
 
-// mark the point that CORRESPONDS (same index) to the current selection — on the other station's ghost
-// curve and on the interpolated station. A dashed accent ring (vs. the solid selection halo) over a dot
-// in `col`, so it reads as "linked to the selected point" rather than "selected".
+// a small red ✕ marking the spot that corresponds (same index) to the selected point — drawn on the other
+// templates' ghost curves so you can see where that control point lands on the other sections
+function redX(svg: SVGSVGElement, sx: number, sy: number): void {
+  const r = 4.5;
+  for (const [dx, dy] of [[-1, -1], [-1, 1]] as const)
+    svg.append(
+      el("line", { x1: sx + dx * r, y1: sy + dy * r, x2: sx - dx * r, y2: sy - dy * r, stroke: SEL, "stroke-width": 2, "stroke-linecap": "round" }),
+    );
+}
+
+// mark the point that CORRESPONDS (same index) to the current selection on the interpolated cut station:
+// a dashed amber ring over a dot in `col`, reading as "linked", matching the amber 3D guide ribbon.
 function linkDot(svg: SVGSVGElement, sx: number, sy: number, col: string): void {
   svg.append(
     el("circle", { cx: sx, cy: sy, r: 8, fill: "none", stroke: HILITE, "stroke-width": 2, opacity: 0.9, "stroke-dasharray": "3 3" }),
@@ -1558,20 +1558,17 @@ function selStationIdx(): number | null {
 }
 
 function cpDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
-  halo(svg, "plan", idx, sx, sy, 9);
-  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: COL.sheer, stroke: "#fff", "stroke-width": 1.5 });
+  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: isSelected("plan", idx) ? SEL : COL.sheer, stroke: "#fff", "stroke-width": 1.5 });
   c.addEventListener("pointerdown", (e) => sheerPointDown(idx, svg, e));
   svg.append(c);
 }
 function trimDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
-  halo(svg, "trim", idx, sx, sy, 9);
-  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: COL.sheer, stroke: "#fff", "stroke-width": 1.5 });
+  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: isSelected("trim", idx) ? SEL : COL.sheer, stroke: "#fff", "stroke-width": 1.5 });
   c.addEventListener("pointerdown", (e) => trimPointDown(idx, svg, e));
   svg.append(c);
 }
 function transomDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
-  halo(svg, "transom", idx, sx, sy, 9);
-  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: "var(--transom)", stroke: "#fff", "stroke-width": 1.5 });
+  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: isSelected("transom", idx) ? SEL : "var(--transom)", stroke: "#fff", "stroke-width": 1.5 });
   c.addEventListener("pointerdown", (e) => transomPointDown(idx, svg, e));
   svg.append(c);
 }
