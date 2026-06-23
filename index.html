@@ -23,7 +23,7 @@
   .top3d{position:relative;flex:1 1 auto;min-width:0;border:1px solid var(--line);border-radius:10px;
          overflow:hidden;background:linear-gradient(#eef3f8,#d7e0ea);}
   .view3dctl{position:absolute;top:10px;right:14px;display:flex;gap:8px;z-index:1;}
-  .top .side{flex:0 0 340px;min-height:0;display:flex;flex-direction:column;gap:14px;}
+  .top .side{flex:0 0 384px;min-height:0;display:flex;flex-direction:column;gap:14px;}
   .sidecard{flex:1 1 0;min-height:0;display:flex;flex-direction:column;}
   .sidepanel{position:relative;flex:1 1 0;min-height:0;}
   .sidepanel > #templateCards{position:absolute;inset:0;}
@@ -53,12 +53,11 @@
   /* the toolbar, relocated to a vertical column in the side */
   .toolcol{display:flex;flex-direction:column;gap:12px;}
   .toolcol .toolbar{align-self:flex-start;}
-  .toolcol .selinfo{flex-wrap:wrap;}
+  .toolcol .selinfo{flex-direction:column;align-items:stretch;gap:8px;} /* constant height — no reflow on select */
   .toolcol .ctl{display:flex;align-items:center;gap:8px;}
   .toolcol .ctl input[type=range]{flex:1;width:auto;}
   .toolacts{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
   .toolacts button{width:100%;}
-  .toolcol .legend{flex-direction:column;gap:7px;}
   .cap{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 8px;
        display:flex;justify-content:space-between;align-items:baseline;}
   .cap .val{text-transform:none;letter-spacing:0;font-weight:600;color:var(--ink);font-size:13px;}
@@ -67,9 +66,6 @@
   #cv3d{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:grab;background:transparent;}
   button.on{background:var(--ink);color:#fff;border-color:var(--ink);}
   button.on:hover{background:var(--ink);}
-  .legend{font-size:13px;color:#4a5568;display:flex;flex-wrap:wrap;gap:6px 22px;}
-  .legend span.sw{display:inline-block;width:20px;height:3px;border-radius:2px;margin-right:7px;vertical-align:middle;}
-  .legend div{display:flex;align-items:center;}
   .hint{font-size:12px;color:var(--mut);margin-top:8px;}
   button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 12px;font:inherit;
          cursor:pointer;color:#4a5568;}
@@ -82,13 +78,14 @@
   .toolbar .tool svg{width:14px;height:14px;display:block;}
   .toolbar .tool.active{background:var(--ink);color:#fff;}
   .toolbar .tool.active:hover{background:var(--ink);}
-  .selinfo{display:inline-flex;gap:12px;align-items:center;padding:0 4px;}
-  .selinfo[hidden]{display:none;}
+  .selinfo{display:flex;gap:8px;align-items:center;}
   .selinfo .sel-label{font-weight:600;color:var(--ink);font-size:13px;}
-  .selinfo .sel-knuckle{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:var(--mut);}
-  .selinfo .sel-knuckle[hidden]{display:none;}
-  .selinfo .sel-knuckle input{vertical-align:middle;}
-  #selDelete:disabled{opacity:.4;cursor:not-allowed;}
+  .selinfo .sel-label.muted{color:var(--mut);font-weight:400;}
+  .selinfo .sel-knuckle{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--mut);}
+  .selinfo .sel-knuckle input{flex:1;width:auto;vertical-align:middle;}
+  .selinfo .sel-knuckle:has(input:disabled){opacity:.45;}
+  #selDelete{align-self:flex-start;}
+  #selDelete:disabled,#selKnuckle:disabled{opacity:.4;cursor:not-allowed;}
   .ctl{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);}
   .ctl input[type=range]{width:92px;vertical-align:middle;}
   .ctl .ctlval{font-weight:600;color:var(--ink);min-width:38px;}
@@ -112,9 +109,9 @@
           <button class="tool" data-tool="add" title="Add — click empty space in an editor to add a control point there">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>Add</button>
         </div>
-        <div class="selinfo" id="selinfo" hidden>
-          <span class="sel-label" id="selLabel"></span>
-          <label class="sel-knuckle" id="selKnuckleWrap" hidden>Knuckle
+        <div class="selinfo" id="selinfo">
+          <span class="sel-label muted" id="selLabel">No point selected</span>
+          <label class="sel-knuckle" id="selKnuckleWrap">Knuckle
             <input type="range" id="selKnuckle" min="0" max="1" step="0.01" title="0 = smooth · 1 = hard corner">
           </label>
           <button id="selDelete" title="Delete the selected point (Delete / Backspace)">Delete</button>
@@ -130,15 +127,6 @@
           <button id="importJson" title="Load a hull model from a JSON file (replaces the current model)">Import JSON</button>
           <button id="exportStep" title="Export the hull surfaces as a STEP (ISO 10303) file">Export STEP</button>
           <button id="exportJson" title="Export the editable hull model (sheer, transom, templates, weight curve) as JSON">Export JSON</button>
-        </div>
-        <div class="legend">
-          <div><span class="sw" style="background:var(--sheer)"></span>Sheer (plan &amp; trim)</div>
-          <div><span class="sw" style="background:var(--deck)"></span>Flat deck (ref)</div>
-          <div><span class="sw" style="background:var(--keel)"></span>Keel (emergent)</div>
-          <div><span class="sw" style="background:var(--transom)"></span>Transom</div>
-          <div><span class="sw" style="background:var(--wl)"></span>Waterlines</div>
-          <div><span class="sw" style="background:var(--bt)"></span>Buttocks</div>
-          <div><span class="sw" style="background:var(--aft)"></span>Templates &amp; blend</div>
         </div>
       </div>
       <div class="card sidecard">

@@ -349,25 +349,21 @@ function setSelectedKnuckle(k: number): void {
   render();
 }
 
-// reflect the current selection in the contextual toolbar panel (label, delete button, knuckle slider)
+// reflect the current selection in the (always-visible) selection panel: label, delete, knuckle slider.
+// The panel keeps constant height — the knuckle slider and delete are present but disabled when they don't
+// apply — so selecting a point never reflows the side column.
 export function refreshSelUI(): void {
-  const info = document.getElementById("selinfo")!,
-    label = document.getElementById("selLabel")!,
+  const label = document.getElementById("selLabel")!,
     del = document.getElementById("selDelete") as HTMLButtonElement,
-    kwrap = document.getElementById("selKnuckleWrap")!,
     krange = document.getElementById("selKnuckle") as HTMLInputElement;
   const s = state.selected;
-  if (!s) {
-    info.hidden = true;
-    return;
-  }
-  info.hidden = false;
-  label.textContent = labelFor(s);
-  del.disabled = !canDelete(s);
-  const knuckle = hasKnuckle(s),
-    arr = selArr();
-  kwrap.hidden = !knuckle;
-  if (knuckle && arr) krange.value = String(arr[s.idx].k);
+  label.textContent = s ? labelFor(s) : "No point selected";
+  label.classList.toggle("muted", !s);
+  del.disabled = !s || !canDelete(s);
+  const arr = selArr(),
+    knuckle = !!(s && arr && hasKnuckle(s));
+  krange.disabled = !knuckle;
+  krange.value = knuckle ? String(arr![s!.idx].k) : "0";
 }
 
 // click on a template point → select it (and, if it can move, start dragging). The pinned sheer-origin
