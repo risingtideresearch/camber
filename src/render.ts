@@ -249,6 +249,18 @@ function drawPlan(sections: Section[], zmin: number): void {
   stationLine(svg, 8, LH - 8);
   // the sheer plan curve (the deck-edge half-breadth)
   const xs = sampleX();
+  // the plan control polygon: the sheer points are B-spline handles, not on-curve, so show the polygon
+  // they define faintly behind the curve (the curve interpolates only the ends and stays inside the rest)
+  svg.append(
+    el("path", {
+      d: poly(state.sheer.cp.map((cp) => [mapX(cp.x), yPlan(cp.y)])),
+      fill: "none",
+      stroke: COL.sheer,
+      "stroke-width": 1,
+      opacity: 0.35,
+      "stroke-dasharray": "3 4",
+    }),
+  );
   svg.append(
     el("path", {
       d: poly(xs.map((x) => [mapX(x), yPlan(state.sheer.yf(x))])),
@@ -385,6 +397,17 @@ function drawProfile(sections: Section[], _zmin: number): void {
     );
   // sheer trim line (real sheer in profile) — the swept sheet is cut to this, kept below the deck
   const xs = sampleX();
+  // the trim control polygon: the points are B-spline handles (curve interpolates only the ends), shown faint
+  svg.append(
+    el("path", {
+      d: poly(state.sheer.trim.map((cp) => [mapX(cp.x), zScreenP(cp.z)])),
+      fill: "none",
+      stroke: COL.sheer,
+      "stroke-width": 1,
+      opacity: 0.35,
+      "stroke-dasharray": "3 4",
+    }),
+  );
   svg.append(
     el("path", {
       d: poly(xs.map((x) => [mapX(x), zScreenP(state.sheer.zf(x))])),

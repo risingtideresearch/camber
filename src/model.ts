@@ -1,7 +1,6 @@
 // ---------- the parametric hull model + the constant-camber sweep ----------
 
 import { clamp, lerp, V, type Vec3 } from "./math.js";
-import { hobbySamplerX } from "./hobby.js";
 import {
   knuckleSlopes,
   hermiteEvalLR,
@@ -9,6 +8,7 @@ import {
   hermiteEval,
   naturalCubicSlopes,
 } from "./pchip.js";
+import { clampedBSplineSamplerX } from "./bspline.js";
 
 // ---------- types ----------
 export interface SheerCP {
@@ -127,9 +127,11 @@ function defaultWeights(k: number): WeightCP[] {
 export type Tool = "select" | "add";
 export type View3D = "trimmed" | "sheet";
 // curve fairing: "pchip" = C¹ monotone, shape-preserving (the default, guarantees the invariants);
-// "c2" = C² natural cubic (curvature-continuous; the weight curve runs it in logit space to stay in the
-// simplex, the station curves run it directly — experimental, drops the knuckles and the no-overshoot guard).
-export type Fairing = "pchip" | "c2";
+// "c2" = C² natural cubic (curvature-continuous, interpolating — but can overshoot); "bspline" = an
+// approximating clamped cubic B-spline (C² and variation-diminishing, so no overshoot — the control points
+// become a polygon the section is pulled inside of). Both c2 and bspline are experimental and drop the
+// per-point knuckles (no chines); the weight curve only honors c2 (in logit space) and ignores bspline.
+export type Fairing = "pchip" | "c2" | "bspline";
 
 // which kind of control point is currently selected, so the renderer can highlight it. A "template"
 // selection also carries which template (state.selected.ti); a "weight" selection is a weight CP.
@@ -166,7 +168,7 @@ export const state: State = {
   rot: { yaw: -0.62, pitch: 0.42 },
   view3d: "trimmed", // "trimmed" = clipped + mirrored hull; "sheet" = untrimmed one side
   zebra: false, // zebra-stripe fairness check on the 3D surface
-  fairing: "pchip", // C¹ shape-preserving by default; "c2" switches to the natural-cubic fairing
+  fairing: "pchip", // C¹ shape-preserving (keeps the chines); "c2"/"bspline" are code-toggle experiments
   tool: "select", // "select" = click a point to select (then drag/delete/knuckle); "add" = click to add
   selected: null, // the persistently selected control point (highlighted in the editors)
 };
@@ -198,8 +200,12 @@ export const immersion = (x: number, z: number): number => -state.waterline - wo
 
 export function prepare(): void {
   const sheer = state.sheer;
-  sheer.yf = hobbySamplerX(sheer.cp.map((p) => [p.x, p.y])); // Hobby curve through the plan control points
-  sheer.zf = hobbySamplerX(sheer.trim.map((p) => [p.x, p.z])); // profile sheer-trim curve, z(x) ≤ 0
+  // the plan half-breadth y(x): a clamped cubic B-spline over the plan control points — C² and
+  // variation-diminishing, so it can't overshoot the control polygon (the plan points are now handles, with
+  // the curve interpolating only the first and last). Evaluated directly as y(x), so the swept frame's
+  // heading is smooth. (Was a Hobby curve sampled to a table + read back by linear interpolation — C⁰.)
+  sheer.yf = clampedBSplineSamplerX(sheer.cp.map((p) => [p.x, p.y]));
+  sheer.zf = clampedBSplineSamplerX(sheer.trim.map((p) => [p.x, p.z])); // profile sheer-trim, z(x) ≤ 0
   state.weightFn = buildWeightSampler(state.weights); // the longitudinal blend path through the simplex
 }
 
@@ -268,10 +274,13 @@ export function buildWeightSampler(weights: WeightCP[]): (x: number) => number[]
   };
 }
 
-// fair a station-curve component (n or d) through its points: the C¹ knuckle-aware monotone Hermite by
-// default, or — in "c2" mode — a curvature-continuous natural cubic (knuckles and the no-overshoot
-// monotonicity guard do not apply in that mode; it is for comparing fairness, not for guaranteed validity).
+// fair a station-curve component (n or d) through its points, parameterized by the chord position t. The
+// C¹ knuckle-aware monotone Hermite by default; in "c2" mode a curvature-continuous natural cubic; in
+// "bspline" mode an approximating clamped cubic B-spline of the component over t (C², no overshoot — the
+// points are a control polygon, not interpolated except at the ends). The c2 and bspline modes ignore the
+// knuckles; they are for comparing fairness, not for guaranteed validity.
 export function fairEval(ts: number[], fs: number[], ks: number[]): (u: number) => number {
+  if (state.fairing === "bspline") return clampedBSplineSamplerX(ts.map((t, i) => [t, fs[i]]));
   if (state.fairing === "c2") {
     const m = naturalCubicSlopes(ts, fs),
       t0 = ts[0],
