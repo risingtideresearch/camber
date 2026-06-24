@@ -38,8 +38,6 @@ export const svgP = byId("svgProfile"),
 // the container the dynamic per-template station editors are rendered into, and the side tab strip
 export const tplCards = document.getElementById("templateCards") as HTMLElement;
 export const sideTabs = document.getElementById("sideTabs") as HTMLElement;
-// the bottom (wide) tab strip that switches between the plan / profile / blend views
-export const wideTabs = document.getElementById("wideTabs") as HTMLElement;
 
 export const cv3d = document.getElementById("cv3d") as HTMLCanvasElement;
 

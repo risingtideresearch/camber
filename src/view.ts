@@ -23,15 +23,15 @@ export const zScreenP = (z: number): number => PZbase - (z - ZMIN) * SZ;
 export const invZp = (vy: number): number => ZMIN + (PZbase - vy) / SZ;
 export const ZTRIMMIN = -1100; // sheer trim must stay below the deck: z in [ZTRIMMIN,0]
 
-// plan: half-breadth about a centre axis; star = top, port = bottom — same px/mm as x (isometric)
+// plan: a single half-breadth — centerline along the BOTTOM edge, breadth growing upward — at the same
+// px/mm as x (isometric). (Previously a full mirrored breadth about a centre axis; now one half fills it.)
 export const YMAX = 1100,
   SYP = SX,
   Ppad = 18,
-  LH = 2 * YMAX * SYP + 2 * Ppad, // height so the full breadth (±YMAX) fits at the isometric scale
-  Lcen = LH / 2;
-export const yStar = (y: number): number => Lcen - y * SYP;
-export const yPort = (y: number): number => Lcen + y * SYP;
-export const invY = (vy: number): number => (Lcen - vy) / SYP;
+  LH = YMAX * SYP + 2 * Ppad, // height so one half-breadth (0..YMAX) fits at the isometric scale
+  Lbase = LH - Ppad; // the centerline, at the bottom of the strip
+export const yPlan = (y: number): number => Lbase - y * SYP; // breadth grows up from the centerline
+export const invY = (vy: number): number => (Lbase - vy) / SYP;
 
 // station editors (square, equal aspect): n across (inboard), d down
 export const STW = 360,
@@ -43,12 +43,19 @@ export const snY = (d: number): number => STpad + d * STsc;
 export const invN = (vx: number): number => (vx - STpad) / STsc + NMIN;
 export const invD = (vy: number): number => (vy - STpad) / STsc;
 
-// weight-curve editor (longitudinal x across — shared mapX — stacked weight 0..1 up)
-export const WH = 176,
-  Wtop = 16,
-  Wbot = 20;
-export const wY = (w: number): number => WH - Wbot - w * (WH - Wtop - Wbot); // w ∈ [0,1]; 0 at the bottom
-export const invW = (vy: number): number => (WH - Wbot - vy) / (WH - Wtop - Wbot);
+// blend control (vertical): the longitudinal axis runs DOWN the strip — stern (x=0) at the top, bow (x=L)
+// at the bottom — and each template's share of the simplex stacks left→right. It owns its own viewBox
+// WVW×WVH (set on the SVG in main.ts). wvX maps the hull length to the vertical; wvW maps a cumulative
+// weight 0..1 to the horizontal.
+export const WVW = 300,
+  WVH = 470,
+  Wvtop = 18,
+  Wvbot = 22,
+  Wvpad = 18;
+export const wvX = (x: number): number => Wvtop + (x / L) * (WVH - Wvtop - Wvbot);
+export const invWvX = (vy: number): number => ((vy - Wvtop) / (WVH - Wvtop - Wvbot)) * L;
+export const wvW = (c: number): number => Wvpad + c * (WVW - 2 * Wvpad); // cumulative weight → left→right
+export const invWvW = (vx: number): number => (vx - Wvpad) / (WVW - 2 * Wvpad);
 
 // re-export the domain bounds the views also use
 export { NMIN, NMAX, DMAX };

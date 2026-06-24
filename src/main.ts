@@ -5,39 +5,46 @@ import { render, draw3d } from "./render.js";
 import { initInteraction, refreshSelUI, addBlendPoint } from "./interaction.js";
 import { downloadStep } from "./step.js";
 import { downloadJson, importJson } from "./json.js";
-import { svgL, svgP } from "./dom.js";
-import { LH, PH } from "./view.js";
+import { svgL, svgP, svgW } from "./dom.js";
+import { LH, PH, WVW, WVH } from "./view.js";
 
-// the plan / profile panels are sized to the isometric scale (see view.ts); set their viewBox heights
-// from the derived constants so the SVG aspect matches the to-scale drawing (no stretching).
+// the plan / profile strips are sized to the isometric scale (see view.ts); set their viewBox heights
+// from the derived constants so the SVG aspect matches the to-scale drawing (no stretching). The blend
+// control carries its own (vertical) viewBox.
 svgL.setAttribute("viewBox", `0 0 1000 ${LH}`);
 svgP.setAttribute("viewBox", `0 0 1000 ${PH}`);
+svgW.setAttribute("viewBox", `0 0 ${WVW} ${WVH}`);
 
-// ---------- keep the section editor a true square ----------
-// The right column hugs the section editor; we size that editor to the largest square the column's available
-// height allows, but never so wide that the 3D view drops below a usable width. The column then hugs the
-// square and the 3D view (flex:1) takes the rest. Width and height are independent here — setting the square's
-// width only reflows horizontally, so a single measure-then-set pass is stable (no layout loop).
-const MIN_3D = 380; // px — don't let the square crowd the 3D view narrower than this
-const topEl = document.querySelector(".top") as HTMLElement;
-const sideFit = document.querySelector(".sidefit") as HTMLElement;
-const sidePanel = document.querySelector(".sidepanel") as HTMLElement;
+// ---------- size the right column ----------
+// The right column's width IS the section editor's side: the square fills that width (CSS aspect-ratio),
+// and the blend control takes the remaining height below it. We pick a width that is a sensible fraction of
+// the main area but never taller (as a square) than half its height, so the blend always has room — and
+// never wider than MAX_SIDE so the left column (3D + plan + profile) keeps the bulk of the width.
+const MIN_SIDE = 220,
+  MAX_SIDE = 460,
+  LEFT_GAP = 20; // the two 10px gaps between the three stacked items in the left column
+const mainEl = document.querySelector(".main") as HTMLElement;
+const rightCol = document.querySelector(".rightcol") as HTMLElement;
+const leftCol = document.querySelector(".leftcol") as HTMLElement;
 
-function fitSection(): void {
-  sidePanel.style.width = "";
-  sidePanel.style.height = "";
-  const avail = sideFit.clientHeight; // vertical space under the tab strip — drives the square
-  if (!avail) return;
-  // cap so the column (square + ~34px card chrome + 14px gap) leaves the 3D view at least MIN_3D wide
-  const maxByWidth = topEl.clientWidth - MIN_3D - 48 /*.top padding*/ - 14 /*gap*/ - 34 /*card chrome*/;
-  const side = Math.max(160, Math.min(avail, maxByWidth));
-  sidePanel.style.width = `${side}px`;
-  sidePanel.style.height = `${side}px`;
+function fitLayout(): void {
+  const w = mainEl.clientWidth,
+    h = mainEl.clientHeight;
+  if (!w || !h) return;
+  const side = Math.max(MIN_SIDE, Math.min(MAX_SIDE, Math.min(w * 0.34, h * 0.5)));
+  rightCol.style.width = `${side}px`;
+  // Cap the left column. The plan + profile strips render at the isometric aspect, so their stacked height
+  // is (LH+PH)/1000 × the column width — left uncapped, a wider window makes them balloon and squeeze the 3D
+  // view. Cap the width at the value where the 3D view ends up as tall as the station square (= `side`),
+  // which is the proportion that reads best; wider windows then center the columns instead of growing them.
+  const stripAspect = (LH + PH) / 1000;
+  const leftMax = Math.max(360, (h - side - LEFT_GAP) / stripAspect);
+  leftCol.style.maxWidth = `${leftMax}px`;
 }
 
-// the 3D canvas fills a viewport-relative box now, so reflow it on resize (mesh is cached; just redraw)
+// the 3D canvas fills a flex box, so reflow it on resize (mesh is cached; just redraw)
 window.addEventListener("resize", () => {
-  fitSection();
+  fitLayout();
   draw3d(false);
 });
 
@@ -120,5 +127,5 @@ importJsonBtn.addEventListener("click", () =>
 );
 
 initInteraction();
+fitLayout(); // size the columns before the first render so the 3D canvas picks up its real size
 reset();
-fitSection();

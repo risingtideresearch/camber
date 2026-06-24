@@ -12,7 +12,7 @@ import {
   type StationCP,
   type WeightCP,
 } from "./model.js";
-import { invX, invY, invZp, invN, invD, invW, YMAX, ZTRIMMIN } from "./view.js";
+import { invX, invY, invZp, invN, invD, invWvX, invWvW, YMAX, ZTRIMMIN } from "./view.js";
 import { svgL, svgP, svgW, tplCards } from "./dom.js";
 import { render, draw3d, activeTemplateIndex } from "./render.js";
 
@@ -95,10 +95,12 @@ function moveWeight(d: Drag, vx: number, vy: number): void {
   const cp = state.weights[d.idx!],
     n = state.weights.length;
   if (d.wpart === "x") {
+    // the blend control is vertical: the longitudinal x reads off the vertical position
     if (d.idx! > 0 && d.idx! < n - 1)
-      cp.x = clamp(invX(vx), state.weights[d.idx! - 1].x + 60, state.weights[d.idx! + 1].x - 60);
+      cp.x = clamp(invWvX(vy), state.weights[d.idx! - 1].x + 60, state.weights[d.idx! + 1].x - 60);
   } else {
-    setWeightBoundary(cp, d.bnd!, clamp(invW(vy), 0, 1));
+    // a band boundary reads off the horizontal position (the simplex split)
+    setWeightBoundary(cp, d.bnd!, clamp(invWvW(vx), 0, 1));
   }
 }
 
@@ -474,7 +476,8 @@ export function initInteraction(): void {
     }
     const [vx, vy] = getVB(drag, e);
     if (drag.kind === "slider") {
-      state.x0 = clamp(invX(vx), 0, L);
+      // the cut scrubs along x — horizontal in plan/profile, but vertical in the blend control
+      state.x0 = clamp(drag.svg === svgW ? invWvX(vy) : invX(vx), 0, L);
     } else if (drag.kind === "sheer") moveSheer(drag, vx, vy);
     else if (drag.kind === "trim") moveTrim(drag, vx, vy);
     else if (drag.kind === "transom") moveTransom(drag, vx, vy);
@@ -534,8 +537,8 @@ export function initInteraction(): void {
   // the weight editor (persistent element): add a blend control point at the clicked x
   svgW.addEventListener("pointerdown", (e) => {
     if (state.tool === "add") {
-      const [vx] = vbCoords(svgW, e),
-        idx = addWeightPoint(invX(vx));
+      const [, vy] = vbCoords(svgW, e),
+        idx = addWeightPoint(invWvX(vy));
       setTool("select");
       select("weight", idx);
     } else {

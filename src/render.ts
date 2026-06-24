@@ -31,14 +31,14 @@ import {
   PZbase,
   zScreenP,
   LH,
-  Lcen,
-  yStar,
-  yPort,
+  Lbase,
+  yPlan,
   snX,
   snY,
   NMIN,
   NMAX,
-  wY,
+  wvX,
+  wvW,
 } from "./view.js";
 import {
   el,
@@ -52,7 +52,6 @@ import {
   svgW,
   tplCards,
   sideTabs,
-  wideTabs,
   tplColor,
   cv3d,
 } from "./dom.js";
@@ -191,7 +190,6 @@ export function render(): void {
   drawCutStation(svgC);
   drawBodyPlan(svgB);
   drawSidePanels(); // template editors + Cut + Body share one tab strip; show the active one
-  drawWideTabs(); // plan / profile / blend share one tab strip in the bottom panel
   draw3d(true);
   const profVal = document.getElementById("profVal") as HTMLElement;
   profVal.textContent = `x = ${Math.round(state.x0)} (${((state.x0 / L) * 100).toFixed(0)}% LOA)`;
@@ -208,41 +206,31 @@ function drawPlan(sections: Section[], zmin: number): void {
   const svg = svgL;
   svg.replaceChildren();
   gridX(svg, 8, LH - 8);
-  // waterlines (constant z): traced contours, mirrored
+  // waterlines (constant z): traced contours, the single port half
   const NWL = 7;
   for (let k = 1; k <= NWL; k++) {
     const zk = (zmin * k) / (NWL + 1);
     for (const run of contour(sections, zk, 2)) {
       svg.append(
         el("path", {
-          d: poly(run.map((p) => [mapX(p[0]), yStar(p[1])])),
+          d: poly(run.map((p) => [mapX(p[0]), yPlan(p[1])])),
           fill: "none",
           stroke: COL.wl,
           "stroke-width": 1,
-          opacity: 0.55,
-          "stroke-linejoin": "round",
-          "stroke-linecap": "round",
-        }),
-      );
-      svg.append(
-        el("path", {
-          d: poly(run.map((p) => [mapX(p[0]), yPort(p[1])])),
-          fill: "none",
-          stroke: COL.wl,
-          "stroke-width": 1,
-          opacity: 0.32,
+          opacity: 0.5,
           "stroke-linejoin": "round",
           "stroke-linecap": "round",
         }),
       );
     }
   }
+  // centerline along the bottom edge
   svg.append(
     el("line", {
       x1: PXpad,
-      y1: Lcen,
+      y1: Lbase,
       x2: 1000 - PXpad,
-      y2: Lcen,
+      y2: Lbase,
       stroke: "var(--keel)",
       "stroke-width": 1.5,
       opacity: 0.5,
@@ -251,7 +239,7 @@ function drawPlan(sections: Section[], zmin: number): void {
   );
   const cl = el("text", {
     x: PXpad - 4,
-    y: Lcen - 4,
+    y: Lbase - 4,
     "text-anchor": "end",
     "font-size": 10,
     fill: "var(--keel)",
@@ -259,24 +247,14 @@ function drawPlan(sections: Section[], zmin: number): void {
   cl.textContent = "CL";
   svg.append(cl);
   stationLine(svg, 8, LH - 8);
+  // the sheer plan curve (the deck-edge half-breadth)
   const xs = sampleX();
   svg.append(
     el("path", {
-      d: poly(xs.map((x) => [mapX(x), yStar(state.sheer.yf(x))])),
+      d: poly(xs.map((x) => [mapX(x), yPlan(state.sheer.yf(x))])),
       fill: "none",
       stroke: COL.sheer,
       "stroke-width": 2.4,
-      "stroke-linejoin": "round",
-      "stroke-linecap": "round",
-    }),
-  );
-  svg.append(
-    el("path", {
-      d: poly(xs.map((x) => [mapX(x), yPort(state.sheer.yf(x))])),
-      fill: "none",
-      stroke: COL.sheer,
-      "stroke-width": 2.4,
-      opacity: 0.5,
       "stroke-linejoin": "round",
       "stroke-linecap": "round",
     }),
@@ -286,76 +264,42 @@ function drawPlan(sections: Section[], zmin: number): void {
   if (te.length > 1) {
     svg.append(
       el("path", {
-        d: poly(te.map((p) => [mapX(p[0]), yStar(p[1])])),
+        d: poly(te.map((p) => [mapX(p[0]), yPlan(p[1])])),
         fill: "none",
         stroke: "var(--transom)",
         "stroke-width": 2.2,
-        "stroke-linejoin": "round",
-        "stroke-linecap": "round",
-      }),
-    );
-    svg.append(
-      el("path", {
-        d: poly(te.map((p) => [mapX(p[0]), yPort(p[1])])),
-        fill: "none",
-        stroke: "var(--transom)",
-        "stroke-width": 2.2,
-        opacity: 0.5,
         "stroke-linejoin": "round",
         "stroke-linecap": "round",
       }),
     );
   }
-  // design-waterline footprint (where the hull meets the WL plane), mirrored to both sides
+  // design-waterline footprint (where the hull meets the WL plane)
   for (const run of dwlContour(sections)) {
     svg.append(
       el("path", {
-        d: poly(run.map((p) => [mapX(p[0]), yStar(p[1])])),
+        d: poly(run.map((p) => [mapX(p[0]), yPlan(p[1])])),
         fill: "none",
         stroke: COL.wl,
         "stroke-width": 2,
-        opacity: 0.9,
-        "stroke-linejoin": "round",
-        "stroke-linecap": "round",
-      }),
-    );
-    svg.append(
-      el("path", {
-        d: poly(run.map((p) => [mapX(p[0]), yPort(p[1])])),
-        fill: "none",
-        stroke: COL.wl,
-        "stroke-width": 2,
-        opacity: 0.6,
+        opacity: 0.85,
         "stroke-linejoin": "round",
         "stroke-linecap": "round",
       }),
     );
   }
-  // cut station — true plan heading (the fan angle), mirrored to the port side
-  const cut = clippedSection(state.x0, 40);
-  svg.append(
-    el("path", {
-      d: poly(cut.pts.map((p) => [mapX(p[0]), yPort(p[1])])),
-      fill: "none",
-      stroke: "var(--slider)",
-      "stroke-width": 2,
-      opacity: 0.4,
-      "stroke-linejoin": "round",
-      "stroke-linecap": "round",
-    }),
-  );
-  cutTrace(svg, (p) => [mapX(p[0]), yStar(p[1])]);
+  // cut station — true plan heading (the fan angle)
+  cutTrace(svg, (p) => [mapX(p[0]), yPlan(p[1])]);
   svg.append(
     el("circle", {
       cx: mapX(state.x0),
-      cy: yStar(state.sheer.yf(state.x0)),
+      cy: yPlan(state.sheer.yf(state.x0)),
       r: 3.2,
       fill: "#fff",
       stroke: COL.sheer,
       "stroke-width": 1.5,
     }),
   );
-  state.sheer.cp.forEach((cp, idx) => cpDot(svg, idx, mapX(cp.x), yStar(cp.y)));
+  state.sheer.cp.forEach((cp, idx) => cpDot(svg, idx, mapX(cp.x), yPlan(cp.y)));
 }
 
 function drawProfile(sections: Section[], _zmin: number): void {
@@ -696,52 +640,26 @@ function drawSidePanels(): void {
   refreshKeelUI(); // keep the keel slider in sync after add/remove/clamp of the active tab
 }
 
-// ---------- the bottom wide panel: plan / profile / blend share one tab strip, one shown at a time ----------
-type WideTab = "plan" | "profile" | "blend";
-let wideTab: WideTab = "plan";
-const WIDE: { key: WideTab; label: string; svg: () => SVGSVGElement }[] = [
-  { key: "plan", label: "Plan", svg: () => svgL },
-  { key: "profile", label: "Profile", svg: () => svgP },
-  { key: "blend", label: "Blend", svg: () => svgW },
-];
-
-function applyWide(): void {
-  for (const v of WIDE) v.svg().style.display = wideTab === v.key ? "" : "none";
-}
-
-function drawWideTabs(): void {
-  wideTabs.replaceChildren();
-  for (const v of WIDE) {
-    const tab = document.createElement("button");
-    tab.className = "tab" + (wideTab === v.key ? " active" : "");
-    tab.textContent = v.label;
-    tab.addEventListener("click", () => {
-      wideTab = v.key;
-      applyWide();
-      drawWideTabs();
-    });
-    wideTabs.append(tab);
-  }
-  const addBtn = document.getElementById("addBlendBtn") as HTMLButtonElement | null;
-  if (addBtn) addBtn.hidden = wideTab !== "blend"; // the "+ blend point" button is only for the blend view
-  applyWide();
-}
-
-// the weight curve as a stacked-band ribbon over x: band j is template j's share of the blend, the bands
-// summing to 1 at every station. Control points carry an x-handle (interior CPs) and the band-boundary
-// handles that edit the simplex split. The red cut slider scrubs x here too.
+// the vertical blend ribbon: the longitudinal axis runs DOWN the strip (stern at the top, bow at the
+// bottom), and at each station the templates stack left→right, band j being template j's share — the bands
+// summing to 1 everywhere. Control points carry an x-handle (interior CPs, slide up/down) and the K−1
+// band-boundary handles (drag left/right) that edit the simplex split. The red cut slider scrubs x here too.
 function drawWeights(svg: SVGSVGElement): void {
   svg.replaceChildren();
   const K = state.templates.length,
-    top = wY(1),
-    bot = wY(0);
-  gridX(svg, top, bot);
-  // horizontal guides at 0 / ½ / 1
+    yTop = wvX(0),
+    yBot = wvX(L),
+    xLeft = wvW(0),
+    xRight = wvW(1);
+  // longitudinal gridlines (constant x): horizontal, at quarters of the length
+  for (let q = 0; q <= 4; q++) {
+    const y = wvX((L * q) / 4);
+    svg.append(el("line", { x1: xLeft, y1: y, x2: xRight, y2: y, stroke: "#edf2f7", "stroke-width": 1 }));
+  }
+  // simplex guides at 0 / ½ / 1: vertical
   for (const g of [0, 0.5, 1])
-    svg.append(
-      el("line", { x1: mapX(0), y1: wY(g), x2: mapX(L), y2: wY(g), stroke: "#edf2f7", "stroke-width": 1 }),
-    );
-  // stacked bands from the sampled curve
+    svg.append(el("line", { x1: wvW(g), y1: yTop, x2: wvW(g), y2: yBot, stroke: "#edf2f7", "stroke-width": 1 }));
+  // stacked bands from the sampled curve (each band spans top→bottom, its left/right edges varying with x)
   const NS = 120,
     xs: number[] = [],
     cum: number[][] = [];
@@ -758,20 +676,29 @@ function drawWeights(svg: SVGSVGElement): void {
     cum.push(c);
   }
   for (let j = 0; j < K; j++) {
-    const upper = xs.map((x, i): [number, number] => [mapX(x), wY(cum[i][j + 1])]),
-      lower = xs.map((x, i): [number, number] => [mapX(x), wY(cum[i][j])]).reverse();
+    const right = xs.map((x, i): [number, number] => [wvW(cum[i][j + 1]), wvX(x)]),
+      left = xs.map((x, i): [number, number] => [wvW(cum[i][j]), wvX(x)]).reverse();
     svg.append(
-      el("path", { d: poly(upper.concat(lower)) + "Z", fill: tplColor(j), opacity: 0.5, stroke: "none" }),
+      el("path", { d: poly(right.concat(left)) + "Z", fill: tplColor(j), opacity: 0.5, stroke: "none" }),
     );
   }
-  stationLine(svg, top, bot); // scrub the cut x from here too
-  // control points: vertical guide + x-handle (interior only) + the K−1 band-boundary handles
+  // stern / bow labels
+  for (const [txt, y, dy] of [
+    ["stern", yTop, -5],
+    ["bow", yBot, 12],
+  ] as const) {
+    const t = el("text", { x: xLeft, y: y + dy, "font-size": 10, fill: COL.mut });
+    t.textContent = txt;
+    svg.append(t);
+  }
+  weightSlider(svg); // the red cut scrubber (horizontal here)
+  // control points: a horizontal guide + the K−1 band-boundary handles (drag ↔) + the x-handle (interior, ↕)
   state.weights.forEach((cp, i) => {
     const n = state.weights.length,
-      x = mapX(cp.x),
+      y = wvX(cp.x),
       sel = state.selected && state.selected.tgt === "weight" && state.selected.idx === i;
     svg.append(
-      el("line", { x1: x, y1: top, x2: x, y2: bot, stroke: "#fff", "stroke-width": 1, opacity: 0.75 }),
+      el("line", { x1: xLeft, y1: y, x2: xRight, y2: y, stroke: "#fff", "stroke-width": 1, opacity: 0.75 }),
     );
     const C: number[] = [];
     let s = 0;
@@ -780,34 +707,64 @@ function drawWeights(svg: SVGSVGElement): void {
       C.push(s);
     }
     for (let b = 0; b < K - 1; b++) {
-      const hy = wY(C[b]);
+      const hx = wvW(C[b]);
       const h = el("circle", {
-        cx: x,
-        cy: hy,
+        cx: hx,
+        cy: y,
         r: 5,
         fill: sel ? SEL : "#fff", // selected blend point → red handles
         stroke: sel ? "#fff" : tplColor(b),
         "stroke-width": 2,
-        style: "cursor:ns-resize",
+        style: "cursor:ew-resize",
       });
       h.addEventListener("pointerdown", (e) => weightHandleDown(i, "bnd", b, svg, e as PointerEvent));
       svg.append(h);
     }
     if (i > 0 && i < n - 1) {
       const xh = el("rect", {
-        x: x - 4.5,
-        y: top - 11,
+        x: xLeft - 11,
+        y: y - 4.5,
         width: 9,
         height: 9,
         fill: sel ? SEL : "#fff",
         stroke: COL.mut,
         "stroke-width": 1.5,
-        style: "cursor:ew-resize",
+        style: "cursor:ns-resize",
       });
       xh.addEventListener("pointerdown", (e) => weightHandleDown(i, "x", 0, svg, e as PointerEvent));
       svg.append(xh);
     }
   });
+}
+
+// the draggable cut handle for the vertical blend control: an invisible horizontal hit band + a triangle at
+// the left edge, at the cut's vertical position. Dragging it scrubs x0 (handled in interaction via svgW).
+function weightSlider(svg: SVGSVGElement): void {
+  const y = wvX(state.x0),
+    xLeft = wvW(0),
+    xRight = wvW(1);
+  const hit = el("line", {
+    x1: xLeft,
+    y1: y,
+    x2: xRight,
+    y2: y,
+    stroke: "#000",
+    "stroke-width": 16,
+    opacity: 0,
+    style: "cursor:ns-resize",
+  });
+  hit.addEventListener("pointerdown", (e) => startDrag({ kind: "slider" }, svg, e));
+  svg.append(hit);
+  svg.append(
+    el("path", {
+      d: `M${xLeft} ${y - 6} L${xLeft} ${y + 6} L${xLeft + 9} ${y} Z`,
+      fill: "var(--slider)",
+      style: "cursor:ns-resize",
+    }),
+  );
+  svg.append(
+    el("line", { x1: xLeft, y1: y, x2: xRight, y2: y, stroke: "var(--slider)", "stroke-width": 1.5, opacity: 0.55 }),
+  );
 }
 
 // the interpolated (blended) station at the red cut x0, with both trims marked: the sheer trim
