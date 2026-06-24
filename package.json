@@ -8,7 +8,9 @@
     "build": "esbuild src/main.ts --bundle --format=esm --outfile=dist/camber.js --sourcemap && esbuild src/interp.ts --bundle --format=esm --outfile=dist/interpolate.js --sourcemap",
     "watch": "esbuild src/main.ts --bundle --format=esm --outfile=dist/camber.js --sourcemap --watch",
     "watch:interp": "esbuild src/interp.ts --bundle --format=esm --outfile=dist/interpolate.js --sourcemap --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:smooth": "esbuild test/smoothness.ts --bundle --platform=node --format=esm --outfile=dist/smoothness.mjs && node dist/smoothness.mjs",
+    "test": "npm run test:smooth"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",

@@ -9,6 +9,7 @@ import {
   clippedSection,
   sweptSection,
   stationAt,
+  keelKAt,
   frameAt,
   contour,
   transomEdge,
@@ -65,6 +66,7 @@ import {
   weightHandleDown,
   addTemplate,
   removeTemplate,
+  refreshKeelUI,
 } from "./interaction.js";
 
 type Proj = (p: Vec3) => [number, number];
@@ -623,6 +625,13 @@ function setSideTab(t: number | "cut" | "body"): void {
   sideTab = t;
   applySideTab();
   buildSideTabs();
+  refreshKeelUI(); // the keel slider targets the active template tab
+}
+
+// the active template tab as a template index, or null when the Cut / Body view is showing (the keel
+// slider edits a specific template, so it is disabled on those)
+export function activeTemplateIndex(): number | null {
+  return typeof sideTab === "number" ? sideTab : null;
 }
 
 // the tab strip: one tab per template (its accent color; the active one carries a ✕ to remove it), a "+" to
@@ -684,6 +693,7 @@ function drawSidePanels(): void {
   tplEls.forEach((svg, j) => drawStation(svg, j));
   buildSideTabs();
   applySideTab();
+  refreshKeelUI(); // keep the keel slider in sync after add/remove/clamp of the active tab
 }
 
 // ---------- the bottom wide panel: plan / profile / blend share one tab strip, one shown at a time ----------
@@ -815,33 +825,13 @@ function drawCutStation(svg: SVGSVGElement): void {
   sh.textContent = "sheer";
   svg.append(sh);
 
-  const st = stationAt(state.x0),
+  const st = stationAt(state.x0, true), // the keel-knuckle symmetric section — matches the trimmed hull
     fr = frameAt(state.x0);
   const dtrim = Math.max(0, Math.min(-state.sheer.zf(state.x0), DMAX)); // sheer-trim depth below the flat deck
   const yAt = (u: number) => fr.p[1] + st.n(u) * fr.n[1]; // world y along the section (the d-axis is vertical)
   const ncl = Math.abs(fr.n[1]) > 1e-6 ? -fr.p[1] / fr.n[1] : NMAX; // inboard offset where the section meets y=0
 
-  // full interpolated station, faint and dashed (the raw swept curve, deck to keel)
-  const full: [number, number][] = [],
-    N = 200;
-  for (let i = 0; i <= N; i++) {
-    const u = (st.tmax * i) / N;
-    full.push([snX(st.n(u)), snY(st.d(u))]);
-  }
-  svg.append(
-    el("path", {
-      d: poly(full),
-      fill: "none",
-      stroke: COL.station,
-      "stroke-width": 1.4,
-      opacity: 0.4,
-      "stroke-dasharray": "5 4",
-      "stroke-linejoin": "round",
-      "stroke-linecap": "round",
-    }),
-  );
-
-  // kept span [umin,umax]: top at the sheer trim, bottom at the centerline — mirrors sweptSection
+  // kept span [umin,umax]: top at the sheer trim, bottom at the centerline (the keel) — mirrors sweptSection
   let umin = 0,
     umax = st.tmax,
     open = true;
@@ -869,6 +859,27 @@ function drawCutStation(svg: SVGSVGElement): void {
     prev = y;
   }
   const empty = umin >= umax - 1e-6; // keel shallower than the trim ⇒ nothing kept
+
+  // the section sheer→keel, faint and dashed (above the kept arc is the sheer-trimmed top); the keel sits at
+  // umax and the mirrored port half beyond it is not drawn, so the curve stops at the centerline
+  const full: [number, number][] = [],
+    N = 200;
+  for (let i = 0; i <= N; i++) {
+    const u = (umax * i) / N;
+    full.push([snX(st.n(u)), snY(st.d(u))]);
+  }
+  svg.append(
+    el("path", {
+      d: poly(full),
+      fill: "none",
+      stroke: COL.station,
+      "stroke-width": 1.4,
+      opacity: 0.4,
+      "stroke-dasharray": "5 4",
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round",
+    }),
+  );
 
   // kept arc, bold
   if (!empty) {
@@ -941,17 +952,26 @@ function drawCutStation(svg: SVGSVGElement): void {
   });
   cl.textContent = "centerline";
   svg.append(cl);
-  if (!open && !empty)
+  // the keel point, morphing round (smooth, keel knuckle 0) → square (hard V, keel knuckle 1) like the
+  // template nodes, so the blended keel knuckle at this station is visible
+  if (!open && !empty) {
+    const kc = Math.min(Math.max(keelKAt(state.x0), 0), 1),
+      ks = 5,
+      krad = (1 - kc) * ks;
     svg.append(
-      el("circle", {
-        cx: snX(st.n(umax)),
-        cy: snY(st.d(umax)),
-        r: 4,
+      el("rect", {
+        x: snX(st.n(umax)) - ks,
+        y: snY(st.d(umax)) - ks,
+        width: 2 * ks,
+        height: 2 * ks,
+        rx: krad,
+        ry: krad,
         fill: "#fff",
         stroke: COL.keel,
-        "stroke-width": 1.6,
+        "stroke-width": 1.8,
       }),
     );
+  }
   // design waterline at this station: the depth where worldZ = −waterline (combines sinkage + rake)
   const dWL = (state.waterline + state.x0 * Math.sin(state.deckRake)) / Math.cos(state.deckRake);
   if (dWL > 0 && dWL < DMAX) {

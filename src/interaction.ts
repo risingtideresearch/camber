@@ -14,7 +14,7 @@ import {
 } from "./model.js";
 import { invX, invY, invZp, invN, invD, invW, YMAX, ZTRIMMIN } from "./view.js";
 import { svgL, svgP, svgW, tplCards } from "./dom.js";
-import { render, draw3d } from "./render.js";
+import { render, draw3d, activeTemplateIndex } from "./render.js";
 
 interface Drag {
   kind: "slider" | "sheer" | "trim" | "transom" | "stn" | "weight" | "rot";
@@ -245,6 +245,7 @@ export function addTemplate(): void {
   if (state.templates.length >= 7) return; // palette / UI cap
   const last = state.templates[state.templates.length - 1];
   state.templates.push(last.map((p) => ({ n: p.n, d: p.d, k: p.k })));
+  state.keelK.push(state.keelK[state.keelK.length - 1] ?? 0); // copy the last template's keel knuckle
   state.weights.forEach((cp) => cp.w.push(0));
   state.selected = null;
   refreshSelUI();
@@ -253,6 +254,7 @@ export function addTemplate(): void {
 export function removeTemplate(ti: number): void {
   if (state.templates.length <= 1) return;
   state.templates.splice(ti, 1);
+  state.keelK.splice(ti, 1);
   state.weights.forEach((cp) => {
     cp.w.splice(ti, 1);
     let s = 0;
@@ -364,6 +366,29 @@ export function refreshSelUI(): void {
     knuckle = !!(s && arr && hasKnuckle(s));
   krange.disabled = !knuckle;
   krange.value = knuckle ? String(arr![s!.idx].k) : "0";
+}
+
+// the keel-knuckle slider edits the active template tab's keel (centerline) knuckle; it is disabled on the
+// Cut / Body views (which are not a single template). Kept in sync by the side-panel render + tab switches.
+function setActiveKeel(k: number): void {
+  const ti = activeTemplateIndex();
+  if (ti === null || ti >= state.keelK.length) return;
+  state.keelK[ti] = clamp(k, 0, 1);
+  refreshKeelUI();
+  render();
+}
+
+export function refreshKeelUI(): void {
+  const r = document.getElementById("keelRange") as HTMLInputElement,
+    v = document.getElementById("keelVal") as HTMLElement,
+    ctl = document.getElementById("keelCtl") as HTMLElement;
+  const ti = activeTemplateIndex(),
+    on = ti !== null && ti < state.keelK.length;
+  r.disabled = !on;
+  ctl.classList.toggle("disabled", !on);
+  const k = on ? state.keelK[ti!] : 0;
+  r.value = String(k);
+  v.textContent = on ? k.toFixed(2) : "—";
 }
 
 // click on a template point → select it (and, if it can move, start dragging). The pinned sheer-origin
@@ -483,6 +508,9 @@ export function initInteraction(): void {
   document
     .getElementById("selKnuckle")!
     .addEventListener("input", (e) => setSelectedKnuckle(parseFloat((e.target as HTMLInputElement).value)));
+  document
+    .getElementById("keelRange")!
+    .addEventListener("input", (e) => setActiveKeel(parseFloat((e.target as HTMLInputElement).value)));
 
   // editor backgrounds: in "add" mode click empty space to add a point there (then back to select, with
   // the new point selected); in "select" mode an empty click clears the selection.
@@ -516,4 +544,5 @@ export function initInteraction(): void {
   });
 
   refreshSelUI();
+  refreshKeelUI();
 }

@@ -138,6 +138,8 @@ export type ActiveTarget = "plan" | "trim" | "transom" | "template" | "weight";
 export interface State {
   sheer: Sheer;
   templates: StationCP[][]; // K ≥ 1 section templates, index-aligned (all share the section count)
+  keelK: number[]; // per-template keel (centerline) knuckle ∈ [0,1]: 0 = C¹-smooth keel across the
+  // centerline, 1 = a hard V. Blended along the hull like the point knuckles. Index-aligned with templates.
   weights: WeightCP[]; // the longitudinal blend path through the simplex; ≥ 2 control points
   weightFn: (x: number) => number[]; // evaluated weight curve x → simplex; rebuilt by prepare()
   x0: number;
@@ -155,6 +157,7 @@ export interface State {
 export const state: State = {
   sheer: null as unknown as Sheer,
   templates: [],
+  keelK: [],
   weights: [],
   weightFn: () => [1],
   x0: 2000,
@@ -177,6 +180,7 @@ export function resetModel(): void {
     zf: () => 0,
   };
   state.templates = TEMPLATE_DEFS.map((t) => t.map((c) => ({ n: c[0], d: c[1], k: c[2] })));
+  state.keelK = state.templates.map(() => 0); // keels default to C¹-smooth across the centerline
   state.weights = defaultWeights(state.templates.length);
   state.x0 = 2000;
   state.waterline = 600;
@@ -322,11 +326,94 @@ export function knuckleEval(
   return (u: number) => hermiteEvalLR(ts, fs, lo, hi, clamp(u, t0, t1));
 }
 
+// the blended keel (centerline) knuckle at station x: Σⱼ w[j]·keelK[j] — the per-template keel knuckle
+// faired along the hull just like the point knuckles, so a hard-V keel can fade to a smooth one.
+export function keelKAt(x: number): number {
+  const w = weightsAt(x),
+    kk = state.keelK;
+  let k = 0;
+  for (let j = 0; j < w.length; j++) k += w[j] * (kk[j] ?? 0);
+  return k;
+}
+
+// how steep a keel approach (body-plan angle from horizontal, radians) starts/finishes handing a flat keel
+// back to its natural V. Below KEEL_FLAT_TH the keel knuckle is honored as authored; above KEEL_V_TH the
+// keel follows its natural deadrise however the keel knuckle is set; between, a smoothstep blend. A flat
+// keel is only geometrically reachable where the section meets the centerline gently — forcing it where the
+// section plunges in (the bow stem) bends the curve back on itself, so easing toward natural keeps it clean.
+const KEEL_FLAT_TH = 50 * (Math.PI / 180),
+  KEEL_V_TH = 75 * (Math.PI / 180);
+// fraction of the half-section parameter (keel up toward the sheer) over which a flat keel is rounded in.
+const KEEL_FLAT_ZONE = 0.5;
+
+// Build the section as a curve continuous across the boat centerline, the keel knuckle kc controlling the
+// keel: 0 = flat (C¹-smooth round bottom), 1 = a hard V. An earlier version rebuilt this from a discrete
+// knot set — the authored points inboard of the y=0 crossing, plus a keel knot, mirrored. But which points
+// fell inboard CHANGED one at a time as n_cl slid up the stem, and each such change stepped the keel shape:
+// the visible deadrise creases. This version never rebuilds from moving knots. The starboard half IS the
+// authored half-section curve itself (chines preserved, and it varies smoothly with x), reflected about the
+// centerline to make the port half; the only keel control is a smooth flattening of the depth near the
+// crossing. Both the reflection point (n_cl, d*) and the flattening vary smoothly in x, so the swept keel
+// is smooth. The flat tangent is eased back toward the natural (V) approach where the section meets the
+// centerline too steeply to flatten without bending back on itself (see KEEL_FLAT_TH/KEEL_V_TH). Returns
+// null for an open section (the curve never reaches the centerline) or a degenerate frame.
+function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], kc: number): Station | null {
+  const fr = frameAt(x),
+    ny = fr.n[1],
+    py = fr.p[1];
+  if (Math.abs(ny) < 1e-6) return null; // station plane parallel to the centerline — no clean crossing
+  const ncl = -py / ny; // inboard offset where world y = 0
+  const ts = chordParam(ns, ds),
+    nf = fairEval(ts, ns, ks),
+    df = fairEval(ts, ds, ks),
+    tmax = ts[ts.length - 1];
+  // first u where the world half-breadth crosses from ≥0 (starboard) to <0 (past the centerline) — the keel
+  let pu = 0,
+    py0 = py + nf(0) * ny,
+    ustar = -1;
+  const FN = 240;
+  for (let i = 1; i <= FN; i++) {
+    const u = (tmax * i) / FN,
+      y = py + nf(u) * ny;
+    if (py0 >= 0 && y < 0) {
+      ustar = pu + (u - pu) * (py0 / (py0 - y));
+      break;
+    }
+    pu = u;
+    py0 = y;
+  }
+  if (ustar < 0) return null; // open section — never reaches the centerline
+  const dstar = df(ustar),
+    z0 = ustar * (1 - KEEL_FLAT_ZONE); // top of the flatten zone (in the half parameter)
+  // natural approach steepness, as the body-plan angle of the secant across the flatten zone (a secant, not
+  // the tangent at the crossing, so a chine sitting on the keel can't make it jump): 0 = flat, π/2 = plunging
+  const theta = Math.atan2(Math.abs(dstar - df(z0)), Math.abs((ncl - nf(z0)) * ny) + 1e-9);
+  let s = clamp((theta - KEEL_FLAT_TH) / (KEEL_V_TH - KEEL_FLAT_TH), 0, 1);
+  s = s * s * (3 - 2 * s); // smoothstep: hand the flat keel back to its natural V as the approach steepens
+  const f = (1 - clamp(kc, 0, 1)) * (1 - s); // flatten amount: 1 = force flat, 0 = leave the natural keel
+  // reflected symmetric section over U ∈ [0, 2·ustar], keel at the midpoint U = ustar
+  const T = 2 * ustar,
+    warp = (u: number) => {
+      const d0 = df(u);
+      if (f <= 0 || u <= z0) return d0;
+      const t = (u - z0) / (ustar - z0), // 0 at the zone top → 1 at the keel
+        g = t >= 1 ? 1 : t * t * (3 - 2 * t);
+      return d0 + f * g * (dstar - d0); // pull depth toward d*, flattening the keel tangent (→0 at f=1)
+    };
+  return {
+    tmax: T,
+    n: (U: number) => (U <= ustar ? nf(U) : 2 * ncl - nf(2 * ustar - U)),
+    d: (U: number) => warp(U <= ustar ? U : 2 * ustar - U),
+  };
+}
+
 // the blended station section at x, as continuous n(u)/d(u) over u in [0,tmax]. At each station the
 // templates are mixed by the weight curve w(x) — section(x)[i] = Σⱼ w[j]·templates[j][i] — componentwise
 // in (n, d, k). The knuckle k is blended along the hull just like n and d, so a chine can fade from hard
-// to soft as the weight curve hands off between a creased template and a smooth one.
-export function stationAt(x: number): Station {
+// to soft as the weight curve hands off between a creased template and a smooth one. With mirrorKeel set
+// (the trimmed hull), the curve is reflected about the centerline so the keel knuckle applies — see
+// mirrorKeelStation; the parameter then runs sheer→keel→port-sheer and the keel sits at the midpoint.
+export function stationAt(x: number, mirrorKeel = false): Station {
   const w = weightsAt(x),
     tpl = state.templates,
     K = tpl.length,
@@ -348,6 +435,10 @@ export function stationAt(x: number): Station {
     ds.push(d);
     ks.push(k);
   }
+  if (mirrorKeel) {
+    const st = mirrorKeelStation(x, ns, ds, ks, keelKAt(x));
+    if (st) return st;
+  }
   const ts = chordParam(ns, ds);
   return { tmax: ts[m - 1], n: fairEval(ts, ns, ks), d: fairEval(ts, ds, ks) };
 }
@@ -367,7 +458,7 @@ export function xTransom(z: number): number {
 // z = z_s(x) is simply the station depth d = -z_s(x).
 export function sweptSection(x: number, M: number, trim: boolean, clipTransom = true): Section {
   const fr = frameAt(x),
-    st = stationAt(x);
+    st = stationAt(x, trim); // trimmed hull: the keel-knuckle symmetric section; sheet: the raw half
   const W = (u: number): Vec3 => {
     const nn = st.n(u),
       dd = st.d(u);
@@ -476,7 +567,7 @@ export function transomEdge(): Vec3[] {
       x = xTransom(z);
     if (x < 0 || x > L) continue;
     if (d < -state.sheer.zf(x)) continue; // above the sheer trim → not yet hull
-    const st = stationAt(x),
+    const st = stationAt(x, true), // match the trimmed hull's keel-knuckle section
       fr = frameAt(x);
     if (d > st.tmax) break;
     let u = st.tmax;

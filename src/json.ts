@@ -53,6 +53,7 @@ export interface HullData {
   trim: TrimCP[];
   transom: TransomCP[];
   templates: StationCP[][]; // K templates, index-aligned
+  keelK: number[]; // per-template keel (centerline) knuckle, index-aligned with templates
   weights: WeightCP[]; // the longitudinal blend path
 }
 export interface ParsedDoc {
@@ -149,6 +150,7 @@ export function buildJson(): string {
         sheerTrim: encTrim(s.trim),
         transom: encTransom(s.transom),
         templates: state.templates.map(encSection),
+        keelK: state.keelK.slice(),
         weights: encWeights(state.weights),
       },
     ],
@@ -268,6 +270,10 @@ export function parseDocument(text: string): ParsedDoc {
     } else {
       throw new Error(`${c} has no templates (and no legacy aft/fore pair)`);
     }
+    // keelK: optional per-template keel knuckle; legacy docs (and any missing/short array) default to 0
+    const keelK = Array.from({ length: nTpl }, (_, j) =>
+      Array.isArray(v.keelK) && typeof v.keelK[j] === "number" ? clamp(v.keelK[j], 0, 1) : 0,
+    );
     // weights: the new `weights` path, or a default straight path corner-to-corner of the simplex
     const weights =
       "weights" in v
@@ -291,6 +297,7 @@ export function parseDocument(text: string): ParsedDoc {
       trim,
       transom,
       templates,
+      keelK,
       weights,
     };
   });
@@ -316,6 +323,7 @@ export function loadHull(v: HullData): void {
   state.sheer.trim = v.trim;
   state.sheer.transom = v.transom;
   state.templates = v.templates;
+  state.keelK = v.keelK;
   state.weights = v.weights;
   state.selected = null;
   state.x0 = clamp(state.x0, 0, L);
