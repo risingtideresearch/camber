@@ -157,6 +157,7 @@ Variant {
   sheerTrim:   TrimPoint[]       // length = topology.sheerTrim; the real sheer, in profile
   transom:     Transom           // the raked stern plane
   templates:   SectionPoint[][]  // topology.templateCount templates, each of length topology.section
+  keelK:       number[]          // length = topology.templateCount; per-template keel knuckle ∈ [0,1]
   weights:     WeightPoint[]     // length = topology.weightPoints; the longitudinal blend path
 }
 ```
@@ -312,6 +313,28 @@ since the knuckle blend stays inside the monotonicity-safe range. The exact spli
 downstream choice, not part of the model; what the model fixes is the points, their knuckles,
 and the monotone-in-depth guarantee.
 
+### The keel knuckle
+
+The point knuckles shape the section *between* the deck and the keel. The **keel knuckle** shapes
+the section where it crosses the centerline — the character of the emergent keel itself. It is one
+extra scalar `keelK ∈ [0,1]` **per template** (a `keelK` vector parallel to `templateCount`, not a
+per-point number), blended along the hull by the weight curve exactly as the point knuckles are:
+`keelK(x) = Σⱼ wⱼ(x)·keelKⱼ`.
+
+At `keelK = 0` the keel is **flat** — the section meets `y = 0` with a horizontal (zero-deadrise)
+tangent, a `C¹`-smooth round bottom across the centerline. At `keelK = 1` it is a **hard V** — the
+section runs into the centerline at its natural deadrise as a `G⁰` corner. Values between ease one
+into the other, and because `keelK` is blended like every other number, a flat-bottomed midbody can
+fade into a V-keeled bow within one hull, and a flat-keeled design can blend into a V-keeled one.
+
+Unlike a point knuckle, a *flat* keel is only geometrically reachable where the section meets the
+centerline gently: at the stem the section plunges in steeply, and forcing it flat there would bend
+the curve back on itself. So a flat keel is a **target**, relaxed back toward the natural deadrise
+where the approach is too steep to flatten cleanly — the same honest-output stance the model takes
+for openness and draft. How that relaxation and the flat-vs-V shaping are realized is a downstream
+construction choice (see [Derived geometry](#derived-geometry)); the model fixes only the authored
+`keelK` per template and its `[0,1]` domain.
+
 ## The weight curve — the longitudinal blend path
 
 The mix of templates at a station is set by a **weight curve** `w(x) = (w₁(x),…,w_K(x))`: a
@@ -363,7 +386,9 @@ rather than forbidden.
   swept section reaches `y = 0`. A section that never reaches the centerline is **open**: it
   contributes no keel point there, and the hull is open-bottomed at that station. Openness is
   a *derived* condition, not an invariant — it is the sweep analog of a displacement target:
-  honest output, not something the convex encoding promises.
+  honest output, not something the convex encoding promises. The keel's *cross-section
+  character* — flat round bottom through a hard V — is authored by the per-template
+  [keel knuckle](#the-keel-knuckle); its *path* up the stem is still emergent.
 - **A knuckle line** is the locus of a creased template point (`k` near `1`) swept along the
   hull — an emergent chine. Like the keel it is read off the sweep, not authored as its own
   curve, and it fades out wherever the knuckle relaxes toward `0`. Derived.
@@ -529,18 +554,19 @@ Guaranteed by the encoding rather than checked after a solve:
 
 - There is exactly one sheer (plan curve + trim line) and one transom; the section shape is
   `templateCount` templates `T₁…T_K` blended by one weight curve.
-- Every variant is parallel to its topology: `sheerPlan`, `sheerTrim`, `weights`, and each of the
-  `templates` have the lengths the topology dictates; the templates are index-aligned (point `i`
-  blends with point `i` across all of them).
+- Every variant is parallel to its topology: `sheerPlan`, `sheerTrim`, `weights`, `keelK`, and each
+  of the `templates` have the lengths the topology dictates (`keelK` parallels `templateCount`, one
+  per template); the templates are index-aligned (point `i` blends with point `i` across all of them).
 - Each template's point 0 is the sheer point at the local origin; the transom is two points.
 - **Curve ordering** holds automatically: each guide curve's and the weight curve's first
   `dx ≥ 0` anchors the chain and every later `dx > 0` gives strictly increasing `x`.
 - **Template descent** holds automatically: every template `dd > 0` gives strictly increasing
   depth, so each template — and every blend of them — is single-valued from deck to keel and
   never curls upward.
-- All half-breadths, trim depths, and transom depths are `≥ 0`; every knuckle `k` lies in
-  `[0,1]`; every weight control point's `w` lies in the simplex (`wⱼ ≥ 0`, `Σ wⱼ = 1`); the
-  transom `x` lies in its interval and its bottom edge lies below its top via `dDepthBot > 0`.
+- All half-breadths, trim depths, and transom depths are `≥ 0`; every point knuckle `k` and every
+  template's keel knuckle `keelK` lie in `[0,1]`; every weight control point's `w` lies in the
+  simplex (`wⱼ ≥ 0`, `Σ wⱼ = 1`); the transom `x` lies in its interval and its bottom edge lies
+  below its top via `dDepthBot > 0`.
 - **Interpolation closure:** for any weights `wᵢ ≥ 0, Σwᵢ = 1`, the blended variant satisfies
   all of the above. This is the defining invariant and follows from the convexity of the valid
   region.
@@ -554,16 +580,18 @@ The on-disk format is the `HullDocument` serialized directly to JSON — the sam
 above, with their field names verbatim: a `length`, a `topology` (`sheerPlan` / `sheerTrim` /
 `section` / `templateCount` / `weightPoints` counts), and a `variants` array. Each variant holds
 `sheerPlan` (`PlanPoint`), `sheerTrim` (`TrimPoint`), `transom` (`Transom`), a `templates` array
-of `templateCount` `SectionPoint` lists, and `weights` (`WeightPoint`), in the increment encoding
-defined above — `dx` / `dd` steps, the transom's `depthTop` / `dDepthBot` / `transomRake`, per-
-point `k`, and each weight point's barycentric `w`. A variant may carry an optional `name`. `k`
-is optional on read and defaults to `0` (smooth). A document in the earlier two-template form —
-`aft` / `fore` instead of `templates` / `weights` — still reads, as two templates on a straight
-blend path. Absolute coordinates are recovered by running sums on load.
+of `templateCount` `SectionPoint` lists, a `keelK` array of `templateCount` keel knuckles, and
+`weights` (`WeightPoint`), in the increment encoding defined above — `dx` / `dd` steps, the
+transom's `depthTop` / `dDepthBot` / `transomRake`, per-point `k`, and each weight point's
+barycentric `w`. A variant may carry an optional `name`. Both `k` and `keelK` are optional on read
+and default to `0` (smooth / flat keel); a missing or short `keelK` fills with `0` per template. A
+document in the earlier two-template form — `aft` / `fore` instead of `templates` / `weights` —
+still reads, as two templates on a straight blend path. Absolute coordinates are recovered by
+running sums on load.
 
 A complete (deliberately minimal) document — a `2 / 2 / 3`, two-template topology on a straight
-blend path, with one knuckle at the chine; the fuller hulls in [`examples/`](examples/) follow the
-same shape:
+blend path, with one knuckle at the chine and a flat keel aft fading to a V keel forward
+(`keelK` `[0, 1]`); the fuller hulls in [`examples/`](examples/) follow the same shape:
 
 ```json
 {
@@ -579,6 +607,7 @@ same shape:
         [ { "dd": 0, "n": 0, "k": 0 }, { "dd": 400, "n": 250, "k": 1 }, { "dd": 600, "n": 900,  "k": 0 } ],
         [ { "dd": 0, "n": 0, "k": 0 }, { "dd": 500, "n": 300, "k": 0 }, { "dd": 700, "n": 1000, "k": 0 } ]
       ],
+      "keelK":   [ 0, 1 ],
       "weights": [ { "dx": 0, "w": [1, 0] }, { "dx": 4000, "w": [0, 1] } ]
     }
   ]
