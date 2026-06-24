@@ -202,6 +202,62 @@ export function render(): void {
     : `x=${Math.round(state.x0)}${open} · above WL`;
 }
 
+// Where the plan curve's inboard radius of curvature R is smaller than the section's inboard reach, the
+// fanned station planes cross and the swept surface folds (cusps) — every offset from R inward is doubled
+// over. The fold's outboard edge is at offset R along the normal (the plan curve's centre of curvature / its
+// evolute); the inboard edge is the section's deepest swept point (the keel where it closes, otherwise the
+// open bottom). This is section-aware: a station is flagged only where the rendered section actually reaches
+// offset R. Each run carries, per station, the plan edges (world x,y at offsets R and n_max) and the profile
+// band (z at the offset-R depth and at the deepest depth), so both views can shade the same folded region.
+type CuspPt = { x: number; outer: [number, number]; inner: [number, number]; zTop: number; zBot: number };
+function cuspRuns(): CuspPt[][] {
+  const yf = state.sheer.yf,
+    e = 4,
+    N = 120,
+    runs: CuspPt[][] = [];
+  let run: CuspPt[] = [];
+  const flush = (): void => {
+    if (run.length) runs.push(run);
+    run = [];
+  };
+  for (let i = 0; i <= N; i++) {
+    const x = (L * i) / N,
+      yp = (yf(x + e) - yf(x - e)) / (2 * e),
+      ypp = (yf(x + e) - 2 * yf(x) + yf(x - e)) / (e * e);
+    let hit: CuspPt | null = null;
+    // concave toward the centerline, and tight enough that R is below the geometric centerline reach
+    if (ypp < -1e-9 && Math.pow(1 + yp * yp, 1.5) / -ypp < yf(x) * Math.sqrt(1 + yp * yp)) {
+      const R = Math.pow(1 + yp * yp, 1.5) / -ypp,
+        fr = frameAt(x),
+        sec = sweptSection(x, 72, true);
+      if (!(sec.aft && !sec.keel)) {
+        let dR = -1,
+          nMax = -Infinity,
+          dMax = -Infinity;
+        for (const p of sec.pts) {
+          const n = (p[0] - fr.p[0]) * fr.n[0] + (p[1] - fr.p[1]) * fr.n[1], // inboard offset along n̂
+            d = -p[2];
+          if (n >= R && dR < 0) dR = d;
+          if (n > nMax) nMax = n;
+          if (d > dMax) dMax = d;
+        }
+        if (nMax >= R && dR >= 0 && dMax > dR)
+          hit = {
+            x,
+            outer: [fr.p[0] + R * fr.n[0], fr.p[1] + R * fr.n[1]], // offset R — the cuspidal edge
+            inner: [fr.p[0] + nMax * fr.n[0], fr.p[1] + nMax * fr.n[1]], // deepest swept offset
+            zTop: -dR,
+            zBot: -dMax,
+          };
+      }
+    }
+    if (hit) run.push(hit);
+    else flush();
+  }
+  flush();
+  return runs;
+}
+
 function drawPlan(sections: Section[], zmin: number): void {
   const svg = svgL;
   svg.replaceChildren();
@@ -296,6 +352,23 @@ function drawPlan(sections: Section[], zmin: number): void {
         opacity: 0.85,
         "stroke-linejoin": "round",
         "stroke-linecap": "round",
+      }),
+    );
+  }
+  // cusp marker: where the plan curvature is too tight for the beam the swept surface folds. Shade the whole
+  // folded area — from the cuspidal edge (offset R) inboard to the deepest swept point — in red.
+  for (const run of cuspRuns()) {
+    const ring = run
+      .map((s): [number, number] => [mapX(s.outer[0]), yPlan(s.outer[1])])
+      .concat(run.slice().reverse().map((s): [number, number] => [mapX(s.inner[0]), yPlan(s.inner[1])]));
+    svg.append(
+      el("path", {
+        d: poly(ring) + "Z",
+        fill: "#e11d48",
+        "fill-opacity": 0.22,
+        stroke: "#e11d48",
+        "stroke-width": 1.4,
+        "stroke-linejoin": "round",
       }),
     );
   }
@@ -452,6 +525,22 @@ function drawProfile(sections: Section[], _zmin: number): void {
   });
   ttl.textContent = "transom";
   svg.append(ttl);
+  // cusp marker: shade the folded depth band (offset = R down to the deepest swept point) at the cusping
+  // stations, in red — the same folded region the plan view shades.
+  for (const run of cuspRuns()) {
+    const top = run.map((s): [number, number] => [mapX(s.x), zScreenP(s.zTop)]),
+      bot = run.map((s): [number, number] => [mapX(s.x), zScreenP(s.zBot)]).reverse();
+    svg.append(
+      el("path", {
+        d: poly(top.concat(bot)) + "Z",
+        fill: "#e11d48",
+        "fill-opacity": 0.22,
+        stroke: "#e11d48",
+        "stroke-width": 1.4,
+        "stroke-linejoin": "round",
+      }),
+    );
+  }
   // cut station — true profile rake (the fan shifts x as the section runs inboard to the keel)
   cutTrace(svg, (p) => [mapX(p[0]), zScreenP(p[2])]);
   const h = clippedSection(state.x0, 18);
