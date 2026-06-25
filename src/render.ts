@@ -1329,7 +1329,14 @@ function gridNormal(rows: Vec3[][], i: number, j: number): Vec3 {
     b = rows[Math.max(i - 1, 0)][j];
   const c = rows[i][Math.min(j + 1, C - 1)],
     d = rows[i][Math.max(j - 1, 0)];
-  return V.norm(V.cross(V.sub(c, d), V.sub(a, b)));
+  const n = V.cross(V.sub(c, d), V.sub(a, b));
+  // On the centerline (the keel, y = 0) a mirror-symmetric hull's normal must have no transverse component.
+  // Here the section is sampled on the starboard side only, so the transverse difference is one-sided and
+  // tilts the normal slightly off the centerline plane; the port mirror flips that tilt, so the two halves
+  // meet at an angle — a spurious crease running the length of the keel seam. Zero the y-component there so
+  // the halves join smoothly (a genuine V keel still reads from its off-centerline faces).
+  if (Math.abs(rows[i][j][1]) < 1e-6) n[1] = 0;
+  return V.norm(n);
 }
 function pushTri(
   P: number[],
@@ -1581,17 +1588,21 @@ export function draw3d(rebuild?: boolean): void {
   gl.uniform1f(loc.uAlpha, 1.0);
   const view = V.norm([-c2 * s1, -c2 * c1, s2]); // surface→eye direction (orthographic)
   gl.uniform3fv(loc.uView, view);
-  // key light at the lower-left of the screen, raking (well off the view axis) so 3/4 views read as
-  // form instead of flat front-lighting, with a smaller toward-eye term to keep the visible faces lit.
-  // right/up are the screen axes expressed in world; left = −right, down = −up.
+  // key light at the lower-left of the screen, off the view axis so 3/4 views read as form rather than flat
+  // front-lighting, with a toward-eye term to keep the visible faces lit. The toward-eye / off-axis balance
+  // (EYE vs SIDE) sets how grazing the light is: a very grazing light is maximally sensitive to tiny normal
+  // tilts, so it amplifies sub-degree faceting noise in the swept mesh into false puckering. Keeping a solid
+  // off-axis component preserves the form read while easing the grazing enough to quiet that meshing noise.
   const right: Vec3 = [c1, -s1, 0],
     up: Vec3 = [s2 * s1, s2 * c1, c2];
+  const EYE = 0.72,
+    SIDE = 0.62;
   gl.uniform3fv(
     loc.uLight,
     V.norm([
-      0.5 * view[0] - 0.85 * right[0] - 0.85 * up[0],
-      0.5 * view[1] - 0.85 * right[1] - 0.85 * up[1],
-      0.5 * view[2] - 0.85 * right[2] - 0.85 * up[2],
+      EYE * view[0] - SIDE * right[0] - SIDE * up[0],
+      EYE * view[1] - SIDE * right[1] - SIDE * up[1],
+      EYE * view[2] - SIDE * right[2] - SIDE * up[2],
     ]),
   );
   gl.uniform1f(loc.uStripes, 11.0);

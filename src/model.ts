@@ -352,7 +352,7 @@ export function keelKAt(x: number): number {
 // section plunges in (the bow stem) bends the curve back on itself, so easing toward natural keeps it clean.
 const KEEL_FLAT_TH = 50 * (Math.PI / 180),
   KEEL_V_TH = 75 * (Math.PI / 180);
-// fraction of the half-section parameter (keel up toward the sheer) over which a flat keel is rounded in.
+// fraction of the half-section parameter (keel up toward the sheer) over which a smooth keel is rounded in.
 const KEEL_FLAT_ZONE = 0.5;
 
 // Build the section as a curve continuous across the boat centerline, the keel knuckle kc controlling the
@@ -400,14 +400,26 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
   let s = clamp((theta - KEEL_FLAT_TH) / (KEEL_V_TH - KEEL_FLAT_TH), 0, 1);
   s = s * s * (3 - 2 * s); // smoothstep: hand the flat keel back to its natural V as the approach steepens
   const f = (1 - clamp(kc, 0, 1)) * (1 - s); // flatten amount: 1 = force flat, 0 = leave the natural keel
-  // reflected symmetric section over U ∈ [0, 2·ustar], keel at the midpoint U = ustar
+  // reflected symmetric section over U ∈ [0, 2·ustar], keel at the midpoint U = ustar. The keel character is
+  // set by the depth's SLOPE at the crossing: the reflection turns a zero slope into a smooth keel and a
+  // nonzero slope into a V (corner). Over the zone [z0, ustar] the depth is blended (by f, via a C² weight)
+  // toward a target depth profile; the smootherstep weight has zero value AND slope at z0, so the blend joins
+  // the section C² there with no shoulder, and uses only df VALUES (continuous across chines) so it stays
+  // robust. The target is a fair PARABOLA with its vertex (zero slope) at the keel and passing through the
+  // section at z0 — constant curvature, spread evenly, so f=1 gives a gently ROUNDED keel rather than a flat
+  // strip with sharp shoulders (the old failure). f=0 leaves the natural slope ⇒ the reflected V.
+  const span = ustar - z0,
+    d0z = df(z0),
+    c = (dstar - d0z) / (span * span); // parabola curvature: vertex at the keel, through (z0, d0z)
   const T = 2 * ustar,
     warp = (u: number) => {
       const d0 = df(u);
       if (f <= 0 || u <= z0) return d0;
-      const t = (u - z0) / (ustar - z0), // 0 at the zone top → 1 at the keel
-        g = t >= 1 ? 1 : t * t * (3 - 2 * t);
-      return d0 + f * g * (dstar - d0); // pull depth toward d*, flattening the keel tangent (→0 at f=1)
+      const t = Math.min((u - z0) / span, 1),
+        g = t * t * t * (t * (t * 6 - 15) + 10), // smootherstep (C²) blend weight
+        v = ustar - u,
+        target = dstar - c * v * v; // fair parabolic round to a flat keel tangent
+      return d0 + f * g * (target - d0);
     };
   return {
     tmax: T,
