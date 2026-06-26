@@ -446,8 +446,11 @@ export function templateBgDown(ti: number, svg: SVGSVGElement, e: PointerEvent):
   }
 }
 
-// ---------- wire up the global / per-svg pointer listeners (called once at startup) ----------
-export function initInteraction(): void {
+// ---------- wire up the global / per-svg pointer listeners ----------
+// Returns a teardown that removes the window-level listeners it registered, so an embedding host (the
+// Patchwork tool) can unmount cleanly without leaking handlers. The per-element listeners below are
+// attached to the scaffold's own nodes and are discarded when that scaffold is removed.
+export function initInteraction(): () => void {
   const toolbar = document.getElementById("toolbar")!;
   toolbar.addEventListener("click", (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>(".tool");
@@ -466,7 +469,7 @@ export function initInteraction(): void {
     e.preventDefault();
   });
 
-  window.addEventListener("pointermove", (e) => {
+  const onPointerMove = (e: PointerEvent): void => {
     if (!drag) return;
     if (drag.kind === "rot") {
       state.rot.yaw = drag.yaw0! + (e.clientX - drag.px0!) * 0.008;
@@ -492,13 +495,16 @@ export function initInteraction(): void {
       cp.d = clamp(invD(vy), lo, hi);
     }
     render();
-  });
-  window.addEventListener("pointerup", () => {
+  };
+  window.addEventListener("pointermove", onPointerMove);
+
+  const onPointerUp = (): void => {
     drag = null; // selection persists after a drag, so the point stays highlighted and editable
-  });
+  };
+  window.addEventListener("pointerup", onPointerUp);
 
   // delete the selected point with Delete/Backspace (unless typing in the knuckle slider)
-  window.addEventListener("keydown", (e) => {
+  const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key !== "Delete" && e.key !== "Backspace") return;
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
@@ -506,7 +512,8 @@ export function initInteraction(): void {
       e.preventDefault();
       deleteSelected();
     }
-  });
+  };
+  window.addEventListener("keydown", onKeyDown);
   document.getElementById("selDelete")!.addEventListener("click", deleteSelected);
   document
     .getElementById("selKnuckle")!
@@ -548,4 +555,10 @@ export function initInteraction(): void {
 
   refreshSelUI();
   refreshKeelUI();
+
+  return () => {
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("keydown", onKeyDown);
+  };
 }

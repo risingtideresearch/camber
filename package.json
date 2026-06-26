@@ -4,11 +4,16 @@
   "version": "0.0.0",
   "description": "Constant-camber boat-hull line drawing tool",
   "type": "module",
+  "exports": "./patchwork/dist/index.js",
   "scripts": {
     "build": "esbuild src/main.ts --bundle --format=esm --outfile=dist/camber.js --sourcemap && esbuild src/interp.ts --bundle --format=esm --outfile=dist/interpolate.js --sourcemap",
     "watch": "esbuild src/main.ts --bundle --format=esm --outfile=dist/camber.js --sourcemap --watch",
     "watch:interp": "esbuild src/interp.ts --bundle --format=esm --outfile=dist/interpolate.js --sourcemap --watch",
+    "build:patchwork": "esbuild patchwork/src/index.ts --bundle --format=esm --outfile=patchwork/dist/index.js --sourcemap",
+    "watch:patchwork": "esbuild patchwork/src/index.ts --bundle --format=esm --outfile=patchwork/dist/index.js --sourcemap --watch",
     "typecheck": "tsc --noEmit",
+    "typecheck:patchwork": "tsc --noEmit -p patchwork/tsconfig.json",
+    "push": "npm run build && npm run build:patchwork && pushwork sync",
     "test:smooth": "esbuild test/smoothness.ts --bundle --platform=node --format=esm --outfile=dist/smoothness.mjs && node dist/smoothness.mjs",
     "test": "npm run test:smooth"
   },

@@ -67,6 +67,7 @@ import {
   removeTemplate,
   refreshKeelUI,
 } from "./interaction.js";
+import { notifyModelChange } from "./hooks.js";
 
 type Proj = (p: Vec3) => [number, number];
 
@@ -200,6 +201,7 @@ export function render(): void {
   profVal.textContent = wl.wet
     ? `x=${Math.round(state.x0)}${open} · draft ${Math.round(wl.draft)} · WL beam ${Math.round(wl.beam)}`
     : `x=${Math.round(state.x0)}${open} · above WL`;
+  notifyModelChange(); // persist the (possibly edited) model — no-op unless a listener is registered
 }
 
 // Where the plan curve's inboard radius of curvature R is smaller than the section's inboard reach, the

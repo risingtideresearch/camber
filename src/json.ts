@@ -319,9 +319,16 @@ export function parseDocument(text: string): ParsedDoc {
 
 // load a parsed variant into the live model
 export function loadHull(v: HullData): void {
-  state.sheer.cp = v.cp;
-  state.sheer.trim = v.trim;
-  state.sheer.transom = v.transom;
+  // Assign a fresh sheer rather than mutating the existing one: the editor's startup `reset()` normally
+  // creates `state.sheer` before any import, but an embedding host (the Patchwork tool) loads a hull as
+  // its first action, when `state.sheer` is still null. `prepare()` rebuilds the yf/zf samplers on render.
+  state.sheer = {
+    cp: v.cp,
+    trim: v.trim,
+    transom: v.transom,
+    yf: () => 0,
+    zf: () => 0,
+  };
   state.templates = v.templates;
   state.keelK = v.keelK;
   state.weights = v.weights;
