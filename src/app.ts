@@ -29,9 +29,12 @@ export interface EditorOptions {
 export interface CamberEditor {
   // The current model serialized as a single-variant `HullDocument`.
   getJson(): string;
-  // Replace the model with the given `HullDocument` JSON (e.g. an incoming remote change). Does not fire
-  // `onChange`.
+  // Replace the model with the given `HullDocument` JSON (clears the selection). Does not fire `onChange`.
   loadJson(text: string): void;
+  // Apply an incoming remote change: like `loadJson`, but keeps the current selection if it still resolves
+  // and tolerates a transiently inconsistent document (returns false instead of throwing). Does not fire
+  // `onChange`.
+  applyRemote(text: string): boolean;
   // Remove window-level listeners and stop persisting. The caller is responsible for removing the
   // injected scaffold from the DOM.
   destroy(): void;
@@ -159,11 +162,28 @@ export function startEditor(opts: EditorOptions = {}): CamberEditor {
   // `loadJson` re-renders, which would otherwise fire `onChange`; this flag suppresses that echo so an
   // incoming remote change is not immediately written straight back out.
   let applying = false;
-  function applyLoad(text: string): void {
+
+  // Keep the current selection only if it still points at an existing control point after a load (a
+  // remote edit may have added/removed points). Returns null if it no longer resolves.
+  function validatedSelection(): typeof state.selected {
+    const s = state.selected;
+    if (!s) return null;
+    if (s.tgt === "plan") return s.idx < state.sheer.cp.length ? s : null;
+    if (s.tgt === "trim") return s.idx < state.sheer.trim.length ? s : null;
+    if (s.tgt === "transom") return s.idx < state.sheer.transom.length ? s : null;
+    if (s.tgt === "weight") return s.idx < state.weights.length ? s : null;
+    // template
+    const ti = s.ti ?? 0;
+    return ti < state.templates.length && s.idx < state.templates[ti].length ? s : null;
+  }
+
+  function applyLoad(text: string, preserveSelection: boolean): void {
     applying = true;
     try {
-      loadJsonText(text);
-      state.selected = null;
+      const prev = state.selected;
+      loadJsonText(text); // clears the selection internally (loadHull)
+      state.selected = preserveSelection ? prev : null;
+      state.selected = validatedSelection(); // drop it if the load changed the topology out from under it
       render();
       refreshSelUI();
       syncTrim(); // waterline / deck rake may have come from the document
@@ -173,7 +193,7 @@ export function startEditor(opts: EditorOptions = {}): CamberEditor {
   }
 
   // Initial content: the document's hull if embedded, otherwise the built-in default.
-  if (opts.initialJson !== undefined) applyLoad(opts.initialJson);
+  if (opts.initialJson !== undefined) applyLoad(opts.initialJson, false);
   else reset();
 
   // Register the persistence hook only after the initial load, so loading the starting hull does not
@@ -187,7 +207,17 @@ export function startEditor(opts: EditorOptions = {}): CamberEditor {
 
   return {
     getJson: () => buildJson(),
-    loadJson: (text: string) => applyLoad(text),
+    loadJson: (text: string) => applyLoad(text, false),
+    applyRemote: (text: string) => {
+      try {
+        applyLoad(text, true);
+        return true;
+      } catch {
+        // A document mid-merge can be transiently inconsistent (e.g. a topology count not yet matching a
+        // variant's point count); skip this revision and wait for the next consistent one.
+        return false;
+      }
+    },
     destroy: () => {
       setModelChangeListener(null);
       window.removeEventListener("resize", onResize);
