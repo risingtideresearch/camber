@@ -327,13 +327,12 @@ section runs into the centerline at its natural deadrise as a `G⁰` corner. Val
 into the other, and because `keelK` is blended like every other number, a flat-bottomed midbody can
 fade into a V-keeled bow within one hull, and a flat-keeled design can blend into a V-keeled one.
 
-Unlike a point knuckle, a *flat* keel is only geometrically reachable where the section meets the
-centerline gently: at the stem the section plunges in steeply, and forcing it flat there would bend
-the curve back on itself. So a flat keel is a **target**, relaxed back toward the natural deadrise
-where the approach is too steep to flatten cleanly — the same honest-output stance the model takes
-for openness and draft. How that relaxation and the flat-vs-V shaping are realized is a downstream
-construction choice (see [Derived geometry](#derived-geometry)); the model fixes only the authored
-`keelK` per template and its `[0,1]` domain.
+`keelK` is honored as authored everywhere — a flat keel (`keelK = 0`) is forced flat even where the
+section meets the centerline steeply (a narrow, flared stem or transom). Flattening never folds the
+section in practice, so there is no automatic relaxation back toward the natural deadrise: if you
+want a V where the entry fines out, author it with `keelK = 1` on that template. How the flat-vs-V
+shaping is realized is a downstream construction choice (see [Derived geometry](#derived-geometry));
+the model fixes only the authored `keelK` per template and its `[0,1]` domain.
 
 ## The weight curve — the longitudinal blend path
 

@@ -349,13 +349,6 @@ export function keelKAt(x: number): number {
   return k;
 }
 
-// how steep a keel approach (body-plan angle from horizontal, radians) starts/finishes handing a flat keel
-// back to its natural V. Below KEEL_FLAT_TH the keel knuckle is honored as authored; above KEEL_V_TH the
-// keel follows its natural deadrise however the keel knuckle is set; between, a smoothstep blend. A flat
-// keel is only geometrically reachable where the section meets the centerline gently — forcing it where the
-// section plunges in (the bow stem) bends the curve back on itself, so easing toward natural keeps it clean.
-const KEEL_FLAT_TH = 50 * (Math.PI / 180),
-  KEEL_V_TH = 75 * (Math.PI / 180);
 // fraction of the half-section parameter (keel up toward the sheer) over which a smooth keel is rounded in.
 const KEEL_FLAT_ZONE = 0.5;
 
@@ -367,9 +360,10 @@ const KEEL_FLAT_ZONE = 0.5;
 // authored half-section curve itself (chines preserved, and it varies smoothly with x), reflected about the
 // centerline to make the port half; the only keel control is a smooth flattening of the depth near the
 // crossing. Both the reflection point (n_cl, d*) and the flattening vary smoothly in x, so the swept keel
-// is smooth. The flat tangent is eased back toward the natural (V) approach where the section meets the
-// centerline too steeply to flatten without bending back on itself (see KEEL_FLAT_TH/KEEL_V_TH). Returns
-// null for an open section (the curve never reaches the centerline) or a degenerate frame.
+// is smooth. The keel character is set entirely by the keel knuckle kc (0 = flat/round, 1 = hard V); there
+// is no automatic flat→V easing (forcing a flat keel never folds the curve in practice — a full sweep of
+// every example stays monotonic — so kc is honored as authored everywhere). Returns null for an open
+// section (the curve never reaches the centerline) or a degenerate frame.
 function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], kc: number): Station | null {
   const fr = frameAt(x),
     ny = fr.n[1],
@@ -398,12 +392,7 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
   if (ustar < 0) return null; // open section — never reaches the centerline
   const dstar = df(ustar),
     z0 = ustar * (1 - KEEL_FLAT_ZONE); // top of the flatten zone (in the half parameter)
-  // natural approach steepness, as the body-plan angle of the secant across the flatten zone (a secant, not
-  // the tangent at the crossing, so a chine sitting on the keel can't make it jump): 0 = flat, π/2 = plunging
-  const theta = Math.atan2(Math.abs(dstar - df(z0)), Math.abs((ncl - nf(z0)) * ny) + 1e-9);
-  let s = clamp((theta - KEEL_FLAT_TH) / (KEEL_V_TH - KEEL_FLAT_TH), 0, 1);
-  s = s * s * (3 - 2 * s); // smoothstep: hand the flat keel back to its natural V as the approach steepens
-  const f = (1 - clamp(kc, 0, 1)) * (1 - s); // flatten amount: 1 = force flat, 0 = leave the natural keel
+  const f = 1 - clamp(kc, 0, 1); // flatten amount: kc=0 ⇒ 1 (force flat/round), kc=1 ⇒ 0 (natural V)
   // reflected symmetric section over U ∈ [0, 2·ustar], keel at the midpoint U = ustar. The keel character is
   // set by the depth's SLOPE at the crossing: the reflection turns a zero slope into a smooth keel and a
   // nonzero slope into a V (corner). Over the zone [z0, ustar] the depth is blended (by f, via a C² weight)
