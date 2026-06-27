@@ -9,7 +9,6 @@ import {
   clippedSection,
   sweptSection,
   stationAt,
-  keelKAt,
   frameAt,
   contour,
   transomEdge,
@@ -929,12 +928,12 @@ function drawCutStation(svg: SVGSVGElement): void {
   }
   const empty = umin >= umax - 1e-6; // keel shallower than the trim ⇒ nothing kept
 
-  // the section sheer→keel, faint and dashed (above the kept arc is the sheer-trimmed top); the keel sits at
-  // umax and the mirrored port half beyond it is not drawn, so the curve stops at the centerline
+  // the full adjusted section, faint and dashed — both halves: sheer → keel (at the midpoint) → port sheer,
+  // so the mirrored keel-rounded shape is visible across the centerline
   const full: [number, number][] = [],
-    N = 200;
+    N = 300;
   for (let i = 0; i <= N; i++) {
-    const u = (umax * i) / N;
+    const u = (st.tmax * i) / N;
     full.push([snX(st.n(u)), snY(st.d(u))]);
   }
   svg.append(
@@ -950,12 +949,45 @@ function drawCutStation(svg: SVGSVGElement): void {
     }),
   );
 
-  // kept arc, bold
+  // DIAGNOSTIC: the raw interpolated half-section (before the keel mirror/round), magenta, so the keel
+  // construction's effect is visible — where the magenta and the gray diverge near the centerline is exactly
+  // the mirror + keel-flatten/round at work.
+  const raw = stationAt(state.x0, false),
+    rawPts: [number, number][] = [];
+  for (let i = 0; i <= N; i++) {
+    const u = (raw.tmax * i) / N;
+    rawPts.push([snX(raw.n(u)), snY(raw.d(u))]);
+  }
+  svg.append(
+    el("path", {
+      d: poly(rawPts),
+      fill: "none",
+      stroke: "#c026d3",
+      "stroke-width": 1.4,
+      opacity: 0.8,
+      "stroke-dasharray": "2 3",
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round",
+    }),
+  );
+  for (const [txt, col, y] of [
+    ["raw interpolated", "#c026d3", 16],
+    ["mirrored + keel-round", COL.station, 30],
+  ] as const) {
+    const t = el("text", { x: snX(NMIN) + 4, y, "font-size": 10, fill: col });
+    t.textContent = txt;
+    svg.append(t);
+  }
+
+  // kept arc, bold — both sides: from the starboard sheer trim (umin) through the keel to the port sheer
+  // trim (its mirror at tmax − umin), so the surviving hull section shows full width with its keel
   if (!empty) {
     const kept: [number, number][] = [],
-      KN = 120;
+      KN = 240,
+      ka = umin,
+      kb = st.tmax - umin;
     for (let i = 0; i <= KN; i++) {
-      const u = umin + ((umax - umin) * i) / KN;
+      const u = ka + ((kb - ka) * i) / KN;
       kept.push([snX(st.n(u)), snY(st.d(u))]);
     }
     svg.append(
@@ -1021,26 +1053,8 @@ function drawCutStation(svg: SVGSVGElement): void {
   });
   cl.textContent = "centerline";
   svg.append(cl);
-  // the keel point, morphing round (smooth, keel knuckle 0) → square (hard V, keel knuckle 1) like the
-  // template nodes, so the blended keel knuckle at this station is visible
-  if (!open && !empty) {
-    const kc = Math.min(Math.max(keelKAt(state.x0), 0), 1),
-      ks = 5,
-      krad = (1 - kc) * ks;
-    svg.append(
-      el("rect", {
-        x: snX(st.n(umax)) - ks,
-        y: snY(st.d(umax)) - ks,
-        width: 2 * ks,
-        height: 2 * ks,
-        rx: krad,
-        ry: krad,
-        fill: "#fff",
-        stroke: COL.keel,
-        "stroke-width": 1.8,
-      }),
-    );
-  }
+  // (no keel-point marker here — it would sit right on the seam and hide the very continuity being inspected;
+  // the blended keel knuckle is shown by the keel slider)
   // design waterline at this station: the depth where worldZ = −waterline (combines sinkage + rake)
   const dWL = (state.waterline + state.x0 * Math.sin(state.deckRake)) / Math.cos(state.deckRake);
   if (dWL > 0 && dWL < DMAX) {
