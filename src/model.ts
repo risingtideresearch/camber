@@ -52,10 +52,6 @@ export interface Station {
   tmax: number;
   n: (u: number) => number;
   d: (u: number) => number;
-  // present only on the keel-mirrored (trimmed-hull) station: the centerline crossing at U = ustar,
-  // its inboard offset ncl, and the half-width span of the keel rounding zone. sweptSection uses these
-  // to un-rake the plan near the keel (see the keel-zone straightening there).
-  keel?: { ustar: number; ncl: number; span: number };
 }
 export interface Section {
   pts: Vec3[];
@@ -351,6 +347,14 @@ export function keelKAt(x: number): number {
 
 // fraction of the half-section parameter (keel up toward the sheer) over which a smooth keel is rounded in.
 const KEEL_FLAT_ZONE = 0.5;
+// A flat/round keel is only FAIR where the section meets the centerline near-perpendicular in plan. Where
+// the sheer flares, the station planes fan (n̂ ⟂ the sheer tangent, not the centerline) and a flat keel
+// rides up into a centerline ridge in true transverse sections (the "pucker") — only a V crosses such an
+// oblique meeting cleanly. So a flat keel is eased toward its natural V as the plan FLARE (the sheer
+// tangent's heading off the x-axis) rises: honored as authored below KEEL_FLAT_FLARE, fully a V above
+// KEEL_V_FLARE, smoothstep between. keelK is a floor — keelK = 1 is always a V regardless of flare.
+const KEEL_FLAT_FLARE = 12 * (Math.PI / 180),
+  KEEL_V_FLARE = 45 * (Math.PI / 180);
 
 // Build the section as a curve continuous across the boat centerline, the keel knuckle kc controlling the
 // keel: 0 = flat (C¹-smooth round bottom), 1 = a hard V. An earlier version rebuilt this from a discrete
@@ -360,10 +364,9 @@ const KEEL_FLAT_ZONE = 0.5;
 // authored half-section curve itself (chines preserved, and it varies smoothly with x), reflected about the
 // centerline to make the port half; the only keel control is a smooth flattening of the depth near the
 // crossing. Both the reflection point (n_cl, d*) and the flattening vary smoothly in x, so the swept keel
-// is smooth. The keel character is set entirely by the keel knuckle kc (0 = flat/round, 1 = hard V); there
-// is no automatic flat→V easing (forcing a flat keel never folds the curve in practice — a full sweep of
-// every example stays monotonic — so kc is honored as authored everywhere). Returns null for an open
-// section (the curve never reaches the centerline) or a degenerate frame.
+// is smooth. The keel knuckle kc sets the character (0 = flat/round, 1 = hard V), eased toward a V where
+// the plan flare would make a flat keel unfair (see KEEL_FLAT_FLARE/KEEL_V_FLARE). Returns null for an
+// open section (the curve never reaches the centerline) or a degenerate frame.
 function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], kc: number): Station | null {
   const fr = frameAt(x),
     ny = fr.n[1],
@@ -392,7 +395,13 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
   if (ustar < 0) return null; // open section — never reaches the centerline
   const dstar = df(ustar),
     z0 = ustar * (1 - KEEL_FLAT_ZONE); // top of the flatten zone (in the half parameter)
-  const f = 1 - clamp(kc, 0, 1); // flatten amount: kc=0 ⇒ 1 (force flat/round), kc=1 ⇒ 0 (natural V)
+  // plan flare = the sheer tangent's heading off the x-axis (n̂ = (Ty,−Tx,0) ⇒ flare = atan2(|Ty|,|Tx|)).
+  // Ease a flat keel toward its natural V as flare rises, so an oblique centerline meeting becomes a fair V
+  // instead of a ridge. keelK is the floor: flatten f = (1−kc)·(1−flareV).
+  const flare = Math.atan2(Math.abs(fr.n[0]), Math.abs(fr.n[1]));
+  let flareV = clamp((flare - KEEL_FLAT_FLARE) / (KEEL_V_FLARE - KEEL_FLAT_FLARE), 0, 1);
+  flareV = flareV * flareV * (3 - 2 * flareV); // smoothstep
+  const f = (1 - clamp(kc, 0, 1)) * (1 - flareV); // flatten amount: 1 = force flat/round, 0 = natural V
   // reflected symmetric section over U ∈ [0, 2·ustar], keel at the midpoint U = ustar. The keel character is
   // set by the depth's SLOPE at the crossing: the reflection turns a zero slope into a smooth keel and a
   // nonzero slope into a V (corner). Over the zone [z0, ustar] the depth is blended (by f, via a C² weight)
@@ -418,7 +427,6 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
     tmax: T,
     n: (U: number) => (U <= ustar ? nf(U) : 2 * ncl - nf(2 * ustar - U)),
     d: (U: number) => warp(U <= ustar ? U : 2 * ustar - U),
-    keel: { ustar, ncl, span: ustar - z0 },
   };
 }
 
@@ -477,22 +485,8 @@ export function sweptSection(x: number, M: number, trim: boolean, clipTransom = 
   const W = (u: number): Vec3 => {
     const nn = st.n(u),
       dd = st.d(u);
-    // keel-zone un-rake: the section plane is raked in plan (n̂ = (Ty,−Tx,0) ⟂ the sheer tangent, not the
-    // centerline), so a point's world-x = p.x + n·Ty grows with depth — the keel sits well forward of the
-    // sheer. That makes the keel a forward x-cusp, and the y-mirror folds it into a ridge in true transverse
-    // sections (the "pucker"). Pull each near-keel point's world-x toward the keel's own x with a smootherstep
-    // weight (1 at the keel, 0 with zero slope at the zone edge): the keel approach becomes transverse, so the
-    // mirror is fair. Only x moves — the (y,z) camber shape is preserved — and the keel point itself (n=ncl)
-    // is unmoved. This bends the section slightly out of its camber plane in the rounding zone only.
-    let dx = 0;
-    const kl = st.keel;
-    if (kl && kl.span > 1e-9) {
-      const t = clamp(1 - Math.abs(u - kl.ustar) / kl.span, 0, 1),
-        g = t * t * t * (t * (t * 6 - 15) + 10);
-      dx = g * (kl.ncl - nn) * fr.n[0];
-    }
     return [
-      fr.p[0] + nn * fr.n[0] + dd * fr.d[0] + dx,
+      fr.p[0] + nn * fr.n[0] + dd * fr.d[0],
       fr.p[1] + nn * fr.n[1] + dd * fr.d[1],
       fr.p[2] + nn * fr.n[2] + dd * fr.d[2],
     ];

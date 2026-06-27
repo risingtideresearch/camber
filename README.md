@@ -327,12 +327,16 @@ section runs into the centerline at its natural deadrise as a `G⁰` corner. Val
 into the other, and because `keelK` is blended like every other number, a flat-bottomed midbody can
 fade into a V-keeled bow within one hull, and a flat-keeled design can blend into a V-keeled one.
 
-`keelK` is honored as authored everywhere — a flat keel (`keelK = 0`) is forced flat even where the
-section meets the centerline steeply (a narrow, flared stem or transom). Flattening never folds the
-section in practice, so there is no automatic relaxation back toward the natural deadrise: if you
-want a V where the entry fines out, author it with `keelK = 1` on that template. How the flat-vs-V
-shaping is realized is a downstream construction choice (see [Derived geometry](#derived-geometry));
-the model fixes only the authored `keelK` per template and its `[0,1]` domain.
+A flat keel is only **fair** where the section meets the centerline near-perpendicular in plan. Where
+the sheer flares, the station planes fan out (the inboard axis `n̂` is square to the sheer, not to the
+centerline), so a flat keel would ride up into a centerline ridge in the transverse sections — only a
+V crosses that oblique meeting cleanly. So a flat keel (`keelK = 0`) is eased toward its natural V as
+the **plan flare** rises (the sheer tangent's heading off the longitudinal axis): honored flat below a
+low flare angle, fully a V above a high one, smoothstep between. `keelK` is the floor — `keelK = 1` is
+a V regardless of flare, and you can author a V wherever you want one. How the flat-vs-V shaping and
+this flare easing are realized is a downstream construction choice (see
+[Derived geometry](#derived-geometry)); the model fixes only the authored `keelK` per template and its
+`[0,1]` domain.
 
 ## The weight curve — the longitudinal blend path
 
