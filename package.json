@@ -10,7 +10,8 @@
     "watch:interp": "esbuild src/interp.ts --bundle --format=esm --outfile=dist/interpolate.js --sourcemap --watch",
     "typecheck": "tsc --noEmit",
     "test:smooth": "esbuild test/smoothness.ts --bundle --platform=node --format=esm --outfile=dist/smoothness.mjs && node dist/smoothness.mjs",
-    "test": "npm run test:smooth"
+    "test:centerline": "esbuild test/centerline.ts --bundle --platform=node --format=esm --outfile=dist/centerline.mjs && node dist/centerline.mjs",
+    "test": "npm run test:smooth && npm run test:centerline"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",
