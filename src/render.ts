@@ -1320,20 +1320,38 @@ function buildLongitudinalMesh(idx: number, view: Vec3): Mesh {
   return { pos: new Float32Array(P), nrm: new Float32Array(Nn), count: P.length / 3 };
 }
 
-// A fair section grid for the trimmed hull: each row is one station from the sheer-trim (top) down to
-// the keel, sampled uniformly in x and WITHOUT the transom cut. Because the rows are never renormalised
-// to a clipped sub-span, adjacent stations stay parallel (no sliver shear), so the surface is smooth all
-// the way aft. The transom is then taken out by clipping this grid against the transom plane (below),
-// which yields an exact, shared hull/transom edge instead of two independently sampled curves.
-function bilgeRows(N: number, M: number, trim: boolean): Vec3[][] {
-  const rows: Vec3[][] = [];
+// A fair section grid sampled uniformly in x and WITHOUT the transom cut (clipQuad does that below, so
+// adjacent stations stay parallel — no sliver shear — and the surface is smooth all the way aft).
+//
+// For the TRIMMED hull each row is the FULL-WIDTH section: starboard sheer-trim → keel → port sheer-trim,
+// built as ONE continuous curve (the starboard half plus its y-mirror, sharing the single keel point at
+// the centre). The keel is therefore an interior column and inherits the section's C¹ smoothness across
+// the centerline. The old approach sampled the starboard half and mirrored the whole SURFACE, which only
+// joins smoothly if the half meets the centerline with zero depth-slope; at a steep (e.g. narrow-transom)
+// stern it doesn't, so the mirror folded the keel into a visible welt ("pucker"). One continuous row has
+// no seam to fold. For an OPEN section (never reaches the centerline) there is no port half to join, so
+// the row carries an `open` flag and buildHullMesh leaves the centre strip unbridged (a real gap there).
+//
+// Untrimmed (the raw swept sheet) is unchanged: one side, full station deck → tmax, no trims, no mirror.
+function bilgeRows(N: number, M: number, trim: boolean): { rows: Vec3[][]; open: boolean[] } {
+  const rows: Vec3[][] = [],
+    open: boolean[] = [];
   for (let i = 0; i <= N; i++) {
-    // trimmed: sheer-trim → keel, no transom clip (done later by clipQuad). untrimmed: the raw swept
-    // sheet, full station deck → tmax with no trims at all.
     const s = sweptSection((L * i) / N, M, trim, false);
-    if (!s.aft) rows.push(s.pts);
+    if (s.aft) continue;
+    if (!trim) {
+      rows.push(s.pts); // raw sheet: half only, meshed without a mirror
+      open.push(true);
+      continue;
+    }
+    // full width: starboard sheer→keel (cols 0..M), then port keel→sheer (cols M+1..2M) as the y-mirror,
+    // dropping the duplicate keel point so a closed section reads as one smooth curve through y=0.
+    const full: Vec3[] = s.pts.slice();
+    for (let j = M - 1; j >= 0; j--) full.push([s.pts[j][0], -s.pts[j][1], s.pts[j][2]]);
+    rows.push(full);
+    open.push(s.open);
   }
-  return rows;
+  return { rows, open };
 }
 // smooth per-vertex normals on a grid via central differences (orientation is irrelevant — shader is two-sided)
 function gridNormal(rows: Vec3[][], i: number, j: number): Vec3 {
@@ -1400,30 +1418,27 @@ function clipQuad(poly: PN[]): { inside: PN[]; cut: [Vec3, Vec3] | null } {
 }
 
 // build the hull triangle soup by clipping the fair grid against the transom plane; also collect the cut
-// segments so the transom panel can be built from the very same edge. mirror ⇒ add the port half.
-// trimmed ⇒ clip the fair grid against the transom plane, collect the cut edge, and mirror to the port
-// half (a closed hull). Untrimmed ⇒ emit the raw swept sheet as-is: one side, no sheer/transom/keel trim.
+// segments so the transom panel can be built from the very same edge.
+// trimmed ⇒ the rows are FULL-WIDTH (port-sheer → keel → starboard-sheer, no mirror): clip each quad
+// against the transom plane and collect the cut edge — one continuous skin with a seamless keel.
+// Untrimmed ⇒ emit the raw swept sheet as-is: one side, no sheer/transom/keel trim.
 function buildHullMesh(trimmed: boolean): { hull: Mesh; cuts: [Vec3, Vec3][] } {
   const M = 44,
-    rows = bilgeRows(180, M, trimmed),
+    { rows, open } = bilgeRows(180, M, trimmed),
     R = rows.length,
-    C = M + 1,
+    C = rows[0]?.length ?? 0,
     P: number[] = [],
     Nn: number[] = [],
     cuts: [Vec3, Vec3][] = [];
+  if (R < 2 || C < 2)
+    return { hull: { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 }, cuts };
   const nrm = rows.map((_, i) => rows[i].map((_, j) => gridNormal(rows, i, j)));
-  const emit = (a: PN, b: PN, c: PN): void => {
-    pushTri(P, Nn, a.p, a.n, b.p, b.n, c.p, c.n);
-    if (trimmed) {
-      const m = (q: PN): PN => ({ p: [q.p[0], -q.p[1], q.p[2]], n: [q.n[0], -q.n[1], q.n[2]] });
-      const ma = m(a),
-        mb = m(b),
-        mc = m(c);
-      pushTri(P, Nn, ma.p, ma.n, mc.p, mc.n, mb.p, mb.n); // reversed winding for the mirror
-    }
-  };
+  const emit = (a: PN, b: PN, c: PN): void => pushTri(P, Nn, a.p, a.n, b.p, b.n, c.p, c.n);
   for (let i = 0; i < R - 1; i++)
     for (let j = 0; j < C - 1; j++) {
+      // the keel sits at column M of a full-width row; where the section is open there is no surface
+      // across the centerline, so don't bridge the strip just inboard of the open bottom on the port side.
+      if (trimmed && j === M && (open[i] || open[i + 1])) continue;
       const quad: PN[] = [
         { p: rows[i][j], n: nrm[i][j] },
         { p: rows[i + 1][j], n: nrm[i + 1][j] },

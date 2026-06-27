@@ -52,6 +52,10 @@ export interface Station {
   tmax: number;
   n: (u: number) => number;
   d: (u: number) => number;
+  // present only on the keel-mirrored (trimmed-hull) station: the centerline crossing at U = ustar,
+  // its inboard offset ncl, and the half-width span of the keel rounding zone. sweptSection uses these
+  // to un-rake the plan near the keel (see the keel-zone straightening there).
+  keel?: { ustar: number; ncl: number; span: number };
 }
 export interface Section {
   pts: Vec3[];
@@ -425,6 +429,7 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
     tmax: T,
     n: (U: number) => (U <= ustar ? nf(U) : 2 * ncl - nf(2 * ustar - U)),
     d: (U: number) => warp(U <= ustar ? U : 2 * ustar - U),
+    keel: { ustar, ncl, span: ustar - z0 },
   };
 }
 
@@ -483,8 +488,22 @@ export function sweptSection(x: number, M: number, trim: boolean, clipTransom = 
   const W = (u: number): Vec3 => {
     const nn = st.n(u),
       dd = st.d(u);
+    // keel-zone un-rake: the section plane is raked in plan (n̂ = (Ty,−Tx,0) ⟂ the sheer tangent, not the
+    // centerline), so a point's world-x = p.x + n·Ty grows with depth — the keel sits well forward of the
+    // sheer. That makes the keel a forward x-cusp, and the y-mirror folds it into a ridge in true transverse
+    // sections (the "pucker"). Pull each near-keel point's world-x toward the keel's own x with a smootherstep
+    // weight (1 at the keel, 0 with zero slope at the zone edge): the keel approach becomes transverse, so the
+    // mirror is fair. Only x moves — the (y,z) camber shape is preserved — and the keel point itself (n=ncl)
+    // is unmoved. This bends the section slightly out of its camber plane in the rounding zone only.
+    let dx = 0;
+    const kl = st.keel;
+    if (kl && kl.span > 1e-9) {
+      const t = clamp(1 - Math.abs(u - kl.ustar) / kl.span, 0, 1),
+        g = t * t * t * (t * (t * 6 - 15) + 10);
+      dx = g * (kl.ncl - nn) * fr.n[0];
+    }
     return [
-      fr.p[0] + nn * fr.n[0] + dd * fr.d[0],
+      fr.p[0] + nn * fr.n[0] + dd * fr.d[0] + dx,
       fr.p[1] + nn * fr.n[1] + dd * fr.d[1],
       fr.p[2] + nn * fr.n[2] + dd * fr.d[2],
     ];
