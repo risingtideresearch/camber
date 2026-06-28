@@ -377,6 +377,11 @@ const KEEL_FLAT_FLARE = 12 * (Math.PI / 180),
 // chord-param window (as a fraction of ustar) around a chine within which the keel-round fades out to the
 // chine's natural V — the garboard there is too thin to round fairly. See mirrorKeelStation.
 const KEEL_CHINE_FADE = 0.16;
+// keel profile-rise easing: |d(keel world-z)/dx|. A flat keel can't wrap a steeply-rising forefoot/stem
+// without bulging, so ease toward the natural V as the keel rise grows — the profile analogue of the plan-
+// flare ease. Honored flat below KEEL_FLAT_RISE, fully a V above KEEL_V_RISE.
+const KEEL_FLAT_RISE = 0.25,
+  KEEL_V_RISE = 0.6;
 
 // Build the section as a curve continuous across the boat centerline, the keel knuckle kc controlling the
 // keel: 0 = flat (C¹-smooth round bottom), 1 = a hard V. An earlier version rebuilt this from a discrete
@@ -435,7 +440,33 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
   const flare = Math.atan2(Math.abs(fr.n[0]), Math.abs(fr.n[1]));
   let flareV = clamp((flare - KEEL_FLAT_FLARE) / (KEEL_V_FLARE - KEEL_FLAT_FLARE), 0, 1);
   flareV = flareV * flareV * (3 - 2 * flareV); // smoothstep
-  let f = (1 - clamp(kc, 0, 1)) * (1 - flareV); // flatten amount: 1 = force flat/round, 0 = natural V
+  // keel profile rise: |d(keel world-z)/dx| by central difference (the keel crossing at x±e). Where the keel
+  // sweeps up to the stem a flat keel bulges, so ease toward the V as the rise grows (the forefoot fix).
+  const keelZAt = (xx: number): number => {
+    const f2 = frameAt(xx);
+    if (Math.abs(f2.n[1]) < 1e-6) return NaN;
+    let pu2 = 0,
+      y2 = f2.p[1] + nf(0) * f2.n[1],
+      u2 = -1;
+    for (let i = 1; i <= FN; i++) {
+      const u = (tmax * i) / FN,
+        y = f2.p[1] + nf(u) * f2.n[1];
+      if (y2 >= 0 && y < 0) {
+        u2 = pu2 + (u - pu2) * (y2 / (y2 - y));
+        break;
+      }
+      pu2 = u;
+      y2 = y;
+    }
+    return u2 < 0 ? NaN : f2.p[2] + nf(u2) * f2.n[2] + df(u2) * f2.d[2];
+  };
+  const eRise = 15,
+    zBack = keelZAt(x - eRise),
+    zFwd = keelZAt(x + eRise);
+  const rise = isFinite(zBack) && isFinite(zFwd) ? Math.abs((zFwd - zBack) / (2 * eRise)) : 0;
+  let riseV = clamp((rise - KEEL_FLAT_RISE) / (KEEL_V_RISE - KEEL_FLAT_RISE), 0, 1);
+  riseV = riseV * riseV * (3 - 2 * riseV); // smoothstep
+  let f = (1 - clamp(kc, 0, 1)) * (1 - flareV) * (1 - riseV); // flatten: 1 = flat/round, 0 = natural V
   // Where the keel crossing (ustar) lands within KEEL_CHINE_FADE·ustar of a chine, the garboard below it is
   // a vanishing sliver: rounding it blows the parabola curvature up and the z0 anchor steps as ustar slides
   // past the chine — a longitudinal keel wrinkle. Fade the flatten toward 0 by chine proximity so the keel
