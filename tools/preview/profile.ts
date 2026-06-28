@@ -37,7 +37,10 @@ const keel = closing.map((s) => s.pts[s.pts.length - 1] as Vec3);
 const te = transomEdge();
 if (keel.length) {
   if (te.length) keel.unshift(te[te.length - 1]);
-  const stem = closing.filter((s) => s.pts[0][2] < state.sheer.zf(s.pts[0][0]) - 3).map((s) => s.pts[0] as Vec3);
+  const dived = (s: any) => s.pts[0][2] < state.sheer.zf(s.pts[0][0]) - 3;
+  let b = closing.length;
+  while (b > 0 && dived(closing[b - 1])) b--;
+  const stem = closing.slice(b).map((s) => s.pts[0] as Vec3);
   if (stem.length) for (let i = stem.length - 1; i >= 0; i--) keel.push(stem[i]);
   else keel.push([xFwd, 0, state.sheer.zf(xFwd)]);
 }

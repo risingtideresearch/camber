@@ -10,14 +10,16 @@ import {
   sweptSection,
   stationAt,
   frameAt,
-  contour,
   transomEdge,
   xTransom,
   chordParam,
   fairEval,
   weightsAt,
   immersion,
+  worldZ,
   forwardLimit,
+  LINES_MODES,
+  type View3DMode,
   type Section,
   type StationCP,
   type ActiveTarget,
@@ -266,28 +268,11 @@ function cuspRuns(): CuspPt[][] {
   return runs;
 }
 
-function drawPlan(sections: Section[], zmin: number): void {
+function drawPlan(sections: Section[], _zmin: number): void {
   const svg = svgL;
   svg.replaceChildren();
   gridX(svg, 8, LH - 8);
-  // waterlines (constant z): traced contours, the single port half
-  const NWL = 7;
-  for (let k = 1; k <= NWL; k++) {
-    const zk = (zmin * k) / (NWL + 1);
-    for (const run of contour(sections, zk, 2)) {
-      svg.append(
-        el("path", {
-          d: poly(run.map((p) => [mapX(p[0]), yPlan(p[1])])),
-          fill: "none",
-          stroke: COL.wl,
-          "stroke-width": 1,
-          opacity: 0.5,
-          "stroke-linejoin": "round",
-          "stroke-linecap": "round",
-        }),
-      );
-    }
-  }
+  // (waterline contours other than the DWL footprint are shown in the 3D Waterline lines view, not here)
   // centerline along the bottom edge
   svg.append(
     el("line", {
@@ -400,24 +385,7 @@ function drawProfile(sections: Section[], _zmin: number): void {
   svg.replaceChildren();
   gridX(svg, Ptop - 4, PZbase);
   stationLine(svg, Ptop - 4, PZbase);
-  // buttocks (constant y): traced contours in profile
-  const ymax = Math.max(...state.sheer.cp.map((p) => p.y)),
-    NBT = 5;
-  for (let k = 1; k <= NBT; k++) {
-    const yk = (ymax * k) / (NBT + 1);
-    for (const run of contour(sections, yk, 1))
-      svg.append(
-        el("path", {
-          d: poly(run.map((p) => [mapX(p[0]), zScreenP(p[2])])),
-          fill: "none",
-          stroke: COL.bt,
-          "stroke-width": 1,
-          opacity: 0.5,
-          "stroke-linejoin": "round",
-          "stroke-linecap": "round",
-        }),
-      );
-  }
+  // (buttock contours are shown in the 3D Buttocks lines view, not here)
   // flat deck at z = 0 — now just a construction reference; the real top edge is the sheer trim below it
   svg.append(
     el("line", {
@@ -476,8 +444,13 @@ function drawProfile(sections: Section[], _zmin: number): void {
   if (keel.length) {
     const te = transomEdge();
     if (te.length) keel.unshift(te[te.length - 1]); // transom keel: deepest point of the transom outline
-    // the leading-edge (stem) sections: those whose top has dived meaningfully below the authored sheer trim
-    const stem = closing.filter((s) => s.pts[0][2] < state.sheer.zf(s.pts[0][0]) - 3).map((s) => s.pts[0]);
+    // the bow stem: the CONTIGUOUS run of forwardmost sections whose top has dived below the authored trim
+    // (the tumblehome lens). Only the forward run — a section's top can also drop below the trim near the
+    // transom (the raked transom clip), and including those would draw a stray line back to the transom.
+    const dived = (s: Section): boolean => s.pts[0][2] < state.sheer.zf(s.pts[0][0]) - 3;
+    let b = closing.length;
+    while (b > 0 && dived(closing[b - 1])) b--;
+    const stem = closing.slice(b).map((s) => s.pts[0]); // forward, increasing x
     if (stem.length) for (let i = stem.length - 1; i >= 0; i--) keel.push(stem[i]); // forefoot → back to the trim
     else keel.push([xFwd, 0, state.sheer.zf(xFwd)]); // a fine bow closes straight onto the trim at the stem
   }
@@ -1647,11 +1620,11 @@ interface LineQuad {
   poly: ProjPt[];
   depth: number; // toward-eye; larger = nearer
   bold: [ProjPt, ProjPt][]; // sheer / keel / chine longitudinals (heavy)
-  stn: [ProjPt, ProjPt][]; // station (transverse) lines at intervals (lighter)
-  wl: [ProjPt, ProjPt][]; // design-waterline crossing through this facet (blue)
+  fam: [ProjPt, ProjPt][]; // the mode's non-chine family: stations / buttocks / waterlines (lighter)
+  wl: [ProjPt, ProjPt][]; // design-waterline crossing through this facet (blue, all modes)
 }
 
-function drawLines(svg: SVGSVGElement, rebuild: boolean): void {
+function drawLines(svg: SVGSVGElement, kind: View3DMode, rebuild: boolean): void {
   if (rebuild || !linesGrid) linesGrid = trimmedHullGrid(LINES_NS, LINES_M);
   const { grid, creaseCols } = linesGrid;
   svg.replaceChildren();
@@ -1678,7 +1651,38 @@ function drawLines(svg: SVGSVGElement, rebuild: boolean): void {
   const crease = new Set(creaseCols);
   const showStation = (i: number): boolean => i === 0 || i === NS || i % LINES_STATION_STEP === 0;
   const gridM = grid.map((row) => row.map(([x, y, z]): Vec3 => [x, -y, z])); // port-side world points
-  const imm = (w: Vec3): number => immersion(w[0], w[2]); // > 0 below the design waterline
+
+  // line-family levels (only the active mode's are used): evenly spaced constant-y (buttocks) and constant
+  // worldZ (waterlines), bracketed by the hull's own range so they sit inside it.
+  let ymax = 0,
+    zlo = Infinity,
+    zhi = -Infinity;
+  for (const row of grid)
+    for (const p of row) {
+      if (Math.abs(p[1]) > ymax) ymax = Math.abs(p[1]);
+      const wz = worldZ(p[0], p[2]);
+      if (wz < zlo) zlo = wz;
+      if (wz > zhi) zhi = wz;
+    }
+  const NB = 4,
+    NW = 6,
+    buttLevels = Array.from({ length: NB }, (_, k) => (ymax * (k + 1)) / (NB + 1)),
+    wlLevels = Array.from({ length: NW }, (_, k) => zlo + ((zhi - zlo) * (k + 1)) / (NW + 1));
+  // marching: the segment where field f crosses `level` across a facet's 4 corners (linear on each edge)
+  const march = (corn: { p: ProjPt; f: number }[], level: number): [ProjPt, ProjPt] | null => {
+    const cr: ProjPt[] = [];
+    for (let k = 0; k < 4; k++) {
+      const a = corn[k],
+        b = corn[(k + 1) % 4],
+        fa = a.f - level,
+        fb = b.f - level;
+      if (fa < 0 !== fb < 0 && fa !== fb) {
+        const t = fa / (fa - fb);
+        cr.push({ x: a.p.x + t * (b.p.x - a.p.x), y: a.p.y + t * (b.p.y - a.p.y), d: a.p.d + t * (b.p.d - a.p.d) });
+      }
+    }
+    return cr.length >= 2 ? [cr[0], cr[1]] : null;
+  };
 
   let minX = Infinity,
     minY = Infinity,
@@ -1698,30 +1702,39 @@ function drawLines(svg: SVGSVGElement, rebuild: boolean): void {
           if (p.y < minY) minY = p.y;
           if (p.y > maxY) maxY = p.y;
         }
+        const wA = GW[i][j],
+          wB = GW[i][j + 1],
+          wC = GW[i + 1][j + 1],
+          wD = GW[i + 1][j];
         const bold: [ProjPt, ProjPt][] = [];
         if (j === 0 || crease.has(j)) bold.push([D, A]); // sheer / chine longitudinal
         if (j + 1 === M || crease.has(j + 1)) bold.push([B, C]); // keel / chine longitudinal
-        const stn: [ProjPt, ProjPt][] = [];
-        if (showStation(i)) stn.push([A, B]); // station (transverse section) at this row
-        if (i === NS - 1 && showStation(NS)) stn.push([D, C]); // the bow/forwardmost station
-        // design-waterline contour: march the immersion sign across the facet's four corners
-        const corn = [
-          { p: A, m: imm(GW[i][j]) },
-          { p: B, m: imm(GW[i][j + 1]) },
-          { p: C, m: imm(GW[i + 1][j + 1]) },
-          { p: D, m: imm(GW[i + 1][j]) },
-        ];
-        const cr: ProjPt[] = [];
-        for (let k = 0; k < 4; k++) {
-          const a = corn[k],
-            b = corn[(k + 1) % 4];
-          if (a.m < 0 !== b.m < 0 && a.m !== b.m) {
-            const t = a.m / (a.m - b.m);
-            cr.push({ x: a.p.x + t * (b.p.x - a.p.x), y: a.p.y + t * (b.p.y - a.p.y), d: a.p.d + t * (b.p.d - a.p.d) });
+        if (i === 0) bold.push([A, B]); // transom trim line — bold in every mode (it is a hull edge)
+        // the mode's non-chine family
+        const fam: [ProjPt, ProjPt][] = [];
+        if (kind === "body") {
+          if (showStation(i) && i !== 0) fam.push([A, B]); // station at this row (the transom is drawn bold)
+          if (i === NS - 1 && showStation(NS)) fam.push([D, C]); // bow/forwardmost station
+        } else if (kind === "buttocks") {
+          const corn = [{ p: A, f: Math.abs(wA[1]) }, { p: B, f: Math.abs(wB[1]) }, { p: C, f: Math.abs(wC[1]) }, { p: D, f: Math.abs(wD[1]) }];
+          for (const lv of buttLevels) {
+            const s = march(corn, lv);
+            if (s) fam.push(s);
+          }
+        } else {
+          const corn = [
+            { p: A, f: worldZ(wA[0], wA[2]) }, { p: B, f: worldZ(wB[0], wB[2]) },
+            { p: C, f: worldZ(wC[0], wC[2]) }, { p: D, f: worldZ(wD[0], wD[2]) },
+          ];
+          for (const lv of wlLevels) {
+            const s = march(corn, lv);
+            if (s) fam.push(s);
           }
         }
-        const wl: [ProjPt, ProjPt][] = cr.length >= 2 ? [[cr[0], cr[1]]] : [];
-        quads.push({ poly: [A, B, C, D], depth: (A.d + B.d + C.d + D.d) / 4, bold, stn, wl });
+        // design waterline (blue, all modes): worldZ crosses −waterline
+        const dc = [{ p: A, f: worldZ(wA[0], wA[2]) }, { p: B, f: worldZ(wB[0], wB[2]) }, { p: C, f: worldZ(wC[0], wC[2]) }, { p: D, f: worldZ(wD[0], wD[2]) }];
+        const dwl = march(dc, -state.waterline);
+        quads.push({ poly: [A, B, C, D], depth: (A.d + B.d + C.d + D.d) / 4, bold, fam, wl: dwl ? [dwl] : [] });
       }
   quads.sort((a, b) => a.depth - b.depth); // far → near: nearer white facets are drawn last and occlude
 
@@ -1807,7 +1820,7 @@ function drawLines(svg: SVGSVGElement, rebuild: boolean): void {
     svg.append(
       el("polygon", {
         points: pts(q.poly),
-        fill: "#ffffff",
+        fill: "#ffffff", // white occlusion faces (the hull reads as a white shape on the grey background)
         stroke: "#ffffff",
         "stroke-width": 0.6,
         "stroke-linejoin": "round",
@@ -1815,7 +1828,7 @@ function drawLines(svg: SVGSVGElement, rebuild: boolean): void {
       }),
     );
     for (const [p0, p1] of q.wl) svg.append(line(p0, p1, 1.4, COL.wl)); // design waterline (blue)
-    for (const [p0, p1] of q.stn) svg.append(line(p0, p1, 1, "#11181f")); // stations (lighter)
+    for (const [p0, p1] of q.fam) svg.append(line(p0, p1, 1, "#11181f")); // stations / buttocks / waterlines
     for (const [p0, p1] of q.bold) svg.append(line(p0, p1, 1.8, "#11181f")); // sheer / keel / chines (heavy)
   }
 }
@@ -1823,9 +1836,9 @@ function drawLines(svg: SVGSVGElement, rebuild: boolean): void {
 export function draw3d(rebuild?: boolean): void {
   // lines-plan style: draw the SVG overlay and skip the WebGL surface entirely
   const lines = document.getElementById("lines3d") as SVGSVGElement | null;
-  if (state.view3dMode === "lines" && lines) {
+  if (LINES_MODES.includes(state.view3dMode) && lines) {
     lines.style.display = "";
-    drawLines(lines, rebuild !== false);
+    drawLines(lines, state.view3dMode, rebuild !== false);
     return;
   }
   if (lines) lines.style.display = "none";
