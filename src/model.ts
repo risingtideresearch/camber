@@ -401,8 +401,14 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
     py0 = y;
   }
   if (ustar < 0) return null; // open section — never reaches the centerline
-  const dstar = df(ustar),
-    z0 = ustar * (1 - KEEL_FLAT_ZONE); // top of the flatten zone (in the half parameter)
+  const dstar = df(ustar);
+  // top of the flatten zone (in the half parameter). Don't let it reach back across a chine: a knuckle
+  // inboard bounds the keel-approach region. Anchoring the rounding parabola at a fixed half-param can land
+  // it on the steep topsides BELOW a flat bottom, so the parabola then bulges the flat bottom up into an
+  // inflection. Pull z0 out to the innermost knuckle (where the bottom is already near keel depth) so a
+  // flat bottom inboard of a chine is left flat (c ≈ 0). A plain V keel (no near-keel chine) is unchanged.
+  let z0 = ustar * (1 - KEEL_FLAT_ZONE);
+  for (let i = 0; i < ts.length; i++) if ((ks[i] ?? 0) > 0.5 && ts[i] > z0 && ts[i] < ustar) z0 = ts[i];
   // plan flare = the sheer tangent's heading off the x-axis (n̂ = (Ty,−Tx,0) ⇒ flare = atan2(|Ty|,|Tx|)).
   // Ease a flat keel toward its natural V as flare rises, so an oblique centerline meeting becomes a fair V
   // instead of a ridge. keelK is the floor: flatten f = (1−kc)·(1−flareV).

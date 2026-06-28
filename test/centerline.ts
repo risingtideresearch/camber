@@ -12,10 +12,15 @@
 // smooth valley. A clean keel has the centerline as its deepest point (ridge <= 0); the old bug spiked to
 // +8 mm at the stern. THRESHOLD_MM is a small margin above the residual discretisation noise.
 //
+// It also guards keel SHAPE within a station: scanning sheer→keel the section depth must be non-decreasing
+// (the keel is the deepest point). A flat bottom inboard of a chine once made the keel-round parabola bulge
+// the bottom UP into an inflection — a depth reversal — so REVERSAL_MM caps how far the depth may dip below
+// its running max on the way to the keel.
+//
 // Run with `npm run test:centerline` (esbuild bundles to dist/ and runs under node). Non-zero exit on any
 // failure so it can gate CI alongside the keel-smoothness test.
 
-import { resetModel, prepare, L, sweptSection } from "../src/model.js";
+import { resetModel, prepare, L, sweptSection, stationAt } from "../src/model.js";
 import { parseDocument, loadHull } from "../src/json.js";
 import { type Vec3 } from "../src/math.js";
 import { readFileSync, readdirSync, existsSync } from "fs";
@@ -26,6 +31,9 @@ import { dirname, join } from "path";
 // it a pucker. The fair construction lands at ~0 (the centerline IS the deepest point); the old mirror bug
 // spiked to +8 mm at a narrow transom. 1.5 mm is wide of the discretisation noise but well under the bug.
 const THRESHOLD_MM = 1.5;
+// the most the section depth may dip below its running max while scanning sheer→keel (a keel inflection /
+// bulge). Clean keels land at ~0; the flat-bottom-inflection bug reached several mm. 1.0 mm is the cap.
+const REVERSAL_MM = 1.0;
 const M = 44; // section columns per half — matches the 3D mesh (buildHullMesh)
 const NS = 180; // station sweep resolution — matches the 3D mesh
 const BAND_MM = 90; // half-breadth window around the centerline within which we judge the keel shape
@@ -99,6 +107,31 @@ function worstRidge(): { ridge: number; x: number } {
   return { ridge: worst === -Infinity ? 0 : worst, x: at };
 }
 
+// worst keel-shape reversal: scanning each closed station's mirrored section sheer→keel, the depth must be
+// non-decreasing (keel deepest). Returns the largest dip below the running max over the hull, and where.
+function worstReversal(): { rev: number; x: number } {
+  let worst = 0,
+    at = 0;
+  for (let x = 0.01 * L; x <= 0.99 * L; x += 8) {
+    const st = stationAt(x, true);
+    if (!st.tmax) continue;
+    const us = st.tmax / 2,
+      K = 80;
+    let mx = -Infinity,
+      dip = 0;
+    for (let i = 0; i <= K; i++) {
+      const d = st.d((us * i) / K);
+      if (d > mx) mx = d;
+      else dip = Math.max(dip, mx - d);
+    }
+    if (dip > worst) {
+      worst = dip;
+      at = x;
+    }
+  }
+  return { rev: worst, x: at };
+}
+
 function loadCase(name: string): void {
   resetModel();
   if (name !== "default") {
@@ -111,13 +144,20 @@ function loadCase(name: string): void {
 function main(): number {
   const cases = ["default", ...readdirSync(examplesDir()).filter((f) => f.endsWith(".json")).sort()];
   let failures = 0;
-  console.log(`Centerline fairness — worst keel ridge in a true transverse section (threshold ${THRESHOLD_MM} mm)\n`);
+  console.log(
+    `Centerline fairness — keel ridge in a true transverse section (≤${THRESHOLD_MM} mm) and keel-shape ` +
+      `reversal sheer→keel (≤${REVERSAL_MM} mm)\n`,
+  );
   for (const name of cases) {
     loadCase(name);
     const { ridge, x } = worstRidge();
-    const bad = ridge > THRESHOLD_MM;
+    const { rev, x: rx } = worstReversal();
+    const bad = ridge > THRESHOLD_MM || rev > REVERSAL_MM;
     if (bad) failures++;
-    console.log(`  ${bad ? "FAIL" : "ok  "}  ${name.padEnd(26)} ridge ${ridge.toFixed(2)} mm @ x=${Math.round(x)}${bad ? "  ✗" : ""}`);
+    console.log(
+      `  ${bad ? "FAIL" : "ok  "}  ${name.padEnd(26)} ridge ${ridge.toFixed(2)} mm @ x=${Math.round(x)}` +
+        `   reversal ${rev.toFixed(2)} mm @ x=${Math.round(rx)}${bad ? "  ✗" : ""}`,
+    );
   }
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"} — ${cases.length - failures}/${cases.length} cases fair`);
   return failures === 0 ? 0 : 1;
