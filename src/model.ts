@@ -374,6 +374,9 @@ const KEEL_FLAT_ZONE = 0.5;
 // KEEL_V_FLARE, smoothstep between. keelK is a floor — keelK = 1 is always a V regardless of flare.
 const KEEL_FLAT_FLARE = 12 * (Math.PI / 180),
   KEEL_V_FLARE = 45 * (Math.PI / 180);
+// chord-param window (as a fraction of ustar) around a chine within which the keel-round fades out to the
+// chine's natural V — the garboard there is too thin to round fairly. See mirrorKeelStation.
+const KEEL_CHINE_FADE = 0.16;
 
 // Build the section as a curve continuous across the boat centerline, the keel knuckle kc controlling the
 // keel: 0 = flat (C¹-smooth round bottom), 1 = a hard V. An earlier version rebuilt this from a discrete
@@ -432,7 +435,19 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
   const flare = Math.atan2(Math.abs(fr.n[0]), Math.abs(fr.n[1]));
   let flareV = clamp((flare - KEEL_FLAT_FLARE) / (KEEL_V_FLARE - KEEL_FLAT_FLARE), 0, 1);
   flareV = flareV * flareV * (3 - 2 * flareV); // smoothstep
-  const f = (1 - clamp(kc, 0, 1)) * (1 - flareV); // flatten amount: 1 = force flat/round, 0 = natural V
+  let f = (1 - clamp(kc, 0, 1)) * (1 - flareV); // flatten amount: 1 = force flat/round, 0 = natural V
+  // Where the keel crossing (ustar) lands within KEEL_CHINE_FADE·ustar of a chine, the garboard below it is
+  // a vanishing sliver: rounding it blows the parabola curvature up and the z0 anchor steps as ustar slides
+  // past the chine — a longitudinal keel wrinkle. Fade the flatten toward 0 by chine proximity so the keel
+  // is simply the chine's natural reflected V there, continuous in x. Far from every chine (a normal keel
+  // with real garboard) this is 1, unchanged. Weighted by chine strength so a soft chine fades the round less.
+  for (let i = 0; i < ts.length; i++) {
+    const k = clamp(ks[i] ?? 0, 0, 1);
+    if (k <= 0) continue;
+    let prox = clamp(Math.abs(ustar - ts[i]) / (KEEL_CHINE_FADE * ustar), 0, 1);
+    prox = prox * prox * (3 - 2 * prox); // smoothstep
+    f *= 1 - k * (1 - prox);
+  }
   // reflected symmetric section over U ∈ [0, 2·ustar], keel at the midpoint U = ustar. The keel character is
   // set by the depth's SLOPE at the crossing: the reflection turns a zero slope into a smooth keel and a
   // nonzero slope into a V (corner). Over the zone [z0, ustar] the depth is blended (by f, via a C² weight)

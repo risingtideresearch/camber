@@ -1,0 +1,30 @@
+{
+  "length": 4000,
+  "topology": { "section": 5, "sheerPlan": 5, "sheerTrim": 4, "weightPoints": 2, "templateCount": 1 },
+  "variants": [
+    {
+      "keelK": [0],
+      "transom": { "x": 150, "depthTop": 55, "dDepthBot": 665, "transomRake": -0.3458646616541353 },
+      "weights": [ { "w": [1], "dx": 0 }, { "w": [1], "dx": 4000 } ],
+      "sheerPlan": [
+        { "y": 820, "dx": 0 }, { "y": 900, "dx": 1000 }, { "y": 880, "dx": 1000 },
+        { "y": 640, "dx": 1000 }, { "y": 0, "dx": 1000 }
+      ],
+      "sheerTrim": [
+        { "k": 0, "dx": 0, "depth": 60 }, { "k": 0, "dx": 1333, "depth": 280 },
+        { "k": 0, "dx": 1334, "depth": 260 }, { "k": 0, "dx": 1333, "depth": 40 }
+      ],
+      "templates": [
+        [
+          { "k": 0, "n": 0, "dd": 0 },
+          { "k": 0, "n": 90, "dd": 320 },
+          { "k": 1, "n": 265.909090909091, "dd": 390.3617086038961 },
+          { "k": 1, "n": 670.2516233766235, "dd": 397.76794631759856 },
+          { "k": 0, "n": 1012.134918609223, "dd": 108.48214285714289 }
+        ]
+      ]
+    }
+  ],
+  "waterline": 600,
+  "deckRakeDeg": 0
+}

@@ -34,6 +34,12 @@ const THRESHOLD_MM = 1.5;
 // the most the section depth may dip below its running max while scanning sheer→keel (a keel inflection /
 // bulge). Clean keels land at ~0; the flat-bottom-inflection bug reached several mm. 1.0 mm is the cap.
 const REVERSAL_MM = 1.0;
+// max near-keel longitudinal buttock curvature index (|d²z/dx²|·1e3) over the mid-body. A transverse ridge
+// can be 0 yet the keel still wrinkle ALONG the hull — e.g. the keel-rounding anchor stepping as the keel
+// crossing slides past a chine (the "Keel Distortion" flat-bottom hull spiked to ~88 here before the
+// chine-proximity fade fix; clean hulls sit under ~6).
+const KEEL_BUTTOCK_MAX = 10;
+const BUTTOCK_YS = [60, 120, 180]; // half-breadths (mm) near the keel at which to judge longitudinal fairness
 const M = 44; // section columns per half — matches the 3D mesh (buildHullMesh)
 const NS = 180; // station sweep resolution — matches the 3D mesh
 const BAND_MM = 90; // half-breadth window around the centerline within which we judge the keel shape
@@ -46,6 +52,11 @@ function examplesDir(): string {
     d = dirname(d);
   }
   return join(process.cwd(), "examples");
+}
+// torture-test hulls kept out of examples/ (they may not meet every fairness bar everywhere) but exercised
+// here as regression fixtures — e.g. keel-at-chine, which guards the keel-rounding chine-fade fix.
+function fixturesDir(): string {
+  return join(dirname(examplesDir()), "test", "fixtures");
 }
 
 // the rendered full-width surface grid: each row is starboard sheer -> keel -> port sheer (the keel an
@@ -132,31 +143,84 @@ function worstReversal(): { rev: number; x: number } {
   return { rev: worst, x: at };
 }
 
-function loadCase(name: string): void {
-  resetModel();
-  if (name !== "default") {
-    const doc = parseDocument(readFileSync(join(examplesDir(), name), "utf8"));
-    loadHull(doc.variants[0]);
+// z on the starboard side at half-breadth Y from a true transverse section, or NaN if the section is too
+// narrow there (< ~1.4·Y) — that avoids the artificially high curvature where a buttock runs out into the
+// keel toward the bow, which is geometry, not a defect.
+function zAtHalfBreadth(sec: { y: number; z: number }[], Y: number): number {
+  const half = sec.length ? sec[sec.length - 1].y : 0;
+  if (half < Y * 1.4) return NaN;
+  for (let i = 0; i < sec.length - 1; i++) {
+    const a = sec[i],
+      b = sec[i + 1];
+    if ((a.y - Y) * (b.y - Y) <= 0 && a.y !== b.y) return a.z + ((Y - a.y) / (b.y - a.y)) * (b.z - a.z);
   }
+  return NaN;
+}
+
+// worst near-keel buttock curvature along the hull over the mid-body (we drop the forward 30% of the keel
+// length, where buttocks terminate into the keel and read artificially high). This catches a LONGITUDINAL
+// keel wrinkle that the transverse ridge/reversal checks miss.
+function worstKeelButtock(): { curv: number; x: number; y: number } {
+  const rows = fullRows();
+  if (rows.length < 5) return { curv: 0, x: 0, y: 0 };
+  const keelXs = rows.map((r) => r[M][0]);
+  const lo = Math.min(...keelXs),
+    hi = Math.max(...keelXs);
+  const x0 = lo + 150,
+    x1 = hi - 0.3 * (hi - lo),
+    dx = 25;
+  const xs: number[] = [];
+  for (let X = x0; X <= x1; X += dx) xs.push(X);
+  let curv = 0,
+    at = 0,
+    aty = 0;
+  for (const Y of BUTTOCK_YS) {
+    const Z = xs.map((X) => {
+      const s = trueSection(rows, X);
+      return s ? zAtHalfBreadth(s, Y) : NaN;
+    });
+    for (let i = 1; i < xs.length - 1; i++) {
+      if (!isFinite(Z[i - 1]) || !isFinite(Z[i]) || !isFinite(Z[i + 1])) continue;
+      const c = (Math.abs(Z[i + 1] - 2 * Z[i] + Z[i - 1]) / (dx * dx)) * 1e3;
+      if (c > curv) {
+        curv = c;
+        at = xs[i];
+        aty = Y;
+      }
+    }
+  }
+  return { curv, x: at, y: aty };
+}
+
+function loadCase(path: string | null): void {
+  resetModel();
+  if (path) loadHull(parseDocument(readFileSync(path, "utf8")).variants[0]);
   prepare();
 }
 
+function listJson(dir: string): string[] {
+  return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".json")).sort() : [];
+}
+
 function main(): number {
-  const cases = ["default", ...readdirSync(examplesDir()).filter((f) => f.endsWith(".json")).sort()];
+  const cases: { name: string; path: string | null }[] = [{ name: "default", path: null }];
+  for (const f of listJson(examplesDir())) cases.push({ name: f, path: join(examplesDir(), f) });
+  for (const f of listJson(fixturesDir())) cases.push({ name: `${f} (fixture)`, path: join(fixturesDir(), f) });
   let failures = 0;
   console.log(
-    `Centerline fairness — keel ridge in a true transverse section (≤${THRESHOLD_MM} mm) and keel-shape ` +
-      `reversal sheer→keel (≤${REVERSAL_MM} mm)\n`,
+    `Centerline fairness — keel ridge in a true transverse section (≤${THRESHOLD_MM} mm), keel-shape ` +
+      `reversal sheer→keel (≤${REVERSAL_MM} mm), and near-keel longitudinal fairness (≤${KEEL_BUTTOCK_MAX})\n`,
   );
-  for (const name of cases) {
-    loadCase(name);
+  for (const { name, path } of cases) {
+    loadCase(path);
     const { ridge, x } = worstRidge();
     const { rev, x: rx } = worstReversal();
-    const bad = ridge > THRESHOLD_MM || rev > REVERSAL_MM;
+    const { curv, x: bx } = worstKeelButtock();
+    const bad = ridge > THRESHOLD_MM || rev > REVERSAL_MM || curv > KEEL_BUTTOCK_MAX;
     if (bad) failures++;
     console.log(
-      `  ${bad ? "FAIL" : "ok  "}  ${name.padEnd(26)} ridge ${ridge.toFixed(2)} mm @ x=${Math.round(x)}` +
-        `   reversal ${rev.toFixed(2)} mm @ x=${Math.round(rx)}${bad ? "  ✗" : ""}`,
+      `  ${bad ? "FAIL" : "ok  "}  ${name.padEnd(26)} ridge ${ridge.toFixed(2)} @ x=${Math.round(x)}` +
+        `   reversal ${rev.toFixed(2)} @ x=${Math.round(rx)}   keel-fair ${curv.toFixed(1)} @ x=${Math.round(bx)}${bad ? "  ✗" : ""}`,
     );
   }
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"} — ${cases.length - failures}/${cases.length} cases fair`);
