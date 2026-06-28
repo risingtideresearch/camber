@@ -364,8 +364,10 @@ export function keelKAt(x: number): number {
   return k;
 }
 
-// fraction of the half-section parameter (keel up toward the sheer) over which a smooth keel is rounded in.
-const KEEL_FLAT_ZONE = 0.5;
+// fraction of the half-section parameter (up from the keel toward the sheer) over which the keel is rounded
+// — a small fillet near the centerline crossing, so it slides smoothly with the keel and a broad round of a
+// straight panel never builds up into a migrating bump. Small enough to leave a flat/panel bottom above it.
+const KEEL_FLAT_ZONE = 0.28;
 // A flat/round keel is only FAIR where the section meets the centerline near-perpendicular in plan. Where
 // the sheer flares, the station planes fan (n̂ ⟂ the sheer tangent, not the centerline) and a flat keel
 // rides up into a centerline ridge in true transverse sections (the "pucker") — only a V crosses such an
@@ -374,14 +376,6 @@ const KEEL_FLAT_ZONE = 0.5;
 // KEEL_V_FLARE, smoothstep between. keelK is a floor — keelK = 1 is always a V regardless of flare.
 const KEEL_FLAT_FLARE = 12 * (Math.PI / 180),
   KEEL_V_FLARE = 45 * (Math.PI / 180);
-// chord-param window (as a fraction of ustar) around a chine within which the keel-round fades out to the
-// chine's natural V — the garboard there is too thin to round fairly. See mirrorKeelStation.
-const KEEL_CHINE_FADE = 0.16;
-// keel profile-rise easing: |d(keel world-z)/dx|. A flat keel can't wrap a steeply-rising forefoot/stem
-// without bulging, so ease toward the natural V as the keel rise grows — the profile analogue of the plan-
-// flare ease. Honored flat below KEEL_FLAT_RISE, fully a V above KEEL_V_RISE.
-const KEEL_FLAT_RISE = 0.25,
-  KEEL_V_RISE = 0.6;
 
 // Build the section as a curve continuous across the boat centerline, the keel knuckle kc controlling the
 // keel: 0 = flat (C¹-smooth round bottom), 1 = a hard V. An earlier version rebuilt this from a discrete
@@ -421,64 +415,21 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
   }
   if (ustar < 0) return null; // open section — never reaches the centerline
   const dstar = df(ustar);
-  // top of the flatten zone (in the half parameter). Don't let it reach back across a chine: a knuckle
-  // inboard bounds the keel-approach region. Anchoring the rounding parabola at a fixed half-param can land
-  // it on the steep topsides BELOW a flat bottom, so the parabola then bulges the flat bottom up into an
-  // inflection. Pull z0 out toward an inboard knuckle (where the bottom is already near keel depth) so a
-  // flat bottom inboard of a chine is left flat (c ≈ 0). Blend it in by the knuckle's strength (smoothstep,
-  // not a threshold) so a chine fading from hard→soft along the hull doesn't step the keel. A plain V keel
-  // (no near-keel chine) is unchanged.
-  const z0base = ustar * (1 - KEEL_FLAT_ZONE);
-  let z0 = z0base;
-  for (let i = 0; i < ts.length; i++) {
-    const k = clamp(ks[i] ?? 0, 0, 1);
-    if (ts[i] > z0base && ts[i] < ustar) z0 = Math.max(z0, z0base + k * k * (3 - 2 * k) * (ts[i] - z0base));
-  }
+  // Round the keel over a SMALL fillet just inboard of the centerline crossing — a zone whose width is a
+  // fixed fraction (KEEL_FLAT_ZONE) of the half-section, so it slides smoothly WITH the keel crossing. A
+  // constant fillet running along the keel approach stays longitudinally fair even where that approach is a
+  // straight chine/deadrise panel. (An earlier version made the zone broad and anchored z0 to an inboard
+  // chine; the zone then stepped in size as the crossing slid past a chine — a longitudinal blister. And a
+  // broad round of a straight panel is itself a big bump that migrates.) The fillet is small, so it rounds
+  // only near the keel and leaves a flat/panel bottom above it alone (no inflection / reversal).
+  const z0 = ustar * (1 - KEEL_FLAT_ZONE);
   // plan flare = the sheer tangent's heading off the x-axis (n̂ = (Ty,−Tx,0) ⇒ flare = atan2(|Ty|,|Tx|)).
   // Ease a flat keel toward its natural V as flare rises, so an oblique centerline meeting becomes a fair V
-  // instead of a ridge. keelK is the floor: flatten f = (1−kc)·(1−flareV).
+  // instead of a ridge (the narrow-flared-transom pucker). keelK is the floor: flatten f = (1−kc)·(1−flareV).
   const flare = Math.atan2(Math.abs(fr.n[0]), Math.abs(fr.n[1]));
   let flareV = clamp((flare - KEEL_FLAT_FLARE) / (KEEL_V_FLARE - KEEL_FLAT_FLARE), 0, 1);
   flareV = flareV * flareV * (3 - 2 * flareV); // smoothstep
-  // keel profile rise: |d(keel world-z)/dx| by central difference (the keel crossing at x±e). Where the keel
-  // sweeps up to the stem a flat keel bulges, so ease toward the V as the rise grows (the forefoot fix).
-  const keelZAt = (xx: number): number => {
-    const f2 = frameAt(xx);
-    if (Math.abs(f2.n[1]) < 1e-6) return NaN;
-    let pu2 = 0,
-      y2 = f2.p[1] + nf(0) * f2.n[1],
-      u2 = -1;
-    for (let i = 1; i <= FN; i++) {
-      const u = (tmax * i) / FN,
-        y = f2.p[1] + nf(u) * f2.n[1];
-      if (y2 >= 0 && y < 0) {
-        u2 = pu2 + (u - pu2) * (y2 / (y2 - y));
-        break;
-      }
-      pu2 = u;
-      y2 = y;
-    }
-    return u2 < 0 ? NaN : f2.p[2] + nf(u2) * f2.n[2] + df(u2) * f2.d[2];
-  };
-  const eRise = 15,
-    zBack = keelZAt(x - eRise),
-    zFwd = keelZAt(x + eRise);
-  const rise = isFinite(zBack) && isFinite(zFwd) ? Math.abs((zFwd - zBack) / (2 * eRise)) : 0;
-  let riseV = clamp((rise - KEEL_FLAT_RISE) / (KEEL_V_RISE - KEEL_FLAT_RISE), 0, 1);
-  riseV = riseV * riseV * (3 - 2 * riseV); // smoothstep
-  let f = (1 - clamp(kc, 0, 1)) * (1 - flareV) * (1 - riseV); // flatten: 1 = flat/round, 0 = natural V
-  // Where the keel crossing (ustar) lands within KEEL_CHINE_FADE·ustar of a chine, the garboard below it is
-  // a vanishing sliver: rounding it blows the parabola curvature up and the z0 anchor steps as ustar slides
-  // past the chine — a longitudinal keel wrinkle. Fade the flatten toward 0 by chine proximity so the keel
-  // is simply the chine's natural reflected V there, continuous in x. Far from every chine (a normal keel
-  // with real garboard) this is 1, unchanged. Weighted by chine strength so a soft chine fades the round less.
-  for (let i = 0; i < ts.length; i++) {
-    const k = clamp(ks[i] ?? 0, 0, 1);
-    if (k <= 0) continue;
-    let prox = clamp(Math.abs(ustar - ts[i]) / (KEEL_CHINE_FADE * ustar), 0, 1);
-    prox = prox * prox * (3 - 2 * prox); // smoothstep
-    f *= 1 - k * (1 - prox);
-  }
+  const f = (1 - clamp(kc, 0, 1)) * (1 - flareV); // flatten amount: 1 = round keel, 0 = natural V
   // reflected symmetric section over U ∈ [0, 2·ustar], keel at the midpoint U = ustar. The keel character is
   // set by the depth's SLOPE at the crossing: the reflection turns a zero slope into a smooth keel and a
   // nonzero slope into a V (corner). Over the zone [z0, ustar] the depth is blended (by f, via a C² weight)
