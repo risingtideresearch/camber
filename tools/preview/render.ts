@@ -15,8 +15,10 @@
 import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
 import { state, L, resetModel, prepare, sweptSection, forwardLimit, type Vec3 } from "../../src/model.js";
 import { trimmedHullGrid, buildStep } from "../../src/step.js";
+import { loadJsonText } from "../../src/json.js";
 
 type P2 = { x: number; y: number; d: number };
 
@@ -142,6 +144,10 @@ else { yaw = parseFloat(a2); pitch = parseFloat(process.argv[4] ?? "0.38"); outA
 const out = outArg ?? `out/${mode}-${a2}.png`;
 
 resetModel();
+// CAMBER_DOC=<path> loads a specific HullDocument JSON instead of the default boat; CAMBER_KEELK overrides
+// the keel knuckle on every template (handy for A/B-ing the keel-flat-vs-V pucker).
+if (process.env.CAMBER_DOC) loadJsonText(readFileSync(process.env.CAMBER_DOC, "utf8"));
+if (process.env.CAMBER_KEELK) state.keelK = state.keelK.map(() => parseFloat(process.env.CAMBER_KEELK!));
 prepare();
 const P = projector(yaw, pitch);
 const svg = mode === "shaded" ? renderShaded(P) : mode === "stepnet" ? renderStepNet(P) : renderLines(P);
