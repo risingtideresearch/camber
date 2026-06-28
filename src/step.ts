@@ -277,7 +277,9 @@ export function trimmedHullGrid(NS: number, M: number): { grid: Vec3[][]; crease
   const grid: Vec3[][] = Array.from({ length: NS + 1 }, () => new Array<Vec3>(cols));
   for (let j = 0; j < cols; j++)
     for (let i = 0; i <= NS; i++) {
-      const x = xaf[j] + (xf - xaf[j]) * (i / NS); // sweep forward from the transom edge to the bow closure
+      // cosine spacing clusters stations at the transom edge and the bow so the fine bow tapers gradually
+      const t = 0.5 * (1 - Math.cos((Math.PI * i) / NS));
+      const x = xaf[j] + (xf - xaf[j]) * t; // sweep forward from the transom edge to the bow closure
       grid[i][j] = fair(x)[j];
     }
   // crease columns (knuckle lines + keel) — consistent along the hull; read from a representative closed section

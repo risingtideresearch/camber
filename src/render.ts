@@ -1347,7 +1347,10 @@ function bilgeRows(
   // (forward of it the forefoot is above the sheer trim — no hull); the raw untrimmed sheet runs to L.
   const xMax = trim ? forwardLimit() : L;
   for (let i = 0; i <= N; i++) {
-    const s = sweptSection((xMax * i) / N, M, trim, false);
+    // cosine (Chebyshev) spacing clusters stations toward the transom and the bow, so the fine bow tapers
+    // over many rows instead of collapsing in one — smoother shading and no abrupt facet at the stem.
+    const x = xMax * 0.5 * (1 - Math.cos((Math.PI * i) / N));
+    const s = sweptSection(x, M, trim, false);
     if (s.aft) continue;
     if (!trim) {
       rows.push(s.pts); // raw sheet: half only, meshed without a mirror
