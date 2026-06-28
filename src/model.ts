@@ -405,10 +405,16 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
   // top of the flatten zone (in the half parameter). Don't let it reach back across a chine: a knuckle
   // inboard bounds the keel-approach region. Anchoring the rounding parabola at a fixed half-param can land
   // it on the steep topsides BELOW a flat bottom, so the parabola then bulges the flat bottom up into an
-  // inflection. Pull z0 out to the innermost knuckle (where the bottom is already near keel depth) so a
-  // flat bottom inboard of a chine is left flat (c ≈ 0). A plain V keel (no near-keel chine) is unchanged.
-  let z0 = ustar * (1 - KEEL_FLAT_ZONE);
-  for (let i = 0; i < ts.length; i++) if ((ks[i] ?? 0) > 0.5 && ts[i] > z0 && ts[i] < ustar) z0 = ts[i];
+  // inflection. Pull z0 out toward an inboard knuckle (where the bottom is already near keel depth) so a
+  // flat bottom inboard of a chine is left flat (c ≈ 0). Blend it in by the knuckle's strength (smoothstep,
+  // not a threshold) so a chine fading from hard→soft along the hull doesn't step the keel. A plain V keel
+  // (no near-keel chine) is unchanged.
+  const z0base = ustar * (1 - KEEL_FLAT_ZONE);
+  let z0 = z0base;
+  for (let i = 0; i < ts.length; i++) {
+    const k = clamp(ks[i] ?? 0, 0, 1);
+    if (ts[i] > z0base && ts[i] < ustar) z0 = Math.max(z0, z0base + k * k * (3 - 2 * k) * (ts[i] - z0base));
+  }
   // plan flare = the sheer tangent's heading off the x-axis (n̂ = (Ty,−Tx,0) ⇒ flare = atan2(|Ty|,|Tx|)).
   // Ease a flat keel toward its natural V as flare rises, so an oblique centerline meeting becomes a fair V
   // instead of a ridge. keelK is the floor: flatten f = (1−kc)·(1−flareV).
