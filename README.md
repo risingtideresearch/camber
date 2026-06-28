@@ -335,7 +335,7 @@ the **plan flare** rises (the sheer tangent's heading off the longitudinal axis)
 low flare angle, fully a V above a high one, smoothstep between. `keelK` is the floor — `keelK = 1` is
 a V regardless of flare, and you can author a V wherever you want one. How the flat-vs-V shaping and
 this flare easing are realized is a downstream construction choice (see
-[Derived geometry](#derived-geometry)); the model fixes only the authored `keelK` per template and its
+[Realizing the keel](#realizing-the-keel)); the model fixes only the authored `keelK` per template and its
 `[0,1]` domain.
 
 ## The weight curve — the longitudinal blend path
@@ -409,6 +409,29 @@ rather than forbidden.
 
 An **inspection station** at an arbitrary `x` — the interpolated template and its two trims
 shown for study — is a viewer affordance, not part of the geometry. It authors nothing.
+
+### Realizing the keel
+
+This is how the keel's authored *character* (flat round ↔ hard V, the [keel knuckle](#the-keel-knuckle))
+becomes surface. The starboard half-section is reflected about `y = 0` to make the port half, so the
+**slope of the section depth at the centerline crossing** decides the keel: a zero slope reflects into a
+`C¹`-smooth round bottom, a nonzero slope into a `G⁰` V. The construction's only job is to set that slope,
+by the flatten amount `f = (1 − keelK)·(1 − flareV)` — the keel knuckle scaled by the flare easing above.
+
+The round is laid in as a **small fillet**: over a fixed fraction of the half-section just inboard of the
+crossing, the depth is eased toward a fair parabola (zero slope, hence flat tangent, at the keel), weighted
+by `f`. `f = 0` leaves the section's natural slope — the reflected V; `f = 1` is the gently rounded keel; in
+between, the slider interpolates.
+
+The fillet's width is a **constant fraction of each section**, not a zone pinned to a chine or other feature.
+That is what keeps the keel longitudinally fair where the section reaches the centerline through a straight
+chine or deadrise *panel* whose keel point **migrates** along the hull (a planing midbody running into a
+finer bow): a constant small fillet sliding along that approach is fair, whereas a broad — or feature-pinned
+— round of a straight, migrating panel builds up into a travelling bulge as its size and placement shift
+station to station. Being small, the fillet also rounds only right at the keel and leaves a flat or panelled
+bottom above it untouched, with no inflection. (A separate **plan-flare** easing, folded into `flareV`
+above, additionally relaxes a flat keel toward its V where the fanned station planes would otherwise make a
+flat bottom ride up into a centerline ridge.)
 
 ## Interpolation and blending
 
