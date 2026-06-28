@@ -52,12 +52,20 @@ export interface Station {
   tmax: number;
   n: (u: number) => number;
   d: (u: number) => number;
+  ts?: number[]; // the template points' parameters in this station's u-scale (for knuckle-column alignment)
+  keelV?: number; // keel crease strength ∈ [0,1]: 0 = flat/round, 1 = hard V (mirrored-keel station only)
 }
 export interface Section {
   pts: Vec3[];
   open: boolean;
   aft: boolean;
   keel: boolean;
+  // column indices (into pts) that sit on a crease line — a template-point knuckle and (when keel) the
+  // keel itself. The columns are placed exactly on those lines so a hard edge has somewhere to live; the
+  // surface/mesh builders give them a tangent break (knot multiplicity / per-side normals). Empty unless
+  // trimmed. The actual sharpness is data-driven: a faded knuckle (low k) on a crease column stays smooth.
+  creaseCols: number[];
+  creaseK: number[]; // crease strength ∈ [0,1] parallel to creaseCols (blended knuckle k; keel V-ness)
 }
 
 // ---------- geometric domain constants ----------
@@ -427,6 +435,8 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
     tmax: T,
     n: (U: number) => (U <= ustar ? nf(U) : 2 * ncl - nf(2 * ustar - U)),
     d: (U: number) => warp(U <= ustar ? U : 2 * ustar - U),
+    ts, // starboard half uses the raw chord-param directly, so template points sit at U = ts[i]
+    keelV: 1 - f, // keel crease strength: 0 = flat/round (smooth), 1 = hard V (for shading the keel crease)
   };
 }
 
@@ -463,7 +473,7 @@ export function stationAt(x: number, mirrorKeel = false): Station {
     if (st) return st;
   }
   const ts = chordParam(ns, ds);
-  return { tmax: ts[m - 1], n: fairEval(ts, ns, ks), d: fairEval(ts, ds, ks) };
+  return { tmax: ts[m - 1], n: fairEval(ts, ns, ks), d: fairEval(ts, ds, ks), ts };
 }
 
 // the transom plane in profile: longitudinal position x of the cut at height z (linear through the two
@@ -569,10 +579,56 @@ export function sweptSection(x: number, M: number, trim: boolean, clipTransom = 
       keel = ub >= umax - 1e-6 && !open;
     }
   }
-  const pts: Vec3[] = [];
-  for (let j = 0; j <= M; j++) pts.push(W(ua + ((ub - ua) * j) / M));
-  if (keel) pts[M][1] = 0;
-  return { pts, open, aft, keel };
+  // column parameters across [ua, ub]. For the trimmed hull, PIN a column on each potential-knuckle template
+  // point (one that is a knuckle in some template, so a crease may run through it). The anchor is at a fixed
+  // column index (even fills between anchors), so the chine line is one consistent grid column the surface /
+  // mesh can crease along. The anchor's POSITION blends from the even-grid spot toward the knuckle param by
+  // the local blended knuckle strength: where the chine is strong it sits on the chine; where it fades (the
+  // fine bow, or it leaves the kept span) the columns relax to even — matching the chineless hull, so the
+  // sweep stays fair with no resampling step. Sharpness is data-driven; the crease column is just a home.
+  const creaseCols: number[] = [],
+    creaseK: number[] = [];
+  let colU: number[];
+  const evenU = (j: number) => ua + ((ub - ua) * j) / M;
+  const pots =
+    trim && st.ts ? st.ts.map((_, i) => i).filter((i) => state.templates.some((t) => (t[i]?.k ?? 0) > 0)) : [];
+  if (pots.length) {
+    const w = weightsAt(x),
+      margin = (ub - ua) * 0.04;
+    const kn = pots
+      .map((i) => ({
+        u: clamp(st.ts![i], ua + margin, ub - margin), // clamp so the anchor count is constant along the hull
+        k: clamp(state.templates.reduce((s, t, j) => s + w[j] * (t[i]?.k ?? 0), 0), 0, 1),
+      }))
+      .sort((a, b) => a.u - b.u);
+    const wK = Math.max(...kn.map((a) => a.k)); // fade the whole realignment in/out with the knuckle strength
+    const anchors = [ua, ...kn.map((a) => a.u), ub],
+      segs = anchors.length - 1;
+    colU = [ua];
+    let col = 0;
+    for (let s = 0; s < segs; s++) {
+      const cnt = Math.floor(M / segs) + (s < M % segs ? 1 : 0); // deterministic ⇒ stable column indices
+      for (let t = 1; t <= cnt; t++) {
+        const aligned = anchors[s] + ((anchors[s + 1] - anchors[s]) * t) / cnt,
+          e = evenU(col + t);
+        colU.push(e + wK * (aligned - e)); // lerp even → knuckle-aligned by the blended knuckle strength
+      }
+      col += cnt;
+      if (s < segs - 1) {
+        creaseCols.push(col); // a consistent crease column (the export puts a knot here)
+        creaseK.push(kn[s].k); // its blended knuckle strength (kn is sorted to match the anchor order)
+      }
+    }
+  } else {
+    colU = Array.from({ length: M + 1 }, (_, j) => evenU(j));
+  }
+  const pts: Vec3[] = colU.map(W);
+  if (keel) {
+    pts[M][1] = 0;
+    creaseCols.push(M); // the keel is a crease line too (a V keel; flat keels stay smooth, data-driven)
+    creaseK.push(clamp(st.keelV ?? 0, 0, 1));
+  }
+  return { pts, open, aft, keel, creaseCols, creaseK };
 }
 
 export function clippedSection(x: number, M: number): Section {

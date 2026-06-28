@@ -138,43 +138,84 @@ function collocation(ub: number[], p: number, U: number[]): number[][] {
   return A;
 }
 
-// global bicubic interpolation: returns the (nu+1)×(nv+1) control net through grid Q plus the knots
-function interpSurface(Q: Vec3[][]): {
-  net: Vec3[][];
-  p: number;
-  q: number;
-  U: number[];
-  Vk: number[];
-} {
+// clamped knot vector from data params over their OWN range [ub0, ubN] (interior = averaged). Like
+// knotsFromParams but it doesn't hardcode [0,1], so it can interpolate a sub-segment of a curve.
+function clampedKnotsRange(ub: number[], p: number): number[] {
+  const n = ub.length - 1,
+    U: number[] = [];
+  for (let i = 0; i <= p; i++) U.push(ub[0]);
+  for (let j = 1; j <= n - p; j++) {
+    let s = 0;
+    for (let i = j; i <= j + p - 1; i++) s += ub[i];
+    U.push(s / p);
+  }
+  for (let i = 0; i <= p; i++) U.push(ub[n]);
+  return U;
+}
+
+// Global bicubic interpolation with hard creases at the given v-columns (knuckle lines + keel). Same as
+// interpSurface in u (smooth longitudinally); in v it interpolates each smooth strip [crease..crease]
+// independently and splices them into ONE surface with a multiplicity-q v-knot at each crease — so the
+// surface CAN break tangent there. It only actually creases where the data corners (a knuckle at full
+// strength); where the knuckle has faded the strip data is smooth and the join is near-smooth (a small C0
+// residual — see the deferred derivative-constrained refinement). Falls back to a smooth strip wherever a
+// crease would leave a segment too short to interpolate at degree q.
+function interpSurfaceCreased(
+  Q: Vec3[][],
+  creaseCols: number[],
+): { net: Vec3[][]; p: number; q: number; U: number[]; Vk: number[] } {
   const nu = Q.length - 1,
     nv = Q[0].length - 1,
     p = Math.min(3, nu),
     q = Math.min(3, nv);
-  const ub = averagedParams(transpose(Q)), // u runs across stations → average down columns
-    vb = averagedParams(Q); // v runs along a station → average across rows
-  const U = knotsFromParams(ub, p),
-    Vk = knotsFromParams(vb, q);
-  const mk = (): number[][] =>
-    Array.from({ length: nu + 1 }, () => new Array<number>(nv + 1).fill(0));
-
-  // pass 1: interpolate down u for each column l → intermediate control points R[i][l] (per coord)
+  const ub = averagedParams(transpose(Q)),
+    vb = averagedParams(Q),
+    U = knotsFromParams(ub, p);
+  const mk = (cols: number): number[][] =>
+    Array.from({ length: nu + 1 }, () => new Array<number>(cols).fill(0));
+  // pass 1: interpolate down u for each v-column → intermediate u-controls R[c][i][l] (smooth in u)
   const Au = luDecompose(collocation(ub, p, U)),
-    R = [mk(), mk(), mk()];
+    R = [mk(nv + 1), mk(nv + 1), mk(nv + 1)];
   for (let l = 0; l <= nv; l++)
     for (let c = 0; c < 3; c++) {
       const sol = luSolve(Au.LU, Au.piv, Q.map((row) => row[l][c]));
       for (let i = 0; i <= nu; i++) R[c][i][l] = sol[i];
     }
-  // pass 2: interpolate along v for each row i → final control net P[i][l] (per coord)
-  const Av = luDecompose(collocation(vb, q, Vk)),
-    P = [mk(), mk(), mk()];
+  // segment bounds in v: split at crease columns, dropping any that would leave a strip shorter than q+1
+  const creases = creaseCols.filter((c) => c > 0 && c < nv).sort((a, b) => a - b);
+  const bounds = [0];
+  for (const c of creases) if (c - bounds[bounds.length - 1] >= q + 1 && nv - c >= q + 1) bounds.push(c);
+  bounds.push(nv);
+  // per-segment params/knots/LU, and the spliced combined v-knot vector
+  const segs = bounds.slice(0, -1).map((a, si) => {
+    const b = bounds[si + 1],
+      params = vb.slice(a, b + 1),
+      knots = clampedKnotsRange(params, q);
+    return { a, b, knots, lu: luDecompose(collocation(params, q, knots)) };
+  });
+  let Vk: number[] = [];
+  for (let si = 0; si < segs.length; si++) {
+    if (si === 0) Vk = segs[si].knots.slice();
+    else {
+      const vc = vb[segs[si].a]; // crease param: drop the (q+1) clamp from each side, splice in q copies ⇒ C0
+      Vk = Vk.slice(0, Vk.length - (q + 1)).concat(new Array(q).fill(vc), segs[si].knots.slice(q + 1));
+    }
+  }
+  const Ncv = Vk.length - q - 1; // combined v-control count
+  const P = [mk(Ncv), mk(Ncv), mk(Ncv)];
   for (let i = 0; i <= nu; i++)
     for (let c = 0; c < 3; c++) {
-      const sol = luSolve(Av.LU, Av.piv, R[c][i]);
-      for (let l = 0; l <= nv; l++) P[c][i][l] = sol[l];
+      let col = 0;
+      for (let si = 0; si < segs.length; si++) {
+        const sg = segs[si],
+          ctrl = luSolve(sg.lu.LU, sg.lu.piv, R[c][i].slice(sg.a, sg.b + 1));
+        // segments share the crease control (each clamped segment interpolates its endpoint) ⇒ skip ctrl[0]
+        const start = si === 0 ? 0 : 1;
+        for (let k = start; k < ctrl.length; k++) P[c][i][col++] = ctrl[k];
+      }
     }
   const net: Vec3[][] = Array.from({ length: nu + 1 }, (_, i) =>
-    Array.from({ length: nv + 1 }, (_, l): Vec3 => [P[0][i][l], P[1][i][l], P[2][i][l]]),
+    Array.from({ length: Ncv }, (_, l): Vec3 => [P[0][i][l], P[1][i][l], P[2][i][l]]),
   );
   return { net, p, q, U, Vk };
 }
@@ -209,7 +250,7 @@ function compressKnots(U: number[]): { knots: number[]; mults: number[] } {
 // that fraction crosses the transom plane and sweep forward from there to the bow. Because the sections
 // are full (sheer→keel, never renormalised to a clipped sliver), the surface stays fair right to the
 // stern, and row 0 lies on the transom plane so the hull and transom share an exact edge.
-function trimmedHullGrid(NS: number, M: number): Vec3[][] {
+function trimmedHullGrid(NS: number, M: number): { grid: Vec3[][]; creaseCols: number[] } {
   const cols = M + 1,
     gate = (p: Vec3): number => p[0] - xTransom(p[2]),
     fair = (x: number): Vec3[] => sweptSection(x, M, true, false).pts;
@@ -238,7 +279,16 @@ function trimmedHullGrid(NS: number, M: number): Vec3[][] {
       const x = xaf[j] + (L - xaf[j]) * (i / NS); // sweep forward from the transom edge to the bow
       grid[i][j] = fair(x)[j];
     }
-  return grid;
+  // crease columns (knuckle lines + keel) — consistent along the hull; read from a representative closed section
+  let creaseCols: number[] = [];
+  for (let i = 2; i <= 7; i++) {
+    const s = sweptSection((L * i) / 10, M, true, false);
+    if (!s.aft && s.keel) {
+      creaseCols = s.creaseCols;
+      break;
+    }
+  }
+  return { grid, creaseCols };
 }
 
 // ---------- STEP text builder ----------
@@ -368,7 +418,7 @@ export function buildStep(date: string): string {
   DATE = date;
   prepare(); // ensure the sheer samplers are current
   const M = 24,
-    half = trimmedHullGrid(48, M);
+    { grid: half, creaseCols: halfCrease } = trimmedHullGrid(48, M);
   if (half.length < 4) throw new Error("hull has too few sections to export");
   // full-width grid: starboard sheer→keel (cols 0..M), then port keel→sheer (cols M+1..2M) as the
   // y-mirror, dropping the duplicate keel point. The keel is therefore an INTERIOR column of one surface
@@ -380,9 +430,21 @@ export function buildStep(date: string): string {
     return full;
   });
 
+  // full-width crease columns: a chine knuckle at half-col c sits at full-cols c and 2M−c; the keel (half
+  // col M) is the centre col M. Mult-q v-knots there let the one surface carry those creases.
+  const creaseSet = new Set<number>();
+  for (const c of halfCrease) {
+    if (c === M) creaseSet.add(M);
+    else {
+      creaseSet.add(c);
+      creaseSet.add(2 * M - c);
+    }
+  }
+  const creaseCols = [...creaseSet].sort((a, b) => a - b);
+
   const d = new StepDoc();
   const faces: number[] = [];
-  const hull = interpSurface(grid);
+  const hull = interpSurfaceCreased(grid, creaseCols);
   faces.push(emitSurfaceFace(d, hull.net, hull.p, hull.q, hull.U, hull.Vk));
   const tf = emitTransomFace(d, hull.net, hull.q, hull.Vk);
   if (tf) faces.push(tf);

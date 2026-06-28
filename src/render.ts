@@ -1333,15 +1333,21 @@ function buildLongitudinalMesh(idx: number, view: Vec3): Mesh {
 // the row carries an `open` flag and buildHullMesh leaves the centre strip unbridged (a real gap there).
 //
 // Untrimmed (the raw swept sheet) is unchanged: one side, full station deck → tmax, no trims, no mirror.
-function bilgeRows(N: number, M: number, trim: boolean): { rows: Vec3[][]; open: boolean[] } {
+function bilgeRows(
+  N: number,
+  M: number,
+  trim: boolean,
+): { rows: Vec3[][]; open: boolean[]; creaseS: number[][] } {
   const rows: Vec3[][] = [],
-    open: boolean[] = [];
+    open: boolean[] = [],
+    creaseS: number[][] = []; // per row, per column: crease strength (0 = smooth, 1 = hard)
   for (let i = 0; i <= N; i++) {
     const s = sweptSection((L * i) / N, M, trim, false);
     if (s.aft) continue;
     if (!trim) {
       rows.push(s.pts); // raw sheet: half only, meshed without a mirror
       open.push(true);
+      creaseS.push(new Array(s.pts.length).fill(0));
       continue;
     }
     // full width: starboard sheer→keel (cols 0..M), then port keel→sheer (cols M+1..2M) as the y-mirror,
@@ -1350,24 +1356,37 @@ function bilgeRows(N: number, M: number, trim: boolean): { rows: Vec3[][]; open:
     for (let j = M - 1; j >= 0; j--) full.push([s.pts[j][0], -s.pts[j][1], s.pts[j][2]]);
     rows.push(full);
     open.push(s.open);
+    // map the half-section crease columns to the full row: a chine at half-col c sits at c and 2M−c; the
+    // keel (half-col M) is the centre col M. Strength = the blended knuckle / keel-V from the section.
+    const cs = new Array(2 * M + 1).fill(0);
+    for (let t = 0; t < s.creaseCols.length; t++) {
+      const c = s.creaseCols[t],
+        k = s.creaseK[t];
+      if (c === M) cs[M] = k;
+      else {
+        cs[c] = k;
+        cs[2 * M - c] = k;
+      }
+    }
+    creaseS.push(cs);
   }
-  return { rows, open };
+  return { rows, open, creaseS };
 }
-// smooth per-vertex normals on a grid via central differences (orientation is irrelevant — shader is two-sided)
-function gridNormal(rows: Vec3[][], i: number, j: number): Vec3 {
+// per-vertex grid normal (orientation irrelevant — shader is two-sided). side = 0 uses the central
+// transverse difference (smooth); side = +1/−1 uses a ONE-SIDED difference (toward the next/previous
+// column) — the two faces of a crease column, so a knuckle/keel-V reads as a hard edge.
+function gridNormal(rows: Vec3[][], i: number, j: number, side = 0): Vec3 {
   const R = rows.length,
     C = rows[0].length;
   const a = rows[Math.min(i + 1, R - 1)][j],
     b = rows[Math.max(i - 1, 0)][j];
-  const c = rows[i][Math.min(j + 1, C - 1)],
-    d = rows[i][Math.max(j - 1, 0)];
+  const c = side < 0 ? rows[i][j] : rows[i][Math.min(j + 1, C - 1)],
+    d = side > 0 ? rows[i][j] : rows[i][Math.max(j - 1, 0)];
   const n = V.cross(V.sub(c, d), V.sub(a, b));
-  // On the centerline (the keel, y = 0) a mirror-symmetric hull's normal must have no transverse component.
-  // Here the section is sampled on the starboard side only, so the transverse difference is one-sided and
-  // tilts the normal slightly off the centerline plane; the port mirror flips that tilt, so the two halves
-  // meet at an angle — a spurious crease running the length of the keel seam. Zero the y-component there so
-  // the halves join smoothly (a genuine V keel still reads from its off-centerline faces).
-  if (Math.abs(rows[i][j][1]) < 1e-6) n[1] = 0;
+  // On the centerline (the keel, y = 0) a smooth keel's normal must have no transverse component. The
+  // central difference is one-sided in y here, tilting it; zero the y-component so the two halves join
+  // smoothly. (A V keel reads from its off-centerline faces via the one-sided side ≠ 0 normals.)
+  if (side === 0 && Math.abs(rows[i][j][1]) < 1e-6) n[1] = 0;
   return V.norm(n);
 }
 function pushTri(
@@ -1424,7 +1443,7 @@ function clipQuad(poly: PN[]): { inside: PN[]; cut: [Vec3, Vec3] | null } {
 // Untrimmed ⇒ emit the raw swept sheet as-is: one side, no sheer/transom/keel trim.
 function buildHullMesh(trimmed: boolean): { hull: Mesh; cuts: [Vec3, Vec3][] } {
   const M = 44,
-    { rows, open } = bilgeRows(180, M, trimmed),
+    { rows, open, creaseS } = bilgeRows(180, M, trimmed),
     R = rows.length,
     C = rows[0]?.length ?? 0,
     P: number[] = [],
@@ -1432,18 +1451,28 @@ function buildHullMesh(trimmed: boolean): { hull: Mesh; cuts: [Vec3, Vec3][] } {
     cuts: [Vec3, Vec3][] = [];
   if (R < 2 || C < 2)
     return { hull: { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 }, cuts };
-  const nrm = rows.map((_, i) => rows[i].map((_, j) => gridNormal(rows, i, j)));
+  const nrmC = rows.map((_, i) => rows[i].map((_, j) => gridNormal(rows, i, j)));
+  // the normal at vertex (i,j) as seen from the strip on side `dir` (+1 = the strip to its right, −1 left).
+  // On a crease column the two sides use one-sided normals (the crease's two faces), blended toward the
+  // smooth central normal by the local crease strength — so a hard knuckle reads as an edge and a faded
+  // one stays smooth. Off a crease column both sides return the shared central normal (no seam).
+  const vN = (i: number, j: number, dir: number): Vec3 => {
+    const s = creaseS[i]?.[j] ?? 0;
+    if (s <= 1e-6) return nrmC[i][j];
+    return V.norm(lerpV(nrmC[i][j], gridNormal(rows, i, j, dir), s));
+  };
   const emit = (a: PN, b: PN, c: PN): void => pushTri(P, Nn, a.p, a.n, b.p, b.n, c.p, c.n);
   for (let i = 0; i < R - 1; i++)
     for (let j = 0; j < C - 1; j++) {
       // the keel sits at column M of a full-width row; where the section is open there is no surface
       // across the centerline, so don't bridge the strip just inboard of the open bottom on the port side.
       if (trimmed && j === M && (open[i] || open[i + 1])) continue;
+      // cols j / j+1 bound this strip: col j sees the strip on its right (+1), col j+1 on its left (−1)
       const quad: PN[] = [
-        { p: rows[i][j], n: nrm[i][j] },
-        { p: rows[i + 1][j], n: nrm[i + 1][j] },
-        { p: rows[i + 1][j + 1], n: nrm[i + 1][j + 1] },
-        { p: rows[i][j + 1], n: nrm[i][j + 1] },
+        { p: rows[i][j], n: vN(i, j, +1) },
+        { p: rows[i + 1][j], n: vN(i + 1, j, +1) },
+        { p: rows[i + 1][j + 1], n: vN(i + 1, j + 1, -1) },
+        { p: rows[i][j + 1], n: vN(i, j + 1, -1) },
       ];
       if (!trimmed) {
         emit(quad[0], quad[1], quad[2]); // raw sheet: the whole quad, untrimmed
