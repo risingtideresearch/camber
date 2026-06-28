@@ -250,7 +250,7 @@ function compressKnots(U: number[]): { knots: number[]; mults: number[] } {
 // that fraction crosses the transom plane and sweep forward from there to the bow. Because the sections
 // are full (sheer→keel, never renormalised to a clipped sliver), the surface stays fair right to the
 // stern, and row 0 lies on the transom plane so the hull and transom share an exact edge.
-function trimmedHullGrid(NS: number, M: number): { grid: Vec3[][]; creaseCols: number[] } {
+export function trimmedHullGrid(NS: number, M: number): { grid: Vec3[][]; creaseCols: number[] } {
   const cols = M + 1,
     gate = (p: Vec3): number => p[0] - xTransom(p[2]),
     fair = (x: number): Vec3[] => sweptSection(x, M, true, false).pts;
