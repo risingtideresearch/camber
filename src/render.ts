@@ -1487,12 +1487,15 @@ function buildHullMesh(trimmed: boolean): { hull: Mesh; cuts: [Vec3, Vec3][] } {
 }
 
 // the ordered starboard transom edge (sheer→keel) recovered from the hull-clip cut segments: collapse to
-// a single half-breadth-vs-depth curve, snap the bottom onto the centerline so the two halves meet cleanly
+// a single half-breadth-vs-depth curve, snap the bottom onto the centerline so the two halves meet cleanly.
+// The hull grid is now FULL WIDTH, so the cut segments span both halves; keep only the starboard side
+// (y ≥ 0) — buildTransomMesh mirrors it back to port — else the edge zigzags across the centerline.
 function transomCurve(cuts: [Vec3, Vec3][]): Vec3[] {
   const pts: Vec3[] = [];
   const seen = new Set<string>();
   for (const seg of cuts)
     for (const q of seg) {
+      if (q[1] < -2) continue; // port side; the mirror rebuilds it (keep the centerline crossing, y≈0)
       const key = Math.round(q[2] / 4) + "," + Math.round(q[1] / 4);
       if (!seen.has(key)) {
         seen.add(key);
