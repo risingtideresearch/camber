@@ -16,7 +16,7 @@ import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { readFileSync } from "node:fs";
-import { state, L, resetModel, prepare, sweptSection, forwardLimit, type Vec3 } from "../../src/model.js";
+import { state, L, resetModel, prepare, sweptSection, forwardLimit, immersion, weightsAt, frameAt, xTransom, type Vec3 } from "../../src/model.js";
 import { trimmedHullGrid, buildStep } from "../../src/step.js";
 import { loadJsonText } from "../../src/json.js";
 
@@ -47,13 +47,16 @@ function svgWrap(body: string, minX: number, minY: number, w: number, h: number,
 }
 
 // ---- lines: painter's white facets + bold feature edges (replicates the editor Lines view) ----
-function renderLines(P: (p: Vec3) => P2): string {
+function renderLines(P: (p: Vec3) => P2, yaw: number, pitch: number, sel: number): string {
   const { grid, creaseCols } = trimmedHullGrid(40, 10);
   const NS = grid.length - 1, M = grid[0].length - 1, crease = new Set(creaseCols);
   const SP = grid.map((r) => r.map(P)), PP = grid.map((r) => r.map(([x, y, z]) => P([x, -y, z])));
+  const gridM = grid.map((r) => r.map(([x, y, z]): Vec3 => [x, -y, z]));
+  const imm = (w: Vec3) => immersion(w[0], w[2]);
   let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
-  const quads: { poly: P2[]; depth: number; bold: [P2, P2][] }[] = [];
-  for (const G of [SP, PP])
+  const STEP = 3, showStation = (i: number) => i === 0 || i === NS || i % STEP === 0;
+  const quads: { poly: P2[]; depth: number; bold: [P2, P2][]; stn: [P2, P2][]; wl: [P2, P2][] }[] = [];
+  for (const [G, GW] of [[SP, grid], [PP, gridM]] as [P2[][], Vec3[][]][])
     for (let i = 0; i < NS; i++)
       for (let j = 0; j < M; j++) {
         const A = G[i][j], B = G[i][j + 1], C = G[i + 1][j + 1], D = G[i + 1][j];
@@ -61,15 +64,55 @@ function renderLines(P: (p: Vec3) => P2): string {
         const bold: [P2, P2][] = [];
         if (j === 0 || crease.has(j)) bold.push([D, A]);
         if (j + 1 === M || crease.has(j + 1)) bold.push([B, C]);
-        if (i === 0) bold.push([A, B]);
-        quads.push({ poly: [A, B, C, D], depth: (A.d + B.d + C.d + D.d) / 4, bold });
+        const stn: [P2, P2][] = [];
+        if (showStation(i)) stn.push([A, B]);
+        if (i === NS - 1 && showStation(NS)) stn.push([D, C]);
+        const corn = [{ p: A, m: imm(GW[i][j]) }, { p: B, m: imm(GW[i][j + 1]) }, { p: C, m: imm(GW[i + 1][j + 1]) }, { p: D, m: imm(GW[i + 1][j]) }];
+        const cr: P2[] = [];
+        for (let k = 0; k < 4; k++) {
+          const a = corn[k], b = corn[(k + 1) % 4];
+          if (a.m < 0 !== b.m < 0 && a.m !== b.m) { const t = a.m / (a.m - b.m); cr.push({ x: a.p.x + t * (b.p.x - a.p.x), y: a.p.y + t * (b.p.y - a.p.y), d: a.p.d + t * (b.p.d - a.p.d) }); }
+        }
+        const wl: [P2, P2][] = cr.length >= 2 ? [[cr[0], cr[1]]] : [];
+        quads.push({ poly: [A, B, C, D], depth: (A.d + B.d + C.d + D.d) / 4, bold, stn, wl });
       }
-  quads.sort((a, b) => a.depth - b.depth);
+  // selected template point → its longitudinal, interleaved into the painter's order so it occludes properly
+  type Item = { depth: number; q?: typeof quads[number]; seg?: [P2, P2] };
+  const items: Item[] = quads.map((q) => ({ depth: q.depth, q }));
+  if (sel >= 0 && sel < state.templates[0].length) {
+    const c1 = Math.cos(yaw), s1 = Math.sin(yaw), c2 = Math.cos(pitch), s2 = Math.sin(pitch);
+    const cT = Math.cos(state.deckRake), sT = Math.sin(state.deckRake);
+    let vx = -c2 * s1 * cT + s2 * sT, vy = -c2 * c1, vz = c2 * s1 * sT + s2 * cT;
+    const vl = Math.hypot(vx, vy, vz) || 1, BIAS = 60;
+    (vx /= vl), (vy /= vl), (vz /= vl);
+    const tpl = state.templates, NP = 120, WP: Vec3[] = [], keep: boolean[] = [];
+    for (let i = 0; i <= NP; i++) {
+      const x = (L * i) / NP, wt = weightsAt(x);
+      let n = 0, d = 0;
+      for (let t = 0; t < tpl.length; t++) { n += wt[t] * tpl[t][sel].n; d += wt[t] * tpl[t][sel].d; }
+      const fr = frameAt(x), w: Vec3 = [fr.p[0] + n * fr.n[0] + d * fr.d[0], fr.p[1] + n * fr.n[1] + d * fr.d[1], fr.p[2] + n * fr.n[2] + d * fr.d[2]];
+      WP.push(w);
+      keep.push(d >= -state.sheer.zf(x) && w[1] >= 0 && w[0] >= xTransom(w[2]));
+    }
+    for (const sgn of [1, -1])
+      for (let i = 0; i < NP; i++) {
+        if (!keep[i] || !keep[i + 1]) continue;
+        const a = P([WP[i][0] + vx * BIAS, sgn * WP[i][1] + vy * BIAS, WP[i][2] + vz * BIAS]);
+        const b = P([WP[i + 1][0] + vx * BIAS, sgn * WP[i + 1][1] + vy * BIAS, WP[i + 1][2] + vz * BIAS]);
+        items.push({ depth: (a.d + b.d) / 2, seg: [a, b] });
+      }
+  }
+  items.sort((a, b) => a.depth - b.depth);
   const sw = (maxX - minX) / 1000;
+  const ln = (a: P2, b: P2, w: number, c: string) => `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="${c}" stroke-width="${w * sw}"/>`;
   let body = "";
-  for (const q of quads) {
-    body += `<polygon points="${q.poly.map((p) => p.x.toFixed(1) + "," + p.y.toFixed(1)).join(" ")}" fill="#fff" stroke="#8995a5" stroke-width="${0.6 * sw}"/>`;
-    for (const [a, b] of q.bold) body += `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="#11181f" stroke-width="${1.8 * sw}"/>`;
+  for (const it of items) {
+    if (it.seg) { body += ln(it.seg[0], it.seg[1], 1.8, "#f59e0b"); continue; }
+    const q = it.q!;
+    body += `<polygon points="${q.poly.map((p) => p.x.toFixed(1) + "," + p.y.toFixed(1)).join(" ")}" fill="#fff" stroke="#fff" stroke-width="${0.6 * sw}"/>`;
+    for (const [a, b] of q.wl) body += ln(a, b, 1.4, "#0ea5e9");
+    for (const [a, b] of q.stn) body += ln(a, b, 1.0, "#11181f");
+    for (const [a, b] of q.bold) body += ln(a, b, 1.8, "#11181f");
   }
   return svgWrap(body, minX, minY, maxX - minX, maxY - minY, (maxX - minX) * 0.06);
 }
@@ -150,7 +193,8 @@ if (process.env.CAMBER_DOC) loadJsonText(readFileSync(process.env.CAMBER_DOC, "u
 if (process.env.CAMBER_KEELK) state.keelK = state.keelK.map(() => parseFloat(process.env.CAMBER_KEELK!));
 prepare();
 const P = projector(yaw, pitch);
-const svg = mode === "shaded" ? renderShaded(P) : mode === "stepnet" ? renderStepNet(P) : renderLines(P);
+const sel = process.env.CAMBER_SEL ? parseInt(process.env.CAMBER_SEL, 10) : -1; // template point index to highlight
+const svg = mode === "shaded" ? renderShaded(P) : mode === "stepnet" ? renderStepNet(P) : renderLines(P, yaw, pitch, sel);
 
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out.replace(/\.png$/, ".svg"), svg);

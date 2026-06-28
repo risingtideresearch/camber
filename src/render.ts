@@ -1634,7 +1634,8 @@ const REF_YAW = -0.62,
 // and the interior grid thin. Rendered as SVG so the strokes can carry real, view-independent line weights
 // (WebGL clamps lineWidth to 1 on most browsers). It reuses the 3D canvas's camera, so it rotates live.
 const LINES_NS = 40,
-  LINES_M = 10;
+  LINES_M = 10,
+  LINES_STATION_STEP = 3; // draw a station (transverse) line every Nth grid row (≈ NS/STEP stations)
 let linesGrid: { grid: Vec3[][]; creaseCols: number[] } | null = null;
 
 interface ProjPt {
@@ -1645,7 +1646,9 @@ interface ProjPt {
 interface LineQuad {
   poly: ProjPt[];
   depth: number; // toward-eye; larger = nearer
-  bold: [ProjPt, ProjPt][];
+  bold: [ProjPt, ProjPt][]; // sheer / keel / chine longitudinals (heavy)
+  stn: [ProjPt, ProjPt][]; // station (transverse) lines at intervals (lighter)
+  wl: [ProjPt, ProjPt][]; // design-waterline crossing through this facet (blue)
 }
 
 function drawLines(svg: SVGSVGElement, rebuild: boolean): void {
@@ -1673,13 +1676,16 @@ function drawLines(svg: SVGSVGElement, rebuild: boolean): void {
   const SP = grid.map((row) => row.map(proj));
   const PP = grid.map((row) => row.map(([x, y, z]) => proj([x, -y, z])));
   const crease = new Set(creaseCols);
+  const showStation = (i: number): boolean => i === 0 || i === NS || i % LINES_STATION_STEP === 0;
+  const gridM = grid.map((row) => row.map(([x, y, z]): Vec3 => [x, -y, z])); // port-side world points
+  const imm = (w: Vec3): number => immersion(w[0], w[2]); // > 0 below the design waterline
 
   let minX = Infinity,
     minY = Infinity,
     maxX = -Infinity,
     maxY = -Infinity;
   const quads: LineQuad[] = [];
-  for (const G of [SP, PP])
+  for (const [G, GW] of [[SP, grid], [PP, gridM]] as [ProjPt[][], Vec3[][]][])
     for (let i = 0; i < NS; i++)
       for (let j = 0; j < M; j++) {
         const A = G[i][j],
@@ -1693,10 +1699,29 @@ function drawLines(svg: SVGSVGElement, rebuild: boolean): void {
           if (p.y > maxY) maxY = p.y;
         }
         const bold: [ProjPt, ProjPt][] = [];
-        if (j === 0 || crease.has(j)) bold.push([D, A]); // sheer / chine column edge
-        if (j + 1 === M || crease.has(j + 1)) bold.push([B, C]); // keel / chine column edge
-        if (i === 0) bold.push([A, B]); // transom station edge
-        quads.push({ poly: [A, B, C, D], depth: (A.d + B.d + C.d + D.d) / 4, bold });
+        if (j === 0 || crease.has(j)) bold.push([D, A]); // sheer / chine longitudinal
+        if (j + 1 === M || crease.has(j + 1)) bold.push([B, C]); // keel / chine longitudinal
+        const stn: [ProjPt, ProjPt][] = [];
+        if (showStation(i)) stn.push([A, B]); // station (transverse section) at this row
+        if (i === NS - 1 && showStation(NS)) stn.push([D, C]); // the bow/forwardmost station
+        // design-waterline contour: march the immersion sign across the facet's four corners
+        const corn = [
+          { p: A, m: imm(GW[i][j]) },
+          { p: B, m: imm(GW[i][j + 1]) },
+          { p: C, m: imm(GW[i + 1][j + 1]) },
+          { p: D, m: imm(GW[i + 1][j]) },
+        ];
+        const cr: ProjPt[] = [];
+        for (let k = 0; k < 4; k++) {
+          const a = corn[k],
+            b = corn[(k + 1) % 4];
+          if (a.m < 0 !== b.m < 0 && a.m !== b.m) {
+            const t = a.m / (a.m - b.m);
+            cr.push({ x: a.p.x + t * (b.p.x - a.p.x), y: a.p.y + t * (b.p.y - a.p.y), d: a.p.d + t * (b.p.d - a.p.d) });
+          }
+        }
+        const wl: [ProjPt, ProjPt][] = cr.length >= 2 ? [[cr[0], cr[1]]] : [];
+        quads.push({ poly: [A, B, C, D], depth: (A.d + B.d + C.d + D.d) / 4, bold, stn, wl });
       }
   quads.sort((a, b) => a.depth - b.depth); // far → near: nearer white facets are drawn last and occlude
 
@@ -1721,28 +1746,77 @@ function drawLines(svg: SVGSVGElement, rebuild: boolean): void {
   );
   svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
 
-  // Painter's: each quad is an opaque white facet with thin grid edges; nearer facets, drawn later, paint
-  // over the lines behind them — so the far-side mesh is hidden, like a solid hull. Bold feature edges are
-  // drawn right after their own facet, so they're occluded by anything nearer too.
+  // Painter's: each quad is an opaque WHITE facet (a white hairline stroke only closes the anti-alias seams).
+  // Nearer facets, drawn later, paint over the lines behind them, so the far side is hidden like a solid hull.
+  // Per facet we draw the occluded interior lines: stations, chines, and the design-waterline crossing (blue).
   const pts = (q: ProjPt[]): string => q.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-  for (const q of quads) {
+  const line = (p0: ProjPt, p1: ProjPt, w: number, color: string): SVGElement =>
+    el("line", {
+      x1: p0.x.toFixed(1), y1: p0.y.toFixed(1), x2: p1.x.toFixed(1), y2: p1.y.toFixed(1),
+      stroke: color, "stroke-width": w, "stroke-linecap": "round", "vector-effect": "non-scaling-stroke",
+    });
+  // The selected template point's longitudinal (the locus it sweeps) is drawn occluded like everything else:
+  // its segments are mixed INTO the painter's order, each at its own depth, biased a hair toward the eye so it
+  // sits just proud of its own facet (no z-fight) but is hidden behind any nearer surface. Built and trimmed
+  // exactly like buildLongitudinalMesh. Amber, matching the shaded view's guide.
+  type Item = { depth: number; q?: LineQuad; seg?: [ProjPt, ProjPt] };
+  const items: Item[] = quads.map((q) => ({ depth: q.depth, q }));
+  const li = selStationIdx();
+  if (li !== null) {
+    // world-space toward-eye direction (gradient of the projected depth), for the small proud-of-surface bias
+    let vx = -c2 * s1 * cT + s2 * sT,
+      vy = -c2 * c1,
+      vz = c2 * s1 * sT + s2 * cT;
+    const vl = Math.hypot(vx, vy, vz) || 1,
+      BIAS = 60; // clear the coarse flat-facet chords (the guide rides facet interiors, not edges)
+    (vx /= vl), (vy /= vl), (vz /= vl);
+    const tpl = state.templates,
+      NP = 120,
+      WP: Vec3[] = [],
+      keep: boolean[] = [];
+    for (let i = 0; i <= NP; i++) {
+      const x = (L * i) / NP,
+        wt = weightsAt(x);
+      let n = 0,
+        d = 0;
+      for (let t = 0; t < tpl.length; t++) {
+        n += wt[t] * tpl[t][li].n;
+        d += wt[t] * tpl[t][li].d;
+      }
+      const fr = frameAt(x),
+        w: Vec3 = [fr.p[0] + n * fr.n[0] + d * fr.d[0], fr.p[1] + n * fr.n[1] + d * fr.d[1], fr.p[2] + n * fr.n[2] + d * fr.d[2]];
+      WP.push(w);
+      keep.push(d >= -state.sheer.zf(x) && w[1] >= 0 && w[0] >= xTransom(w[2]));
+    }
+    for (const sgn of [1, -1])
+      for (let i = 0; i < NP; i++) {
+        if (!keep[i] || !keep[i + 1]) continue;
+        const a = proj([WP[i][0] + vx * BIAS, sgn * WP[i][1] + vy * BIAS, WP[i][2] + vz * BIAS]),
+          b = proj([WP[i + 1][0] + vx * BIAS, sgn * WP[i + 1][1] + vy * BIAS, WP[i + 1][2] + vz * BIAS]);
+        items.push({ depth: (a.d + b.d) / 2, seg: [a, b] });
+      }
+  }
+  items.sort((a, b) => a.depth - b.depth); // far → near, facets and guide segments together
+
+  for (const it of items) {
+    if (it.seg) {
+      svg.append(line(it.seg[0], it.seg[1], 1.8, HILITE)); // selected longitudinal (amber), occluded
+      continue;
+    }
+    const q = it.q!;
     svg.append(
       el("polygon", {
         points: pts(q.poly),
         fill: "#ffffff",
-        stroke: "#8995a5",
+        stroke: "#ffffff",
         "stroke-width": 0.6,
         "stroke-linejoin": "round",
         "vector-effect": "non-scaling-stroke",
       }),
     );
-    for (const [p0, p1] of q.bold)
-      svg.append(
-        el("line", {
-          x1: p0.x.toFixed(1), y1: p0.y.toFixed(1), x2: p1.x.toFixed(1), y2: p1.y.toFixed(1),
-          stroke: "#11181f", "stroke-width": 1.8, "stroke-linecap": "round", "vector-effect": "non-scaling-stroke",
-        }),
-      );
+    for (const [p0, p1] of q.wl) svg.append(line(p0, p1, 1.4, COL.wl)); // design waterline (blue)
+    for (const [p0, p1] of q.stn) svg.append(line(p0, p1, 1, "#11181f")); // stations (lighter)
+    for (const [p0, p1] of q.bold) svg.append(line(p0, p1, 1.8, "#11181f")); // sheer / keel / chines (heavy)
   }
 }
 
