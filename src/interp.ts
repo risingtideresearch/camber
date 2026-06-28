@@ -14,8 +14,9 @@
 import { clamp } from "./math.js";
 import { state, L, prepare, type Sheer, type StationCP, type WeightCP } from "./model.js";
 import { draw3d } from "./render.js";
-import { downloadStep } from "./step.js";
-import { downloadJson, parseDocument, type HullData } from "./json.js";
+import { buildJson, parseDocument, type HullData, type ParsedDoc } from "./json.js";
+import { getDesign, insertDesign, updateDesign } from "./supabase.js";
+import { buildPreviewSvg } from "./preview.js";
 
 interface Hull {
   name: string;
@@ -111,6 +112,24 @@ function refresh(): void {
   draw3d(true); // rebuild + draw the mesh
 }
 
+// The very first draw (right after an async load) can run before the canvas has its laid-out size, leaving a
+// blank 3D view until something redraws. Draw once more next frame, when layout has settled.
+function drawAfterLayout(): void {
+  requestAnimationFrame(() => {
+    if (hulls.length) draw3d(false);
+  });
+}
+
+// update just the normalized % labels in place — called on every slider input so dragging a slider doesn't
+// rebuild (and destroy) the slider element mid-drag, which would abort the drag after the first input event.
+function updatePercents(): void {
+  const total = hulls.reduce((a, x) => a + x.weight, 0) || 1;
+  const pcts = document.querySelectorAll<HTMLElement>("#hullList .pct");
+  hulls.forEach((h, i) => {
+    if (pcts[i]) pcts[i].textContent = `${((h.weight / total) * 100).toFixed(0)}%`;
+  });
+}
+
 // ---------- the weights panel (one slider per loaded hull) ----------
 function renderPanel(): void {
   const list = document.getElementById("hullList")!;
@@ -125,7 +144,6 @@ function renderPanel(): void {
       `<span class="dot" style="background:${palette[i % palette.length]}"></span>` +
       `<span class="hullname" title="${h.name}">${h.name}</span>` +
       `<span class="pct">${pct}%</span>` +
-      `<button class="rm" title="Remove this hull" data-i="${i}">✕</button>` +
       `</div>` +
       `<input type="range" class="wslider" min="0" max="100" step="1" value="${Math.round(h.weight * 100)}" data-i="${i}">`;
     list.append(row);
@@ -133,16 +151,7 @@ function renderPanel(): void {
   list.querySelectorAll<HTMLInputElement>(".wslider").forEach((sl) => {
     sl.addEventListener("input", () => {
       hulls[+sl.dataset.i!].weight = +sl.value / 100;
-      renderPanel();
-      refresh();
-    });
-  });
-  list.querySelectorAll<HTMLButtonElement>(".rm").forEach((b) => {
-    b.addEventListener("click", () => {
-      hulls.splice(+b.dataset.i!, 1);
-      if (hulls.length === 0) topo = null;
-      renderPanel();
-      updateStatus();
+      updatePercents(); // in-place; do NOT rebuild the panel while a slider is being dragged
       refresh();
     });
   });
@@ -150,15 +159,123 @@ function renderPanel(): void {
 
 function updateStatus(): void {
   const status = document.getElementById("status")!;
-  const exportable = hulls.length >= 1;
-  (document.getElementById("exportStep") as HTMLButtonElement).disabled = !exportable;
-  (document.getElementById("exportJson") as HTMLButtonElement).disabled = !exportable;
   if (hulls.length === 0) {
-    status.textContent = "Load 2–5 exported hulls to begin.";
+    status.textContent = "Open a blend from the design library to begin.";
   } else if (hulls.length === 1) {
-    status.textContent = "1 hull loaded — add at least one more to interpolate.";
+    status.textContent = "1 hull loaded — needs at least one more to interpolate.";
   } else {
     status.textContent = `${hulls.length} hulls · blending`;
+  }
+  refreshSaveUI();
+}
+
+// ---------- saving the blend to the library ----------
+// First save creates a new design (button reads "Save As…"). After that the button reads "Save" and
+// overwrites that design, flipping back to "Save As…" only when the name is changed (which forks a new one) —
+// exactly like the hull editor.
+let currentId: string | null = null; // the saved design's row id (null until first save)
+let savedName: string | null = null; // the name stored for currentId
+let savedSnapshot = ""; // buildJson() of the last save
+let savingNow = false;
+let flashUntil = 0;
+
+const nameInput = () => document.getElementById("blendName") as HTMLInputElement;
+const saveBtnEl = () => document.getElementById("saveAs") as HTMLButtonElement;
+const saveStateEl = () => document.getElementById("saveState")!;
+
+function defaultBlendName(): string {
+  return hulls.length ? `Blend of ${hulls.map((h) => h.name).join(" + ")}`.slice(0, 120) : "Untitled blend";
+}
+// would saving create a new row? (never saved, or the name was changed away from the saved design)
+function willFork(): boolean {
+  const name = nameInput().value.trim();
+  return currentId == null || (name !== "" && name !== savedName);
+}
+function isDirty(): boolean {
+  if (hulls.length === 0) return false;
+  if (currentId == null) return true; // never saved → always unsaved work
+  return buildJson() !== savedSnapshot || nameInput().value.trim() !== savedName;
+}
+function refreshSaveUI(): void {
+  saveBtnEl().textContent = willFork() ? "Save As…" : "Save";
+  saveBtnEl().disabled = hulls.length < 1 || savingNow;
+  if (savingNow || Date.now() < flashUntil) return;
+  const st = saveStateEl();
+  if (hulls.length < 1) {
+    st.className = "savestate";
+    st.textContent = "";
+  } else if (isDirty()) {
+    st.className = "savestate dirty";
+    st.textContent = "Unsaved";
+  } else {
+    st.className = "savestate saved";
+    st.textContent = "Saved";
+  }
+}
+
+async function doSave(): Promise<void> {
+  if (savingNow || hulls.length < 1) return;
+  const fork = willFork();
+  let name = nameInput().value.trim();
+  if (fork) {
+    if (!name) {
+      name = prompt("Name this blend:", defaultBlendName())?.trim() ?? "";
+      if (!name) return;
+      nameInput().value = name;
+    }
+  } else {
+    name = savedName!; // plain overwrite keeps the existing name
+  }
+  savingNow = true;
+  flashUntil = 0;
+  saveBtnEl().disabled = true;
+  saveStateEl().className = "savestate";
+  saveStateEl().textContent = "Saving…";
+  try {
+    const json = buildJson(); // the blended hull is already in `state`
+    const preview = buildPreviewSvg();
+    if (fork) currentId = await insertDesign(name, json, preview);
+    else await updateDesign(currentId!, json, preview);
+    savedName = name;
+    savedSnapshot = json;
+    nameInput().value = name;
+    flashUntil = Date.now() + 1400;
+    saveStateEl().className = "savestate saved";
+    saveStateEl().textContent = "Saved ✓";
+  } catch (e) {
+    saveStateEl().className = "savestate dirty";
+    saveStateEl().textContent = "Save failed";
+    alert("Save failed: " + (e instanceof Error ? e.message : String(e)));
+  } finally {
+    savingNow = false;
+    refreshSaveUI();
+  }
+}
+
+function closeToLibrary(): void {
+  if (isDirty() && !confirm("Discard the unsaved blend and return to the library?")) return;
+  window.location.href = "index.html";
+}
+
+// add every variant of a parsed document to the family (a HullDocument can carry several), checking each
+// against the shared topology. Collects any per-variant problems into `errs`.
+function addParsedDoc(parsed: ParsedDoc, base: string, errs: string[]): void {
+  let vi = 0;
+  for (const data of parsed.variants) {
+    if (hulls.length >= 5) {
+      errs.push(`${base}: family is full (max 5 hulls) — some variants skipped`);
+      break;
+    }
+    try {
+      checkTopology(data, parsed.length);
+    } catch (e) {
+      errs.push(`${base}: ${e instanceof Error ? e.message : String(e)}`);
+      vi++;
+      continue;
+    }
+    const name = data.name ?? (parsed.variants.length > 1 ? `${base} #${vi + 1}` : base);
+    hulls.push({ name, data, weight: 1 });
+    vi++;
   }
 }
 
@@ -166,51 +283,42 @@ function updateStatus(): void {
 async function loadFiles(files: FileList | File[]): Promise<void> {
   const errs: string[] = [];
   for (const f of Array.from(files)) {
-    let parsed;
     try {
-      parsed = parseDocument(await f.text());
+      addParsedDoc(parseDocument(await f.text()), f.name.replace(/\.json$/i, "") || "hull", errs);
     } catch (e) {
       errs.push(`${f.name}: ${e instanceof Error ? e.message : String(e)}`);
-      continue;
-    }
-    const base = f.name.replace(/\.json$/i, "") || "hull";
-    // a HullDocument can carry several variants — each becomes a hull in the family
-    let vi = 0;
-    for (const data of parsed.variants) {
-      if (hulls.length >= 5) {
-        errs.push(`${f.name}: family is full (max 5 hulls) — some variants skipped`);
-        break;
-      }
-      try {
-        checkTopology(data, parsed.length);
-      } catch (e) {
-        errs.push(`${f.name}: ${e instanceof Error ? e.message : String(e)}`);
-        vi++;
-        continue;
-      }
-      const name = data.name ?? (parsed.variants.length > 1 ? `${base} #${vi + 1}` : base);
-      hulls.push({ name, data, weight: 1 });
-      vi++;
     }
   }
   renderPanel();
   updateStatus();
   refresh();
+  drawAfterLayout();
   if (errs.length) alert("Some files could not be loaded:\n\n" + errs.join("\n"));
+}
+
+// ---------- library loading (opened from the design library with ?ids=a,b,c) ----------
+async function loadByIds(ids: string[]): Promise<void> {
+  const errs: string[] = [];
+  for (const id of ids) {
+    try {
+      const { name, documentText } = await getDesign(id);
+      addParsedDoc(parseDocument(documentText), name, errs);
+    } catch (e) {
+      errs.push(`${id}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  renderPanel();
+  updateStatus();
+  refresh();
+  drawAfterLayout();
+  if (errs.length) alert("Some designs could not be loaded:\n\n" + errs.join("\n"));
 }
 
 // ---------- wire up ----------
 function init(): void {
   state.x0 = L / 2;
 
-  const file = document.getElementById("fileInput") as HTMLInputElement;
-  document.getElementById("loadBtn")!.addEventListener("click", () => file.click());
-  file.addEventListener("change", () => {
-    if (file.files) loadFiles(file.files);
-    file.value = "";
-  });
-
-  // drag-and-drop onto the whole page
+  // drag-and-drop onto the whole page (still works for loading JSON files, though there's no Load button)
   const stop = (e: Event) => {
     e.preventDefault();
     e.stopPropagation();
@@ -229,22 +337,21 @@ function init(): void {
     refresh();
   });
 
-  // export the current blend — both read the shared `state`, so they emit exactly what is shown
-  document.getElementById("exportStep")!.addEventListener("click", () => {
-    if (!hulls.length) return;
-    try {
-      downloadStep();
-    } catch (e) {
-      alert("STEP export failed: " + (e instanceof Error ? e.message : String(e)));
+  // save the current blend to the library / close back to it
+  document.getElementById("blendName")!.addEventListener("input", refreshSaveUI);
+  document.getElementById("saveAs")!.addEventListener("click", doSave);
+  document.getElementById("closeBtn")!.addEventListener("click", closeToLibrary);
+  window.addEventListener("beforeunload", (e) => {
+    if (isDirty()) {
+      e.preventDefault();
+      e.returnValue = "";
     }
   });
-  document.getElementById("exportJson")!.addEventListener("click", () => {
-    if (!hulls.length) return;
-    try {
-      downloadJson();
-    } catch (e) {
-      alert("JSON export failed: " + (e instanceof Error ? e.message : String(e)));
-    }
+  setInterval(refreshSaveUI, 300);
+
+  // the 3D canvas fills a CSS box; redraw it when the box resizes (mesh is cached)
+  window.addEventListener("resize", () => {
+    if (hulls.length) draw3d(false);
   });
 
   // 3D view toggles (display-only, same as the editor)
@@ -275,6 +382,10 @@ function init(): void {
     draw3d(false);
   });
   window.addEventListener("pointerup", () => (rot = null));
+
+  // opened from the design library? load that selection straight from Supabase.
+  const ids = new URLSearchParams(window.location.search).get("ids");
+  if (ids) loadByIds(ids.split(",").filter(Boolean));
 
   updateStatus();
 }

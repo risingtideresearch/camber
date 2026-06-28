@@ -28,18 +28,32 @@ function previewEl(preview: string | null): HTMLElement {
   return ph;
 }
 
+const fileappEl = document.querySelector(".fileapp") as HTMLElement;
 const gridEl = document.getElementById("grid") as HTMLElement;
 const emptyEl = document.getElementById("emptyMsg") as HTMLElement;
+const selToolbar = document.getElementById("selToolbar") as HTMLElement;
 const selNameEl = document.getElementById("selName") as HTMLElement;
+const blendBtn = document.getElementById("blendBtn") as HTMLButtonElement;
 const openBtn = document.getElementById("openBtn") as HTMLButtonElement;
 const exportJsonBtn = document.getElementById("exportJsonBtn") as HTMLButtonElement;
 const exportStepBtn = document.getElementById("exportStepBtn") as HTMLButtonElement;
 const deleteBtn = document.getElementById("deleteBtn") as HTMLButtonElement;
 const newBtn = document.getElementById("newDesign") as HTMLButtonElement;
 const importBtn = document.getElementById("importJson") as HTMLButtonElement;
+const blendBar = document.getElementById("blendBar") as HTMLElement;
+const blendInfo = document.getElementById("blendInfo") as HTMLElement;
+const blendOpenBtn = document.getElementById("blendOpen") as HTMLButtonElement;
+const blendCancelBtn = document.getElementById("blendCancel") as HTMLButtonElement;
 
 let rows: DesignRow[] = [];
 let selectedId: string | null = null;
+
+// blend mode: pick a base design's compatible family, then open them in the interpolation viewer
+let blendMode = false;
+let blendSig: string | null = null; // the topology signature being blended
+const blendSel = new Set<string>(); // ids chosen for the blend
+
+const topoById = new Map<string, Topo | null>(); // recomputed each render
 
 function fmtDate(iso: string): string {
   const d = new Date(iso);
@@ -50,41 +64,185 @@ function selectedRow(): DesignRow | undefined {
   return rows.find((r) => r.id === selectedId);
 }
 
-function syncSelectionUI(): void {
+// is this design blend-compatible with the active base (same topology signature)?
+function isCompatible(id: string): boolean {
+  const t = topoById.get(id);
+  return blendSig != null && !!t && topoSig(t) === blendSig;
+}
+
+// reflect selection / blend state into the toolbar + cards
+function syncUI(): void {
+  fileappEl.classList.toggle("blending", blendMode);
+  selToolbar.hidden = blendMode;
+  blendBar.hidden = !blendMode;
+
+  if (blendMode) {
+    const compat = rows.filter((r) => isCompatible(r.id)).length;
+    blendInfo.textContent = `${blendSel.size} selected · pick 2–5 of ${compat} compatible hulls`;
+    blendOpenBtn.disabled = blendSel.size < 2 || blendSel.size > 5;
+  } else {
+    const row = selectedRow();
+    selNameEl.textContent = row ? row.name : "No design selected";
+    selNameEl.classList.toggle("none", !row);
+    for (const b of [openBtn, exportJsonBtn, exportStepBtn, deleteBtn]) b.disabled = !row;
+    // Blend needs the selected design plus at least one topology-compatible peer
+    const t = row ? topoById.get(row.id) : null;
+    const peers = t ? rows.filter((r) => { const o = topoById.get(r.id); return o && topoSig(o) === topoSig(t); }).length : 0;
+    blendBtn.disabled = peers < 2;
+  }
+  syncCards();
+}
+
+function syncCards(): void {
+  for (const card of Array.from(gridEl.children) as HTMLElement[]) {
+    const id = card.dataset.id!;
+    if (blendMode) {
+      const compat = isCompatible(id);
+      card.classList.remove("selected");
+      card.classList.toggle("compat", compat);
+      card.classList.toggle("incompat", !compat);
+      card.classList.toggle("picked", blendSel.has(id));
+    } else {
+      card.classList.remove("compat", "incompat", "picked");
+      card.classList.toggle("selected", id === selectedId);
+    }
+  }
+}
+
+function onCardClick(id: string): void {
+  if (blendMode) {
+    if (!isCompatible(id)) return; // incompatible cards are inert
+    if (blendSel.has(id)) blendSel.delete(id);
+    else if (blendSel.size < 5) blendSel.add(id);
+    syncUI();
+  } else {
+    selectedId = id;
+    syncUI();
+  }
+}
+
+function enterBlend(): void {
   const row = selectedRow();
-  selNameEl.textContent = row ? row.name : "No design selected";
-  selNameEl.classList.toggle("none", !row);
-  for (const b of [openBtn, exportJsonBtn, exportStepBtn, deleteBtn]) b.disabled = !row;
-  for (const card of Array.from(gridEl.children) as HTMLElement[])
-    card.classList.toggle("selected", card.dataset.id === selectedId);
+  const t = row ? topoById.get(row.id) : null;
+  if (!row || !t) return;
+  blendMode = true;
+  blendSig = topoSig(t);
+  blendSel.clear();
+  blendSel.add(row.id);
+  syncUI();
+}
+function exitBlend(): void {
+  blendMode = false;
+  blendSig = null;
+  blendSel.clear();
+  syncUI();
+}
+function openBlender(): void {
+  // preserve grid (newest-first) order
+  const ids = rows.filter((r) => blendSel.has(r.id)).map((r) => r.id);
+  if (ids.length < 2) return;
+  window.location.href = `interpolate.html?ids=${ids.join(",")}`;
 }
 
 function openInEditor(id: string): void {
   window.location.href = `editor.html?id=${encodeURIComponent(id)}`;
 }
 
+interface Topo {
+  length: number;
+  plan: number;
+  trim: number;
+  section: number;
+  templates: number;
+  weights: number;
+  variants: number;
+}
+// the topology that governs blending. parseDocument normalizes it (filling legacy aft/fore defaults), so this
+// matches what the interpolation viewer checks. Returns null if the document can't be parsed.
+function topoOf(row: DesignRow): Topo | null {
+  try {
+    const p = parseDocument(JSON.stringify(row.document));
+    return {
+      length: p.length,
+      plan: p.topology.sheerPlan,
+      trim: p.topology.sheerTrim,
+      section: p.topology.section,
+      templates: p.topology.templateCount,
+      weights: p.topology.weightPoints,
+      variants: p.variants.length,
+    };
+  } catch {
+    return null;
+  }
+}
+// the blend signature: only designs with an identical one (length + all control-point counts) can interpolate
+const topoSig = (t: Topo): string => `${t.length}|${t.plan}/${t.trim}/${t.section}/${t.templates}/${t.weights}`;
+
+function statChip(val: number, label: string): HTMLElement {
+  const s = document.createElement("span");
+  s.className = "stat";
+  const b = document.createElement("b");
+  b.textContent = String(val);
+  s.append(b, document.createTextNode(" " + label));
+  return s;
+}
+
+// resolve every design's topology (used for the stat chips and blend compatibility)
+function computeTopo(): void {
+  topoById.clear();
+  for (const row of rows) topoById.set(row.id, topoOf(row));
+}
+
 function renderGrid(): void {
+  computeTopo();
   gridEl.textContent = "";
+
   for (const row of rows) {
     const card = document.createElement("div");
     card.className = "card";
     card.dataset.id = row.id;
     card.append(previewEl(row.preview));
+
+    const t = topoById.get(row.id) ?? null;
+
     const name = document.createElement("div");
     name.className = "cname";
     name.textContent = row.name;
+    card.append(name);
+
+    if (t) {
+      const tt = document.createElement("div");
+      tt.className = "topo";
+      tt.append(
+        statChip(t.templates, "templates"),
+        statChip(t.section, "section"),
+        statChip(t.plan, "plan"),
+        statChip(t.trim, "trim"),
+        statChip(t.weights, "blend"),
+        statChip(t.length, "mm"),
+      );
+      if (t.variants > 1) tt.append(statChip(t.variants, "variants"));
+      card.append(tt);
+    }
+
     const date = document.createElement("div");
     date.className = "cdate";
     date.textContent = fmtDate(row.created_at);
-    card.append(name, date);
-    card.addEventListener("click", () => {
-      selectedId = row.id;
-      syncSelectionUI();
+    card.append(date);
+
+    // the blend-pick check badge (shown only in blend mode, via CSS)
+    const pick = document.createElement("span");
+    pick.className = "pick";
+    pick.textContent = "✓";
+    card.append(pick);
+
+    card.addEventListener("click", () => onCardClick(row.id));
+    card.addEventListener("dblclick", () => {
+      if (!blendMode) openInEditor(row.id);
     });
-    card.addEventListener("dblclick", () => openInEditor(row.id));
     gridEl.append(card);
   }
-  syncSelectionUI();
+  syncUI();
 }
 
 async function refresh(): Promise<void> {
@@ -132,6 +290,10 @@ newBtn.addEventListener("click", () => {
 openBtn.addEventListener("click", () => {
   if (selectedId) openInEditor(selectedId);
 });
+
+blendBtn.addEventListener("click", enterBlend);
+blendCancelBtn.addEventListener("click", exitBlend);
+blendOpenBtn.addEventListener("click", openBlender);
 
 exportJsonBtn.addEventListener("click", () => {
   const row = selectedRow();

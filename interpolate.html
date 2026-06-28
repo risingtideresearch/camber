@@ -36,6 +36,13 @@
   button.primary{background:var(--ink);color:#fff;border-color:var(--ink);}
   button.primary:hover{background:#2d3748;}
   .barrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+  .docname{font:inherit;font-weight:600;color:var(--ink);background:transparent;border:1px solid var(--line);
+       border-radius:8px;padding:6px 10px;max-width:240px;}
+  .docname::placeholder{color:var(--mut);font-weight:400;}
+  .docname:focus{outline:none;border-color:#2b6cb0;background:#fff;}
+  .savestate{font-size:12px;min-width:74px;color:var(--mut);}
+  .savestate.dirty{color:#b7791f;}
+  .savestate.saved{color:#2f855a;}
 
   /* ---- interpolation control panel ---- */
   .ctl{display:flex;flex-direction:column;gap:12px;}
@@ -54,20 +61,21 @@
 </head>
 <body>
 <header>
-  <h1>Hull interpolation viewer</h1>
-  <p>Load 2–5 hulls exported from the editor (<code>camber-hull</code> JSON), then move the weight sliders
-  to blend between them. Every blend of valid hulls of the same topology is itself a valid hull. The blend
-  shown can be exported as STEP or JSON.</p>
+  <h1>Hull interpolation blender</h1>
+  <p>Move the weight sliders to blend between the chosen hulls. Every blend of valid hulls of the same
+  topology is itself a valid hull. Name it and use <strong>Save As</strong> to store the result as a new
+  design in the library.</p>
 </header>
 <div class="wrap">
   <div class="card">
     <div class="barrow">
-      <button id="loadBtn" class="primary">Load hulls…</button>
+      <input id="blendName" class="docname" placeholder="Untitled blend" maxlength="120"
+             title="Name for the saved blend" spellcheck="false">
+      <span class="savestate" id="saveState"></span>
+      <button id="saveAs" class="primary" title="Save the current blend as a new design in the library" disabled>Save As…</button>
       <button id="equalBtn" title="Reset all weights to equal">Equalize weights</button>
-      <input type="file" id="fileInput" accept=".json,application/json" multiple style="display:none">
       <span style="flex:1"></span>
-      <button id="exportStep" title="Export the blended hull as a STEP (ISO 10303) file" disabled>Export STEP</button>
-      <button id="exportJson" title="Export the blended hull model as JSON" disabled>Export JSON</button>
+      <button id="closeBtn" title="Close and return to the design library">Close</button>
     </div>
   </div>
 
