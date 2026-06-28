@@ -469,7 +469,7 @@ function drawProfile(sections: Section[], _zmin: number): void {
     );
   // sheer trim line (real sheer in profile) — the swept sheet is cut to this, kept below the deck
   const xs = sampleX();
-  // the trim control polygon: the points are B-spline handles (curve interpolates only the ends), shown faint
+  // the trim control polygon, shown faint (the curve interpolates these points, with per-point knuckles)
   svg.append(
     el("path", {
       d: poly(state.sheer.trim.map((cp) => [mapX(cp.x), zScreenP(cp.z)])),
@@ -564,7 +564,7 @@ function drawProfile(sections: Section[], _zmin: number): void {
       "stroke-width": 1.5,
     }),
   );
-  state.sheer.trim.forEach((cp, idx) => trimDot(svg, idx, mapX(cp.x), zScreenP(cp.z)));
+  state.sheer.trim.forEach((cp, idx) => trimDot(svg, idx, mapX(cp.x), zScreenP(cp.z), cp.k));
   state.sheer.transom.forEach((cp, idx) => transomDot(svg, idx, mapX(cp.x), zScreenP(cp.z)));
 }
 
@@ -1724,8 +1724,21 @@ function cpDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
   c.addEventListener("pointerdown", (e) => sheerPointDown(idx, svg, e));
   svg.append(c);
 }
-function trimDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
-  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: isSelected("trim", idx) ? SELB : COL.sheer, stroke: "#fff", "stroke-width": 1.5 });
+function trimDot(svg: SVGSVGElement, idx: number, sx: number, sy: number, k: number): void {
+  // morph round (k=0, smooth) → square (k=1, hard corner) via corner radius, like the template nodes
+  const s = 5.5,
+    rad = (1 - Math.min(Math.max(k, 0), 1)) * s;
+  const c = el("rect", {
+    x: sx - s,
+    y: sy - s,
+    width: 2 * s,
+    height: 2 * s,
+    rx: rad,
+    ry: rad,
+    fill: isSelected("trim", idx) ? SELB : COL.sheer,
+    stroke: "#fff",
+    "stroke-width": 1.5,
+  });
   c.addEventListener("pointerdown", (e) => trimPointDown(idx, svg, e));
   svg.append(c);
 }

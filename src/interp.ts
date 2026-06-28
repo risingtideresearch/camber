@@ -80,6 +80,7 @@ function blend(): void {
   const trim = hulls[0].data.trim.map((_, i) => ({
     x: hulls.reduce((a, h, k) => a + w[k] * h.data.trim[i].x, 0),
     z: hulls.reduce((a, h, k) => a + w[k] * h.data.trim[i].z, 0),
+    k: hulls.reduce((a, h, kk) => a + w[kk] * h.data.trim[i].k, 0),
   }));
   const transom = hulls[0].data.transom.map((_, i) => ({
     x: hulls.reduce((a, h, k) => a + w[k] * h.data.transom[i].x, 0),

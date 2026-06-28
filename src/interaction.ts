@@ -9,7 +9,6 @@ import {
   DMAX,
   weightsAt,
   type ActiveTarget,
-  type StationCP,
   type WeightCP,
 } from "./model.js";
 import { invX, invY, invZp, invN, invD, invWvX, invWvW, YMAX, ZTRIMMIN } from "./view.js";
@@ -153,7 +152,7 @@ function addTrimPoint(x: number, z: number): number {
   x = clamp(x, cp[0].x + 80, cp[n - 1].x - 80);
   let k = cp.findIndex((p) => p.x > x);
   if (k < 1) k = n - 1;
-  cp.splice(k, 0, { x, z: clamp(z, ZTRIMMIN, 0) });
+  cp.splice(k, 0, { x, z: clamp(z, ZTRIMMIN, 0), k: 0 });
   return k;
 }
 function removeTrimPoint(idx: number): void {
@@ -289,10 +288,14 @@ export function setTool(name: typeof state.tool): void {
 }
 
 // ---------- selection ----------
-// the StationCP array of the currently-selected template point, or null
-function selArr(): StationCP[] | null {
+// the knuckle-carrying point array for the current selection (a template, or the sheer trim), or null.
+// Both StationCP and TrimCP carry `.k`, so the knuckle slider drives either.
+function selArr(): { k: number }[] | null {
   const s = state.selected;
-  return s && s.tgt === "template" && s.ti !== undefined ? state.templates[s.ti] : null;
+  if (!s) return null;
+  if (s.tgt === "template" && s.ti !== undefined) return state.templates[s.ti];
+  if (s.tgt === "trim") return state.sheer.trim;
+  return null;
 }
 
 export function select(tgt: ActiveTarget, idx: number, ti?: number): void {
@@ -318,10 +321,10 @@ function canDelete(s: { tgt: ActiveTarget; idx: number }): boolean {
   return len > 3 && s.idx > 0 && s.idx < len - 1;
 }
 
-// template points carry a knuckle (k) — including the last (keel) point. Only the pinned sheer point
-// (idx 0) and the sheer/trim/transom/weight points do not.
+// points that carry a knuckle (k): every sheer-trim point, and every template point but the pinned sheer
+// point (idx 0). The plan/transom/weight points do not.
 function hasKnuckle(s: { tgt: ActiveTarget; idx: number }): boolean {
-  return s.tgt === "template" && s.idx > 0;
+  return s.tgt === "trim" || (s.tgt === "template" && s.idx > 0);
 }
 
 function labelFor(s: { tgt: ActiveTarget; idx: number; ti?: number }): string {

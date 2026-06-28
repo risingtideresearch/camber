@@ -18,6 +18,7 @@ export interface SheerCP {
 export interface TrimCP {
   x: number;
   z: number;
+  k: number; // knuckle ∈ [0,1]: 0 = smooth, 1 = hard corner — same as the template points
 }
 export interface TransomCP {
   x: number;
@@ -184,7 +185,7 @@ export const state: State = {
 export function resetModel(): void {
   state.sheer = {
     cp: SHEER_DEF.map((c) => ({ x: c[0], y: c[1] })),
-    trim: SHEER_TRIM_DEF.map((c) => ({ x: c[0], z: c[1] })),
+    trim: SHEER_TRIM_DEF.map((c) => ({ x: c[0], z: c[1], k: 0 })),
     transom: TRANSOM_DEF.map((c) => ({ x: c[0], z: c[1] })),
     yf: () => 0,
     zf: () => 0,
@@ -213,7 +214,13 @@ export function prepare(): void {
   // the curve interpolating only the first and last). Evaluated directly as y(x), so the swept frame's
   // heading is smooth. (Was a Hobby curve sampled to a table + read back by linear interpolation — C⁰.)
   sheer.yf = clampedBSplineSamplerX(sheer.cp.map((p) => [p.x, p.y]));
-  sheer.zf = clampedBSplineSamplerX(sheer.trim.map((p) => [p.x, p.z])); // profile sheer-trim, z(x) ≤ 0
+  // profile sheer-trim z(x) ≤ 0: the same knuckle-aware fairing the templates use (interpolating, with
+  // per-point knuckles), parameterized by x — so a hard sheer-line corner is possible, like a chine.
+  sheer.zf = fairEval(
+    sheer.trim.map((p) => p.x),
+    sheer.trim.map((p) => p.z),
+    sheer.trim.map((p) => p.k),
+  );
   state.weightFn = buildWeightSampler(state.weights); // the longitudinal blend path through the simplex
 }
 

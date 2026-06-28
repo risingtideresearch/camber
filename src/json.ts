@@ -29,6 +29,7 @@ interface PlanPoint {
 interface TrimPoint {
   dx: number;
   depth: number;
+  k: number;
 }
 interface SectionPoint {
   dd: number;
@@ -74,7 +75,7 @@ export interface ParsedDoc {
 const encPlan = (cp: SheerCP[]): PlanPoint[] =>
   cp.map((p, i) => ({ dx: i === 0 ? p.x : p.x - cp[i - 1].x, y: p.y }));
 const encTrim = (trim: TrimCP[]): TrimPoint[] =>
-  trim.map((p, i) => ({ dx: i === 0 ? p.x : p.x - trim[i - 1].x, depth: -p.z }));
+  trim.map((p, i) => ({ dx: i === 0 ? p.x : p.x - trim[i - 1].x, depth: -p.z, k: p.k }));
 const encSection = (pts: StationCP[]): SectionPoint[] =>
   pts.map((p, i) => ({ dd: i === 0 ? 0 : p.d - pts[i - 1].d, n: p.n, k: p.k }));
 const encWeights = (w: WeightCP[]): WeightPoint[] =>
@@ -101,7 +102,7 @@ function decTrim(trim: TrimPoint[]): TrimCP[] {
   let x = 0;
   return trim.map((p, i) => {
     x = i === 0 ? p.dx : x + p.dx;
-    return { x, z: -p.depth };
+    return { x, z: -p.depth, k: clamp(p.k, 0, 1) };
   });
 }
 function decSection(pts: SectionPoint[]): StationCP[] {
@@ -249,6 +250,7 @@ export function parseDocument(text: string): ParsedDoc {
       points(v.sheerTrim, `${c}.sheerTrim`, nTrim, (o, i) => ({
         dx: num(o.dx, `${c}.sheerTrim[${i}].dx`),
         depth: num(o.depth, `${c}.sheerTrim[${i}].depth`),
+        k: typeof o.k === "number" ? o.k : 0, // k optional, defaults to 0 (smooth) for legacy docs
       })),
     );
     const secList = (arr: unknown, ctx: string) =>
