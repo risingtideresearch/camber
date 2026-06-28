@@ -8,7 +8,7 @@
 // hull's aft edge. Both live in one OPEN_SHELL (the hull is open along the deck/sheer edge).
 
 import { V, type Vec3 } from "./math.js";
-import { L, sweptSection, xTransom, state, prepare } from "./model.js";
+import { L, sweptSection, xTransom, state, prepare, forwardLimit } from "./model.js";
 
 // ---------- B-spline numerics ----------
 
@@ -273,10 +273,11 @@ export function trimmedHullGrid(NS: number, M: number): { grid: Vec3[][]; crease
     }
     prev = cur;
   }
+  const xf = forwardLimit(); // the hull closes here, not necessarily at L (the fine bow trims away forward)
   const grid: Vec3[][] = Array.from({ length: NS + 1 }, () => new Array<Vec3>(cols));
   for (let j = 0; j < cols; j++)
     for (let i = 0; i <= NS; i++) {
-      const x = xaf[j] + (L - xaf[j]) * (i / NS); // sweep forward from the transom edge to the bow
+      const x = xaf[j] + (xf - xaf[j]) * (i / NS); // sweep forward from the transom edge to the bow closure
       grid[i][j] = fair(x)[j];
     }
   // crease columns (knuckle lines + keel) — consistent along the hull; read from a representative closed section

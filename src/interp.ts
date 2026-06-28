@@ -368,6 +368,12 @@ function init(): void {
     tz.classList.toggle("on", state.zebra);
     if (hulls.length) draw3d(false);
   });
+  const tl = document.getElementById("toggleLines") as HTMLButtonElement;
+  tl.addEventListener("click", () => {
+    state.lineArt = !state.lineArt;
+    tl.classList.toggle("on", state.lineArt);
+    if (hulls.length) draw3d(true);
+  });
 
   // 3D rotation (view-only; no model is touched)
   const cv = document.getElementById("cv3d") as HTMLCanvasElement;
@@ -383,6 +389,17 @@ function init(): void {
     draw3d(false);
   });
   window.addEventListener("pointerup", () => (rot = null));
+  // scroll-wheel zoom (the lines overlay is pointer-events:none so this still reaches the canvas)
+  cv.addEventListener(
+    "wheel",
+    (e) => {
+      if (!hulls.length) return;
+      e.preventDefault();
+      state.zoom = clamp(state.zoom * Math.exp(-e.deltaY * 0.0015), 0.3, 8);
+      draw3d(false);
+    },
+    { passive: false },
+  );
 
   // opened from the design library? load that selection straight from Supabase.
   const ids = new URLSearchParams(window.location.search).get("ids");

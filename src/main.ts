@@ -108,6 +108,13 @@ toggleZebra.addEventListener("click", () => {
   draw3d(false);
 });
 
+const toggleLines = document.getElementById("toggleLines") as HTMLButtonElement;
+toggleLines.addEventListener("click", () => {
+  state.lineArt = !state.lineArt;
+  toggleLines.classList.toggle("on", state.lineArt);
+  draw3d(true); // build the wireframe grid (or restore the shaded surface)
+});
+
 document.getElementById("addBlendBtn")!.addEventListener("click", () => {
   addBlendPoint();
   updateDirty();

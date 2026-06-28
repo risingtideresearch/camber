@@ -468,6 +468,16 @@ export function initInteraction(): void {
     };
     e.preventDefault();
   });
+  // scroll-wheel zoom (smooth, multiplicative); the lines overlay is pointer-events:none so this still fires
+  cv3d.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      state.zoom = clamp(state.zoom * Math.exp(-e.deltaY * 0.0015), 0.3, 8);
+      draw3d(false);
+    },
+    { passive: false },
+  );
 
   window.addEventListener("pointermove", (e) => {
     if (!drag) return;

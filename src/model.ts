@@ -158,8 +158,10 @@ export interface State {
   deckRake: number; // deck rake angle (rad, +ve = bow up): a rigid rotation of the whole hull about the
   // transverse (y) axis through the sheer origin. Everything is built deck-flat (z=0); the boat floats at this rake.
   rot: { yaw: number; pitch: number };
+  zoom: number; // 3D view zoom multiplier on the fixed framing (1 = default; scroll wheel adjusts)
   view3d: View3D;
   zebra: boolean;
+  lineArt: boolean; // 3D view style: false = shaded surface, true = lines-plan wireframe (SVG overlay)
   fairing: Fairing; // which curve fairing to use (session toggle; not part of the saved model)
   tool: Tool;
   selected: { tgt: ActiveTarget; idx: number; ti?: number } | null;
@@ -175,8 +177,10 @@ export const state: State = {
   waterline: 600,
   deckRake: 0,
   rot: { yaw: -0.62, pitch: 0.42 },
+  zoom: 1,
   view3d: "trimmed", // "trimmed" = clipped + mirrored hull; "sheet" = untrimmed one side
   zebra: false, // zebra-stripe fairness check on the 3D surface
+  lineArt: false, // start on the shaded surface; toggled by the "Lines" button
   fairing: "pchip", // C¹ shape-preserving (keeps the chines); "c2"/"bspline" are code-toggle experiments
   tool: "select", // "select" = click a point to select (then drag/delete/knuckle); "add" = click to add
   selected: null, // the persistently selected control point (highlighted in the editors)
@@ -652,6 +656,24 @@ export function sweptSection(x: number, M: number, trim: boolean, clipTransom = 
 
 export function clippedSection(x: number, M: number): Section {
   return sweptSection(x, M, true);
+}
+
+// The forward limit of the hull: the largest x where a trimmed section still exists. Near the bow the
+// forefoot rises above the sheer-trim line, so sections there go empty (no hull) — the surface must close
+// at this x, NOT at x = L. Without it the mesh either drops the empty bow sections (leaving an open notch)
+// or stretches a facet to a fabricated point at L (a fold). Returns L when the hull closes exactly at L.
+export function forwardLimit(): number {
+  const exists = (x: number): boolean => !sweptSection(x, 4, true, false).aft;
+  if (exists(L)) return L;
+  let lo = L * 0.5,
+    hi = L;
+  if (!exists(lo)) return L; // section already gone amidships (degenerate model) — don't clamp
+  for (let k = 0; k < 24; k++) {
+    const m = (lo + hi) / 2;
+    if (exists(m)) lo = m;
+    else hi = m;
+  }
+  return lo; // the last x with a (vanishingly small) section ⇒ the bow closes here
 }
 
 // the transom face outline (starboard, top→bottom): walk down the transom plane and read the hull's

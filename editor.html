@@ -26,6 +26,9 @@
   .top3d{position:relative;flex:1 1 0;min-height:140px;border:1px solid var(--line);border-radius:10px;
          overflow:hidden;background:linear-gradient(#eef3f8,#d7e0ea);}
   .view3dctl{position:absolute;top:10px;right:14px;display:flex;gap:8px;z-index:1;}
+  .view3dctl button.on{background:var(--ink);color:#fff;border-color:var(--ink);}
+  /* lines-plan overlay: white, covers the GL canvas; pointer-events pass through so drag-rotate still works */
+  .lines3d{position:absolute;inset:0;width:100%;height:100%;background:#fff;pointer-events:none;}
   .viewstrip{flex:0 0 auto;width:100%;border:1px solid var(--line);border-radius:10px;background:var(--panel);
              overflow:hidden;}
   .viewstrip svg{display:block;width:100%;height:auto;}
@@ -155,7 +158,9 @@
     <div class="leftcol">
       <div class="top3d">
         <canvas id="cv3d"></canvas>
+        <svg id="lines3d" class="lines3d" style="display:none"></svg>
         <div class="view3dctl">
+          <button id="toggleLines" title="Lines-plan wireframe view">Lines</button>
           <button id="toggleZebra">Zebra</button>
           <button id="toggle3d">Untrimmed sheet</button>
         </div>

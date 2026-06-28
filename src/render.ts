@@ -17,6 +17,7 @@ import {
   fairEval,
   weightsAt,
   immersion,
+  forwardLimit,
   type Section,
   type StationCP,
   type ActiveTarget,
@@ -54,6 +55,7 @@ import {
   tplColor,
   cv3d,
 } from "./dom.js";
+import { trimmedHullGrid } from "./step.js";
 import {
   startDrag,
   sheerPointDown,
@@ -1341,8 +1343,11 @@ function bilgeRows(
   const rows: Vec3[][] = [],
     open: boolean[] = [],
     creaseS: number[][] = []; // per row, per column: crease strength (0 = smooth, 1 = hard)
+  // for the trimmed hull, stop the forward sweep at the bow closure so the surface tapers to a clean stem
+  // (forward of it the forefoot is above the sheer trim — no hull); the raw untrimmed sheet runs to L.
+  const xMax = trim ? forwardLimit() : L;
   for (let i = 0; i <= N; i++) {
-    const s = sweptSection((L * i) / N, M, trim, false);
+    const s = sweptSection((xMax * i) / N, M, trim, false);
     if (s.aft) continue;
     if (!trim) {
       rows.push(s.pts); // raw sheet: half only, meshed without a mirror
@@ -1597,7 +1602,133 @@ const REF_YAW = -0.62,
   REF_PITCH = 0.42,
   NOMINAL: number[] = [0, -950, -1300, 4000, 950, 0]; // [x0,y0,z0, x1,y1,z1]
 
+// ---------- lines-plan wireframe (SVG overlay) ----------
+// A white, unshaded line drawing in the style of a hand-drawn hull lines plan: a transparent mesh of
+// stations (transverse) and longitudinals, with the feature edges (sheer, keel, stem, transom, chines) bold
+// and the interior grid thin. Rendered as SVG so the strokes can carry real, view-independent line weights
+// (WebGL clamps lineWidth to 1 on most browsers). It reuses the 3D canvas's camera, so it rotates live.
+const LINES_NS = 40,
+  LINES_M = 10;
+let linesGrid: { grid: Vec3[][]; creaseCols: number[] } | null = null;
+
+interface ProjPt {
+  x: number;
+  y: number;
+  d: number;
+}
+interface LineQuad {
+  poly: ProjPt[];
+  depth: number; // toward-eye; larger = nearer
+  bold: [ProjPt, ProjPt][];
+}
+
+function drawLines(svg: SVGSVGElement, rebuild: boolean): void {
+  if (rebuild || !linesGrid) linesGrid = trimmedHullGrid(LINES_NS, LINES_M);
+  const { grid, creaseCols } = linesGrid;
+  svg.replaceChildren();
+  const NS = grid.length - 1,
+    M = grid[0].length - 1;
+  if (NS < 1 || M < 1) return;
+
+  // project world (x,y,z) → screen, the same transform as the WebGL vertex shader (deck rake, then yaw about
+  // up, then pitch); SVG y is down, so negate. `d` is the toward-eye depth (larger = nearer) for painter sort.
+  const c1 = Math.cos(state.rot.yaw),
+    s1 = Math.sin(state.rot.yaw),
+    c2 = Math.cos(state.rot.pitch),
+    s2 = Math.sin(state.rot.pitch),
+    cT = Math.cos(state.deckRake),
+    sT = Math.sin(state.deckRake);
+  const proj = ([x, y, z]: Vec3): ProjPt => {
+    const rx = x * cT - z * sT,
+      rz = x * sT + z * cT;
+    return { x: rx * c1 - y * s1, y: -((rx * s1 + y * c1) * s2 + rz * c2), d: -c2 * s1 * rx - c2 * c1 * y + s2 * rz };
+  };
+  // projected point grids for both sides (starboard + the y-mirror)
+  const SP = grid.map((row) => row.map(proj));
+  const PP = grid.map((row) => row.map(([x, y, z]) => proj([x, -y, z])));
+  const crease = new Set(creaseCols);
+
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
+  const quads: LineQuad[] = [];
+  for (const G of [SP, PP])
+    for (let i = 0; i < NS; i++)
+      for (let j = 0; j < M; j++) {
+        const A = G[i][j],
+          B = G[i][j + 1],
+          C = G[i + 1][j + 1],
+          D = G[i + 1][j];
+        for (const p of [A, B, C, D]) {
+          if (p.x < minX) minX = p.x;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.y > maxY) maxY = p.y;
+        }
+        const bold: [ProjPt, ProjPt][] = [];
+        if (j === 0 || crease.has(j)) bold.push([D, A]); // sheer / chine column edge
+        if (j + 1 === M || crease.has(j + 1)) bold.push([B, C]); // keel / chine column edge
+        if (i === 0) bold.push([A, B]); // transom station edge
+        quads.push({ poly: [A, B, C, D], depth: (A.d + B.d + C.d + D.d) / 4, bold });
+      }
+  quads.sort((a, b) => a.depth - b.depth); // far → near: nearer white facets are drawn last and occlude
+
+  // FIXED zoom (matches the shaded view): the viewBox size frames the NOMINAL hull box at a reference
+  // orientation, so it depends only on the overlay's pixel size — not the live rotation. Only the center
+  // tracks the live hull, so it pivots in place at a constant size instead of rescaling as you rotate.
+  const ref = projExtent(
+    NOMINAL,
+    Math.cos(REF_YAW), Math.sin(REF_YAW), Math.cos(REF_PITCH), Math.sin(REF_PITCH),
+    1, 0, L / 2, (ZMIN + ZMAX) / 2,
+  );
+  const w = svg.clientWidth || 800,
+    h = svg.clientHeight || 400;
+  const pxScale = 0.92 * Math.min(w / ref.exX, h / ref.exY) * state.zoom;
+  const vbw = w / pxScale,
+    vbh = h / pxScale,
+    cx = (minX + maxX) / 2,
+    cy = (minY + maxY) / 2;
+  svg.setAttribute(
+    "viewBox",
+    `${(cx - vbw / 2).toFixed(1)} ${(cy - vbh / 2).toFixed(1)} ${vbw.toFixed(1)} ${vbh.toFixed(1)}`,
+  );
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+
+  // Painter's: each quad is an opaque white facet with thin grid edges; nearer facets, drawn later, paint
+  // over the lines behind them — so the far-side mesh is hidden, like a solid hull. Bold feature edges are
+  // drawn right after their own facet, so they're occluded by anything nearer too.
+  const pts = (q: ProjPt[]): string => q.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  for (const q of quads) {
+    svg.append(
+      el("polygon", {
+        points: pts(q.poly),
+        fill: "#ffffff",
+        stroke: "#8995a5",
+        "stroke-width": 0.6,
+        "stroke-linejoin": "round",
+        "vector-effect": "non-scaling-stroke",
+      }),
+    );
+    for (const [p0, p1] of q.bold)
+      svg.append(
+        el("line", {
+          x1: p0.x.toFixed(1), y1: p0.y.toFixed(1), x2: p1.x.toFixed(1), y2: p1.y.toFixed(1),
+          stroke: "#11181f", "stroke-width": 1.8, "stroke-linecap": "round", "vector-effect": "non-scaling-stroke",
+        }),
+      );
+  }
+}
+
 export function draw3d(rebuild?: boolean): void {
+  // lines-plan style: draw the SVG overlay and skip the WebGL surface entirely
+  const lines = document.getElementById("lines3d") as SVGSVGElement | null;
+  if (state.lineArt && lines) {
+    lines.style.display = "";
+    drawLines(lines, rebuild !== false);
+    return;
+  }
+  if (lines) lines.style.display = "none";
   if (!GL) initGL();
   const trimmed = state.view3d === "trimmed";
   if (rebuild !== false || !meshHull) {
@@ -1636,7 +1767,7 @@ export function draw3d(rebuild?: boolean): void {
     bb = meshBBox ?? NOMINAL;
   const ref = projExtent(NOMINAL, Math.cos(REF_YAW), Math.sin(REF_YAW), Math.cos(REF_PITCH), Math.sin(REF_PITCH), 1, 0, cxm, czm),
     live = projExtent(bb, c1, s1, c2, s2, rc, rs, cxm, czm),
-    pxScale = 0.92 * Math.min(w / ref.exX, h / ref.exY);
+    pxScale = 0.92 * Math.min(w / ref.exX, h / ref.exY) * state.zoom;
   gl.uniform1f(loc.uKX, (pxScale * 2) / w);
   gl.uniform1f(loc.uKY, (pxScale * 2) / h);
   gl.uniform1f(loc.uCX, live.cX);
