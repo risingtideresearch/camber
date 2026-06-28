@@ -1726,14 +1726,14 @@ function drawLines(svg: SVGSVGElement, rebuild: boolean): void {
 export function draw3d(rebuild?: boolean): void {
   // lines-plan style: draw the SVG overlay and skip the WebGL surface entirely
   const lines = document.getElementById("lines3d") as SVGSVGElement | null;
-  if (state.lineArt && lines) {
+  if (state.view3dMode === "lines" && lines) {
     lines.style.display = "";
     drawLines(lines, rebuild !== false);
     return;
   }
   if (lines) lines.style.display = "none";
   if (!GL) initGL();
-  const trimmed = state.view3d === "trimmed";
+  const trimmed = state.view3dMode !== "sheet";
   if (rebuild !== false || !meshHull) {
     const built = buildHullMesh(trimmed);
     meshHull = built.hull;
@@ -1801,7 +1801,7 @@ export function draw3d(rebuild?: boolean): void {
     ]),
   );
   gl.uniform1f(loc.uStripes, 11.0);
-  gl.uniform1i(loc.uZebra, state.zebra ? 1 : 0);
+  gl.uniform1i(loc.uZebra, state.view3dMode === "zebra" ? 1 : 0);
   gl.uniform1f(loc.uWaterZ, -state.waterline); // boot-top height in world z; below it the hull is bottom-painted
   gl.uniform1f(loc.uPaint, 1.0); // hull + transom take bottom paint
   drawMesh(gl, meshHull, [0.3, 0.5, 0.72]);

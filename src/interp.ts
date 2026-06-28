@@ -355,23 +355,13 @@ function init(): void {
     if (hulls.length) draw3d(false);
   });
 
-  // 3D view toggles (display-only, same as the editor)
-  const t3 = document.getElementById("toggle3d") as HTMLButtonElement;
-  t3.addEventListener("click", () => {
-    state.view3d = state.view3d === "trimmed" ? "sheet" : "trimmed";
-    t3.textContent = state.view3d === "trimmed" ? "Untrimmed sheet" : "Trimmed hull";
-    if (hulls.length) draw3d(true);
-  });
-  const tz = document.getElementById("toggleZebra") as HTMLButtonElement;
-  tz.addEventListener("click", () => {
-    state.zebra = !state.zebra;
-    tz.classList.toggle("on", state.zebra);
-    if (hulls.length) draw3d(false);
-  });
-  const tl = document.getElementById("toggleLines") as HTMLButtonElement;
-  tl.addEventListener("click", () => {
-    state.lineArt = !state.lineArt;
-    tl.classList.toggle("on", state.lineArt);
+  // 3D display mode — a single mutually-exclusive choice (render / lines / zebra / sheet), like the editor
+  const view3dModes = document.getElementById("view3dModes")!;
+  view3dModes.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button.vmode");
+    if (!b) return;
+    state.view3dMode = b.dataset.mode as typeof state.view3dMode;
+    view3dModes.querySelectorAll(".vmode").forEach((x) => x.classList.toggle("on", x === b));
     if (hulls.length) draw3d(true);
   });
 

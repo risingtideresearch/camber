@@ -94,25 +94,14 @@ rakeRange.addEventListener("input", () => {
   updateDirty();
 });
 
-const toggle3d = document.getElementById("toggle3d") as HTMLButtonElement;
-toggle3d.addEventListener("click", () => {
-  state.view3d = state.view3d === "trimmed" ? "sheet" : "trimmed";
-  toggle3d.textContent = state.view3d === "trimmed" ? "Untrimmed sheet" : "Trimmed hull";
-  draw3d(true);
-});
-
-const toggleZebra = document.getElementById("toggleZebra") as HTMLButtonElement;
-toggleZebra.addEventListener("click", () => {
-  state.zebra = !state.zebra;
-  toggleZebra.classList.toggle("on", state.zebra);
-  draw3d(false);
-});
-
-const toggleLines = document.getElementById("toggleLines") as HTMLButtonElement;
-toggleLines.addEventListener("click", () => {
-  state.lineArt = !state.lineArt;
-  toggleLines.classList.toggle("on", state.lineArt);
-  draw3d(true); // build the wireframe grid (or restore the shaded surface)
+// the 3D display mode is a single mutually-exclusive choice (render / lines / zebra / sheet)
+const view3dModes = document.getElementById("view3dModes")!;
+view3dModes.addEventListener("click", (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button.vmode");
+  if (!b) return;
+  state.view3dMode = b.dataset.mode as typeof state.view3dMode;
+  view3dModes.querySelectorAll(".vmode").forEach((x) => x.classList.toggle("on", x === b));
+  draw3d(true); // rebuild for the new mode (mesh vs lines grid vs sheet)
 });
 
 document.getElementById("addBlendBtn")!.addEventListener("click", () => {

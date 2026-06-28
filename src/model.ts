@@ -134,7 +134,10 @@ function defaultWeights(k: number): WeightCP[] {
 
 // ---------- mutable model + view state ----------
 export type Tool = "select" | "add";
-export type View3D = "trimmed" | "sheet";
+// the 3D view's mutually-exclusive display mode: "render" = shaded trimmed hull, "lines" = lines-plan
+// wireframe (SVG overlay), "zebra" = zebra-striped trimmed hull (fairness check), "sheet" = the untrimmed
+// shaded sweep (one side, no trims/mirror).
+export type View3DMode = "render" | "lines" | "zebra" | "sheet";
 // curve fairing: "pchip" = C¹ monotone, shape-preserving (the default, guarantees the invariants);
 // "c2" = C² natural cubic (curvature-continuous, interpolating — but can overshoot); "bspline" = an
 // approximating clamped cubic B-spline (C² and variation-diminishing, so no overshoot — the control points
@@ -159,9 +162,7 @@ export interface State {
   // transverse (y) axis through the sheer origin. Everything is built deck-flat (z=0); the boat floats at this rake.
   rot: { yaw: number; pitch: number };
   zoom: number; // 3D view zoom multiplier on the fixed framing (1 = default; scroll wheel adjusts)
-  view3d: View3D;
-  zebra: boolean;
-  lineArt: boolean; // 3D view style: false = shaded surface, true = lines-plan wireframe (SVG overlay)
+  view3dMode: View3DMode; // mutually-exclusive 3D display mode (render / lines / zebra / sheet)
   fairing: Fairing; // which curve fairing to use (session toggle; not part of the saved model)
   tool: Tool;
   selected: { tgt: ActiveTarget; idx: number; ti?: number } | null;
@@ -178,9 +179,7 @@ export const state: State = {
   deckRake: 0,
   rot: { yaw: -0.62, pitch: 0.42 },
   zoom: 1,
-  view3d: "trimmed", // "trimmed" = clipped + mirrored hull; "sheet" = untrimmed one side
-  zebra: false, // zebra-stripe fairness check on the 3D surface
-  lineArt: false, // start on the shaded surface; toggled by the "Lines" button
+  view3dMode: "render", // shaded trimmed hull by default
   fairing: "pchip", // C¹ shape-preserving (keeps the chines); "c2"/"bspline" are code-toggle experiments
   tool: "select", // "select" = click a point to select (then drag/delete/knuckle); "add" = click to add
   selected: null, // the persistently selected control point (highlighted in the editors)

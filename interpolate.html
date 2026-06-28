@@ -37,6 +37,12 @@
   button:disabled:hover{background:#fff;}
   button.on{background:var(--ink);color:#fff;border-color:var(--ink);}
   button.primary{background:var(--ink);color:#fff;border-color:var(--ink);}
+  /* 3D mode segmented control: joined buttons, one active */
+  .view3dctl{display:inline-flex;gap:0;}
+  .view3dctl .vmode{border-radius:0;margin-left:-1px;}
+  .view3dctl .vmode:first-child{border-radius:8px 0 0 8px;margin-left:0;}
+  .view3dctl .vmode:last-child{border-radius:0 8px 8px 0;}
+  .view3dctl .vmode.on{position:relative;z-index:1;}
   button.primary:hover{background:#2d3748;}
   .barrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
   .docname{font:inherit;font-weight:600;color:var(--ink);background:transparent;border:1px solid var(--line);
@@ -87,9 +93,12 @@
       <div class="card">
         <div class="cap"><span>3D · blended hull</span>
           <span style="display:flex;gap:8px;align-items:center;">
-            <button id="toggleLines" title="Lines-plan wireframe view">Lines</button>
-            <button id="toggleZebra">Zebra</button>
-            <button id="toggle3d">Untrimmed sheet</button>
+            <span class="view3dctl" id="view3dModes">
+              <button class="vmode on" data-mode="render" title="Shaded hull">Render</button>
+              <button class="vmode" data-mode="lines" title="Lines-plan wireframe">Lines</button>
+              <button class="vmode" data-mode="zebra" title="Zebra-stripe fairness check">Zebra</button>
+              <button class="vmode" data-mode="sheet" title="Untrimmed swept sheet (one side)">Sheet</button>
+            </span>
             <span class="val">drag to rotate</span></span></div>
         <div class="cv3dwrap">
           <canvas id="cv3d"></canvas>
