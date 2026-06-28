@@ -1,7 +1,7 @@
 // ---------- DOM + SVG helpers and shared element references ----------
 
 import { type Vec2 } from "./math.js";
-import { L } from "./model.js";
+import { L, XFWD } from "./model.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 
@@ -59,10 +59,11 @@ export function tplColor(i: number): string {
   return TPL_PALETTE[((i % TPL_PALETTE.length) + TPL_PALETTE.length) % TPL_PALETTE.length];
 }
 
-// a uniform sampling of x across the hull length, used by the plan/profile sweep curves
+// a uniform sampling of x across the hull length, used by the plan/profile sweep curves. Runs to L+XFWD so
+// the sheer-trim curve (which may carry control points over the bow overhang) is drawn out there too.
 export function sampleX(): number[] {
   const a: number[] = [],
-    N = 100;
-  for (let i = 0; i <= N; i++) a.push((L * i) / N);
+    N = 110;
+  for (let i = 0; i <= N; i++) a.push(((L + XFWD) * i) / N);
   return a;
 }

@@ -1,13 +1,14 @@
 // ---------- view transforms: world coordinates → screen (SVG viewBox) coordinates ----------
 
-import { L, NMIN, NMAX, DMAX } from "./model.js";
+import { L, XFWD, NMIN, NMAX, DMAX } from "./model.js";
 
-// shared longitudinal (x) mapping for plan + profile. SX (px per mm, set by fitting the length L across
-// the 1000-wide panel) is the SINGLE isometric scale: the plan's breadth and the profile's depth use it
-// too, so all three drawings are to one scale and read the same proportions as the 3D view. The plan and
-// profile panel heights are derived from that scale so the breadth / depth domains fill them.
+// shared longitudinal (x) mapping for plan + profile. SX (px per mm, set by fitting the length L — plus the
+// forward trim overhang XFWD — across the 1000-wide panel) is the SINGLE isometric scale: the plan's breadth
+// and the profile's depth use it too, so all three drawings are to one scale and read the same proportions as
+// the 3D view. The plan and profile panel heights are derived from that scale so the breadth / depth domains
+// fill them. The extra XFWD reserves room to the right of x=L for sheer-trim points over the bow overhang.
 export const PXpad = 60,
-  SX = (1000 - 2 * PXpad) / L;
+  SX = (1000 - 2 * PXpad) / (L + XFWD);
 export const mapX = (x: number): number => PXpad + x * SX;
 export const invX = (vx: number): number => (vx - PXpad) / SX;
 

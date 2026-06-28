@@ -4,6 +4,7 @@ import { clamp, lerp } from "./math.js";
 import {
   state,
   L,
+  XFWD,
   NMIN,
   NMAX,
   DMAX,
@@ -77,8 +78,12 @@ function moveSheer(d: Drag, vx: number, vy: number): void {
 function moveTrim(d: Drag, vx: number, vy: number): void {
   const cp = state.sheer.trim[d.idx!],
     n = state.sheer.trim.length;
-  if (d.idx! > 0 && d.idx! < n - 1)
-    cp.x = clamp(invX(vx), state.sheer.trim[d.idx! - 1].x + 80, state.sheer.trim[d.idx! + 1].x - 80);
+  // The first point is pinned at the transom (x = 0); every other point — including the LAST — is movable in
+  // x. The last point may run forward to L + XFWD so the sheer trim can extend over the bow overhang.
+  if (d.idx! > 0) {
+    const hiX = d.idx! < n - 1 ? state.sheer.trim[d.idx! + 1].x - 80 : L + XFWD;
+    cp.x = clamp(invX(vx), state.sheer.trim[d.idx! - 1].x + 80, hiX);
+  }
   cp.z = clamp(invZp(vy), ZTRIMMIN, 0); // constrained at or below the flat deck (z ≤ 0)
 }
 
@@ -149,9 +154,10 @@ function removeSheerPoint(idx: number): void {
 function addTrimPoint(x: number, z: number): number {
   const cp = state.sheer.trim,
     n = cp.length;
-  x = clamp(x, cp[0].x + 80, cp[n - 1].x - 80);
+  // a new trim point may land anywhere forward of the transom, including the bow overhang up to L + XFWD
+  x = clamp(x, cp[0].x + 80, L + XFWD);
   let k = cp.findIndex((p) => p.x > x);
-  if (k < 1) k = n - 1;
+  if (k < 0) k = n; // past every existing point → append at the bow end
   cp.splice(k, 0, { x, z: clamp(z, ZTRIMMIN, 0), k: 0 });
   return k;
 }

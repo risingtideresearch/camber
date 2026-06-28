@@ -177,9 +177,16 @@ function dwlContour(sections: Section[]): [number, number][][] {
 // ---------- render ----------
 export function render(): void {
   prepare();
-  const NSEC = 64,
+  // Sample to the hull's true forward closure (forwardLimit), not the LOA: a tumblehome bow closes past x=L,
+  // and a fine bow closes before it. Cosine spacing clusters stations toward the transom and the stem, where
+  // the keel and waterlines sweep up fastest, so the bow is resolved instead of spanned by a couple of points.
+  const NSEC = 80,
+    xFwd = forwardLimit(),
     sections: Section[] = [];
-  for (let i = 0; i <= NSEC; i++) sections.push(clippedSection((L * i) / NSEC, 18));
+  for (let i = 0; i <= NSEC; i++) {
+    const x = (xFwd * (1 - Math.cos((Math.PI * i) / NSEC))) / 2;
+    sections.push(clippedSection(x, 18));
+  }
   let zmin = 0;
   for (const s of sections) {
     if (s.aft) continue;
@@ -432,32 +439,48 @@ function drawProfile(sections: Section[], _zmin: number): void {
   });
   dl.textContent = "flat deck";
   svg.append(dl);
-  // design waterline: horizontal in world ⇒ a raked line in this deck-frame profile (slope = the rake)
-  const wlS = Math.sin(state.deckRake),
+  // design waterline: horizontal in world ⇒ a raked line in this deck-frame profile (slope = the rake).
+  // Runs all the way forward to the hull's closure (forwardLimit), past the LOA for a tumblehome bow.
+  const xFwd = forwardLimit(),
+    wlS = Math.sin(state.deckRake),
     wlC = Math.cos(state.deckRake),
     zWL = (x: number) => (-state.waterline - x * wlS) / wlC;
   svg.append(
     el("line", {
       x1: mapX(0),
       y1: zScreenP(zWL(0)),
-      x2: mapX(L),
-      y2: zScreenP(zWL(L)),
+      x2: mapX(xFwd),
+      y2: zScreenP(zWL(xFwd)),
       stroke: COL.wl,
       "stroke-width": 1.8,
       opacity: 0.9,
     }),
   );
   const wll = el("text", {
-    x: mapX(L) - 4,
-    y: zScreenP(zWL(L)) - 5,
+    x: mapX(xFwd) - 4,
+    y: zScreenP(zWL(xFwd)) - 5,
     "text-anchor": "end",
     "font-size": 10,
     fill: COL.wl,
   });
   wll.textContent = "DWL";
   svg.append(wll);
-  // emergent keel (rocker / stem) — only where the section actually closes on the centerline
-  const keel = sections.filter((s) => s.keel).map((s) => s.pts[s.pts.length - 1]);
+  // emergent keel + stem, drawn as one continuous outline from transom to bow so it MATCHES the 3D mesh:
+  //  • aft: start at the transom's deepest point (where the transom outline reaches the centerline);
+  //  • bottom: the keel/rocker — the deepest point of each closing section (s.pts[last]) — rising to the bow;
+  //  • stem: at a tumblehome bow the deck tucks to the centerline, so the section TOP (s.pts[0]) dives below
+  //    the authored trim and meets the keel at the forefoot. Trace that diving top edge back from the forefoot
+  //    to where it rejoins the trim — the real raked leading edge, not a fabricated plumb line.
+  const closing = sections.filter((s) => s.keel && s.pts.length > 1);
+  const keel = closing.map((s) => s.pts[s.pts.length - 1]);
+  if (keel.length) {
+    const te = transomEdge();
+    if (te.length) keel.unshift(te[te.length - 1]); // transom keel: deepest point of the transom outline
+    // the leading-edge (stem) sections: those whose top has dived meaningfully below the authored sheer trim
+    const stem = closing.filter((s) => s.pts[0][2] < state.sheer.zf(s.pts[0][0]) - 3).map((s) => s.pts[0]);
+    if (stem.length) for (let i = stem.length - 1; i >= 0; i--) keel.push(stem[i]); // forefoot → back to the trim
+    else keel.push([xFwd, 0, state.sheer.zf(xFwd)]); // a fine bow closes straight onto the trim at the stem
+  }
   if (keel.length > 1)
     svg.append(
       el("path", {
