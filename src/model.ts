@@ -662,7 +662,13 @@ export function sweptSection(x: number, M: number, trim: boolean, clipTransom = 
         k: clamp(state.templates.reduce((s, t, j) => s + w[j] * (t[i]?.k ?? 0), 0), 0, 1),
       }))
       .sort((a, b) => a.u - b.u);
-    const wK = Math.max(...kn.map((a) => a.k)); // fade the whole realignment in/out with the knuckle strength
+    // The crease column itself always SITS ON the chine (the template point's swept locus), so the drawn /
+    // exported chine line tracks the real chine regardless of how hard the knuckle is. The FILL columns
+    // between anchors still relax from knuckle-aligned toward the even grid by the blended knuckle strength
+    // (wK) — where the chine softens the interior spacing eases back to even, which keeps the keel deadrise
+    // fair; only the crease line is pinned. (Earlier the crease column too was lerped toward even, dragging
+    // the drawn chine away from its true line where the knuckle faded.)
+    const wK = Math.max(...kn.map((a) => a.k));
     const anchors = [ua, ...kn.map((a) => a.u), ub],
       segs = anchors.length - 1;
     colU = [ua];
@@ -670,9 +676,13 @@ export function sweptSection(x: number, M: number, trim: boolean, clipTransom = 
     for (let s = 0; s < segs; s++) {
       const cnt = Math.floor(M / segs) + (s < M % segs ? 1 : 0); // deterministic ⇒ stable column indices
       for (let t = 1; t <= cnt; t++) {
-        const aligned = anchors[s] + ((anchors[s + 1] - anchors[s]) * t) / cnt,
-          e = evenU(col + t);
-        colU.push(e + wK * (aligned - e)); // lerp even → knuckle-aligned by the blended knuckle strength
+        if (t === cnt && s < segs - 1) {
+          colU.push(anchors[s + 1]); // the crease column: exactly on the chine
+        } else {
+          const aligned = anchors[s] + ((anchors[s + 1] - anchors[s]) * t) / cnt,
+            e = evenU(col + t);
+          colU.push(e + wK * (aligned - e)); // fill: relax toward even by the knuckle strength
+        }
       }
       col += cnt;
       if (s < segs - 1) {
