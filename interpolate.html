@@ -66,10 +66,11 @@
   .hullhead .rm:hover{color:var(--slider);background:none;}
   input[type=range]{width:100%;accent-color:var(--slider);}
   .hint{font-size:12px;color:var(--mut);}
-  /* blend pad (3+ hulls): a draggable puck in a polygon of hulls */
+  /* blend pad (3+ hulls): draggable coloured hull dots around a fixed centre (the blend) */
   .padwrap{display:flex;justify-content:center;padding:2px 0;}
   #blendPad{width:100%;max-width:260px;height:auto;touch-action:none;cursor:pointer;user-select:none;}
-  #blendPad .puck{cursor:grab;}
+  #blendPad .bdot{cursor:grab;}
+  #blendPad .bdot:active{cursor:grabbing;}
   .padlegend{display:flex;flex-direction:column;gap:6px;}
   .legrow{display:flex;align-items:center;gap:8px;font-size:13px;}
   .legrow .dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto;}
@@ -83,12 +84,23 @@
   .twoends .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px;}
   .twoends .dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto;}
   .twopct{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums;font-weight:700;font-size:13px;color:var(--ink);}
+  /* metrics panel */
+  .scalerow{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--mut);}
+  .scalerow label{display:flex;align-items:center;gap:6px;color:var(--ink);}
+  .scalerow input{width:72px;font:inherit;border:1px solid var(--line);border-radius:6px;padding:3px 6px;}
+  .scalerow select{font:inherit;border:1px solid var(--line);border-radius:6px;padding:3px 6px;background:#fff;}
+  .metrics{display:flex;flex-direction:column;gap:1px;}
+  .msec{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin:8px 0 2px;}
+  .mrow{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:1px 0;}
+  .mrow .mk{color:var(--mut);}
+  .mrow .mv{font-variant-numeric:tabular-nums;font-weight:600;color:var(--ink);white-space:nowrap;}
+  .mnote{font-size:12px;color:#b7791f;margin:4px 0;}
 </style>
 </head>
 <body>
 <header>
   <h1>Hull interpolation blender</h1>
-  <p>Blend between the chosen hulls — a slider for two, or drag the dot in the blend pad for three or more.
+  <p>Blend between the chosen hulls — a slider for two, or drag each hull's dot toward the centre for three or more.
   Every blend of valid hulls of the same topology is itself a valid hull. Name it and use
   <strong>Save As</strong> to store the result as a new design in the library.</p>
 </header>
@@ -131,7 +143,20 @@
         <div class="ctl">
           <div id="status">Load 2–5 exported hulls to begin.</div>
           <div id="hullList"></div>
-          <div class="hint">Drag toward a hull for more of it; the centre is an equal blend. The result is always a valid hull.</div>
+          <div class="hint">Drag a hull's dot toward the centre for more of it, or past the ring to drop it. The result is always a valid hull.</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="cap"><span>Metrics</span></div>
+        <div class="ctl">
+          <div class="scalerow">
+            <label title="Overall length the model's x=L maps to — sets the scale for the dimensional metrics">LOA
+              <input id="loaInput" type="number" min="0" step="0.1" value="12"></label>
+            <select id="unitSel" title="Length unit"><option value="m">m</option><option value="ft">ft</option></select>
+            <select id="waterSel" title="Water density"><option value="salt">salt</option><option value="fresh">fresh</option></select>
+          </div>
+          <div id="metricsBody" class="metrics"></div>
+          <div class="hint">Unitless metrics show always; dimensional ones use the length scale above. Stability is geometry only (KMt) — GM needs a weight/KG.</div>
         </div>
       </div>
     </div>
