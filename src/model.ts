@@ -696,28 +696,18 @@ export function clippedSection(x: number, M: number): Section {
   return sweptSection(x, M, true);
 }
 
-// The forward limit of the hull: the largest x where a trimmed section still exists. Near the bow the
-// forefoot rises above the sheer-trim line, so sections there go empty (no hull) — the surface must close
-// at this x, NOT at x = L. Without it the mesh either drops the empty bow sections (leaving an open notch)
-// or stretches a facet to a fabricated point at L (a fold). Returns L when the hull closes exactly at L.
+// The forward limit of the hull: the largest x where a trimmed section still exists, but NEVER past the
+// plan's last control point — the hull is not extrapolated beyond what the user drew. The bow closes where
+// the sections vanish (the forefoot rises above the sheer trim, or a tumblehome lens shrinks to nothing) if
+// that happens at or before the last cp; otherwise the hull ends at the last cp (a blunt bow, the cue to
+// extend the sheer plan further). Near the bow the forefoot rises above the trim, so sections go empty.
 export function forwardLimit(): number {
   const exists = (x: number): boolean => !sweptSection(x, 4, true, false).aft;
-  if (exists(L)) {
-    // still a live section at the LOA — a tumblehome bow that closes past it via the sheer extrapolation.
-    // Extend forward until the y≥0 lens vanishes (bow extension), capped at a modest overhang.
-    let lo = L,
-      hi = L * 1.4;
-    if (exists(hi)) return hi; // safety cap (shouldn't happen for a sane hull)
-    for (let k = 0; k < 24; k++) {
-      const m = (lo + hi) / 2;
-      if (exists(m)) lo = m;
-      else hi = m;
-    }
-    return lo;
-  }
-  let lo = L * 0.5,
-    hi = L;
-  if (!exists(lo)) return L; // section already gone amidships (degenerate model) — don't clamp
+  const xEnd = state.sheer.cp[state.sheer.cp.length - 1].x; // the plan's last control point: the hard forward bound
+  if (exists(xEnd)) return xEnd; // still a section at the last cp — the hull ends there (blunt, or just closing)
+  let lo = xEnd * 0.5,
+    hi = xEnd;
+  if (!exists(lo)) return xEnd; // section already gone amidships (degenerate model) — don't clamp shorter
   for (let k = 0; k < 24; k++) {
     const m = (lo + hi) / 2;
     if (exists(m)) lo = m;

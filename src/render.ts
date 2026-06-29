@@ -273,7 +273,12 @@ function drawPlan(sections: Section[], _zmin: number): void {
   svg.replaceChildren();
   gridX(svg, 8, LH - 8);
   // (waterline contours other than the DWL footprint are shown in the 3D Waterline lines view, not here)
-  // centerline along the bottom edge
+  // faint band below the centerline (y < 0): "past the centerline" — where the sheer plan crosses to close a
+  // tumblehome bow.
+  svg.append(
+    el("rect", { x: PXpad, y: Lbase, width: 1000 - 2 * PXpad, height: LH - Lbase, fill: "var(--keel)", opacity: 0.05 }),
+  );
+  // centerline (y = 0)
   svg.append(
     el("line", {
       x1: PXpad,
@@ -296,8 +301,11 @@ function drawPlan(sections: Section[], _zmin: number): void {
   cl.textContent = "CL";
   svg.append(cl);
   stationLine(svg, 8, LH - 8);
-  // the sheer plan curve (the deck-edge half-breadth)
-  const xs = sampleX();
+  // the sheer plan curve (the deck-edge half-breadth) — drawn only out to the last control point; the plan is
+  // not extrapolated past what the user drew (the hull ends at the last cp too, see forwardLimit)
+  const xEnd = state.sheer.cp[state.sheer.cp.length - 1].x,
+    xs: number[] = [];
+  for (let i = 0; i <= 110; i++) xs.push((xEnd * i) / 110);
   // the plan control polygon: the sheer points are B-spline handles, not on-curve, so show the polygon
   // they define faintly behind the curve (the curve interpolates only the ends and stays inside the rest)
   svg.append(
@@ -315,11 +323,34 @@ function drawPlan(sections: Section[], _zmin: number): void {
       d: poly(xs.map((x) => [mapX(x), yPlan(state.sheer.yf(x))])),
       fill: "none",
       stroke: COL.sheer,
-      "stroke-width": 2.4,
+      "stroke-width": 2,
+      opacity: 0.8,
+      "stroke-dasharray": "8 5", // the sheer plan is the control/guide; the max-beam line below is the result
       "stroke-linejoin": "round",
       "stroke-linecap": "round",
     }),
   );
+  // widest-point (max-beam) longitudinal: the locus of each section's widest point. On a tumblehome hull it
+  // lies OUTBOARD of the sheer (deck edge), and where it reaches the centerline is the true bow closure — so
+  // it is the line to watch when shaping a tumblehome bow (the deck can close while the body is still open).
+  const beam: Vec3[] = [];
+  for (const s of sections) {
+    if (s.aft || !s.pts.length) continue;
+    let p = s.pts[0];
+    for (const q of s.pts) if (q[1] > p[1]) p = q;
+    beam.push(p);
+  }
+  if (beam.length > 1)
+    svg.append(
+      el("path", {
+        d: poly(beam.map((p) => [mapX(p[0]), yPlan(p[1])])),
+        fill: "none",
+        stroke: COL.fore,
+        "stroke-width": 2.4, // the result line — drawn solid and heavier than the dashed sheer-plan guide
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round",
+      }),
+    );
   // transom footprint in plan (centerline → sheer at the stern)
   const te = transomEdge();
   if (te.length > 1) {

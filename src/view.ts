@@ -24,13 +24,15 @@ export const zScreenP = (z: number): number => PZbase - (z - ZMIN) * SZ;
 export const invZp = (vy: number): number => ZMIN + (PZbase - vy) / SZ;
 export const ZTRIMMIN = -1100; // sheer trim must stay below the deck: z in [ZTRIMMIN,0]
 
-// plan: a single half-breadth — centerline along the BOTTOM edge, breadth growing upward — at the same
-// px/mm as x (isometric). (Previously a full mirrored breadth about a centre axis; now one half fills it.)
+// plan: a single half-breadth — breadth grows upward at the same px/mm as x (isometric). The centerline used
+// to sit on the BOTTOM edge; now the strip reserves a band BELOW it (down to YMIN < 0) so the sheer plan can
+// be drawn crossing the centerline at a tumblehome bow, where the deck edge tucks past y = 0.
 export const YMAX = 1100,
+  YMIN = -220, // room below the centerline for the bow's centerline crossing
   SYP = SX,
   Ppad = 18,
-  LH = YMAX * SYP + 2 * Ppad, // height so one half-breadth (0..YMAX) fits at the isometric scale
-  Lbase = LH - Ppad; // the centerline, at the bottom of the strip
+  LH = (YMAX - YMIN) * SYP + 2 * Ppad, // height so [YMIN, YMAX] fits at the isometric scale
+  Lbase = Ppad + YMAX * SYP; // screen y of the centerline (y = 0), now up from the bottom by |YMIN|·SYP
 export const yPlan = (y: number): number => Lbase - y * SYP; // breadth grows up from the centerline
 export const invY = (vy: number): number => (Lbase - vy) / SYP;
 

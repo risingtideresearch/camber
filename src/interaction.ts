@@ -12,7 +12,7 @@ import {
   type ActiveTarget,
   type WeightCP,
 } from "./model.js";
-import { invX, invY, invZp, invN, invD, invWvX, invWvW, YMAX, ZTRIMMIN } from "./view.js";
+import { invX, invY, invZp, invN, invD, invWvX, invWvW, YMAX, YMIN, ZTRIMMIN } from "./view.js";
 import { svgL, svgP, svgW, tplCards } from "./dom.js";
 import { render, draw3d, activeTemplateIndex } from "./render.js";
 
@@ -70,9 +70,14 @@ function getVB(d: Drag, e: PointerEvent): [number, number] {
 function moveSheer(d: Drag, vx: number, vy: number): void {
   const cp = state.sheer.cp[d.idx!],
     n = state.sheer.cp.length;
-  if (d.idx! > 0 && d.idx! < n - 1)
-    cp.x = clamp(invX(vx), state.sheer.cp[d.idx! - 1].x + 80, state.sheer.cp[d.idx! + 1].x - 80);
-  cp.y = clamp(invY(vy), 0, YMAX);
+  // The first point is pinned at the transom (x = 0); every other point — including the LAST — is movable in
+  // x, the last running forward to L + XFWD so the plan can be drawn over the bow overhang. y may go below the
+  // centerline (down to YMIN) so the sheer plan can cross it to close a tumblehome bow.
+  if (d.idx! > 0) {
+    const hiX = d.idx! < n - 1 ? state.sheer.cp[d.idx! + 1].x - 80 : L + XFWD;
+    cp.x = clamp(invX(vx), state.sheer.cp[d.idx! - 1].x + 80, hiX);
+  }
+  cp.y = clamp(invY(vy), YMIN, YMAX);
 }
 
 function moveTrim(d: Drag, vx: number, vy: number): void {
@@ -140,10 +145,12 @@ function setWeightBoundary(cp: WeightCP, b: number, val: number): void {
 function addSheerPoint(x: number, y: number): number {
   const cp = state.sheer.cp,
     n = cp.length;
-  x = clamp(x, cp[0].x + 80, cp[n - 1].x - 80);
+  // a new plan point may land anywhere forward of the transom, including the bow overhang up to L + XFWD, and
+  // below the centerline (down to YMIN) for the bow crossing
+  x = clamp(x, cp[0].x + 80, L + XFWD);
   let k = cp.findIndex((p) => p.x > x);
-  if (k < 1) k = n - 1;
-  cp.splice(k, 0, { x, y: clamp(y, 0, YMAX) });
+  if (k < 0) k = n; // past every existing point → append at the bow end
+  cp.splice(k, 0, { x, y: clamp(y, YMIN, YMAX) });
   return k;
 }
 function removeSheerPoint(idx: number): void {
