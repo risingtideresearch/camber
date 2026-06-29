@@ -12,7 +12,7 @@
 // all loaded hulls must agree on point counts and length.
 
 import { clamp } from "./math.js";
-import { state, L, prepare, type Sheer, type StationCP, type WeightCP } from "./model.js";
+import { state, L, prepare, type Sheer, type StationCP } from "./model.js";
 import { draw3d } from "./render.js";
 import { buildJson, parseDocument, type HullData, type ParsedDoc } from "./json.js";
 import { getDesign, insertDesign, updateDesign } from "./supabase.js";
@@ -31,7 +31,6 @@ let topo: {
   trim: number;
   section: number;
   templates: number;
-  weights: number;
   length: number;
 } | null = null;
 const palette: string[] = ["#2b6cb0", "#dd6b20", "#0f766e", "#7c3aed", "#b45309"];
@@ -44,7 +43,6 @@ function checkTopology(data: HullData, length: number): void {
     trim: data.trim.length,
     section: data.templates[0].length,
     templates: data.templates.length,
-    weights: data.weights.length,
     length,
   };
   if (!topo) {
@@ -55,13 +53,12 @@ function checkTopology(data: HullData, length: number): void {
     t.plan !== topo.plan ||
     t.trim !== topo.trim ||
     t.section !== topo.section ||
-    t.templates !== topo.templates ||
-    t.weights !== topo.weights
+    t.templates !== topo.templates
   )
     throw new Error(
-      `topology mismatch — plan/trim/section/templates/weights counts ` +
-        `${t.plan}/${t.trim}/${t.section}/${t.templates}/${t.weights}, the family has ` +
-        `${topo.plan}/${topo.trim}/${topo.section}/${topo.templates}/${topo.weights}. ` +
+      `topology mismatch — plan/trim/section/templates counts ` +
+        `${t.plan}/${t.trim}/${t.section}/${t.templates}, the family has ` +
+        `${topo.plan}/${topo.trim}/${topo.section}/${topo.templates}. ` +
         `Only one topology can blend.`,
     );
   if (Math.abs(t.length - topo.length) > 1e-6)
@@ -73,9 +70,11 @@ function blend(): void {
   const total = hulls.reduce((a, h) => a + h.weight, 0) || 1;
   const w = hulls.map((h) => h.weight / total); // normalize to Σ = 1 (barycentric)
 
-  const plan = hulls[0].data.cp.map((_, i) => ({
+  const plan = hulls[0].data.cp.map((cp0, i) => ({
     x: hulls.reduce((a, h, k) => a + w[k] * h.data.cp[i].x, 0),
     y: hulls.reduce((a, h, k) => a + w[k] * h.data.cp[i].y, 0),
+    // the blend weights ride on the station — a convex blend of simplex points is itself in the simplex
+    w: cp0.w.map((_, j) => hulls.reduce((a, h, k) => a + w[k] * h.data.cp[i].w[j], 0)),
   }));
   const trim = hulls[0].data.trim.map((_, i) => ({
     x: hulls.reduce((a, h, k) => a + w[k] * h.data.trim[i].x, 0),
@@ -94,15 +93,8 @@ function blend(): void {
       k: hulls.reduce((a, h, kk) => a + w[kk] * h.data.templates[j][i].k, 0),
     })),
   );
-  // the weight curve, blended control point by control point (a convex blend of simplex points → simplex)
-  const weights: WeightCP[] = hulls[0].data.weights.map((wp, i) => ({
-    x: hulls.reduce((a, h, k) => a + w[k] * h.data.weights[i].x, 0),
-    w: wp.w.map((_, j) => hulls.reduce((a, h, k) => a + w[k] * h.data.weights[i].w[j], 0)),
-  }));
-
   state.sheer = { cp: plan, trim, transom, yf: () => 0, zf: () => 0 } as Sheer;
   state.templates = templates;
-  state.weights = weights;
 }
 
 // ---------- redraw: blend (if any hulls) then draw the 3D hull ----------

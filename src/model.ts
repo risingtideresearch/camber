@@ -11,9 +11,13 @@ import {
 import { clampedBSplineSamplerX } from "./bspline.js";
 
 // ---------- types ----------
+// A longitudinal control STATION: it carries both the plan half-breadth y AND the blend weight w (the
+// barycentric template mix) at this x. The two used to be separate arrays (sheer cps + weight cps) at nearly
+// the same x's; unified here so one station drives both curves. w has length = template count, in the simplex.
 export interface SheerCP {
   x: number;
   y: number;
+  w: number[];
 }
 export interface TrimCP {
   x: number;
@@ -29,8 +33,8 @@ export interface StationCP {
   d: number;
   k: number; // knuckle ∈ [0,1]: 0 = smooth, 1 = hard corner; blends. (point 0, the pinned sheer, is left smooth)
 }
-// a control point of the longitudinal weight curve: at station x, the barycentric mix `w` of the
-// templates (w[j] ≥ 0, Σ w[j] = 1 — a point in the (K−1)-simplex). The curve is faired between these.
+// {x, w} shape of a blend control point — used by the weight sampler and when migrating old documents that
+// stored the blend as its own array. The live model now carries w on SheerCP (the unified station).
 export interface WeightCP {
   x: number;
   w: number[]; // length = template count K; in the simplex
@@ -162,8 +166,7 @@ export interface State {
   templates: StationCP[][]; // K ≥ 1 section templates, index-aligned (all share the section count)
   keelK: number[]; // per-template keel (centerline) knuckle ∈ [0,1]: 0 = C¹-smooth keel across the
   // centerline, 1 = a hard V. Blended along the hull like the point knuckles. Index-aligned with templates.
-  weights: WeightCP[]; // the longitudinal blend path through the simplex; ≥ 2 control points
-  weightFn: (x: number) => number[]; // evaluated weight curve x → simplex; rebuilt by prepare()
+  weightFn: (x: number) => number[]; // evaluated weight curve x → simplex; rebuilt by prepare() from sheer.cp
   x0: number;
   waterline: number; // depth (≥0) of the design waterline below the sheer origin (deck datum at x=0, z=0)
   deckRake: number; // deck rake angle (rad, +ve = bow up): a rigid rotation of the whole hull about the
@@ -180,7 +183,6 @@ export const state: State = {
   sheer: null as unknown as Sheer,
   templates: [],
   keelK: [],
-  weights: [],
   weightFn: () => [1],
   x0: 2000,
   waterline: 600,
@@ -194,16 +196,17 @@ export const state: State = {
 };
 
 export function resetModel(): void {
+  state.templates = TEMPLATE_DEFS.map((t) => t.map((c) => ({ n: c[0], d: c[1], k: c[2] })));
+  state.keelK = state.templates.map(() => 0); // keels default to C¹-smooth across the centerline
+  // each station carries its blend w, sampled here from the default linear aft→fore handoff
+  const wf0 = buildWeightSampler(defaultWeights(state.templates.length));
   state.sheer = {
-    cp: SHEER_DEF.map((c) => ({ x: c[0], y: c[1] })),
+    cp: SHEER_DEF.map((c) => ({ x: c[0], y: c[1], w: wf0(c[0]) })),
     trim: SHEER_TRIM_DEF.map((c) => ({ x: c[0], z: c[1], k: 0 })),
     transom: TRANSOM_DEF.map((c) => ({ x: c[0], z: c[1] })),
     yf: () => 0,
     zf: () => 0,
   };
-  state.templates = TEMPLATE_DEFS.map((t) => t.map((c) => ({ n: c[0], d: c[1], k: c[2] })));
-  state.keelK = state.templates.map(() => 0); // keels default to C¹-smooth across the centerline
-  state.weights = defaultWeights(state.templates.length);
   state.x0 = 2000;
   state.waterline = 600;
   state.deckRake = 0;
@@ -237,7 +240,7 @@ export function prepare(): void {
     sheer.trim.map((p) => p.z),
     sheer.trim.map((p) => p.k),
   );
-  state.weightFn = buildWeightSampler(state.weights); // the longitudinal blend path through the simplex
+  state.weightFn = buildWeightSampler(state.sheer.cp); // the blend path, read from the unified stations
 }
 
 // ---------- the weight curve: a shape-preserving interpolation through the simplex ----------

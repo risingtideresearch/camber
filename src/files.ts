@@ -154,7 +154,6 @@ interface Topo {
   trim: number;
   section: number;
   templates: number;
-  weights: number;
   variants: number;
 }
 // the topology that governs blending. parseDocument normalizes it (filling legacy aft/fore defaults), so this
@@ -168,7 +167,6 @@ function topoOf(row: DesignRow): Topo | null {
       trim: p.topology.sheerTrim,
       section: p.topology.section,
       templates: p.topology.templateCount,
-      weights: p.topology.weightPoints,
       variants: p.variants.length,
     };
   } catch {
@@ -176,7 +174,7 @@ function topoOf(row: DesignRow): Topo | null {
   }
 }
 // the blend signature: only designs with an identical one (length + all control-point counts) can interpolate
-const topoSig = (t: Topo): string => `${t.length}|${t.plan}/${t.trim}/${t.section}/${t.templates}/${t.weights}`;
+const topoSig = (t: Topo): string => `${t.length}|${t.plan}/${t.trim}/${t.section}/${t.templates}`;
 
 function statChip(val: number, label: string): HTMLElement {
   const s = document.createElement("span");
@@ -218,7 +216,6 @@ function renderGrid(): void {
         statChip(t.section, "section"),
         statChip(t.plan, "plan"),
         statChip(t.trim, "trim"),
-        statChip(t.weights, "blend"),
         statChip(t.length, "mm"),
       );
       if (t.variants > 1) tt.append(statChip(t.variants, "variants"));

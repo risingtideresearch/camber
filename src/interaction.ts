@@ -75,7 +75,11 @@ function moveSheer(d: Drag, vx: number, vy: number): void {
   // centerline (down to YMIN) so the sheer plan can cross it to close a tumblehome bow.
   if (d.idx! > 0) {
     const hiX = d.idx! < n - 1 ? state.sheer.cp[d.idx! + 1].x - 80 : L + XFWD;
-    cp.x = clamp(invX(vx), state.sheer.cp[d.idx! - 1].x + 80, hiX);
+    const nx = clamp(invX(vx), state.sheer.cp[d.idx! - 1].x + 80, hiX);
+    // resample the station's blend onto the current curve at its new x, so moving the plan handle along x
+    // barely disturbs the blend (the point stays on the curve it helped define)
+    if (nx !== cp.x) cp.w = weightsAt(nx);
+    cp.x = nx;
   }
   cp.y = clamp(invY(vy), YMIN, YMAX);
 }
@@ -98,19 +102,10 @@ function moveTransom(d: Drag, vx: number, vy: number): void {
   cp.z = clamp(invZp(vy), ZTRIMMIN, 0);
 }
 
-// drag a weight control point: either along x (only the interior CPs; the ends are pinned to 0 / L), or
-// one of its internal band boundaries — the cumulative-weight split that edits the simplex value.
-function moveWeight(d: Drag, vx: number, vy: number): void {
-  const cp = state.weights[d.idx!],
-    n = state.weights.length;
-  if (d.wpart === "x") {
-    // the blend control is vertical: the longitudinal x reads off the vertical position
-    if (d.idx! > 0 && d.idx! < n - 1)
-      cp.x = clamp(invWvX(vy), state.weights[d.idx! - 1].x + 60, state.weights[d.idx! + 1].x - 60);
-  } else {
-    // a band boundary reads off the horizontal position (the simplex split)
-    setWeightBoundary(cp, d.bnd!, clamp(invWvW(vx), 0, 1));
-  }
+// drag a station's blend in the weight strip: only the simplex split (the band boundary). x is shared with
+// the plan curve and is edited there, so the blend strip has no x-handle.
+function moveWeight(d: Drag, vx: number): void {
+  if (d.wpart !== "x") setWeightBoundary(state.sheer.cp[d.idx!], d.bnd!, clamp(invWvW(vx), 0, 1));
 }
 
 // The weight CP carries a barycentric vector w ∈ Δ^{K−1}. We edit it through its cumulative boundaries
@@ -141,23 +136,27 @@ function setWeightBoundary(cp: WeightCP, b: number, val: number): void {
   cp.w = t > 0 ? w.map((v) => v / t) : w.map(() => 1 / K);
 }
 
-// ---------- add / remove control points ---------- (add* return the inserted index)
-function addSheerPoint(x: number, y: number): number {
+// ---------- add / remove stations ---------- (add* return the inserted index)
+// Add a unified station at x: its plan y and its blend w are both read off the CURRENT curves there, so the
+// insert changes neither curve — it just adds a handle. (yGiven is the dragged y when adding in the plan
+// view; the blend strip passes the plan curve's own y so the station lands on the curve.)
+function addStation(x: number, yGiven: number): number {
   const cp = state.sheer.cp,
     n = cp.length;
-  // a new plan point may land anywhere forward of the transom, including the bow overhang up to L + XFWD, and
-  // below the centerline (down to YMIN) for the bow crossing
+  // may land anywhere forward of the transom, including the bow overhang to L + XFWD, and below the centerline
   x = clamp(x, cp[0].x + 80, L + XFWD);
   let k = cp.findIndex((p) => p.x > x);
   if (k < 0) k = n; // past every existing point → append at the bow end
-  cp.splice(k, 0, { x, y: clamp(y, YMIN, YMAX) });
+  cp.splice(k, 0, { x, y: clamp(yGiven, YMIN, YMAX), w: weightsAt(x) });
   return k;
 }
-function removeSheerPoint(idx: number): void {
+const addSheerPoint = (x: number, y: number): number => addStation(x, y);
+function removeStation(idx: number): void {
   const cp = state.sheer.cp;
   if (cp.length <= 3 || idx <= 0 || idx >= cp.length - 1) return; // keep both ends and a minimum of 3
   cp.splice(idx, 1);
 }
+const removeSheerPoint = removeStation;
 function addTrimPoint(x: number, z: number): number {
   const cp = state.sheer.trim,
     n = cp.length;
@@ -216,39 +215,26 @@ function removeStationPoint(idx: number): void {
   state.templates.forEach((t) => t.splice(idx, 1));
 }
 
-// add a weight control point at x, taking its barycentric value from the current curve there (so the path
-// is unchanged by the insert — a new handle on the same line), then it can be dragged to bend the path.
-function addWeightPoint(x: number): number {
-  const w = state.weights,
-    n = w.length;
-  x = clamp(x, w[0].x + 60, w[n - 1].x - 60);
-  let k = w.findIndex((p) => p.x > x);
-  if (k < 1) k = n - 1;
-  w.splice(k, 0, { x, w: weightsAt(x) });
-  return k;
-}
-function removeWeightPoint(idx: number): void {
-  const n = state.weights.length;
-  if (n <= 2 || idx <= 0 || idx >= n - 1) return; // keep the two end control points
-  state.weights.splice(idx, 1);
-}
+// add a station from the blend strip: x as given, plan y read off the current plan curve so the station
+// lands on it (stations are unified, so this adds the plan handle too).
+const addWeightPoint = (x: number): number => addStation(x, state.sheer.yf(x));
+const removeWeightPoint = removeStation;
 
-// add a blend control point at the midpoint of the widest gap between adjacent control points (the
-// "+ blend point" button) — its weight is read off the current curve so the path is unchanged, then
-// it is selected ready to drag.
+// add a station at the midpoint of the widest gap between adjacent stations (the "+ blend point" button) —
+// both curves are unchanged (y and w read off the current curves), then it is selected ready to drag.
 export function addBlendPoint(): void {
-  const w = state.weights;
-  if (w.length < 2) return;
+  const cp = state.sheer.cp;
+  if (cp.length < 2) return;
   let bi = 0,
     bg = -1;
-  for (let i = 0; i < w.length - 1; i++) {
-    const g = w[i + 1].x - w[i].x;
+  for (let i = 0; i < cp.length - 1; i++) {
+    const g = cp[i + 1].x - cp[i].x;
     if (g > bg) {
       bg = g;
       bi = i;
     }
   }
-  const idx = addWeightPoint((w[bi].x + w[bi + 1].x) / 2);
+  const idx = addWeightPoint((cp[bi].x + cp[bi + 1].x) / 2);
   select("weight", idx);
 }
 
@@ -260,7 +246,7 @@ export function addTemplate(): void {
   const last = state.templates[state.templates.length - 1];
   state.templates.push(last.map((p) => ({ n: p.n, d: p.d, k: p.k })));
   state.keelK.push(state.keelK[state.keelK.length - 1] ?? 0); // copy the last template's keel knuckle
-  state.weights.forEach((cp) => cp.w.push(0));
+  state.sheer.cp.forEach((cp) => cp.w.push(0));
   state.selected = null;
   refreshSelUI();
   render();
@@ -269,7 +255,7 @@ export function removeTemplate(ti: number): void {
   if (state.templates.length <= 1) return;
   state.templates.splice(ti, 1);
   state.keelK.splice(ti, 1);
-  state.weights.forEach((cp) => {
+  state.sheer.cp.forEach((cp) => {
     cp.w.splice(ti, 1);
     let s = 0;
     cp.w.forEach((v) => (s += v));
@@ -329,7 +315,7 @@ function canDelete(s: { tgt: ActiveTarget; idx: number }): boolean {
   if (s.tgt === "transom") return false;
   if (s.tgt === "plan") return state.sheer.cp.length > 3 && s.idx > 0 && s.idx < state.sheer.cp.length - 1;
   if (s.tgt === "trim") return state.sheer.trim.length > 3 && s.idx > 0 && s.idx < state.sheer.trim.length - 1;
-  if (s.tgt === "weight") return state.weights.length > 2 && s.idx > 0 && s.idx < state.weights.length - 1;
+  if (s.tgt === "weight") return state.sheer.cp.length > 3 && s.idx > 0 && s.idx < state.sheer.cp.length - 1;
   const len = state.templates[0].length; // template
   return len > 3 && s.idx > 0 && s.idx < len - 1;
 }
@@ -507,7 +493,7 @@ export function initInteraction(): void {
     } else if (drag.kind === "sheer") moveSheer(drag, vx, vy);
     else if (drag.kind === "trim") moveTrim(drag, vx, vy);
     else if (drag.kind === "transom") moveTransom(drag, vx, vy);
-    else if (drag.kind === "weight") moveWeight(drag, vx, vy);
+    else if (drag.kind === "weight") moveWeight(drag, vx);
     else if (drag.kind === "stn") {
       const arr = state.templates[drag.ti!],
         i = drag.idx!,

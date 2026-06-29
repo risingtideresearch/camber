@@ -14,6 +14,7 @@ import { clamp } from "./math.js";
 import {
   state,
   L,
+  buildWeightSampler,
   type SheerCP,
   type TrimCP,
   type TransomCP,
@@ -25,6 +26,7 @@ import {
 interface PlanPoint {
   dx: number;
   y: number;
+  w?: number[]; // unified format: the station's blend weights ride on the plan point. Absent in old docs.
 }
 interface TrimPoint {
   dx: number;
@@ -55,7 +57,7 @@ export interface HullData {
   transom: TransomCP[];
   templates: StationCP[][]; // K templates, index-aligned
   keelK: number[]; // per-template keel (centerline) knuckle, index-aligned with templates
-  weights: WeightCP[]; // the longitudinal blend path
+  // blend weights ride on cp[i].w (the unified station)
 }
 export interface ParsedDoc {
   length: number;
@@ -66,20 +68,17 @@ export interface ParsedDoc {
     sheerTrim: number;
     section: number;
     templateCount: number;
-    weightPoints: number;
   };
   variants: HullData[];
 }
 
 // ---------- encode: absolute model coords → increment-encoded on-disk form ----------
 const encPlan = (cp: SheerCP[]): PlanPoint[] =>
-  cp.map((p, i) => ({ dx: i === 0 ? p.x : p.x - cp[i - 1].x, y: p.y }));
+  cp.map((p, i) => ({ dx: i === 0 ? p.x : p.x - cp[i - 1].x, y: p.y, w: p.w.slice() }));
 const encTrim = (trim: TrimCP[]): TrimPoint[] =>
   trim.map((p, i) => ({ dx: i === 0 ? p.x : p.x - trim[i - 1].x, depth: -p.z, k: p.k }));
 const encSection = (pts: StationCP[]): SectionPoint[] =>
   pts.map((p, i) => ({ dd: i === 0 ? 0 : p.d - pts[i - 1].d, n: p.n, k: p.k }));
-const encWeights = (w: WeightCP[]): WeightPoint[] =>
-  w.map((p, i) => ({ dx: i === 0 ? p.x : p.x - w[i - 1].x, w: p.w.slice() }));
 function encTransom(t: TransomCP[]): Transom {
   const [top, bot] = t; // [0] = top edge (near sheer), [1] = bottom edge (near keel)
   return {
@@ -95,7 +94,7 @@ function decPlan(plan: PlanPoint[]): SheerCP[] {
   let x = 0;
   return plan.map((p, i) => {
     x = i === 0 ? p.dx : x + p.dx;
-    return { x, y: p.y };
+    return { x, y: p.y, w: Array.isArray(p.w) ? p.w.slice() : [] }; // w filled by migration if absent
   });
 }
 function decTrim(trim: TrimPoint[]): TrimCP[] {
@@ -139,20 +138,18 @@ export function buildJson(): string {
     waterline: state.waterline,
     deckRakeDeg: (state.deckRake * 180) / Math.PI,
     topology: {
-      sheerPlan: s.cp.length,
+      sheerPlan: s.cp.length, // the unified station count: drives both the plan curve and the blend
       sheerTrim: s.trim.length,
       section: state.templates[0].length,
       templateCount: state.templates.length,
-      weightPoints: state.weights.length,
     },
     variants: [
       {
-        sheerPlan: encPlan(s.cp),
+        sheerPlan: encPlan(s.cp), // each plan point carries its blend weights w
         sheerTrim: encTrim(s.trim),
         transom: encTransom(s.transom),
         templates: state.templates.map(encSection),
         keelK: state.keelK.slice(),
-        weights: encWeights(state.weights),
       },
     ],
   };
@@ -204,6 +201,16 @@ function weightVec(v: unknown, ctx: string, k: number): number[] {
     throw new Error(`${ctx} must be an array of ${k} weights (one per template)`);
   return v.map((x, i) => num(x, `${ctx}[${i}]`));
 }
+// project a weight vector onto the simplex (clamp float noise away, renormalize to Σ = 1)
+function normW(w: number[]): number[] {
+  let s = 0;
+  const c = w.map((v) => {
+    const x = v > 0 ? v : 0;
+    s += x;
+    return x;
+  });
+  return s > 0 ? c.map((v) => v / s) : c.map(() => 1 / c.length);
+}
 // the default straight blend path: full weight on template 0 at the stern, handing off to the last
 // template at the bow — the multi-template analog of the old linear x/L tween (an edge of the simplex)
 function linearPath(k: number, length: number): WeightCP[] {
@@ -244,6 +251,7 @@ export function parseDocument(text: string): ParsedDoc {
       points(v.sheerPlan, `${c}.sheerPlan`, nPlan, (o, i) => ({
         dx: num(o.dx, `${c}.sheerPlan[${i}].dx`),
         y: num(o.y, `${c}.sheerPlan[${i}].y`),
+        w: Array.isArray(o.w) ? weightVec(o.w, `${c}.sheerPlan[${i}].w`, nTpl) : undefined, // unified format
       })),
     );
     const trim = decTrim(
@@ -276,16 +284,24 @@ export function parseDocument(text: string): ParsedDoc {
     const keelK = Array.from({ length: nTpl }, (_, j) =>
       Array.isArray(v.keelK) && typeof v.keelK[j] === "number" ? clamp(v.keelK[j], 0, 1) : 0,
     );
-    // weights: the new `weights` path, or a default straight path corner-to-corner of the simplex
-    const weights =
-      "weights" in v
-        ? decWeights(
-            points(v.weights, `${c}.weights`, nWt, (o, i) => ({
-              dx: num(o.dx, `${c}.weights[${i}].dx`),
-              w: weightVec(o.w, `${c}.weights[${i}].w`, nTpl),
-            })),
-          )
-        : linearPath(nTpl, length);
+    // Blend weights now ride on each station (cp.w). The unified format already filled them; MIGRATE an old
+    // document — which stored a separate `weights` path (or none → the default linear handoff) — by sampling
+    // that path at each station's x. Same resampling the editor uses when a station is dragged along x.
+    if (cp.every((p) => p.w.length === nTpl)) {
+      cp.forEach((p) => (p.w = normW(p.w))); // unified format: project each onto the simplex
+    } else {
+      const oldW =
+        "weights" in v
+          ? decWeights(
+              points(v.weights, `${c}.weights`, nWt, (o, i) => ({
+                dx: num(o.dx, `${c}.weights[${i}].dx`),
+                w: weightVec(o.w, `${c}.weights[${i}].w`, nTpl),
+              })),
+            )
+          : linearPath(nTpl, length);
+      const wf = buildWeightSampler(oldW);
+      cp.forEach((p) => (p.w = wf(p.x)));
+    }
     const to = obj(v.transom, `${c}.transom`);
     const transom = decTransom({
       x: num(to.x, `${c}.transom.x`),
@@ -300,7 +316,6 @@ export function parseDocument(text: string): ParsedDoc {
       transom,
       templates,
       keelK,
-      weights,
     };
   });
 
@@ -313,7 +328,6 @@ export function parseDocument(text: string): ParsedDoc {
       sheerTrim: nTrim,
       section: nSec,
       templateCount: nTpl,
-      weightPoints: nWt,
     },
     variants,
   };
@@ -326,7 +340,6 @@ export function loadHull(v: HullData): void {
   state.sheer.transom = v.transom;
   state.templates = v.templates;
   state.keelK = v.keelK;
-  state.weights = v.weights;
   state.selected = null;
   state.x0 = clamp(state.x0, 0, L);
 }

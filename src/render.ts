@@ -833,9 +833,10 @@ function drawWeights(svg: SVGSVGElement): void {
   }
   weightSlider(svg); // the red cut scrubber (horizontal here)
   // control points: a horizontal guide + the K−1 band-boundary handles (drag ↔) + the x-handle (interior, ↕)
-  state.weights.forEach((cp, i) => {
-    const n = state.weights.length,
-      y = wvX(cp.x),
+  // one row per unified station at its x; the K−1 band-boundary handles edit its blend. x is set in the plan
+  // view (the station is shared), so there is no x-handle here.
+  state.sheer.cp.forEach((cp, i) => {
+    const y = wvX(cp.x),
       sel = state.selected && state.selected.tgt === "weight" && state.selected.idx === i;
     svg.append(
       el("line", { x1: xLeft, y1: y, x2: xRight, y2: y, stroke: "#fff", "stroke-width": 1, opacity: 0.75 }),
@@ -859,20 +860,6 @@ function drawWeights(svg: SVGSVGElement): void {
       });
       h.addEventListener("pointerdown", (e) => weightHandleDown(i, "bnd", b, svg, e as PointerEvent));
       svg.append(h);
-    }
-    if (i > 0 && i < n - 1) {
-      const xh = el("rect", {
-        x: xLeft - 11,
-        y: y - 4.5,
-        width: 9,
-        height: 9,
-        fill: sel ? SEL : "#fff",
-        stroke: COL.mut,
-        "stroke-width": 1.5,
-        style: "cursor:ns-resize",
-      });
-      xh.addEventListener("pointerdown", (e) => weightHandleDown(i, "x", 0, svg, e as PointerEvent));
-      svg.append(xh);
     }
   });
 }
