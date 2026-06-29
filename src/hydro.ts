@@ -50,8 +50,8 @@ export interface Hydro {
   validWaterplane: boolean; // false when the waterline sits above the sheer (no WL crossing) → coeffs are NaN
 }
 
-const M = 48; // section columns
-const NS = 240; // longitudinal sampling
+const M = 48; // default section columns
+const NS = 240; // default longitudinal sampling (coarser is fine for the heatmap — see hydrostatics args)
 
 interface Strip {
   x: number;
@@ -126,13 +126,13 @@ function deadriseAt(sec: { pts: Vec3[]; keel: boolean }): number {
   return Math.atan(Math.abs(dzdy)) * (180 / Math.PI); // deadrise = angle of the bottom from horizontal
 }
 
-export function hydrostatics(): Hydro | null {
+export function hydrostatics(ns: number = NS, m: number = M): Hydro | null {
   const xf = forwardLimit();
   if (!(xf > 0)) return null;
   const strips: Strip[] = [];
-  for (let k = 0; k <= NS; k++) {
-    const x = (xf * k) / NS,
-      sec = clippedSection(x, M);
+  for (let k = 0; k <= ns; k++) {
+    const x = (xf * k) / ns,
+      sec = clippedSection(x, m);
     if (sec.aft) continue;
     let dmax = 0;
     for (const q of sec.pts) dmax = Math.max(dmax, immersion(q[0], q[2]));
@@ -229,7 +229,7 @@ export function hydrostatics(): Hydro | null {
     cm,
     cw,
     cvp,
-    deadrise: deadriseAt(clippedSection(amid, M)),
+    deadrise: deadriseAt(clippedSection(amid, m)),
     halfEntrance,
     xAft,
     xFwd,

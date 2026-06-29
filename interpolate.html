@@ -69,8 +69,18 @@
   /* blend pad (3+ hulls): draggable coloured hull dots around a fixed centre (the blend) */
   .padwrap{display:flex;justify-content:center;padding:2px 0;}
   #blendPad{width:100%;max-width:260px;height:auto;touch-action:none;cursor:pointer;user-select:none;}
-  #blendPad .bdot{cursor:grab;}
-  #blendPad .bdot:active{cursor:grabbing;}
+  #blendPad .puck{cursor:grab;}
+  #blendPad .puck:active{cursor:grabbing;}
+  /* metric heatmap selector + legend */
+  .heatrow{display:flex;align-items:center;gap:8px;font-size:13px;}
+  .heatrow label{color:var(--mut);}
+  .heatrow select{flex:1 1 auto;font:inherit;border:1px solid var(--line);border-radius:6px;padding:3px 6px;background:#fff;}
+  #heatLegend{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);min-height:16px;}
+  #heatLegend:empty{display:none;}
+  #heatLegend .hl-k{flex:1 1 auto;color:var(--ink);font-weight:600;}
+  #heatLegend .hl-bar{width:64px;height:9px;border-radius:3px;border:1px solid var(--line);
+    background:linear-gradient(90deg,rgb(44,123,182),rgb(255,255,191),rgb(215,25,28));}
+  #heatLegend .hl-lo,#heatLegend .hl-hi{font-variant-numeric:tabular-nums;}
   .padlegend{display:flex;flex-direction:column;gap:6px;}
   .legrow{display:flex;align-items:center;gap:8px;font-size:13px;}
   .legrow .dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto;}
@@ -100,7 +110,7 @@
 <body>
 <header>
   <h1>Hull interpolation blender</h1>
-  <p>Blend between the chosen hulls — a slider for two, or drag each hull's dot toward the centre for three or more.
+  <p>Blend between the chosen hulls — a slider for two, or drag the dot in the blend pad for three or more.
   Every blend of valid hulls of the same topology is itself a valid hull. Name it and use
   <strong>Save As</strong> to store the result as a new design in the library.</p>
 </header>
@@ -143,7 +153,9 @@
         <div class="ctl">
           <div id="status">Load 2–5 exported hulls to begin.</div>
           <div id="hullList"></div>
-          <div class="hint">Drag a hull's dot toward the centre for more of it, or past the ring to drop it. The result is always a valid hull.</div>
+          <div class="heatrow"><label for="metricSel">Colour by</label><select id="metricSel" title="Colour the pad by a metric's value across the blend space"></select></div>
+          <div id="heatLegend"></div>
+          <div class="hint">Drag toward a hull for more of it; the centre is an equal blend. Pick a metric to colour the pad by its value across the blend space.</div>
         </div>
       </div>
       <div class="card">

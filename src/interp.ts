@@ -16,7 +16,7 @@ import { state, L, prepare, type Sheer, type StationCP } from "./model.js";
 import { draw3d } from "./render.js";
 import { buildJson, parseDocument, type HullData, type ParsedDoc } from "./json.js";
 import { promoteFamily } from "./promote.js";
-import { hydrostatics } from "./hydro.js";
+import { hydrostatics, type Hydro } from "./hydro.js";
 import { getDesign, insertDesign, updateDesign } from "./supabase.js";
 import { buildPreviewSvg } from "./preview.js";
 
@@ -152,48 +152,82 @@ function drawAfterLayout(): void {
   });
 }
 
-// ---------- the blend control: a single slider for 2 hulls, a "gravity pad" for 3+ ----------
-// The control is the source of truth; each hull's weight is read off it (a straight split for the slider,
-// a distance kernel for the pad) and renormalized in blend(). For N ≥ 3 the blend itself sits fixed at the
-// centre and each hull is a draggable coloured dot: the closer a dot is to the centre, the more of that hull.
-// The weight kernel has finite support — w_i = max(0, RSUP − d_i) — so a dot dragged out past the support
-// ring contributes nothing, which is how you cleanly drop a hull from the mix (or isolate one by dragging it
-// onto the centre). Only each dot's distance from the centre matters; its angle is a free, purely spatial
-// degree of freedom (arrange the dots however reads best).
+// ---------- the blend control: a single slider for 2 hulls, a barycentric "blend pad" for 3+ ----------
+// The control's position is the source of truth; each hull's weight is read off it (a straight split for the
+// slider, mean-value coordinates for the pad) and renormalized in blend(). A 2-hull blend is a 1-D simplex
+// (the slider); 3 hulls a triangle (the pad is then exact); 4–5 a regular polygon (the pad explores a 2-D
+// slice of the simplex). Every interior point is a valid blend — which is exactly what lets the metric
+// heatmap colour the pad by sampling it on a grid (see paintHeatmap).
 const PAD = 260,
   PADC = PAD / 2,
-  RSUP = 112, // support radius: a dot at/beyond this contributes zero
-  RREST = 64, // equal-blend rest radius (all dots equidistant)
-  RMAX = 122; // drag clamp: keep dots (r≈7) inside the pad
+  PADR = 96; // polygon circumradius (leaves a margin for the vertex dots)
 type Pt = { x: number; y: number };
-let dots: Pt[] = []; // one draggable dot per hull (viewBox coords), for N ≥ 3
+let puck: Pt = { x: PADC, y: PADC }; // pad position (viewBox coords), for N ≥ 3
 let tTwo = 0.5; // slider position 0..1, for N === 2
 
-// the equal-blend rest layout: n dots equidistant from the centre (dot 0 at top, going clockwise)
-function restLayout(n: number): Pt[] {
+// the regular-polygon vertices for n hulls (vertex 0 at the top, going clockwise)
+function padVerts(n: number): Pt[] {
   return Array.from({ length: n }, (_, i) => {
     const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
-    return { x: PADC + RREST * Math.cos(a), y: PADC + RREST * Math.sin(a) };
+    return { x: PADC + PADR * Math.cos(a), y: PADC + PADR * Math.sin(a) };
   });
 }
-
-// clamp a dragged dot to within RMAX of the centre, so it never leaves the pad
-function clampDot(p: Pt): Pt {
-  const dx = p.x - PADC,
-    dy = p.y - PADC,
-    d = Math.hypot(dx, dy);
-  if (d <= RMAX) return p;
-  const s = RMAX / d;
-  return { x: PADC + dx * s, y: PADC + dy * s };
+// inside the (convex) polygon? winding-agnostic: inside ⇔ all edge cross-products share one sign
+function insidePoly(p: Pt, V: Pt[]): boolean {
+  let pos = false,
+    neg = false;
+  for (let i = 0; i < V.length; i++) {
+    const j = (i + 1) % V.length,
+      cr = (V[j].x - V[i].x) * (p.y - V[i].y) - (V[j].y - V[i].y) * (p.x - V[i].x);
+    if (cr > 1e-9) pos = true;
+    else if (cr < -1e-9) neg = true;
+  }
+  return !(pos && neg);
 }
-
-// finite-support distance kernel: weight falls linearly with distance from the centre, reaching zero at
-// RSUP. Renormalized to sum to 1; if every dot has been pushed out of support, fall back to an equal blend.
-function kernelWeights(): number[] {
-  const raw = dots.map((p) => Math.max(0, RSUP - Math.hypot(p.x - PADC, p.y - PADC)));
-  const sum = raw.reduce((a, b) => a + b, 0);
-  if (sum <= 0) return dots.map(() => 1 / dots.length);
-  return raw.map((x) => x / sum);
+// clamp p into the polygon (project onto the nearest edge), nudged a hair inward so the mean-value formula
+// never sees a point exactly on an edge (where an angle → π and tan blows up)
+function clampPoly(p: Pt, V: Pt[]): Pt {
+  let q = p;
+  if (!insidePoly(p, V)) {
+    let bd = Infinity;
+    for (let i = 0; i < V.length; i++) {
+      const a = V[i],
+        b = V[(i + 1) % V.length],
+        dx = b.x - a.x,
+        dy = b.y - a.y,
+        t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1), 0, 1),
+        cx = a.x + t * dx,
+        cy = a.y + t * dy,
+        d = (cx - p.x) ** 2 + (cy - p.y) ** 2;
+      if (d < bd) {
+        bd = d;
+        q = { x: cx, y: cy };
+      }
+    }
+  }
+  return { x: q.x + (PADC - q.x) * 1e-3, y: q.y + (PADC - q.y) * 1e-3 };
+}
+// mean-value coordinates of p w.r.t. polygon V — non-negative, summing to 1 inside a convex V, reducing to
+// ordinary barycentric coordinates when V is a triangle
+function meanValue(p: Pt, V: Pt[]): number[] {
+  const n = V.length,
+    s = V.map((v) => ({ x: v.x - p.x, y: v.y - p.y })),
+    r = s.map((d) => Math.hypot(d.x, d.y));
+  for (let i = 0; i < n; i++) if (r[i] < 1e-6) return V.map((_, k) => (k === i ? 1 : 0));
+  const half: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n,
+      dot = s[i].x * s[j].x + s[i].y * s[j].y,
+      crs = s[i].x * s[j].y - s[i].y * s[j].x;
+    half[i] = Math.tan(Math.atan2(Math.abs(crs), dot) / 2);
+  }
+  let sum = 0;
+  const w = V.map((_, i) => {
+    const wi = (half[(i - 1 + n) % n] + half[i]) / r[i];
+    sum += wi;
+    return wi;
+  });
+  return w.map((x) => x / (sum || 1));
 }
 
 // read the hull weights off the current control position
@@ -203,15 +237,14 @@ function setWeightsFromControl(): void {
     hulls[0].weight = 1 - tTwo;
     hulls[1].weight = tTwo;
   } else if (n >= 3) {
-    if (dots.length !== n) dots = restLayout(n); // family changed under us
-    const w = kernelWeights();
+    const w = meanValue(puck, padVerts(n));
     hulls.forEach((h, i) => (h.weight = w[i]));
   } else if (n === 1) hulls[0].weight = 1;
 }
 
-// reset the control to an equal blend (dots equidistant from the centre)
+// reset the control to the centre (an equal blend)
 function resetBlend(): void {
-  dots = restLayout(hulls.length);
+  puck = { x: PADC, y: PADC };
   tTwo = 0.5;
 }
 
@@ -226,18 +259,20 @@ function updateReadout(): void {
     if (pa) pa.textContent = pct(0);
     if (pb) pb.textContent = pct(1);
   } else if (n >= 3) {
+    const pk = document.getElementById("puck");
+    if (pk) {
+      pk.setAttribute("cx", `${puck.x}`);
+      pk.setAttribute("cy", `${puck.y}`);
+    }
+    const V = padVerts(n);
     hulls.forEach((_, i) => {
-      const dot = document.getElementById(`dot${i}`),
-        sp = document.getElementById(`spoke${i}`);
-      if (dot) {
-        dot.setAttribute("cx", `${dots[i].x}`);
-        dot.setAttribute("cy", `${dots[i].y}`);
-      }
+      const sp = document.getElementById(`spoke${i}`);
       if (sp) {
-        sp.setAttribute("x2", `${dots[i].x}`);
-        sp.setAttribute("y2", `${dots[i].y}`);
-        // a spoke fades out as its hull leaves the mix
-        sp.setAttribute("stroke-opacity", `${(0.1 + 0.9 * (hulls[i].weight / total)).toFixed(2)}`);
+        sp.setAttribute("x1", `${puck.x}`);
+        sp.setAttribute("y1", `${puck.y}`);
+        sp.setAttribute("x2", `${V[i].x}`);
+        sp.setAttribute("y2", `${V[i].y}`);
+        sp.setAttribute("stroke-opacity", `${(0.12 + 0.88 * (hulls[i].weight / total)).toFixed(2)}`);
       }
     });
     const pcts = document.querySelectorAll<HTMLElement>("#hullList .legrow .pct");
@@ -276,20 +311,21 @@ function renderPanel(): void {
     return;
   }
 
-  // n ≥ 3: a gravity pad (drag each coloured hull dot toward/away from the fixed centre) + a legend
-  if (dots.length !== n) dots = restLayout(n);
+  // n ≥ 3: a polygon pad (drag the puck) + a legend. The <g id="heat"> layer (clipped to the polygon) is
+  // filled by the metric heatmap; the puck/spokes/dots sit on top.
+  const V = padVerts(n);
+  const polyD = V.map((v, i) => `${i ? "L" : "M"}${v.x.toFixed(1)} ${v.y.toFixed(1)}`).join(" ") + "Z";
   let svg =
     `<svg id="blendPad" viewBox="0 0 ${PAD} ${PAD}" preserveAspectRatio="xMidYMid meet">` +
-    `<circle cx="${PADC}" cy="${PADC}" r="${RMAX}" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>` +
-    // the support ring: a hull whose dot is outside it drops out of the mix
-    `<circle id="supring" cx="${PADC}" cy="${PADC}" r="${RSUP}" fill="none" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="4 4"/>`;
+    `<defs><clipPath id="padClip"><path d="${polyD}"/></clipPath></defs>` +
+    `<path d="${polyD}" fill="#f8fafc" stroke="none"/>` +
+    `<g id="heat" clip-path="url(#padClip)"></g>` +
+    `<path d="${polyD}" fill="none" stroke="#e2e8f0" stroke-width="1.5" stroke-linejoin="round"/>`;
   for (let i = 0; i < n; i++)
-    svg += `<line id="spoke${i}" x1="${PADC}" y1="${PADC}" x2="${dots[i].x.toFixed(1)}" y2="${dots[i].y.toFixed(1)}" stroke="${col(i)}" stroke-width="2" stroke-opacity="0.5"/>`;
-  // the fixed centre = the blended hull
-  svg += `<circle cx="${PADC}" cy="${PADC}" r="4" fill="var(--ink)"/>`;
+    svg += `<line id="spoke${i}" x1="${PADC}" y1="${PADC}" x2="${V[i].x.toFixed(1)}" y2="${V[i].y.toFixed(1)}" stroke="${col(i)}" stroke-width="2" stroke-opacity="0.5"/>`;
   for (let i = 0; i < n; i++)
-    svg += `<circle id="dot${i}" class="bdot" data-i="${i}" cx="${dots[i].x.toFixed(1)}" cy="${dots[i].y.toFixed(1)}" r="7" fill="${col(i)}" stroke="#fff" stroke-width="2"/>`;
-  svg += `</svg>`;
+    svg += `<circle cx="${V[i].x.toFixed(1)}" cy="${V[i].y.toFixed(1)}" r="6" fill="${col(i)}" stroke="#fff" stroke-width="1.5"/>`;
+  svg += `<circle id="puck" class="puck" cx="${puck.x}" cy="${puck.y}" r="9" fill="#fff" stroke="var(--ink)" stroke-width="2.5"/></svg>`;
   const padwrap = document.createElement("div");
   padwrap.className = "padwrap";
   padwrap.innerHTML = svg;
@@ -306,47 +342,137 @@ function renderPanel(): void {
     .join("");
   list.append(legend);
 
-  // drag a hull dot toward the centre (more of it) or out past the support ring (drop it). Press anywhere
-  // to grab the nearest dot within reach.
+  // drag the puck (or press anywhere in the pad to jump it there)
   const padEl = padwrap.querySelector<SVGSVGElement>("#blendPad")!;
-  const supring = padEl.querySelector<SVGCircleElement>("#supring")!;
   const toVB = (e: PointerEvent): Pt => {
     const r = padEl.getBoundingClientRect();
     return { x: ((e.clientX - r.left) / r.width) * PAD, y: ((e.clientY - r.top) / r.height) * PAD };
   };
-  let dragIdx = -1;
-  padEl.addEventListener("pointerdown", (e) => {
-    const p = toVB(e);
-    let best = -1,
-      bd = 28 * 28; // grab radius²
-    dots.forEach((d, i) => {
-      const dd = (d.x - p.x) ** 2 + (d.y - p.y) ** 2;
-      if (dd < bd) {
-        bd = dd;
-        best = i;
-      }
-    });
-    if (best < 0) return;
-    dragIdx = best;
-    padEl.setPointerCapture(e.pointerId);
-    e.preventDefault();
-    supring.setAttribute("stroke", "#94a3b8"); // emphasize the ring while dragging
-  });
-  padEl.addEventListener("pointermove", (e) => {
-    if (dragIdx < 0) return;
-    dots[dragIdx] = clampDot(toVB(e));
+  let dragging = false;
+  const move = (e: PointerEvent): void => {
+    puck = clampPoly(toVB(e), V);
     setWeightsFromControl();
     updateReadout();
     refresh();
+  };
+  padEl.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    padEl.setPointerCapture(e.pointerId);
+    e.preventDefault();
+    move(e);
+  });
+  padEl.addEventListener("pointermove", (e) => {
+    if (dragging) move(e);
   });
   const end = (e: PointerEvent): void => {
-    dragIdx = -1;
-    supring.setAttribute("stroke", "#cbd5e1");
+    dragging = false;
     if (padEl.hasPointerCapture(e.pointerId)) padEl.releasePointerCapture(e.pointerId);
   };
   padEl.addEventListener("pointerup", end);
   padEl.addEventListener("pointercancel", end);
   updateReadout();
+  paintHeatmap(); // re-fill the metric heatmap for the new polygon
+}
+
+// ---------- metric heatmap: colour the pad interior by a chosen hydrostatic metric ----------
+// The pad is a continuous position → blend map, so we sample it on a grid: each cell's centre → mean-value
+// weights → blended hull → hydrostatics → the selected metric, mapped through a colour ramp. Painted once per
+// (family, metric) — NOT on every puck drag (the landscape is position-independent) — over a COARSE
+// hydrostatics sampling so a few hundred cells stay snappy.
+let heatMetric = "none";
+const HEAT_METRICS: { key: string; label: string; get: (h: Hydro) => number }[] = [
+  { key: "cb", label: "Cb · block", get: (h) => h.cb },
+  { key: "cp", label: "Cp · prismatic", get: (h) => h.cp },
+  { key: "cm", label: "Cm · midship", get: (h) => h.cm },
+  { key: "cw", label: "Cw · waterplane", get: (h) => h.cw },
+  { key: "vol", label: "∇ · volume", get: (h) => h.vol },
+  { key: "draft", label: "Draft", get: (h) => h.draft },
+  { key: "loverb", label: "L / B", get: (h) => h.lwl / h.bwl },
+  { key: "bmt", label: "BMt", get: (h) => h.bmt },
+  { key: "kmt", label: "KMt", get: (h) => h.kmt },
+  { key: "deadrise", label: "Deadrise", get: (h) => h.deadrise },
+  { key: "lcb", label: "LCB · %", get: (h) => ((h.lcb - (h.xAft + h.xFwd) / 2) / h.lwl) * 100 },
+];
+
+// sequential colour ramp 0..1 → blue → pale → red (reversed RdYlBu)
+function heatColor(t: number): string {
+  const stops = [
+    [44, 123, 182],
+    [255, 255, 191],
+    [215, 25, 28],
+  ];
+  const u = Math.max(0, Math.min(1, t)) * 2,
+    i = u < 1 ? 0 : 1,
+    f = u - i,
+    a = stops[i],
+    b = stops[i + 1];
+  const ch = (k: number): number => Math.round(a[k] + (b[k] - a[k]) * f);
+  return `rgb(${ch(0)},${ch(1)},${ch(2)})`;
+}
+
+function updateHeatLegend(def: { label: string } | null, lo = 0, hi = 0): void {
+  const el = document.getElementById("heatLegend");
+  if (!el) return;
+  if (!def) {
+    el.innerHTML = "";
+    return;
+  }
+  const fmt = (v: number): string =>
+    Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
+  el.innerHTML =
+    `<span class="hl-k">${def.label}</span><span class="hl-lo">${fmt(lo)}</span>` +
+    `<span class="hl-bar"></span><span class="hl-hi">${fmt(hi)}</span>`;
+}
+
+function paintHeatmap(): void {
+  const g = document.getElementById("heat");
+  if (!g) return;
+  const n = hulls.length,
+    def = HEAT_METRICS.find((m) => m.key === heatMetric);
+  if (!def || n < 3) {
+    g.innerHTML = "";
+    updateHeatLegend(null);
+    return;
+  }
+  const V = padVerts(n),
+    G = 18,
+    cell = PAD / G;
+  const saved = hulls.map((h) => h.weight); // the current puck blend — restored after sampling
+  const cells: { x: number; y: number; v: number }[] = [];
+  let lo = Infinity,
+    hi = -Infinity;
+  for (let gy = 0; gy < G; gy++)
+    for (let gx = 0; gx < G; gx++) {
+      const cx = (gx + 0.5) * cell,
+        cy = (gy + 0.5) * cell;
+      if (!insidePoly({ x: cx, y: cy }, V)) continue;
+      const w = meanValue({ x: cx, y: cy }, V);
+      hulls.forEach((h, i) => (h.weight = w[i]));
+      blend();
+      prepare();
+      const hy = hydrostatics(72, 20); // coarse sampling — fast over a few hundred cells
+      const v = hy && hy.validWaterplane ? def.get(hy) : NaN;
+      cells.push({ x: gx * cell, y: gy * cell, v });
+      if (Number.isFinite(v)) {
+        lo = Math.min(lo, v);
+        hi = Math.max(hi, v);
+      }
+    }
+  hulls.forEach((h, i) => (h.weight = saved[i])); // restore the live blend
+  blend();
+  prepare();
+  if (!(hi > lo)) {
+    g.innerHTML = "";
+    updateHeatLegend(null);
+    return;
+  }
+  const span = hi - lo,
+    s = (cell + 0.7).toFixed(1); // slight overlap to hide seams
+  let html = "";
+  for (const c of cells)
+    html += `<rect x="${c.x.toFixed(1)}" y="${c.y.toFixed(1)}" width="${s}" height="${s}" fill="${Number.isFinite(c.v) ? heatColor((c.v - lo) / span) : "#e5e7eb"}" opacity="0.85"/>`;
+  g.innerHTML = html;
+  updateHeatLegend(def, lo, hi);
 }
 
 function updateStatus(): void {
@@ -542,6 +668,15 @@ function init(): void {
   // metrics scale inputs: geometry is unchanged, so just reformat the readout
   for (const id of ["loaInput", "unitSel", "waterSel"])
     document.getElementById(id)!.addEventListener("input", renderMetrics);
+  // metric heatmap selector — populate from HEAT_METRICS, repaint on change
+  const msel = document.getElementById("metricSel") as HTMLSelectElement;
+  msel.innerHTML =
+    `<option value="none">none</option>` +
+    HEAT_METRICS.map((m) => `<option value="${m.key}">${m.label}</option>`).join("");
+  msel.addEventListener("change", () => {
+    heatMetric = msel.value;
+    paintHeatmap();
+  });
   window.addEventListener("beforeunload", (e) => {
     if (isDirty()) {
       e.preventDefault();
