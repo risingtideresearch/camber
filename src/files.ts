@@ -1,13 +1,14 @@
 // ---------- entry point for the design library (the fullscreen file view) ----------
 //
 // Lists the hull designs stored in Supabase and lets you open one in the editor (editor.html?id=…), start a
-// new one, import a JSON file into the library, or export the selected design as JSON / STEP. Exports reuse
-// the same code paths as the editor: JSON is the stored document verbatim; STEP loads the document into the
-// model and runs the STEP writer (which fairs the surfaces via prepare() internally).
+// new one, import a JSON file into the library, or export the selected design as JSON / STEP / STL. Exports
+// reuse the same code paths as the editor: JSON is the stored document verbatim; STEP and STL load the
+// document into the model and run their writers (which fair the surfaces via prepare() internally).
 
 import { listDesigns, insertDesign, deleteDesign, type DesignRow } from "./supabase.js";
 import { parseDocument, loadJsonText } from "./json.js";
 import { buildStep } from "./step.js";
+import { buildStl } from "./stl.js";
 import { resetModel } from "./model.js";
 import { buildPreviewSvg } from "./preview.js";
 
@@ -37,6 +38,7 @@ const blendBtn = document.getElementById("blendBtn") as HTMLButtonElement;
 const openBtn = document.getElementById("openBtn") as HTMLButtonElement;
 const exportJsonBtn = document.getElementById("exportJsonBtn") as HTMLButtonElement;
 const exportStepBtn = document.getElementById("exportStepBtn") as HTMLButtonElement;
+const exportStlBtn = document.getElementById("exportStlBtn") as HTMLButtonElement;
 const deleteBtn = document.getElementById("deleteBtn") as HTMLButtonElement;
 const newBtn = document.getElementById("newDesign") as HTMLButtonElement;
 const importBtn = document.getElementById("importJson") as HTMLButtonElement;
@@ -84,7 +86,7 @@ function syncUI(): void {
     const row = selectedRow();
     selNameEl.textContent = row ? row.name : "No design selected";
     selNameEl.classList.toggle("none", !row);
-    for (const b of [openBtn, exportJsonBtn, exportStepBtn, deleteBtn]) b.disabled = !row;
+    for (const b of [openBtn, exportJsonBtn, exportStepBtn, exportStlBtn, deleteBtn]) b.disabled = !row;
     // Blend needs the selected design plus at least one topology-compatible peer
     const t = row ? topoById.get(row.id) : null;
     const peers = t ? rows.filter((r) => { const o = topoById.get(r.id); return o && topoSig(o) === topoSig(t); }).length : 0;
@@ -316,6 +318,21 @@ exportStepBtn.addEventListener("click", () => {
     alert("Export STEP failed: " + (e instanceof Error ? e.message : String(e)));
   } finally {
     exportStepBtn.disabled = false;
+  }
+});
+
+exportStlBtn.addEventListener("click", () => {
+  const row = selectedRow();
+  if (!row) return;
+  exportStlBtn.disabled = true;
+  try {
+    resetModel();
+    loadJsonText(JSON.stringify(row.document)); // load into the model singleton; buildStl fairs + meshes it
+    downloadBlob(`${safeName(row.name)}.stl`, buildStl(safeName(row.name)), "model/stl");
+  } catch (e) {
+    alert("Export STL failed: " + (e instanceof Error ? e.message : String(e)));
+  } finally {
+    exportStlBtn.disabled = false;
   }
 });
 
