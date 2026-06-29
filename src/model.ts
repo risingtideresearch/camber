@@ -221,13 +221,11 @@ export const immersion = (x: number, z: number): number => -state.waterline - wo
 export function prepare(): void {
   const sheer = state.sheer;
   // the plan half-breadth y(x): a clamped cubic B-spline over the plan control points — C² and
-  // variation-diminishing, so it can't overshoot the control polygon (the plan points are now handles, with
-  // the curve interpolating only the first and last). Evaluated directly as y(x), so the swept frame's
-  // heading is smooth. (Was a Hobby curve sampled to a table + read back by linear interpolation — C⁰.)
-  // the plan half-breadth y(x): a clamped cubic B-spline over the plan control points, but EXTRAPOLATED
-  // linearly past the forward end (x > last cp) instead of clamped — so a tumblehome bow can let the sheer
-  // guide cross the centerline (y < 0) past the LOA and the surface taper to a closed stem (see the
-  // bow-extension branch in sweptSection). Aft is left clamped.
+  // variation-diminishing, so it can't overshoot the control polygon (the plan points are handles, the curve
+  // interpolating only the first and last). Evaluated directly as y(x), so the swept frame's heading is smooth.
+  // Past the forward end (x > last cp) it is EXTRAPOLATED linearly (continuing the end slope) so a tumblehome
+  // bow can let the sheer guide cross the centerline (y < 0) and the surface taper to a closed stem. Aft is
+  // left clamped.
   const yfRaw = clampedBSplineSamplerX(sheer.cp.map((p) => [p.x, p.y]));
   const xEnd = sheer.cp[sheer.cp.length - 1].x,
     slopeEnd = yfRaw(xEnd) - yfRaw(xEnd - 1);
@@ -240,17 +238,6 @@ export function prepare(): void {
     sheer.trim.map((p) => p.k),
   );
   state.weightFn = buildWeightSampler(state.weights); // the longitudinal blend path through the simplex
-  // Cache the keel depth + slope just inboard of the LOA (from the normal keel-symmetric section), so the
-  // emergent bow keel can continue that slope across x=L. Sampled here, after the samplers above are built;
-  // x=L uses mirrorKeel (not the bow lens), so there is no circular dependency on this cache.
-  keelAtL = null;
-  const keelZ = (xx: number): number => {
-    const s = sweptSection(xx, 8, true, false);
-    return s.keel && s.pts.length ? s.pts[s.pts.length - 1][2] : NaN;
-  };
-  const zPrev = keelZ(L - 20),
-    zAtL = keelZ(L);
-  if (Number.isFinite(zPrev) && Number.isFinite(zAtL)) keelAtL = { z: zAtL, slope: (zAtL - zPrev) / 20 };
 }
 
 // ---------- the weight curve: a shape-preserving interpolation through the simplex ----------
@@ -396,13 +383,6 @@ export function keelKAt(x: number): number {
 // — a small fillet near the centerline crossing, so it slides smoothly with the keel and a broad round of a
 // straight panel never builds up into a migrating bump. Small enough to leave a flat/panel bottom above it.
 const KEEL_FLAT_ZONE = 0.28;
-// Bow-keel fairing: over this distance forward of the LOA, the emergent bow keel's depth is blended from a
-// straight continuation of the inboard keel slope (G1 at x=L) into its own natural (lens-crossing) depth, so
-// the keel/stem line has no slope kink where the keel construction changes at the LOA. keelAtL caches the
-// inboard keel depth + slope at x=L (recomputed by prepare); null until the first prepare / for hulls that
-// close before the LOA (the bow extension is never reached, so the cache is unused).
-const KEEL_FAIR_DIST = 90;
-let keelAtL: { z: number; slope: number } | null = null;
 // A flat/round keel is only FAIR where the section meets the centerline near-perpendicular in plan. Where
 // the sheer flares, the station planes fan (n̂ ⟂ the sheer tangent, not the centerline) and a flat keel
 // rides up into a centerline ridge in true transverse sections (the "pucker") — only a V crosses such an
@@ -433,31 +413,39 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
     nf = fairEval(ts, ns, ks),
     df = fairEval(ts, ds, ks),
     tmax = ts[ts.length - 1];
-  // first u where the world half-breadth crosses from ≥0 (starboard) to <0 (past the centerline) — the keel
+  // The STARBOARD span between the section's two world-centerline crossings: uA (the up-crossing, where the
+  // section first reaches y ≥ 0) and ustar (the down-crossing — the keel). For a normal hull the deck (u=0)
+  // is already to starboard, so uA = 0 and this is the whole half-section. For a tumblehome bow past the LOA
+  // the sheer guide is to PORT (py < 0), so uA > 0 and we drop the deck→centerline part — which lets this same
+  // keel-symmetric construction close the bow, no special lens case.
   let pu = 0,
     py0 = py + nf(0) * ny,
+    uA = py0 >= 0 ? 0 : -1,
     ustar = -1;
   const FN = 240;
   for (let i = 1; i <= FN; i++) {
     const u = (tmax * i) / FN,
       y = py + nf(u) * ny;
-    if (py0 >= 0 && y < 0) {
-      ustar = pu + (u - pu) * (py0 / (py0 - y));
+    if (uA < 0) {
+      if (py0 < 0 && y >= 0) uA = pu + (u - pu) * (-py0 / (y - py0)); // up-crossing into starboard
+    } else if (py0 >= 0 && y < 0) {
+      ustar = pu + (u - pu) * (py0 / (py0 - y)); // down-crossing: the keel
       break;
     }
     pu = u;
     py0 = y;
   }
-  if (ustar < 0) return null; // open section — never reaches the centerline
-  const dstar = df(ustar);
+  if (uA < 0 || ustar <= uA + 1e-6) return null; // open: no starboard span reaching the centerline
+  const half = ustar - uA, // u-length of the kept starboard half
+    dstar = df(ustar);
   // Round the keel over a SMALL fillet just inboard of the centerline crossing — a zone whose width is a
-  // fixed fraction (KEEL_FLAT_ZONE) of the half-section, so it slides smoothly WITH the keel crossing. A
+  // fixed fraction (KEEL_FLAT_ZONE) of the starboard span, so it slides smoothly WITH the keel crossing. A
   // constant fillet running along the keel approach stays longitudinally fair even where that approach is a
   // straight chine/deadrise panel. (An earlier version made the zone broad and anchored z0 to an inboard
   // chine; the zone then stepped in size as the crossing slid past a chine — a longitudinal blister. And a
   // broad round of a straight panel is itself a big bump that migrates.) The fillet is small, so it rounds
   // only near the keel and leaves a flat/panel bottom above it alone (no inflection / reversal).
-  const z0 = ustar * (1 - KEEL_FLAT_ZONE);
+  const z0 = ustar - half * KEEL_FLAT_ZONE;
   // plan flare = the sheer tangent's heading off the x-axis (n̂ = (Ty,−Tx,0) ⇒ flare = atan2(|Ty|,|Tx|)).
   // Ease a flat keel toward its natural V as flare rises, so an oblique centerline meeting becomes a fair V
   // instead of a ridge (the narrow-flared-transom pucker). keelK is the floor: flatten f = (1−kc)·(1−flareV).
@@ -476,21 +464,23 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
   const span = ustar - z0,
     d0z = df(z0),
     c = (dstar - d0z) / (span * span); // parabola curvature: vertex at the keel, through (z0, d0z)
-  const T = 2 * ustar,
-    warp = (u: number) => {
-      const d0 = df(u);
-      if (f <= 0 || u <= z0) return d0;
-      const t = Math.min((u - z0) / span, 1),
-        g = t * t * t * (t * (t * 6 - 15) + 10), // smootherstep (C²) blend weight
-        v = ustar - u,
-        target = dstar - c * v * v; // fair parabolic round to a flat keel tangent
-      return d0 + f * g * (target - d0);
-    };
+  const warp = (u: number) => {
+    const d0 = df(u);
+    if (f <= 0 || u <= z0) return d0;
+    const t = Math.min((u - z0) / span, 1),
+      g = t * t * t * (t * (t * 6 - 15) + 10), // smootherstep (C²) blend weight
+      v = ustar - u,
+      target = dstar - c * v * v; // fair parabolic round to a flat keel tangent
+    return d0 + f * g * (target - d0);
+  };
+  // U ∈ [0, 2·half]: the starboard half [0,half] maps to the original span [uA,ustar], the keel sits at the
+  // midpoint U = half, and the port half reflects the starboard one about the centerline offset n_cl.
+  const umap = (U: number): number => uA + (U <= half ? U : 2 * half - U);
   return {
-    tmax: T,
-    n: (U: number) => (U <= ustar ? nf(U) : 2 * ncl - nf(2 * ustar - U)),
-    d: (U: number) => warp(U <= ustar ? U : 2 * ustar - U),
-    ts, // starboard half uses the raw chord-param directly, so template points sit at U = ts[i]
+    tmax: 2 * half,
+    n: (U: number) => (U <= half ? nf(umap(U)) : 2 * ncl - nf(umap(U))),
+    d: (U: number) => warp(umap(U)),
+    ts: ts.map((t) => t - uA), // template points shifted into the [0,half] starboard span (uA=0 ⇒ unchanged)
     keelV: 1 - f, // keel crease strength: 0 = flat/round (smooth), 1 = hard V (for shading the keel crease)
   };
 }
@@ -502,10 +492,11 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
 // (the trimmed hull), the curve is reflected about the centerline so the keel knuckle applies — see
 // mirrorKeelStation; the parameter then runs sheer→keel→port-sheer and the keel sits at the midpoint.
 export function stationAt(x: number, mirrorKeel = false): Station {
-  // Past the LOA (bow extension for a tumblehome bow) freeze the section shape at x = L — the templates and
-  // weight curve are only defined on [0, L]; the extension sweeps that frozen L-section along the extrapolated
-  // sheer and clips it at the centerline. Use the raw (non-keel-symmetric) section there, since the symmetric
-  // keel construction assumes the sheer is on the starboard side.
+  // Past the LOA (the bow extension for a tumblehome bow) freeze the section SHAPE at x = L — the templates and
+  // weight curve are only defined on [0, L] — but keep building it through mirrorKeelStation, which now handles
+  // the sheer guide having crossed the centerline (it reflects the starboard span [uA, ustar]). So the bow
+  // closes through the same keel-symmetric construction as the rest of the hull, swept along the extrapolated
+  // sheer, with no special case.
   const xw = Math.min(x, L),
     w = weightsAt(xw),
     tpl = state.templates,
@@ -528,9 +519,12 @@ export function stationAt(x: number, mirrorKeel = false): Station {
     ds.push(d);
     ks.push(k);
   }
-  if (mirrorKeel && x <= L) {
-    const st = mirrorKeelStation(x, ns, ds, ks, keelKAt(xw));
-    if (st) return st;
+  if (mirrorKeel) {
+    // null ⇒ the section never reaches the centerline (an open bow station, or past the bow closure where the
+    // swept lens has vanished). For the trimmed hull that means NO hull here — return a degenerate (tmax 0)
+    // station so sweptSection reports `aft`. (Falling back to the raw, un-mirrored half-section instead would
+    // resurrect the full deep section past the closure — the "wings".)
+    return mirrorKeelStation(x, ns, ds, ks, keelKAt(xw)) ?? { tmax: 0, n: () => 0, d: () => 0, ts: [0] };
   }
   const ts = chordParam(ns, ds);
   return { tmax: ts[m - 1], n: fairEval(ts, ns, ks), d: fairEval(ts, ds, ks), ts };
@@ -561,88 +555,10 @@ export function sweptSection(x: number, M: number, trim: boolean, clipTransom = 
       fr.p[2] + nn * fr.n[2] + dd * fr.d[2],
     ];
   };
-  // ---- bow extension: where the sheer guide has crossed the centerline (yf < 0, only forward of the LOA via
-  // the extrapolation in prepare), a tumblehome station straddles the centerline, and mirrorKeelStation can't
-  // build a clean symmetric section (its starboard half would include the port deck). Instead keep the y ≥ 0
-  // "lens" between the station's two centerline crossings — the starboard half from the sheer trim down to the
-  // keel — which trimmedHullGrid mirrors to port like any other half-section. The lens shrinks to nothing as
-  // the guide moves to port, tapering the bow to a closed stem. Only reached past x = L; existing hulls (swept
-  // within [0,L]) are untouched. ----
-  if (trim && fr.p[1] < -1e-6) {
-    const FN = 240,
-      yOf = (u: number): number => W(u)[1];
-    const cross = (i: number, a: number, b: number): number =>
-      (st.tmax * (i - 1)) / FN + (st.tmax / FN) * (a / (a - b)); // linear y=0 crossing in the i-th step
-    let uA = -1,
-      uB = -1,
-      prev = yOf(0);
-    for (let i = 1; i <= FN; i++) {
-      const y = yOf((st.tmax * i) / FN);
-      if (uA < 0 && prev < 0 && y >= 0) uA = cross(i, prev, y); // up-crossing: enters the kept side
-      else if (uA >= 0 && prev >= 0 && y < 0) {
-        uB = cross(i, prev, y); // down-crossing: the keel
-        break;
-      }
-      prev = y;
-    }
-    if (uA < 0 || uB <= uA + 1e-6)
-      return { pts: [W(0)], open: false, aft: true, keel: false, creaseCols: [], creaseK: [] };
-    // Apply the sheer trim to the lens, same as a normal section: the top edge is the first depth in [uA,uB]
-    // reaching the trim depth (the topside strip above it is cut). Depth grows monotonically down the lens, so
-    // a forward scan finds it. If the whole lens sits above the trim, there is no hull here (a clean closure).
-    let uTop = uA;
-    const dtrim = -state.sheer.zf(x);
-    if (dtrim > st.d(uA)) {
-      const TN = 120;
-      let pd = st.d(uA),
-        hit = -1;
-      for (let i = 1; i <= TN; i++) {
-        const u = uA + ((uB - uA) * i) / TN,
-          dd = st.d(u);
-        if (dd >= dtrim) {
-          const u0 = uA + ((uB - uA) * (i - 1)) / TN;
-          hit = u0 + (u - u0) * ((dtrim - pd) / (dd - pd || 1));
-          break;
-        }
-        pd = dd;
-      }
-      if (hit < 0 || hit >= uB - 1e-6)
-        return { pts: [W(uB)], open: false, aft: true, keel: false, creaseCols: [], creaseK: [] };
-      uTop = hit;
-    }
-    // Round the keel so the port mirror joins smoothly (a U, not a V or a spike). The hull mirrors each half
-    // section across the centerline plane; the join is smooth iff the section meets y = 0 with dz/dy = 0 — i.e.
-    // its DEPTH bottoms out at the keel. The raw lens instead crosses y = 0 still descending, so over a small
-    // fillet just above the keel we ease the depth z toward its keel value with a vanishing slope (smootherstep),
-    // leaving the breadth y to cross naturally. dz/dt → 0 while dy/dt ≠ 0 gives dz/dy → 0: a rounded keel,
-    // matching mirrorKeelStation's keel round on the rest of the hull. (Easing y instead would send dz/dy → ∞ —
-    // a vertical approach that mirrors to a downward spike, the earlier wrinkle.)
-    // Keel depth at the crossing — but faired longitudinally: near the LOA, continue the inboard keel slope
-    // (cached in keelAtL) and ease into the natural crossing depth over KEEL_FAIR_DIST, so the stem/keel line
-    // has no slope kink at x=L. Easing the WARP TARGET (not the y crossing) keeps the keel on the centerline.
-    const span = uB - uTop,
-      zone = KEEL_FLAT_ZONE; // fillet width as a fraction of the lens, same constant as the main keel round
-    let zKeel = W(uB)[2];
-    if (keelAtL) {
-      const dxL = x - L,
-        t = Math.min(dxL / KEEL_FAIR_DIST, 1),
-        gK = t * t * t * (t * (t * 6 - 15) + 10), // smootherstep: zero slope at both ends ⇒ G1 at x=L and handoff
-        zTangent = keelAtL.z + keelAtL.slope * dxL;
-      zKeel = zTangent * (1 - gK) + zKeel * gK;
-    }
-    const pts: Vec3[] = [];
-    for (let j = 0; j <= M; j++) {
-      const t = j / M,
-        w = W(uTop + span * t);
-      if (t > 1 - zone) {
-        const s = (t - (1 - zone)) / zone, // 0 at the fillet start → 1 at the keel
-          g = s * s * s * (s * (s * 6 - 15) + 10); // 0→1, zero slope at both ends (smootherstep)
-        w[2] = w[2] * (1 - g) + zKeel * g; // ease depth to the keel value with vanishing slope ⇒ rounded keel
-      }
-      pts.push(w);
-    }
-    return { pts, open: false, aft: false, keel: true, creaseCols: [], creaseK: [] };
-  }
+  // Bow extension: where the sheer guide has crossed the centerline (yf < 0, forward of the LOA via the
+  // extrapolation in prepare) the station straddles the centerline. mirrorKeelStation builds the same keel-
+  // symmetric, keel-rounded section it does everywhere (reflecting the starboard span [uA, ustar]), and the
+  // normal trim + centerline + transom clipping below closes the bow — no special case.
   let umin = 0,
     umax = st.tmax,
     open = true,
@@ -657,7 +573,10 @@ export function sweptSection(x: number, M: number, trim: boolean, clipTransom = 
         const u = (st.tmax * i) / FN;
         if (st.d(u) >= dtrim) {
           const da = st.d((st.tmax * (i - 1)) / FN);
-          umin = (st.tmax * (i - 1 + (dtrim - da) / (st.d(u) - da || 1))) / FN;
+          // clamp ≥ 0: at a bow lens the very top of the section already sits below the trim (da ≥ dtrim), so
+          // the interpolation would go negative — keep the whole section from its top instead of crossing the
+          // centerline to port. (For a normal section the top is the deck at d=0 < dtrim, so this is a no-op.)
+          umin = Math.max(0, (st.tmax * (i - 1 + (dtrim - da) / (st.d(u) - da || 1))) / FN);
           break;
         }
       }
