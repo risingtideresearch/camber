@@ -27,9 +27,10 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p _site/dist
-          cp index.html _site/
-          cp dist/camber.js _site/dist/
-          if [ -f dist/camber.js.map ]; then cp dist/camber.js.map _site/dist/; fi
+          # all three pages (index = design library, editor, interpolate) and their bundles + sourcemaps
+          cp ./*.html _site/
+          cp dist/*.js _site/dist/
+          cp dist/*.js.map _site/dist/ 2>/dev/null || true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
