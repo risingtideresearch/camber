@@ -373,9 +373,22 @@ function renderPanel(): void {
   padEl.addEventListener("pointerup", end);
   padEl.addEventListener("pointercancel", end);
   updateReadout();
-  computeSamples(); // one blend-space sampling pass, shared by the heatmap + scatter
-  paintHeatmap();
-  renderScatter();
+  scheduleSampling(); // one blend-space sampling pass (heatmap + scatter), off the critical path
+}
+
+// the sampling pass is heavy (a blend + prepare + hydrostatics per grid cell, ~1–3 s), so show the pad and
+// 3D first, paint a "sampling…" placeholder, then compute on the next tick and fill the heatmap + scatter.
+let sampleTimer = 0;
+function scheduleSampling(): void {
+  const svg = document.getElementById("scatter");
+  if (svg && hulls.length >= 2)
+    svg.innerHTML = `<text x="${SCW / 2}" y="${SCH / 2}" text-anchor="middle" font-size="12" fill="#94a3b8">sampling the blend space…</text>`;
+  clearTimeout(sampleTimer);
+  sampleTimer = window.setTimeout(() => {
+    computeSamples();
+    paintHeatmap();
+    renderScatter();
+  }, 20);
 }
 
 // ---------- metric heatmap: colour the pad interior by a chosen hydrostatic metric ----------
@@ -410,7 +423,10 @@ interface Sample {
   t: number; // slider param (2 hulls)
   h: Hydro | null;
 }
-const HEAT_G = 18; // pad grid resolution (cells per side)
+const HEAT_G = 31; // pad grid resolution (cells per side) — ~3× the samples of an 18-grid (count ∝ G²)
+const SAMPLE_NS = 72, // hydrostatics resolution for the sampling pass (the live metrics panel uses full
+  SAMPLE_M = 20; //     resolution). The per-cell cost is dominated by blend()+prepare(), not this, so the
+//                       grid runs ~1 s (triangle) to ~3 s (pentagon) — done off the critical path below.
 let samples: Sample[] = [];
 let lastHydro: Hydro | null = null; // hydrostatics of the current (live) blend; set by renderMetrics
 let scatterX = "loverb",
@@ -424,14 +440,14 @@ function computeSamples(): void {
   if (n < 2) return;
   const saved = hulls.map((h) => h.weight); // restore the live blend after the pass
   if (n === 2) {
-    const N = 40;
+    const N = 120;
     for (let i = 0; i <= N; i++) {
       const t = i / N;
       hulls[0].weight = 1 - t;
       hulls[1].weight = t;
       blend();
       prepare();
-      samples.push({ gx: i, gy: 0, pos: { x: 0, y: 0 }, t, h: hydrostatics(72, 20) });
+      samples.push({ gx: i, gy: 0, pos: { x: 0, y: 0 }, t, h: hydrostatics(SAMPLE_NS, SAMPLE_M) });
     }
   } else {
     const V = padVerts(n),
@@ -445,7 +461,7 @@ function computeSamples(): void {
         hulls.forEach((h, i) => (h.weight = w[i]));
         blend();
         prepare();
-        samples.push({ gx, gy, pos: { x: cx, y: cy }, t: 0, h: hydrostatics(72, 20) });
+        samples.push({ gx, gy, pos: { x: cx, y: cy }, t: 0, h: hydrostatics(SAMPLE_NS, SAMPLE_M) });
       }
   }
   hulls.forEach((h, i) => (h.weight = saved[i]));
