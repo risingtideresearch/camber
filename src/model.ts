@@ -383,6 +383,9 @@ export function keelKAt(x: number): number {
 // — a small fillet near the centerline crossing, so it slides smoothly with the keel and a broad round of a
 // straight panel never builds up into a migrating bump. Small enough to leave a flat/panel bottom above it.
 const KEEL_FLAT_ZONE = 0.28;
+// Blended-knuckle strength at/above which the grid columns are FULLY chine-anchored (so the chine line has no
+// drift); below it the alignment relaxes toward the even grid as the chine fades to nothing. See sweptSection.
+const KNUCKLE_PIN = 0.35;
 // A flat/round keel is only FAIR where the section meets the centerline near-perpendicular in plan. Where
 // the sheer flares, the station planes fan (n̂ ⟂ the sheer tangent, not the centerline) and a flat keel
 // rides up into a centerline ridge in true transverse sections (the "pucker") — only a V crosses such an
@@ -668,7 +671,14 @@ export function sweptSection(x: number, M: number, trim: boolean, clipTransom = 
     // (wK) — where the chine softens the interior spacing eases back to even, which keeps the keel deadrise
     // fair; only the crease line is pinned. (Earlier the crease column too was lerped toward even, dragging
     // the drawn chine away from its true line where the knuckle faded.)
-    const wK = Math.max(...kn.map((a) => a.k));
+    // Blend the WHOLE column distribution between the even grid and the chine-anchored grid by wK (so there is
+    // never an isolated column — that breaks the surface). But wK SATURATES: once the blended knuckle is past
+    // ~KNUCKLE_PIN the columns are fully chine-anchored, so the drawn/exported chine sits on its true line with
+    // no drift; only as the chine genuinely fades toward nothing does the grid relax to even (which keeps the
+    // keel fair where the chine crowds it near a fine bow). A plain-linear wK drifted the chine even at
+    // moderate strength; full pinning roughened the keel where the chine faded — this does neither.
+    let wK = clamp(Math.max(...kn.map((a) => a.k)) / KNUCKLE_PIN, 0, 1);
+    wK = wK * wK * (3 - 2 * wK); // smoothstep
     const anchors = [ua, ...kn.map((a) => a.u), ub],
       segs = anchors.length - 1;
     colU = [ua];
@@ -676,13 +686,9 @@ export function sweptSection(x: number, M: number, trim: boolean, clipTransom = 
     for (let s = 0; s < segs; s++) {
       const cnt = Math.floor(M / segs) + (s < M % segs ? 1 : 0); // deterministic ⇒ stable column indices
       for (let t = 1; t <= cnt; t++) {
-        if (t === cnt && s < segs - 1) {
-          colU.push(anchors[s + 1]); // the crease column: exactly on the chine
-        } else {
-          const aligned = anchors[s] + ((anchors[s + 1] - anchors[s]) * t) / cnt,
-            e = evenU(col + t);
-          colU.push(e + wK * (aligned - e)); // fill: relax toward even by the knuckle strength
-        }
+        const aligned = anchors[s] + ((anchors[s + 1] - anchors[s]) * t) / cnt,
+          e = evenU(col + t);
+        colU.push(e + wK * (aligned - e)); // even grid → chine-anchored grid, by the (saturating) wK
       }
       col += cnt;
       if (s < segs - 1) {

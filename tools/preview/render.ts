@@ -135,8 +135,8 @@ function renderLines(P: (p: Vec3) => P2, yaw: number, pitch: number, sel: number
 }
 
 // ---- shaded: full-width rows (like render.ts bilgeRows) flat-Lambert shaded, to spot puckers/creases ----
-function renderShaded(P: (p: Vec3) => P2): string {
-  const Mh = 44, N = 160, xf = forwardLimit();
+function renderShaded(P: (p: Vec3) => P2, yaw = 0, pitch = 0, zebra = false): string {
+  const Mh = 44, N = 200, xf = forwardLimit();
   const rows: Vec3[][] = [];
   for (let i = 0; i <= N; i++) {
     const x = xf * 0.5 * (1 - Math.cos((Math.PI * i) / N)); // cosine spacing, matches the real mesh
@@ -147,6 +147,10 @@ function renderShaded(P: (p: Vec3) => P2): string {
     rows.push(full);
   }
   const Lt = [0.4, -0.5, 0.76], nl = Math.hypot(Lt[0], Lt[1], Lt[2]);
+  // view direction (toward eye) in world, for the zebra reflection bands
+  const c1 = Math.cos(yaw), s1 = Math.sin(yaw), c2 = Math.cos(pitch), s2 = Math.sin(pitch), cT = Math.cos(state.deckRake), sT = Math.sin(state.deckRake);
+  let Vx = -c2 * s1 * cT + s2 * sT, Vy = -c2 * c1, Vz = c2 * s1 * sT + s2 * cT;
+  const Vl = Math.hypot(Vx, Vy, Vz) || 1; (Vx /= Vl), (Vy /= Vl), (Vz /= Vl);
   const R = rows.length, C = rows[0].length;
   let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
   const quads: { P: P2[]; depth: number; col: string }[] = [];
@@ -154,13 +158,22 @@ function renderShaded(P: (p: Vec3) => P2): string {
     for (let j = 0; j < C - 1; j++) {
       const A = rows[i][j], B = rows[i + 1][j], Cc = rows[i + 1][j + 1], D = rows[i][j + 1];
       const e1 = [B[0] - A[0], B[1] - A[1], B[2] - A[2]], e2 = [D[0] - A[0], D[1] - A[1], D[2] - A[2]];
-      let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+      const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
       const ln = Math.hypot(n[0], n[1], n[2]) || 1;
-      const dot = Math.abs((n[0] * Lt[0] + n[1] * Lt[1] + n[2] * Lt[2]) / (ln * nl)); // two-sided
-      const sh = Math.round(60 + 170 * Math.max(0, Math.min(1, 0.35 + 0.65 * dot)));
+      let col: string;
+      if (zebra) {
+        const Nx = n[0] / ln, Ny = n[1] / ln, Nz = n[2] / ln, vn = Vx * Nx + Vy * Ny + Vz * Nz;
+        const Rz = -Vz + 2 * vn * Nz, Ry = -Vy + 2 * vn * Ny; // reflect(-V, N), y/z components
+        const s = Math.sin(Math.atan2(Rz, Ry) * 8) > 0 ? 1 : 0;
+        col = s ? "rgb(247,250,255)" : "rgb(18,23,38)";
+      } else {
+        const dot = Math.abs((n[0] * Lt[0] + n[1] * Lt[1] + n[2] * Lt[2]) / (ln * nl));
+        const sh = Math.round(60 + 170 * Math.max(0, Math.min(1, 0.35 + 0.65 * dot)));
+        col = `rgb(${Math.round(sh * 0.55)},${Math.round(sh * 0.7)},${sh})`;
+      }
       const pr = [A, B, Cc, D].map(P);
       for (const p of pr) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
-      quads.push({ P: pr, depth: (pr[0].d + pr[1].d + pr[2].d + pr[3].d) / 4, col: `rgb(${Math.round(sh * 0.55)},${Math.round(sh * 0.7)},${sh})` });
+      quads.push({ P: pr, depth: (pr[0].d + pr[1].d + pr[2].d + pr[3].d) / 4, col });
     }
   quads.sort((a, b) => a.depth - b.depth);
   let body = "";
@@ -213,7 +226,9 @@ const P = projector(yaw, pitch);
 const sel = process.env.CAMBER_SEL ? parseInt(process.env.CAMBER_SEL, 10) : -1; // template point index to highlight
 // lines family: pass mode "body"|"buttocks"|"waterline" directly, or use mode "lines" + CAMBER_LINES env
 const linesKind = ["body", "buttocks", "waterline"].includes(mode) ? mode : process.env.CAMBER_LINES ?? "body";
-const svg = mode === "shaded" ? renderShaded(P) : mode === "stepnet" ? renderStepNet(P) : renderLines(P, yaw, pitch, sel, linesKind);
+const svg = mode === "shaded" ? renderShaded(P, yaw, pitch, false)
+  : mode === "zebra" ? renderShaded(P, yaw, pitch, true)
+  : mode === "stepnet" ? renderStepNet(P) : renderLines(P, yaw, pitch, sel, linesKind);
 
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out.replace(/\.png$/, ".svg"), svg);
