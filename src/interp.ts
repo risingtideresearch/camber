@@ -397,18 +397,39 @@ function scheduleSampling(): void {
 // (family, metric) — NOT on every puck drag (the landscape is position-independent) — over a COARSE
 // hydrostatics sampling so a few hundred cells stay snappy.
 let heatMetric = "none";
+// every continuous metric the hydrostatics engine produces (lengths/areas/volume in model units — the
+// explorer plots relative values, so units don't matter here; the metrics panel carries the dimensioned ones)
+const amid = (h: Hydro): number => (h.xAft + h.xFwd) / 2;
 const HEAT_METRICS: { key: string; label: string; get: (h: Hydro) => number }[] = [
+  // dimensions
+  { key: "lwl", label: "LWL", get: (h) => h.lwl },
+  { key: "bwl", label: "Beam · WL", get: (h) => h.bwl },
+  { key: "draft", label: "Draft", get: (h) => h.draft },
+  // areas & volume
+  { key: "vol", label: "∇ · volume", get: (h) => h.vol },
+  { key: "waterplane", label: "Waterplane area", get: (h) => h.waterplaneArea },
+  { key: "midship", label: "Midship area", get: (h) => h.midshipArea },
+  { key: "wetted", label: "Wetted area", get: (h) => h.wettedArea },
+  // form coefficients
   { key: "cb", label: "Cb · block", get: (h) => h.cb },
   { key: "cp", label: "Cp · prismatic", get: (h) => h.cp },
   { key: "cm", label: "Cm · midship", get: (h) => h.cm },
   { key: "cw", label: "Cw · waterplane", get: (h) => h.cw },
-  { key: "vol", label: "∇ · volume", get: (h) => h.vol },
-  { key: "draft", label: "Draft", get: (h) => h.draft },
-  { key: "loverb", label: "L / B", get: (h) => h.lwl / h.bwl },
+  { key: "cvp", label: "Cvp · vert. prismatic", get: (h) => h.cvp },
+  // centroids & initial stability
+  { key: "lcb", label: "LCB · %", get: (h) => ((h.lcb - amid(h)) / h.lwl) * 100 },
+  { key: "lcf", label: "LCF · %", get: (h) => ((h.lcf - amid(h)) / h.lwl) * 100 },
+  { key: "kb", label: "KB", get: (h) => h.kb },
   { key: "bmt", label: "BMt", get: (h) => h.bmt },
   { key: "kmt", label: "KMt", get: (h) => h.kmt },
+  { key: "bml", label: "BMl", get: (h) => h.bml },
+  { key: "kml", label: "KMl", get: (h) => h.kml },
+  // ratios & angles
+  { key: "loverb", label: "L / B", get: (h) => h.lwl / h.bwl },
+  { key: "boverT", label: "B / T", get: (h) => h.bwl / h.draft },
+  { key: "slender", label: "L / ∇⅓", get: (h) => h.lwl / Math.cbrt(h.vol) },
   { key: "deadrise", label: "Deadrise", get: (h) => h.deadrise },
-  { key: "lcb", label: "LCB · %", get: (h) => ((h.lcb - (h.xAft + h.xFwd) / 2) / h.lwl) * 100 },
+  { key: "entrance", label: "½ entrance angle", get: (h) => h.halfEntrance },
 ];
 
 // ---------- shared blend-space sampling (feeds both the heatmap and the scatter explorer) ----------
