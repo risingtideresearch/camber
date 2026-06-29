@@ -2,28 +2,28 @@
 
 import { resetModel, state } from "./model.js";
 import { render, draw3d } from "./render.js";
-import { initInteraction, refreshSelUI, addBlendPoint } from "./interaction.js";
+import { initInteraction, refreshSelUI } from "./interaction.js";
 import { buildJson, loadJsonText } from "./json.js";
 import { getDesign, insertDesign, updateDesign } from "./supabase.js";
 import { buildPreviewSvg } from "./preview.js";
 import { svgL, svgP, svgW } from "./dom.js";
-import { LH, PH, WVW, WVH } from "./view.js";
+import { LH, PH, WH } from "./view.js";
 
 // the plan / profile strips are sized to the isometric scale (see view.ts); set their viewBox heights
 // from the derived constants so the SVG aspect matches the to-scale drawing (no stretching). The blend
-// control carries its own (vertical) viewBox.
+// strip shares the 1000-wide x axis (compact height WH) so its stations line up with plan/profile.
 svgL.setAttribute("viewBox", `0 0 1000 ${LH}`);
 svgP.setAttribute("viewBox", `0 0 1000 ${PH}`);
-svgW.setAttribute("viewBox", `0 0 ${WVW} ${WVH}`);
+svgW.setAttribute("viewBox", `0 0 1000 ${WH}`);
 
 // ---------- size the right column ----------
-// The right column's width IS the section editor's side: the square fills that width (CSS aspect-ratio),
-// and the blend control takes the remaining height below it. We pick a width that is a sensible fraction of
-// the main area but never taller (as a square) than half its height, so the blend always has room — and
-// never wider than MAX_SIDE so the left column (3D + plan + profile) keeps the bulk of the width.
-const MIN_SIDE = 220,
-  MAX_SIDE = 460,
-  LEFT_GAP = 20; // the two 10px gaps between the three stacked items in the left column
+// The right column's width IS each panel's side: both the section editor and the cut station are squares
+// that fill that width (CSS aspect-ratio), stacked vertically. We pick a width that is a sensible fraction
+// of the main area but, since TWO squares now stack, never taller (as a square) than ~0.42 of its height so
+// both fit with their captions — and never wider than MAX_SIDE so the left column keeps the bulk of width.
+const MIN_SIDE = 200,
+  MAX_SIDE = 420,
+  LEFT_GAP = 30; // the three 10px gaps between the four stacked items (3D, blend, plan, profile)
 const mainEl = document.querySelector(".main") as HTMLElement;
 const rightCol = document.querySelector(".rightcol") as HTMLElement;
 const leftCol = document.querySelector(".leftcol") as HTMLElement;
@@ -32,13 +32,13 @@ function fitLayout(): void {
   const w = mainEl.clientWidth,
     h = mainEl.clientHeight;
   if (!w || !h) return;
-  const side = Math.max(MIN_SIDE, Math.min(MAX_SIDE, Math.min(w * 0.34, h * 0.5)));
+  const side = Math.max(MIN_SIDE, Math.min(MAX_SIDE, Math.min(w * 0.34, h * 0.42)));
   rightCol.style.width = `${side}px`;
   // Cap the left column. The plan + profile strips render at the isometric aspect, so their stacked height
   // is (LH+PH)/1000 × the column width — left uncapped, a wider window makes them balloon and squeeze the 3D
   // view. Cap the width at the value where the 3D view ends up as tall as the station square (= `side`),
   // which is the proportion that reads best; wider windows then center the columns instead of growing them.
-  const stripAspect = (LH + PH) / 1000;
+  const stripAspect = (WH + LH + PH) / 1000;
   const leftMax = Math.max(360, (h - side - LEFT_GAP) / stripAspect);
   leftCol.style.maxWidth = `${leftMax}px`;
 }
@@ -102,11 +102,6 @@ view3dModes.addEventListener("click", (e) => {
   state.view3dMode = b.dataset.mode as typeof state.view3dMode;
   view3dModes.querySelectorAll(".vmode").forEach((x) => x.classList.toggle("on", x === b));
   draw3d(true); // rebuild for the new mode (mesh vs lines grid vs sheet)
-});
-
-document.getElementById("addBlendBtn")!.addEventListener("click", () => {
-  addBlendPoint();
-  updateDirty();
 });
 
 document.getElementById("revertDesign")!.addEventListener("click", revert);

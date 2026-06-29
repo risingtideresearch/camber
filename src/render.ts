@@ -39,8 +39,7 @@ import {
   snY,
   NMIN,
   NMAX,
-  wvX,
-  wvW,
+  wY,
 } from "./view.js";
 import {
   el,
@@ -50,7 +49,6 @@ import {
   svgP,
   svgL,
   svgC,
-  svgB,
   svgW,
   tplCards,
   sideTabs,
@@ -197,12 +195,10 @@ export function render(): void {
   drawPlan(sections, zmin);
   drawProfile(sections, zmin);
   drawWeights(svgW);
-  drawCutStation(svgC);
-  drawBodyPlan(svgB);
-  drawSidePanels(); // template editors + Cut + Body share one tab strip; show the active one
+  drawCutStation(svgC); // the cut station lives in its own (always-visible) panel in the lower right column
+  drawSidePanels(); // template editors share one tab strip; show the active one
   draw3d(true);
   const profVal = document.getElementById("profVal") as HTMLElement;
-  profVal.textContent = `x = ${Math.round(state.x0)} (${((state.x0 / L) * 100).toFixed(0)}% LOA)`;
   const h = clippedSection(state.x0, 18);
   // (label uses the live cut) — draft + breadth are measured against the design waterline
   const wl = waterlineStats(h),
@@ -683,7 +679,7 @@ function drawStation(svg: SVGSVGElement, ti: number): void {
 // a zero-size getBoundingClientRect and breaks the pointer-to-model mapping). Cut and Body are the fixed page
 // svgs. The tab strip shows exactly one panel at a time.
 let tplEls: SVGSVGElement[] = [];
-let sideTab: number | "cut" | "body" = 0; // active tab: a template index, or the Cut / Body view
+let sideTab = 0; // active tab: a template index (the Cut view is now its own panel, not a tab)
 let prevTplCount = 0;
 
 function buildTemplateSvgs(): void {
@@ -698,28 +694,25 @@ function buildTemplateSvgs(): void {
   });
 }
 
-// show only the active panel; the others stay drawn but hidden, so switching tabs is instant
+// show only the active template panel; the others stay drawn but hidden, so switching tabs is instant
 function applySideTab(): void {
   tplEls.forEach((svg, j) => (svg.style.display = sideTab === j ? "" : "none"));
-  svgC.style.display = sideTab === "cut" ? "" : "none";
-  svgB.style.display = sideTab === "body" ? "" : "none";
 }
 
-function setSideTab(t: number | "cut" | "body"): void {
+function setSideTab(t: number): void {
   sideTab = t;
   applySideTab();
   buildSideTabs();
   refreshKeelUI(); // the keel slider targets the active template tab
 }
 
-// the active template tab as a template index, or null when the Cut / Body view is showing (the keel
-// slider edits a specific template, so it is disabled on those)
+// the active template tab as a template index (always a template now that Cut is its own panel)
 export function activeTemplateIndex(): number | null {
-  return typeof sideTab === "number" ? sideTab : null;
+  return sideTab;
 }
 
-// the tab strip: one tab per template (its accent color; the active one carries a ✕ to remove it), a "+" to
-// add a template, then the Cut and Body views.
+// the tab strip: one tab per template (its accent color; the active one carries a ✕ to remove it), then a
+// "+" to add a template.
 function buildSideTabs(): void {
   sideTabs.replaceChildren();
   const K = state.templates.length;
@@ -752,16 +745,6 @@ function buildSideTabs(): void {
   add.disabled = K >= 7;
   add.addEventListener("click", () => addTemplate());
   sideTabs.append(add);
-  const sep = document.createElement("span");
-  sep.className = "tabsep";
-  sideTabs.append(sep);
-  for (const v of [["cut", "Cut"], ["body", "Body"]] as const) {
-    const tab = document.createElement("button");
-    tab.className = "tab" + (sideTab === v[0] ? " active" : "");
-    tab.textContent = v[1];
-    tab.addEventListener("click", () => setSideTab(v[0]));
-    sideTabs.append(tab);
-  }
 }
 
 // redraw the side panel: (re)build the template svgs when the count changes, draw each, refresh the tabs
@@ -773,38 +756,35 @@ function drawSidePanels(): void {
     if (grew) sideTab = K - 1;
     prevTplCount = K;
   }
-  if (typeof sideTab === "number" && sideTab >= K) sideTab = K - 1; // a removed template → clamp
+  if (sideTab >= K) sideTab = K - 1; // a removed template → clamp
   tplEls.forEach((svg, j) => drawStation(svg, j));
   buildSideTabs();
   applySideTab();
   refreshKeelUI(); // keep the keel slider in sync after add/remove/clamp of the active tab
 }
 
-// the vertical blend ribbon: the longitudinal axis runs DOWN the strip (stern at the top, bow at the
-// bottom), and at each station the templates stack left→right, band j being template j's share — the bands
-// summing to 1 everywhere. Control points carry an x-handle (interior CPs, slide up/down) and the K−1
-// band-boundary handles (drag left/right) that edit the simplex split. The red cut slider scrubs x here too.
+// the horizontal blend ribbon: x runs left→right (shared mapX, aligned with plan/profile), and at each x
+// the templates stack BOTTOM→TOP, band j being template j's share — the bands summing to 1 everywhere.
+// Each station shows the K−1 band-boundary handles (drag ↕) that edit the simplex split; x is set in the
+// plan view (the station is shared). The red cut slider (shared stationLine) scrubs x here too.
 function drawWeights(svg: SVGSVGElement): void {
   svg.replaceChildren();
   const K = state.templates.length,
-    yTop = wvX(0),
-    yBot = wvX(L),
-    xLeft = wvW(0),
-    xRight = wvW(1);
-  // longitudinal gridlines (constant x): horizontal, at quarters of the length
-  for (let q = 0; q <= 4; q++) {
-    const y = wvX((L * q) / 4);
-    svg.append(el("line", { x1: xLeft, y1: y, x2: xRight, y2: y, stroke: "#edf2f7", "stroke-width": 1 }));
-  }
-  // simplex guides at 0 / ½ / 1: vertical
+    top = wY(1),
+    bot = wY(0),
+    xEnd = state.sheer.cp[state.sheer.cp.length - 1].x,
+    xL = mapX(0),
+    xR = mapX(xEnd);
+  gridX(svg, top, bot); // vertical x-gridlines (quarters of the length) — aligned with plan/profile
+  // simplex guides at 0 / ½ / 1: horizontal
   for (const g of [0, 0.5, 1])
-    svg.append(el("line", { x1: wvW(g), y1: yTop, x2: wvW(g), y2: yBot, stroke: "#edf2f7", "stroke-width": 1 }));
-  // stacked bands from the sampled curve (each band spans top→bottom, its left/right edges varying with x)
+    svg.append(el("line", { x1: xL, y1: wY(g), x2: xR, y2: wY(g), stroke: "#edf2f7", "stroke-width": 1 }));
+  // stacked bands from the sampled curve (each band a horizontal ribbon, its top/bottom edges varying with x)
   const NS = 120,
     xs: number[] = [],
     cum: number[][] = [];
   for (let i = 0; i <= NS; i++) {
-    const x = (L * i) / NS,
+    const x = (xEnd * i) / NS,
       w = weightsAt(x),
       c = [0];
     let s = 0;
@@ -816,30 +796,29 @@ function drawWeights(svg: SVGSVGElement): void {
     cum.push(c);
   }
   for (let j = 0; j < K; j++) {
-    const right = xs.map((x, i): [number, number] => [wvW(cum[i][j + 1]), wvX(x)]),
-      left = xs.map((x, i): [number, number] => [wvW(cum[i][j]), wvX(x)]).reverse();
+    const upper = xs.map((x, i): [number, number] => [mapX(x), wY(cum[i][j + 1])]),
+      lower = xs.map((x, i): [number, number] => [mapX(x), wY(cum[i][j])]).reverse();
     svg.append(
-      el("path", { d: poly(right.concat(left)) + "Z", fill: tplColor(j), opacity: 0.5, stroke: "none" }),
+      el("path", { d: poly(upper.concat(lower)) + "Z", fill: tplColor(j), opacity: 0.5, stroke: "none" }),
     );
   }
-  // stern / bow labels
-  for (const [txt, y, dy] of [
-    ["stern", yTop, -5],
-    ["bow", yBot, 12],
+  // stern / bow labels (x runs stern→bow, left→right)
+  for (const [txt, x, anchor] of [
+    ["stern", xL, "start"],
+    ["bow", xR, "end"],
   ] as const) {
-    const t = el("text", { x: xLeft, y: y + dy, "font-size": 10, fill: COL.mut });
+    const t = el("text", { x, y: top - 4, "font-size": 10, fill: COL.mut, "text-anchor": anchor });
     t.textContent = txt;
     svg.append(t);
   }
-  weightSlider(svg); // the red cut scrubber (horizontal here)
-  // control points: a horizontal guide + the K−1 band-boundary handles (drag ↔) + the x-handle (interior, ↕)
-  // one row per unified station at its x; the K−1 band-boundary handles edit its blend. x is set in the plan
-  // view (the station is shared), so there is no x-handle here.
+  stationLine(svg, top, bot); // the red cut scrubber (vertical, shared with the plan/profile strips)
+  // control points: a vertical guide + the K−1 band-boundary handles (drag ↕). One column per unified
+  // station at its x; x is set in the plan view (the station is shared), so there is no x-handle here.
   state.sheer.cp.forEach((cp, i) => {
-    const y = wvX(cp.x),
+    const x = mapX(cp.x),
       sel = state.selected && state.selected.tgt === "weight" && state.selected.idx === i;
     svg.append(
-      el("line", { x1: xLeft, y1: y, x2: xRight, y2: y, stroke: "#fff", "stroke-width": 1, opacity: 0.75 }),
+      el("line", { x1: x, y1: top, x2: x, y2: bot, stroke: "#fff", "stroke-width": 1, opacity: 0.75 }),
     );
     const C: number[] = [];
     let s = 0;
@@ -848,50 +827,20 @@ function drawWeights(svg: SVGSVGElement): void {
       C.push(s);
     }
     for (let b = 0; b < K - 1; b++) {
-      const hx = wvW(C[b]);
+      const hy = wY(C[b]);
       const h = el("circle", {
-        cx: hx,
-        cy: y,
+        cx: x,
+        cy: hy,
         r: 5,
         fill: sel ? SEL : "#fff", // selected blend point → red handles
         stroke: sel ? "#fff" : tplColor(b),
         "stroke-width": 2,
-        style: "cursor:ew-resize",
+        style: "cursor:ns-resize",
       });
       h.addEventListener("pointerdown", (e) => weightHandleDown(i, "bnd", b, svg, e as PointerEvent));
       svg.append(h);
     }
   });
-}
-
-// the draggable cut handle for the vertical blend control: an invisible horizontal hit band + a triangle at
-// the left edge, at the cut's vertical position. Dragging it scrubs x0 (handled in interaction via svgW).
-function weightSlider(svg: SVGSVGElement): void {
-  const y = wvX(state.x0),
-    xLeft = wvW(0),
-    xRight = wvW(1);
-  const hit = el("line", {
-    x1: xLeft,
-    y1: y,
-    x2: xRight,
-    y2: y,
-    stroke: "#000",
-    "stroke-width": 16,
-    opacity: 0,
-    style: "cursor:ns-resize",
-  });
-  hit.addEventListener("pointerdown", (e) => startDrag({ kind: "slider" }, svg, e));
-  svg.append(hit);
-  svg.append(
-    el("path", {
-      d: `M${xLeft} ${y - 6} L${xLeft} ${y + 6} L${xLeft + 9} ${y} Z`,
-      fill: "var(--slider)",
-      style: "cursor:ns-resize",
-    }),
-  );
-  svg.append(
-    el("line", { x1: xLeft, y1: y, x2: xRight, y2: y, stroke: "var(--slider)", "stroke-width": 1.5, opacity: 0.55 }),
-  );
 }
 
 // the interpolated (blended) station at the red cut x0, with both trims marked: the sheer trim
@@ -1103,81 +1052,6 @@ function drawCutStation(svg: SVGSVGElement): void {
     });
     linkDot(svg, snX(bn), snY(bd), COL.station);
   }
-}
-
-// classic body plan: the trimmed hull stations overlaid on one cross-section frame, sharing a
-// centerline — forward stations on the right half, aft stations on the left (mirrored). Each section
-// already carries both trims (sheer trim at the top, centerline trim at the keel).
-function drawBodyPlan(svg: SVGSVGElement): void {
-  svg.replaceChildren();
-  const NB = 24,
-    secs: { f: number; s: Section }[] = [];
-  for (let i = 0; i <= NB; i++) {
-    const x = (L * i) / NB,
-      s = clippedSection(x, 40);
-    if (!s.aft) secs.push({ f: x / L, s });
-  }
-  let ymax = 1,
-    zmin = 0;
-  for (const o of secs)
-    for (const p of o.s.pts) {
-      ymax = Math.max(ymax, Math.abs(p[1]));
-      zmin = Math.min(zmin, p[2]);
-    }
-  const W = 360,
-    H = 360,
-    pad = 26;
-  const sc = Math.min((W - 2 * pad) / (2 * ymax), (H - 2 * pad) / (0 - zmin || 1));
-  const cx = W / 2,
-    top = pad + 6;
-  const Y = (y: number) => cx + y * sc,
-    Z = (z: number) => top - z * sc; // z=0 at top (deck), keel below
-  // deck reference + centerline
-  svg.append(
-    el("line", { x1: pad, y1: Z(0), x2: W - pad, y2: Z(0), stroke: COL.deck, "stroke-width": 1.3, "stroke-dasharray": "6 4" }),
-  );
-  svg.append(
-    el("line", { x1: cx, y1: Z(0) - 6, x2: cx, y2: Z(zmin), stroke: COL.keel, "stroke-width": 1.2, opacity: 0.6, "stroke-dasharray": "4 4" }),
-  );
-  const tA = el("text", { x: pad, y: Z(0) - 6, "font-size": 10, fill: COL.aft });
-  tA.textContent = "AFT";
-  svg.append(tA);
-  const tF = el("text", { x: W - pad, y: Z(0) - 6, "text-anchor": "end", "font-size": 10, fill: COL.fore });
-  tF.textContent = "FWD";
-  svg.append(tF);
-  // stations: fore on the right (+y), aft mirrored to the left (−y)
-  for (const o of secs) {
-    const fwd = o.f >= 0.5,
-      col = fwd ? COL.fore : COL.aft,
-      sgn = fwd ? 1 : -1;
-    const pts = o.s.pts.map((p): [number, number] => [Y(sgn * p[1]), Z(p[2])]);
-    svg.append(
-      el("path", {
-        d: poly(pts),
-        fill: "none",
-        stroke: col,
-        "stroke-width": 1.2,
-        opacity: 0.75,
-        "stroke-linejoin": "round",
-        "stroke-linecap": "round",
-      }),
-    );
-  }
-  // highlight the live cut station
-  const cut = clippedSection(state.x0, 40),
-    fwd = state.x0 / L >= 0.5,
-    sgn = fwd ? 1 : -1;
-  if (!cut.aft)
-    svg.append(
-      el("path", {
-        d: poly(cut.pts.map((p): [number, number] => [Y(sgn * p[1]), Z(p[2])])),
-        fill: "none",
-        stroke: COL.station,
-        "stroke-width": 2.4,
-        "stroke-linejoin": "round",
-        "stroke-linecap": "round",
-      }),
-    );
 }
 
 // ---------- 3D shaded hull (WebGL) ----------

@@ -32,7 +32,6 @@ const byId = (id: string): SVGSVGElement =>
 export const svgP = byId("svgProfile"),
   svgL = byId("svgPlan"),
   svgC = byId("svgCut"),
-  svgB = byId("svgBody"),
   svgW = byId("svgWeights");
 
 // the container the dynamic per-template station editors are rendered into, and the side tab strip

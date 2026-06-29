@@ -46,19 +46,14 @@ export const snY = (d: number): number => STpad + d * STsc;
 export const invN = (vx: number): number => (vx - STpad) / STsc + NMIN;
 export const invD = (vy: number): number => (vy - STpad) / STsc;
 
-// blend control (vertical): the longitudinal axis runs DOWN the strip — stern (x=0) at the top, bow (x=L)
-// at the bottom — and each template's share of the simplex stacks left→right. It owns its own viewBox
-// WVW×WVH (set on the SVG in main.ts). wvX maps the hull length to the vertical; wvW maps a cumulative
-// weight 0..1 to the horizontal.
-export const WVW = 300,
-  WVH = 470,
-  Wvtop = 18,
-  Wvbot = 22,
-  Wvpad = 18;
-export const wvX = (x: number): number => Wvtop + (x / L) * (WVH - Wvtop - Wvbot);
-export const invWvX = (vy: number): number => ((vy - Wvtop) / (WVH - Wvtop - Wvbot)) * L;
-export const wvW = (c: number): number => Wvpad + c * (WVW - 2 * Wvpad); // cumulative weight → left→right
-export const invWvW = (vx: number): number => (vx - Wvpad) / (WVW - 2 * Wvpad);
+// blend control (horizontal): x runs left→right via the shared mapX, so its stations line up with the plan
+// and profile strips above/below it. Each template's share of the simplex stacks VERTICALLY — cumulative
+// weight 0 at the bottom, 1 at the top. The strip owns its own (wide, short) viewBox 1000×WH, set in
+// main.ts; wY maps a cumulative weight 0..1 to the vertical, leaving room for the band handles.
+export const WH = 150,
+  Wpad = 16;
+export const wY = (c: number): number => WH - Wpad - c * (WH - 2 * Wpad); // cumulative weight → screen y (0 bottom)
+export const invWY = (vy: number): number => (WH - Wpad - vy) / (WH - 2 * Wpad);
 
 // re-export the domain bounds the views also use
 export { NMIN, NMAX, DMAX };

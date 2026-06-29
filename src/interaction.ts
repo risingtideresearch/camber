@@ -12,7 +12,7 @@ import {
   type ActiveTarget,
   type WeightCP,
 } from "./model.js";
-import { invX, invY, invZp, invN, invD, invWvX, invWvW, YMAX, YMIN, ZTRIMMIN } from "./view.js";
+import { invX, invY, invZp, invN, invD, invWY, YMAX, YMIN, ZTRIMMIN } from "./view.js";
 import { svgL, svgP, svgW, tplCards } from "./dom.js";
 import { render, draw3d, activeTemplateIndex } from "./render.js";
 
@@ -104,8 +104,8 @@ function moveTransom(d: Drag, vx: number, vy: number): void {
 
 // drag a station's blend in the weight strip: only the simplex split (the band boundary). x is shared with
 // the plan curve and is edited there, so the blend strip has no x-handle.
-function moveWeight(d: Drag, vx: number): void {
-  if (d.wpart !== "x") setWeightBoundary(state.sheer.cp[d.idx!], d.bnd!, clamp(invWvW(vx), 0, 1));
+function moveWeight(d: Drag, vy: number): void {
+  if (d.wpart !== "x") setWeightBoundary(state.sheer.cp[d.idx!], d.bnd!, clamp(invWY(vy), 0, 1));
 }
 
 // The weight CP carries a barycentric vector w ∈ Δ^{K−1}. We edit it through its cumulative boundaries
@@ -220,23 +220,6 @@ function removeStationPoint(idx: number): void {
 const addWeightPoint = (x: number): number => addStation(x, state.sheer.yf(x));
 const removeWeightPoint = removeStation;
 
-// add a station at the midpoint of the widest gap between adjacent stations (the "+ blend point" button) —
-// both curves are unchanged (y and w read off the current curves), then it is selected ready to drag.
-export function addBlendPoint(): void {
-  const cp = state.sheer.cp;
-  if (cp.length < 2) return;
-  let bi = 0,
-    bg = -1;
-  for (let i = 0; i < cp.length - 1; i++) {
-    const g = cp[i + 1].x - cp[i].x;
-    if (g > bg) {
-      bg = g;
-      bi = i;
-    }
-  }
-  const idx = addWeightPoint((cp[bi].x + cp[bi + 1].x) / 2);
-  select("weight", idx);
-}
 
 // ---------- add / remove whole templates ----------
 // a new template starts as a copy of the last and enters every weight CP at zero weight, so the hull is
@@ -488,12 +471,12 @@ export function initInteraction(): void {
     }
     const [vx, vy] = getVB(drag, e);
     if (drag.kind === "slider") {
-      // the cut scrubs along x — horizontal in plan/profile, but vertical in the blend control
-      state.x0 = clamp(drag.svg === svgW ? invWvX(vy) : invX(vx), 0, L);
+      // the cut scrubs along x — horizontal in all three strips (plan, profile, blend)
+      state.x0 = clamp(invX(vx), 0, L);
     } else if (drag.kind === "sheer") moveSheer(drag, vx, vy);
     else if (drag.kind === "trim") moveTrim(drag, vx, vy);
     else if (drag.kind === "transom") moveTransom(drag, vx, vy);
-    else if (drag.kind === "weight") moveWeight(drag, vx);
+    else if (drag.kind === "weight") moveWeight(drag, vy);
     else if (drag.kind === "stn") {
       const arr = state.templates[drag.ti!],
         i = drag.idx!,
@@ -549,8 +532,8 @@ export function initInteraction(): void {
   // the weight editor (persistent element): add a blend control point at the clicked x
   svgW.addEventListener("pointerdown", (e) => {
     if (state.tool === "add") {
-      const [, vy] = vbCoords(svgW, e),
-        idx = addWeightPoint(invWvX(vy));
+      const [vx] = vbCoords(svgW, e),
+        idx = addWeightPoint(invX(vx));
       setTool("select");
       select("weight", idx);
     } else {
