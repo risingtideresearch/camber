@@ -1637,7 +1637,7 @@ const REF_YAW = -0.62,
 // stations (transverse) and longitudinals, with the feature edges (sheer, keel, stem, transom, chines) bold
 // and the interior grid thin. Rendered as SVG so the strokes can carry real, view-independent line weights
 // (WebGL clamps lineWidth to 1 on most browsers). It reuses the 3D canvas's camera, so it rotates live.
-const LINES_NS = 40,
+const LINES_NS = 80,
   LINES_M = 10,
   LINES_STATION_STEP = 3; // draw a station (transverse) line every Nth grid row (≈ NS/STEP stations)
 let linesGrid: { grid: Vec3[][]; creaseCols: number[] } | null = null;
@@ -1695,8 +1695,8 @@ function drawLines(svg: SVGSVGElement, kind: View3DMode, rebuild: boolean): void
       if (wz < zlo) zlo = wz;
       if (wz > zhi) zhi = wz;
     }
-  const NB = 4,
-    NW = 6,
+  const NB = 8,
+    NW = 12,
     buttLevels = Array.from({ length: NB }, (_, k) => (ymax * (k + 1)) / (NB + 1)),
     wlLevels = Array.from({ length: NW }, (_, k) => zlo + ((zhi - zlo) * (k + 1)) / (NW + 1));
   // marching: the segment where field f crosses `level` across a facet's 4 corners (linear on each edge)

@@ -48,7 +48,7 @@ function svgWrap(body: string, minX: number, minY: number, w: number, h: number,
 
 // ---- lines: painter's white facets + bold feature edges (replicates the editor Lines view) ----
 function renderLines(P: (p: Vec3) => P2, yaw: number, pitch: number, sel: number, kind: string): string {
-  const { grid, creaseCols } = trimmedHullGrid(40, 10);
+  const { grid, creaseCols } = trimmedHullGrid(80, 10);
   const NS = grid.length - 1, M = grid[0].length - 1, crease = new Set(creaseCols);
   const SP = grid.map((r) => r.map(P)), PP = grid.map((r) => r.map(([x, y, z]) => P([x, -y, z])));
   const gridM = grid.map((r) => r.map(([x, y, z]): Vec3 => [x, -y, z]));
@@ -56,7 +56,7 @@ function renderLines(P: (p: Vec3) => P2, yaw: number, pitch: number, sel: number
   const STEP = 3, showStation = (i: number) => i === 0 || i === NS || i % STEP === 0;
   let ymax = 0, zlo = Infinity, zhi = -Infinity;
   for (const row of grid) for (const p of row) { ymax = Math.max(ymax, Math.abs(p[1])); const wz = worldZ(p[0], p[2]); zlo = Math.min(zlo, wz); zhi = Math.max(zhi, wz); }
-  const NB = 4, NW = 6;
+  const NB = 8, NW = 12;
   const buttLevels = Array.from({ length: NB }, (_, k) => (ymax * (k + 1)) / (NB + 1));
   const wlLevels = Array.from({ length: NW }, (_, k) => zlo + ((zhi - zlo) * (k + 1)) / (NW + 1));
   const march = (corn: { p: P2; f: number }[], level: number): [P2, P2] | null => {
