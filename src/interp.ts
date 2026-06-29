@@ -92,6 +92,8 @@ function renderMetrics(): void {
   const body = document.getElementById("metricsBody");
   if (!body) return;
   const h = hulls.length ? hydrostatics() : null;
+  lastHydro = h; // also drives the scatter's current-blend marker
+  updateScatterMark();
   if (!h) {
     body.innerHTML = `<div class="mrow"><span class="mk">—</span><span class="mv">load hulls</span></div>`;
     return;
@@ -371,7 +373,9 @@ function renderPanel(): void {
   padEl.addEventListener("pointerup", end);
   padEl.addEventListener("pointercancel", end);
   updateReadout();
-  paintHeatmap(); // re-fill the metric heatmap for the new polygon
+  computeSamples(); // one blend-space sampling pass, shared by the heatmap + scatter
+  paintHeatmap();
+  renderScatter();
 }
 
 // ---------- metric heatmap: colour the pad interior by a chosen hydrostatic metric ----------
@@ -393,6 +397,61 @@ const HEAT_METRICS: { key: string; label: string; get: (h: Hydro) => number }[] 
   { key: "deadrise", label: "Deadrise", get: (h) => h.deadrise },
   { key: "lcb", label: "LCB · %", get: (h) => ((h.lcb - (h.xAft + h.xFwd) / 2) / h.lwl) * 100 },
 ];
+
+// ---------- shared blend-space sampling (feeds both the heatmap and the scatter explorer) ----------
+// One expensive pass per family: sample the blend space (the polygon interior for 3+ hulls, the slider param
+// for 2) and store the full hydrostatics at each sample. The heatmap colours the pad by one metric; the
+// scatter plots two metrics against each other. Resampled only when the family changes — picking metrics just
+// re-reads the cache. Each sample restores the live blend afterward.
+interface Sample {
+  gx: number;
+  gy: number; // pad grid cell (3+ hulls)
+  pos: Pt; // pad position (3+ hulls)
+  t: number; // slider param (2 hulls)
+  h: Hydro | null;
+}
+const HEAT_G = 18; // pad grid resolution (cells per side)
+let samples: Sample[] = [];
+let lastHydro: Hydro | null = null; // hydrostatics of the current (live) blend; set by renderMetrics
+let scatterX = "loverb",
+  scatterY = "cb";
+type MetricDef = (typeof HEAT_METRICS)[number];
+let scatterMap: { sx: (v: number) => number; sy: (v: number) => number; defX: MetricDef; defY: MetricDef } | null = null;
+
+function computeSamples(): void {
+  samples = [];
+  const n = hulls.length;
+  if (n < 2) return;
+  const saved = hulls.map((h) => h.weight); // restore the live blend after the pass
+  if (n === 2) {
+    const N = 40;
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      hulls[0].weight = 1 - t;
+      hulls[1].weight = t;
+      blend();
+      prepare();
+      samples.push({ gx: i, gy: 0, pos: { x: 0, y: 0 }, t, h: hydrostatics(72, 20) });
+    }
+  } else {
+    const V = padVerts(n),
+      cell = PAD / HEAT_G;
+    for (let gy = 0; gy < HEAT_G; gy++)
+      for (let gx = 0; gx < HEAT_G; gx++) {
+        const cx = (gx + 0.5) * cell,
+          cy = (gy + 0.5) * cell;
+        if (!insidePoly({ x: cx, y: cy }, V)) continue;
+        const w = meanValue({ x: cx, y: cy }, V);
+        hulls.forEach((h, i) => (h.weight = w[i]));
+        blend();
+        prepare();
+        samples.push({ gx, gy, pos: { x: cx, y: cy }, t: 0, h: hydrostatics(72, 20) });
+      }
+  }
+  hulls.forEach((h, i) => (h.weight = saved[i]));
+  blend();
+  prepare();
+}
 
 // sequential colour ramp 0..1 → blue → pale → red (reversed RdYlBu)
 function heatColor(t: number): string {
@@ -429,38 +488,16 @@ function paintHeatmap(): void {
   if (!g) return;
   const n = hulls.length,
     def = HEAT_METRICS.find((m) => m.key === heatMetric);
-  if (!def || n < 3) {
+  if (!def || n < 3 || !samples.length) {
     g.innerHTML = "";
     updateHeatLegend(null);
     return;
   }
-  const V = padVerts(n),
-    G = 18,
-    cell = PAD / G;
-  const saved = hulls.map((h) => h.weight); // the current puck blend — restored after sampling
-  const cells: { x: number; y: number; v: number }[] = [];
+  const cell = PAD / HEAT_G;
+  const vals = samples.map((s) => (s.h && s.h.validWaterplane ? def.get(s.h) : NaN));
   let lo = Infinity,
     hi = -Infinity;
-  for (let gy = 0; gy < G; gy++)
-    for (let gx = 0; gx < G; gx++) {
-      const cx = (gx + 0.5) * cell,
-        cy = (gy + 0.5) * cell;
-      if (!insidePoly({ x: cx, y: cy }, V)) continue;
-      const w = meanValue({ x: cx, y: cy }, V);
-      hulls.forEach((h, i) => (h.weight = w[i]));
-      blend();
-      prepare();
-      const hy = hydrostatics(72, 20); // coarse sampling — fast over a few hundred cells
-      const v = hy && hy.validWaterplane ? def.get(hy) : NaN;
-      cells.push({ x: gx * cell, y: gy * cell, v });
-      if (Number.isFinite(v)) {
-        lo = Math.min(lo, v);
-        hi = Math.max(hi, v);
-      }
-    }
-  hulls.forEach((h, i) => (h.weight = saved[i])); // restore the live blend
-  blend();
-  prepare();
+  for (const v of vals) if (Number.isFinite(v)) (lo = Math.min(lo, v)), (hi = Math.max(hi, v));
   if (!(hi > lo)) {
     g.innerHTML = "";
     updateHeatLegend(null);
@@ -469,10 +506,103 @@ function paintHeatmap(): void {
   const span = hi - lo,
     s = (cell + 0.7).toFixed(1); // slight overlap to hide seams
   let html = "";
-  for (const c of cells)
-    html += `<rect x="${c.x.toFixed(1)}" y="${c.y.toFixed(1)}" width="${s}" height="${s}" fill="${Number.isFinite(c.v) ? heatColor((c.v - lo) / span) : "#e5e7eb"}" opacity="0.85"/>`;
+  samples.forEach((smp, i) => {
+    const fill = Number.isFinite(vals[i]) ? heatColor((vals[i] - lo) / span) : "#e5e7eb";
+    html += `<rect x="${(smp.gx * cell).toFixed(1)}" y="${(smp.gy * cell).toFixed(1)}" width="${s}" height="${s}" fill="${fill}" opacity="0.85"/>`;
+  });
   g.innerHTML = html;
   updateHeatLegend(def, lo, hi);
+}
+
+// ---------- the scatter explorer: sampled blends plotted against two metrics; click a point to jump there ----------
+const SCW = 480,
+  SCH = 270,
+  SCM = { l: 56, r: 14, t: 12, b: 36 }; // viewBox + plot margins
+function renderScatter(): void {
+  const svg = document.getElementById("scatter");
+  if (!svg) return;
+  const defX = HEAT_METRICS.find((m) => m.key === scatterX),
+    defY = HEAT_METRICS.find((m) => m.key === scatterY);
+  const note = (t: string): void => {
+    scatterMap = null;
+    svg.innerHTML = `<text x="${SCW / 2}" y="${SCH / 2}" text-anchor="middle" font-size="12" fill="#94a3b8">${t}</text>`;
+  };
+  if (!defX || !defY) return note("pick two metrics");
+  if (samples.length < 2) return note("load a blend to explore");
+  const pts = samples
+    .map((smp) => ({ smp, x: smp.h && smp.h.validWaterplane ? defX.get(smp.h) : NaN, y: smp.h && smp.h.validWaterplane ? defY.get(smp.h) : NaN }))
+    .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+  if (pts.length < 2) return note("no valid samples at this waterline");
+  let xlo = Infinity,
+    xhi = -Infinity,
+    ylo = Infinity,
+    yhi = -Infinity;
+  for (const p of pts) {
+    xlo = Math.min(xlo, p.x);
+    xhi = Math.max(xhi, p.x);
+    ylo = Math.min(ylo, p.y);
+    yhi = Math.max(yhi, p.y);
+  }
+  const padR = (lo: number, hi: number): [number, number] => {
+    const d = (hi - lo) * 0.06 || Math.abs(hi) * 0.06 || 1;
+    return [lo - d, hi + d];
+  };
+  [xlo, xhi] = padR(xlo, xhi);
+  [ylo, yhi] = padR(ylo, yhi);
+  const plotW = SCW - SCM.l - SCM.r,
+    plotH = SCH - SCM.t - SCM.b;
+  const sx = (v: number): number => SCM.l + ((v - xlo) / (xhi - xlo)) * plotW;
+  const sy = (v: number): number => SCM.t + (1 - (v - ylo) / (yhi - ylo)) * plotH;
+  scatterMap = { sx, sy, defX, defY };
+  const fmt = (v: number): string => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3));
+  let html = `<rect x="${SCM.l}" y="${SCM.t}" width="${plotW}" height="${plotH}" fill="#fbfcfe" stroke="#e2e8f0"/>`;
+  // axes: min/max tick labels
+  html += `<text x="${SCM.l}" y="${SCH - 22}" font-size="10" fill="#718096">${fmt(xlo)}</text>`;
+  html += `<text x="${SCW - SCM.r}" y="${SCH - 22}" text-anchor="end" font-size="10" fill="#718096">${fmt(xhi)}</text>`;
+  html += `<text x="${SCW / 2}" y="${SCH - 8}" text-anchor="middle" font-size="11" fill="#1a202c">${defX.label}</text>`;
+  html += `<text x="${SCM.l - 8}" y="${SCM.t + 8}" text-anchor="end" font-size="10" fill="#718096">${fmt(yhi)}</text>`;
+  html += `<text x="${SCM.l - 8}" y="${SCM.t + plotH}" text-anchor="end" font-size="10" fill="#718096">${fmt(ylo)}</text>`;
+  html += `<text transform="translate(14 ${SCM.t + plotH / 2}) rotate(-90)" text-anchor="middle" font-size="11" fill="#1a202c">${defY.label}</text>`;
+  // sample points (clickable; data-i indexes into `samples`)
+  for (const p of pts) {
+    const i = samples.indexOf(p.smp);
+    html += `<circle class="spt" data-i="${i}" cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="3.5" fill="#2b6cb0" fill-opacity="0.5" stroke="#fff" stroke-width="0.75"/>`;
+  }
+  // the current-blend marker, positioned by updateScatterMark
+  html += `<circle id="scatterMark" r="6" fill="none" stroke="var(--slider)" stroke-width="2.5" display="none"/>`;
+  svg.innerHTML = html;
+  updateScatterMark();
+}
+
+// move just the current-blend marker (cheap; called whenever the live hydrostatics change)
+function updateScatterMark(): void {
+  const m = document.getElementById("scatterMark");
+  if (!m || !scatterMap) return;
+  const h = lastHydro,
+    ok = h && h.validWaterplane;
+  const x = ok ? scatterMap.defX.get(h!) : NaN,
+    y = ok ? scatterMap.defY.get(h!) : NaN;
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    m.setAttribute("cx", `${scatterMap.sx(x).toFixed(1)}`);
+    m.setAttribute("cy", `${scatterMap.sy(y).toFixed(1)}`);
+    m.setAttribute("display", "");
+  } else m.setAttribute("display", "none");
+}
+
+// jump the blend control to a sampled point (clicked in the scatter)
+function jumpToSample(i: number): void {
+  const smp = samples[i];
+  if (!smp) return;
+  if (hulls.length === 2) {
+    tTwo = smp.t;
+    const sl = document.getElementById("tslider") as HTMLInputElement | null;
+    if (sl) sl.value = `${Math.round(smp.t * 100)}`;
+  } else {
+    puck = { ...smp.pos };
+  }
+  setWeightsFromControl();
+  updateReadout();
+  refresh();
 }
 
 function updateStatus(): void {
@@ -676,6 +806,24 @@ function init(): void {
   msel.addEventListener("change", () => {
     heatMetric = msel.value;
     paintHeatmap();
+  });
+  // scatter explorer: two metric axes (populate from HEAT_METRICS) + click a point to jump there
+  const opts = HEAT_METRICS.map((m) => `<option value="${m.key}">${m.label}</option>`).join("");
+  for (const [id, get, set] of [
+    ["scatterX", () => scatterX, (v: string) => (scatterX = v)],
+    ["scatterY", () => scatterY, (v: string) => (scatterY = v)],
+  ] as const) {
+    const sel = document.getElementById(id) as HTMLSelectElement;
+    sel.innerHTML = opts;
+    sel.value = get();
+    sel.addEventListener("change", () => {
+      set(sel.value);
+      renderScatter();
+    });
+  }
+  document.getElementById("scatter")!.addEventListener("pointerdown", (e) => {
+    const c = (e.target as Element).closest<SVGElement>(".spt");
+    if (c) jumpToSample(+c.dataset.i!);
   });
   window.addEventListener("beforeunload", (e) => {
     if (isDirty()) {

@@ -81,6 +81,13 @@
   #heatLegend .hl-bar{width:64px;height:9px;border-radius:3px;border:1px solid var(--line);
     background:linear-gradient(90deg,rgb(44,123,182),rgb(255,255,191),rgb(215,25,28));}
   #heatLegend .hl-lo,#heatLegend .hl-hi{font-variant-numeric:tabular-nums;}
+  /* scatter explorer */
+  .scataxes{display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;}
+  .scataxes label{color:var(--mut);font-size:12px;}
+  .scataxes select{font:inherit;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:2px 5px;background:#fff;}
+  #scatter{display:block;width:100%;height:auto;}
+  #scatter .spt{cursor:pointer;}
+  #scatter .spt:hover{fill-opacity:1;}
   .padlegend{display:flex;flex-direction:column;gap:6px;}
   .legrow{display:flex;align-items:center;gap:8px;font-size:13px;}
   .legrow .dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto;}
@@ -145,6 +152,16 @@
           <canvas id="cv3d"></canvas>
           <svg id="lines3d" class="lines3d" style="display:none"></svg>
         </div>
+      </div>
+      <div class="card">
+        <div class="cap"><span>Blend explorer</span>
+          <span class="scataxes">
+            <label>Y</label><select id="scatterY" title="Vertical-axis metric"></select>
+            <label>vs X</label><select id="scatterX" title="Horizontal-axis metric"></select>
+          </span>
+        </div>
+        <svg id="scatter" viewBox="0 0 480 270" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="hint">Each dot is a sampled blend, plotted by the two metrics. Click one to jump the blend there; the red ring is the current blend.</div>
       </div>
     </div>
     <div class="side">
