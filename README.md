@@ -6,7 +6,7 @@ parameterization is very parsimonious and well suited to optimization methods.
 
 It is also chosen so that it is **stable under interpolation**: given two or more
 valid hull designs, any blend of them is again a valid hull. Design exploration can thus also happen by
-moving through the space *between* multiple authored variants.
+moving through the space *between* multiple authored designs.
 
 The traditional constant-camber technique builds a hull by sweeping one mould of fixed
 transverse curvature along a guide, so every panel comes off the same jig. This model keeps
@@ -35,7 +35,7 @@ Try it here: [https://risingtideresearch.github.io/camber/](https://risingtidere
   of templates `T₁…T_K`; at any station it is the convex blend `Σⱼ wⱼ(x)·Tⱼ`, where the **weight
   curve** `w(x)` is an authored, faired path through the templates' blend space (the simplex),
   running stern to bow. This *along-hull* blend is intrinsic to one design and is distinct from
-  the *across-design* blend of variants below. The two are no longer the same operation — the
+  the *across-design* blend of designs below. The two are no longer the same operation — the
   section is now *bilinear* in (weights, templates) rather than affine — so they commute only on
   sub-families where the weights or the templates are shared; every blend is still valid (see
   [Interpolation](#interpolation-and-blending)). The previous model is `K = 2` with
@@ -44,20 +44,25 @@ Try it here: [https://risingtideresearch.github.io/camber/](https://risingtidere
   point's depth and offset, the transom's rake — each is a single authored number. There is
   no position-solving phase; the only thing downstream code does is *evaluate* the sweep and
   fair the curves through the authored points.
-- **A document is one topology and a set of variants.** The **topology** is the discrete
-  structure — how many control points each generator has — and carries no geometry. A
-  **variant** is the numbers laid over that structure (including how sharp each template point
-  is — a continuous **knuckle**, not a discrete flag). One variant resolves to one hull;
-  several variants over the same topology form a family that interpolates.
+- **A document is one hull.** Each document holds the numbers for a single hull — the
+  generators and, on each control point, how sharp it is (a continuous **knuckle**, not a
+  discrete flag). There is no separate "topology": the discrete structure (how many control
+  points each generator has) is simply the length of each array. Several documents whose
+  generators have the same control-point counts form a **family** that interpolates; the
+  blender also reconciles *differing* counts by promoting them to a common form (see
+  [Interpolation](#interpolation-and-blending)).
 - **Validity is convex by construction.** The numbers are encoded so that the set of valid
-  variants is a convex region — a product of intervals, half-lines, and positive-increment
-  cones. A convex combination of valid variants is therefore valid; this is the property
-  that makes interpolation safe, and it is the single principle that shapes the encoding
-  throughout.
+  hulls (at a fixed set of counts) is a convex region — a product of intervals, half-lines, and
+  positive-increment cones. A convex combination of valid hulls is therefore valid; this is the
+  property that makes interpolation safe, and it is the single principle that shapes the
+  encoding throughout.
 
 ## Coordinate system
 
-Right-handed, in millimeters.
+Right-handed, in **unitless length** — coordinates are plain numbers, not millimeters. The
+overall length is a fixed `L = 1000`, so a hull spans `x ∈ [0, 1000]` and every coordinate is a
+small integer-scale number; read them as whatever unit the design is meant in. (Earlier
+documents were authored at `L = 4000` "mm"; they still load — see [Persistence](#persistence).)
 
 - `x` — longitudinal (fore-and-aft), increasing from stern toward bow. Origin at the
   **transom reference** (`x = 0`); the bow is at `x = L`, the hull's overall length.
@@ -67,11 +72,11 @@ Right-handed, in millimeters.
 - `z` — vertical, increasing upward. The **flat deck** is the reference plane `z = 0`; the
   hull hangs below it, so hull `z ≤ 0`. Depth is measured downward from the deck.
 
-Authored *lengths* are millimeters. The transom's tilt is authored as a **slope** — the
-tangent of the angle, a run-over-rise `dx/dz` that is `0` at the upright orientation — not
-as an angle in degrees. All authored numbers are full-precision floats, since interpolation
-produces in-between values. Derived geometry — curve evaluations, the swept surface, section
-intersections, the emergent keel — is likewise full precision.
+Authored *lengths* are in those same unitless units. The transom's tilt is authored as a
+**slope** — the tangent of the angle, a run-over-rise `dx/dz` that is `0` at the upright
+orientation — not as an angle in degrees. All authored numbers are full-precision floats, since
+interpolation produces in-between values. Derived geometry — curve evaluations, the swept
+surface, section intersections, the emergent keel — is likewise full precision.
 
 ## The sweep frame
 
@@ -108,63 +113,43 @@ Two consequences follow from the flat deck and are used throughout:
 
 ## The document
 
-A hull document is a single topology together with one or more variants:
+A hull document is one hull — a flat set of generators, no wrapper:
 
 ```
 HullDocument {
-  topology:      Topology
-  variants:      Variant[]      // ≥ 1; each is a complete set of numbers for `topology`
-  length:        number         // L, overall length (x of the bow), shared by all variants
+  name?:     string
+  length:    number           // L, overall length (x of the bow); the unitless scale (= 1000)
+  sheerPlan: PlanPoint[]       // ≥ 2; the deck-edge guide curve — and the blend path (see below)
+  sheerTrim: TrimPoint[]       // ≥ 2; the real sheer, in profile
+  transom:   Transom           // the raked stern plane (always two points)
+  templates: SectionPoint[][]  // K ≥ 1 templates, each the same length S ≥ 2 (index 0 = sheer point)
+  keelK:     number[]          // length K; per-template keel knuckle ∈ [0,1]
 }
 ```
 
-`length` is currently shared by all variants: the along-hull fraction `f = x / L` is then the
-same for every variant at a given `x`, which keeps the world-`x` generators (sheer plan, sheer
-trim, transom) comparable across variants and makes the along-hull and across-design blends
-commute (see [Interpolation](#interpolation-and-blending)). **Note (future):** per-variant
-lengths are worth supporting — length is a non-negative affine quantity, so it would blend and
-stay convex; the cost is re-parameterizing the longitudinal generators in normalized `f ∈ [0,1]`
-rather than world `x`, then scaling by each variant's `L`. Until then, length is one constant.
+Nothing is referred to by id, and there is no separate "topology" block: the discrete structure
+is just the array lengths — `sheerPlan.length`, `sheerTrim.length`, the per-template point count
+`S = templates[0].length` (the same for every template), and the template count `K =
+templates.length`. There is exactly one sheer and one transom, so those are implicit; the
+transom is always two points (top and bottom of its raked plane). The templates are
+index-aligned, so each along-hull blend pairs point `i` with point `i`.
 
-Nothing is referred to by id. There is exactly one sheer and one transom, so those are
-implicit. The section shape is a *set* of `templateCount` templates and one weight curve; the
-discrete freedoms are *how many control points* each generator has — including how many
-templates there are and how many control points the weight curve carries:
+`length` is the document's **unitless scale**. Geometry is built in world `x ∈ [0, L]`; on
+import, a document authored at a different `length` (e.g. a legacy `4000`) is rescaled to the
+current `L`, so old and new documents live at one scale and blend cleanly. A point's sharpness
+carries no discrete structure either — it is a per-point **knuckle** number (see
+[the section templates](#the-section-templates)).
 
-```
-Topology {
-  sheerPlan:     number   // count of sheer plan-curve control points; ≥ 2
-  sheerTrim:     number   // count of sheer trim-line control points; ≥ 2
-  section:       number   // count of points per template; ≥ 2 (index 0 is the sheer point)
-  templateCount: number   // count of section templates K; ≥ 1 (2 = the old aft/fore model)
-  weightPoints:  number   // count of weight-curve control points; ≥ 2 (may be 1 when K = 1)
-}
-```
+**The weight curve rides on the sheer plan.** The longitudinal blend path `w(x)` is not a
+separate generator: each `sheerPlan` point is a **station** that carries, alongside its plan
+position `(x, y)`, the barycentric weight `w ∈ Δ^{K−1}` of the template mix at that station.
+The plan control points and the blend control points are one and the same — so a station's `x`
+places both the deck edge and the template hand-off there. (When `K = 1` the weight is the
+trivial `[1]` and only the plan position matters.)
 
-A point's sharpness carries no discrete structure — it is a per-point **knuckle** number on the
-variant (see [the section templates](#the-section-templates)), not part of the topology. The
-single `section` count applies to every template, which are index-aligned so each along-hull
-blend pairs point `i` with point `i`. The transom is always two points (top and bottom of its
-raked plane), so it needs no count.
-
-A variant mirrors the topology, holding the numbers — a scalar where there is one of a thing
-(`transomRake`), and a vector parallel to each topology count:
-
-```
-Variant {
-  name?:       string
-  sheerPlan:   PlanPoint[]       // length = topology.sheerPlan; the deck-edge guide curve
-  sheerTrim:   TrimPoint[]       // length = topology.sheerTrim; the real sheer, in profile
-  transom:     Transom           // the raked stern plane
-  templates:   SectionPoint[][]  // topology.templateCount templates, each of length topology.section
-  keelK:       number[]          // length = topology.templateCount; per-template keel knuckle ∈ [0,1]
-  weights:     WeightPoint[]     // length = topology.weightPoints; the longitudinal blend path
-}
-```
-
-To evaluate geometry you read a variant's numbers against the topology and run the sweep;
-there is no third "resolved" form. Per-slot domains (`> 0`, `≥ 0`, or free `ℝ`) come from
-the encoding described next, and are exactly what make every blend valid.
+To evaluate geometry you read the numbers and run the sweep; there is no separate "resolved"
+form. Per-slot domains (`> 0`, `≥ 0`, or free `ℝ`) come from the encoding described next, and
+are exactly what make every blend valid.
 
 ## Stable encoding: increments, not absolutes
 
@@ -197,24 +182,23 @@ stored directly over `ℝ`: a section point's inboard offset `n` (negative is al
 Finally, a section point carries a **knuckle** `k ∈ [0,1]` (`0` = smooth, `1` = hard corner);
 a bounded interval is convex, so it blends like everything else.
 
-A **weight control point** adds two more convex shapes. Its station advances by the same forward
-step `dx > 0` as a guide curve (the path is sampled stern-to-bow, strictly increasing in `x`),
-and its barycentric weight `w` lives in the `(K−1)`-simplex — `wⱼ ≥ 0`, `Σⱼ wⱼ = 1` — itself a
+A plan point's **barycentric weight** `w` is one more convex shape. Because the blend path rides
+on the sheer plan, each `PlanPoint` carries — beside its `dx` and `y` — the weight `w` of the
+template mix at that station; it lives in the `(K−1)`-simplex (`wⱼ ≥ 0`, `Σⱼ wⱼ = 1`), itself a
 convex polytope, so a blend of two simplex weights is again a simplex weight.
 
 ```
-PlanPoint    { dx: number,  y: number }                 // dx > 0 (≥ 0 for point 0); y ≥ 0 (half-breadth at z = 0)
+PlanPoint    { dx: number,  y: number,  w: number[] }   // dx > 0 (≥ 0 for point 0); y ≥ 0 (half-breadth at z = 0); w ∈ Δ^{K−1} (length K, wⱼ ≥ 0, Σ wⱼ = 1)
 TrimPoint    { dx: number,  depth: number }             // dx > 0 (≥ 0 for point 0); depth ≥ 0 (below the flat deck)
 SectionPoint { dd: number,  n: number,  k: number }     // dd > 0 (= 0 for pt 0, the sheer); n ∈ ℝ (n < 0 = tumblehome); k ∈ [0,1] (knuckle; the pinned sheer point at index 0 is left smooth)
-WeightPoint  { dx: number,  w: number[] }               // dx > 0 (≥ 0 for point 0); w ∈ Δ^{K−1} (length K, wⱼ ≥ 0, Σ wⱼ = 1)
 ```
 
-The valid region of a variant is thus the product of: positive orthants (every later plan/
-trim/weight `dx`, every template `dd`), a non-negative orthant (every `y`, every `depth`), free
-lines (every `n`, the transom rake), bounded intervals (every knuckle `k`), simplices (every
-weight control point's `w`), and the transom's bounded box (below). Every factor is convex and an
+The valid region of a hull is thus the product of: positive orthants (every later plan/trim
+`dx`, every template `dd`), a non-negative orthant (every `y`, every `depth`), free lines
+(every `n`, the transom rake), bounded intervals (every knuckle `k`), simplices (every plan
+station's `w`), and the transom's bounded box (below). Every factor is convex and an
 intersection of convex sets is convex, so the valid region is convex. **Any convex blend of valid
-variants is valid**, with no feasibility check.
+hulls is valid**, with no feasibility check.
 
 ## The sheer
 
@@ -242,7 +226,7 @@ interpolation-closed, and (via *depth is height*) the trim at `x` cuts the swept
 exactly local depth `d = depth(x)`.
 
 The trim line need not have the same control-point count as the plan curve — they are
-independent generators with independent topology counts.
+independent generators with independent control-point counts.
 
 ## The transom
 
@@ -299,7 +283,7 @@ tightness is authored. Concretely, `k` blends the point's faired tangent toward 
 chords, so an isolated `k = 1` breaks the tangent and a `k = 1` pair collapses the segment
 between them to a straight line.
 
-Because `k` is just a number on the variant — carried per template and blended along the hull by
+Because `k` is just a number on the hull — carried per template and blended along the hull by
 the weight curve, and across designs by the blend weights — a crease is **not** fixed by the
 topology: a hard chine on one template (`k = 1`) fades to a round bilge wherever the weight curve
 hands off to a `k = 0` template, within one hull, and a hard-chine design can blend continuously
@@ -356,9 +340,11 @@ depth, knuckles in `[0,1]` — **whatever path the curve takes**. The weight cur
 multi-template generalization of the old fore-and-aft fraction `f = x / L`, which is exactly the
 `K = 2` path `w = (1−f, f)`, the straight edge of the 1-simplex.
 
-The curve is authored as a sequence of **weight control points**, each a station `x` and a
-barycentric weight `w ∈ Δ^{K−1}`, faired between them so the path passes through each authored
-split. Two properties must hold along the whole path: it must stay *inside* the simplex
+The curve is authored on the **sheer plan stations** themselves: each plan control point carries
+a barycentric weight `w ∈ Δ^{K−1}` beside its position, and the path is faired between those
+stations so it passes through each authored split. (Plan position and blend weight share one set
+of control points — moving a station along `x` moves both.) Two properties must hold along the
+whole path: it must stay *inside* the simplex
 (validity), and it must be *smooth* (fairness — no longitudinal hard spot at an interior control
 station, the way a piecewise-linear blend would give). The reference implementation interpolates
 each barycentric component with a shape-preserving monotone cubic (the same PCHIP fairing the
@@ -379,7 +365,7 @@ requirement, not which of these is used.
 ## Derived geometry
 
 Everything below is *computed by sweeping*, never authored. These are the model's outputs;
-none is guaranteed to exist for a given variant, and where one does not, that is reported
+none is guaranteed to exist for a given hull, and where one does not, that is reported
 rather than forbidden.
 
 - **The hull surface** is the locus of swept sections `W(section(x))` over `x ∈ [0, L]`,
@@ -435,11 +421,12 @@ flat bottom ride up into a centerline ridge.)
 
 ## Interpolation and blending
 
-Because every variant of a document shares the one topology, the variants *are* a family. A
-**blend** of variants `V₁…Vₙ` with weights `wᵢ ≥ 0`, `Σwᵢ = 1`, is the variant `Σ wᵢ·Vᵢ`,
-taken componentwise over the structure: each `sheerPlan` and `sheerTrim` point's `dx`/`y`/
-`depth`, the transom's fields, each template point's `dd`/`n`/`k`, and each weight point's `w`. Pairwise
-interpolation is the `n = 2` case, `V = (1−t)·V₁ + t·V₂`, `t ∈ [0,1]`.
+Hulls whose generators have the same control-point counts form a **family**. A **blend** of
+hulls `H₁…Hₙ` with weights `wᵢ ≥ 0`, `Σwᵢ = 1`, is the hull `Σ wᵢ·Hᵢ`, taken componentwise over
+the structure: each `sheerPlan` station's `dx`/`y`/`w`, each `sheerTrim` point's `dx`/`depth`,
+the transom's fields, and each template point's `dd`/`n`/`k`. Pairwise interpolation is the
+`n = 2` case, `H = (1−t)·H₁ + t·H₂`, `t ∈ [0,1]`. (Differing counts are reconciled first by
+promotion — see the end of this section.)
 
 Because the valid region is convex, the blend lies inside it — a valid hull with no
 feasibility check:
@@ -451,7 +438,7 @@ feasibility check:
 - Free reals (`n`, rake) stay free.
 
 **Two interpolations that no longer commute (and the bilinear defect).** The along-hull blend
-(the weight curve mixing the templates) and the across-design blend (variants mixed by weights)
+(the weight curve mixing the templates) and the across-design blend (designs mixed by weights)
 were the same affine operation in the two-template model, and there they commuted. With an
 authored weight curve the station is `section(x) = Σⱼ wⱼ(x)·Tⱼ`, **bilinear** in the pair
 (weights, templates), so blending *both* factors across designs differs from blending the swept
@@ -472,9 +459,9 @@ parameterization makes below.
 
 **What interpolation preserves:** any quantity *affine* in the numbers — curve orderings,
 template descent, half-breadth and depth signs, the transom box, simplex weights. A template
-point or weight control point at the same place in two variants stays put across the blend; the
-swept *section*'s along-hull mix, however, is bilinear, so it moves by the cross-term above
-unless one factor is shared.
+point or plan station at the same place in two hulls stays put across the blend; the swept
+*section*'s along-hull mix, however, is bilinear, so it moves by the cross-term above unless one
+factor is shared.
 
 **What it does not preserve:**
 
@@ -488,26 +475,33 @@ unless one factor is shared.
   surfaces. (The knuckle *value* `k` does blend affinely, but the sharpness it produces is a
   nonlinear shape effect, like fairness.)
 
-Blending is defined only within one topology. Changing a control-point count is a different
-topology — a different document. Changing knuckles is **not**: a knuckle is a number, so any
-blend of creasing is just another valid variant.
+**Blending across differing counts (promotion).** The componentwise blend above needs the hulls
+to agree on control-point counts. When they differ, the blender first **promotes** the family to
+a common form — raising each hull to the family's maximum count in each dimension while
+preserving its shape: the plan curve is re-fit to more control points (a least-squares B-spline
+refit — very close but not bit-exact, since the curve's knots are derived from the count), the
+trim and section curves gain on-curve points in their widest gaps (knuckles preserved), and the
+template count is padded with zero-weight duplicates so each hull is unchanged at its own end of
+the blend. The result is a valid hull throughout; the only cost is a small (sub-percent) shape
+drift on the promoted (lower-count) hulls. Changing knuckles, by contrast, needs no promotion: a
+knuckle is a number, so any blend of creasing is just another valid hull.
 
 ## Optimization
 
-Optimization runs over the **blend weights**, not the raw numbers. Given a document's variants
-`V₁…Vₙ`, a candidate hull is `Σ wᵢ·Vᵢ` for `wᵢ ≥ 0, Σwᵢ = 1` — a point in the simplex they
-span. By interpolation closure every such point is a valid hull, so there is no feasibility
-phase: an objective — a target draft or displacement, a fairness or stability measure, a
-desired proportion — is minimized over `w`. The variants are the vertices of the reachable
-space; the optimizer chooses where in their convex hull the design sits. This keeps the
-search low-dimensional — one weight per variant — and every iterate a guaranteed-valid blend
-of known-good designs.
+Optimization runs over the **blend weights**, not the raw numbers. Given a family of hulls
+`H₁…Hₙ`, a candidate is `Σ wᵢ·Hᵢ` for `wᵢ ≥ 0, Σwᵢ = 1` — a point in the simplex they span. By
+interpolation closure every such point is a valid hull, so there is no feasibility phase: an
+objective — a target draft or displacement, a fairness or stability measure, a desired
+proportion — is minimized over `w`. The hulls are the vertices of the reachable space; the
+optimizer chooses where in their convex hull the design sits. This keeps the search
+low-dimensional — one weight per hull — and every iterate a guaranteed-valid blend of
+known-good designs.
 
 A constraint that the hull must *close* (no open sections) is an objective or a feasibility
 filter on `w`, not an encoded invariant — openness is nonlinear, so the convex encoding
 cannot promise it the way it promises ordering.
 
-## Unconstrained parameterization: a real-vector variant
+## Unconstrained parameterization: a real-vector form
 
 The encoding above makes the valid region a convex *subset* of the raw numbers — positive
 orthants, a non-negative orthant, bounded intervals, a box. That is exactly right for blending
@@ -515,15 +509,16 @@ orthants, a non-negative orthant, bounded intervals, a box. That is exactly righ
 differentiation, or sampling it is often more convenient to carry **no constraints at all**: a
 single flat vector — or fixed-shape tensor — `θ ∈ ℝᴹ` of unbounded full-precision reals, every
 coordinate free, that *always* decodes to a valid hull. This is a second, equivalent
-parameterization of the *same* variant, not a new degree of freedom.
+parameterization of the *same* hull, not a new degree of freedom.
 
-It is obtained by a **change of variables**: each constrained slot of a variant is the image of
+It is obtained by a **change of variables**: each constrained slot of a hull is the image of
 one real coordinate under a fixed, monotone, smooth bijection from `ℝ` onto that slot's domain.
-Decoding applies the transforms slot-by-slot — the variant is `φ(θ)` — and the natural tensor
-layout mirrors the topology: a `P×2` block for `sheerPlan` `(dx, y)`, a `Q×2` block for
-`sheerTrim` `(dx, depth)`, a length-4 transom block, `K` `S×3` blocks for the templates
-`(dd, n, k)` (the pinned sheer point at index 0 carries no coordinates, as before), and a
-weight-curve block of one `dx` plus one length-`K` softmax pre-image per control point.
+Decoding applies the transforms slot-by-slot — the hull is `φ(θ)` — and the natural tensor
+layout mirrors the array lengths: a `P×(2+K)` block for `sheerPlan` (`dx`, `y`, and a length-`K`
+softmax pre-image for the station's weight `w`), a `Q×2` block for `sheerTrim` `(dx, depth)`, a
+length-4 transom block, and `K` `S×3` blocks for the templates `(dd, n, k)` (the pinned sheer
+point at index 0 carries no coordinates, as before). The blend path needs no block of its own —
+it rides in the sheer-plan block.
 
 | slot(s) | domain | transform `φ: ℝ → domain` |
 | --- | --- | --- |
@@ -531,7 +526,7 @@ weight-curve block of one `dx` plus one length-`K` softmax pre-image per control
 | `y`, `depth`, `depthTop`, first `dx` | `[0, ∞)` | `softplus(u)` |
 | `k` (knuckle) | `[0, 1]` | `σ(u) = 1 / (1 + e⁻ᵘ)` |
 | transom `x` | `(x_min, x_max)` | `x_min + (x_max − x_min)·σ(u)` |
-| weight `w` (per control point) | `Δ^{K−1}` | `softmax(u₁…u_K)ⱼ = e^{uⱼ} / Σ_k e^{u_k}` |
+| weight `w` (per plan station) | `Δ^{K−1}` | `softmax(u₁…u_K)ⱼ = e^{uⱼ} / Σ_k e^{u_k}` |
 | `n`, `transomRake` | `ℝ` | `u`  (identity) |
 
 (The strict-vs-closed distinction — `> 0` versus `≥ 0` — collapses here: `softplus` and `eᵘ`
@@ -542,10 +537,10 @@ Two consequences follow — one strengthening and one weakening the blending sto
 sections above.
 
 **Validity becomes unconditional.** Because every transform lands in its domain for *every* real
-input, *every* `θ ∈ ℝᴹ` decodes to a valid variant — not merely convex combinations of
-known-good variants, but the whole of `ℝᴹ`. There is no feasible region to respect, so a
+input, *every* `θ ∈ ℝᴹ` decodes to a valid hull — not merely convex combinations of
+known-good hulls, but the whole of `ℝᴹ`. There is no feasible region to respect, so a
 gradient step, a Newton step, or an unconstrained sampler may move anywhere and never produce an
-invalid hull. This is strictly stronger than the convex encoding's "any blend of valid variants
+invalid hull. This is strictly stronger than the convex encoding's "any blend of valid hulls
 is valid".
 
 **Linear interpolation is no longer affine in the numbers.** The price is that a straight line
@@ -553,11 +548,11 @@ in `θ`-space is *not* the affine blend of the previous sections. On the positiv
 **log-space** (geometric) blend — `softplus⁻¹` behaves like `log` for large values, so moving
 linearly in `θ` interpolates the *logarithms* of the increments; on `k` and transom `x` it is a
 **logit-space** blend. The interpolant is still a valid hull, but the affine facts — "a point at
-the same place in two variants stays put", and the commutation of the along-hull blend with the
+the same place in two hulls stays put", and the commutation of the along-hull blend with the
 across-design blend — hold only on the identity slots (`n`, `transomRake`). The two
 parameterizations therefore do different jobs:
 
-- **The convex-affine numbers** (the encoding above) are for *authoring and blending*: variants
+- **The convex-affine numbers** (the encoding above) are for *authoring and blending*: hulls
   are vertices, a design is a point in their simplex, a blend is an interpretable affine mix, and
   the along-hull and across-design blends commute.
 - **The real vector `θ`** is for *unconstrained search*: hand the whole of `ℝᴹ` to an optimizer,
@@ -565,10 +560,10 @@ parameterizations therefore do different jobs:
   construction.
 
 **For sampling and priors.** A change of variables carries a Jacobian, so a probability density
-placed on the constrained variant induces on `θ` an extra log-Jacobian term `Σⱼ log φⱼ′(θⱼ)` —
+placed on the constrained hull induces on `θ` an extra log-Jacobian term `Σⱼ log φⱼ′(θⱼ)` —
 `log σ(u)` for each `softplus` slot, `log σ(u) + log(1 − σ(u))` for each `σ`-based slot (knuckle
 or transom `x`, plus a constant `log(x_max − x_min)` for the latter), `0` for the identity
-slots, and — for each weight control point — the softmax block's log-Jacobian over its `K − 1`
+slots, and — for each plan station's weight — the softmax block's log-Jacobian over its `K − 1`
 effective dimensions (softmax is over-parameterized by the global shift `uⱼ → uⱼ + c`, so fix the
 gauge, e.g. `u_K = 0`, before taking the density). Carry that term whenever `θ` is the variable of
 a sampler or a MAP objective; it is irrelevant to a purely deterministic optimization of a
@@ -579,72 +574,69 @@ geometric objective.
 Guaranteed by the encoding rather than checked after a solve:
 
 - There is exactly one sheer (plan curve + trim line) and one transom; the section shape is
-  `templateCount` templates `T₁…T_K` blended by one weight curve.
-- Every variant is parallel to its topology: `sheerPlan`, `sheerTrim`, `weights`, `keelK`, and each
-  of the `templates` have the lengths the topology dictates (`keelK` parallels `templateCount`, one
-  per template); the templates are index-aligned (point `i` blends with point `i` across all of them).
+  `K` templates `T₁…T_K` blended by the weight path carried on the sheer-plan stations.
+- The arrays are mutually consistent: `keelK` has one entry per template (length `K`), every
+  template has the same point count `S`, and each plan station's weight `w` has length `K`; the
+  templates are index-aligned (point `i` blends with point `i` across all of them).
 - Each template's point 0 is the sheer point at the local origin; the transom is two points.
-- **Curve ordering** holds automatically: each guide curve's and the weight curve's first
-  `dx ≥ 0` anchors the chain and every later `dx > 0` gives strictly increasing `x`.
+- **Curve ordering** holds automatically: the sheer plan's and trim's first `dx ≥ 0` anchors the
+  chain and every later `dx > 0` gives strictly increasing `x` (the blend path inherits this, as
+  it rides on the plan stations).
 - **Template descent** holds automatically: every template `dd > 0` gives strictly increasing
   depth, so each template — and every blend of them — is single-valued from deck to keel and
   never curls upward.
 - All half-breadths, trim depths, and transom depths are `≥ 0`; every point knuckle `k` and every
-  template's keel knuckle `keelK` lie in `[0,1]`; every weight control point's `w` lies in the
-  simplex (`wⱼ ≥ 0`, `Σ wⱼ = 1`); the transom `x` lies in its interval and its bottom edge lies
-  below its top via `dDepthBot > 0`.
-- **Interpolation closure:** for any weights `wᵢ ≥ 0, Σwᵢ = 1`, the blended variant satisfies
-  all of the above. This is the defining invariant and follows from the convexity of the valid
-  region.
+  template's keel knuckle `keelK` lie in `[0,1]`; every plan station's `w` lies in the simplex
+  (`wⱼ ≥ 0`, `Σ wⱼ = 1`); the transom `x` lies in its interval and its bottom edge lies below its
+  top via `dDepthBot > 0`.
+- **Interpolation closure:** for any weights `wᵢ ≥ 0, Σwᵢ = 1`, the blended hull satisfies all of
+  the above. This is the defining invariant and follows from the convexity of the valid region.
 
 The emergent keel, draft, waterlines, buttocks, transom outline, displacement, and whether a
 section is open or empty are *derived* — none is an invariant.
 
 ## Persistence
 
-The on-disk format is the `HullDocument` serialized directly to JSON — the same structures named
-above, with their field names verbatim: a `length`, a `topology` (`sheerPlan` / `sheerTrim` /
-`section` / `templateCount` / `weightPoints` counts), and a `variants` array. Each variant holds
-`sheerPlan` (`PlanPoint`), `sheerTrim` (`TrimPoint`), `transom` (`Transom`), a `templates` array
-of `templateCount` `SectionPoint` lists, a `keelK` array of `templateCount` keel knuckles, and
-`weights` (`WeightPoint`), in the increment encoding defined above — `dx` / `dd` steps, the
-transom's `depthTop` / `dDepthBot` / `transomRake`, per-point `k`, and each weight point's
-barycentric `w`. A variant may carry an optional `name`. Both `k` and `keelK` are optional on read
-and default to `0` (smooth / flat keel); a missing or short `keelK` fills with `0` per template. A
-document in the earlier two-template form — `aft` / `fore` instead of `templates` / `weights` —
-still reads, as two templates on a straight blend path. Absolute coordinates are recovered by
-running sums on load.
+The on-disk format is the `HullDocument` serialized directly to JSON — the structures named
+above, with their field names verbatim: a `length` (the unitless scale), then `sheerPlan`
+(`PlanPoint`), `sheerTrim` (`TrimPoint`), `transom` (`Transom`), a `templates` array of `K`
+`SectionPoint` lists, and a `keelK` array of `K` keel knuckles, in the increment encoding defined
+above — `dx` / `dd` steps, the transom's `depthTop` / `dDepthBot` / `transomRake`, per-point `k`,
+and each plan station's barycentric `w`. There is no `topology` block: counts are the array
+lengths. A document may carry an optional `name`. Both `k` and `keelK` are optional on read and
+default to `0` (smooth / flat keel); a missing or short `keelK` fills with `0` per template.
+Absolute coordinates are recovered by running sums on load.
 
-A complete (deliberately minimal) document — a `2 / 2 / 3`, two-template topology on a straight
-blend path, with one knuckle at the chine and a flat keel aft fading to a V keel forward
-(`keelK` `[0, 1]`); the fuller hulls in [`examples/`](examples/) follow the same shape:
+**Scale and legacy migration.** `length` is the document's own unitless scale; on load,
+coordinates are rescaled from it to the current `L`, so a document authored at any length lands
+at one scale. The importer also still reads the **earlier layouts**: a `topology` + `variants`
+wrapper (one or more hulls — the editor takes the first, the blender takes all), an `aft` / `fore`
+template pair instead of `templates`, and a separate `weights` path instead of per-station `w`
+(re-sampled onto the plan stations on load). So a legacy `length: 4000`, topology/variants
+document still opens and converts cleanly. There is still no explicit *version tag*.
+
+A complete (deliberately minimal) document — two plan/trim points, three section points, two
+templates on a straight blend path, with one knuckle at the chine and a flat keel aft fading to a
+V keel forward (`keelK` `[0, 1]`); the fuller hulls in [`examples/`](examples/) follow the same
+shape:
 
 ```json
 {
-  "length": 4000,
-  "topology": { "sheerPlan": 2, "sheerTrim": 2, "section": 3, "templateCount": 2, "weightPoints": 2 },
-  "variants": [
-    {
-      "name": "demo",
-      "sheerPlan": [ { "dx": 0, "y": 800 }, { "dx": 4000, "y": 0 } ],
-      "sheerTrim": [ { "dx": 0, "depth": 60 }, { "dx": 4000, "depth": 40 } ],
-      "transom":   { "x": 150, "depthTop": 55, "dDepthBot": 665, "transomRake": -0.3459 },
-      "templates": [
-        [ { "dd": 0, "n": 0, "k": 0 }, { "dd": 400, "n": 250, "k": 1 }, { "dd": 600, "n": 900,  "k": 0 } ],
-        [ { "dd": 0, "n": 0, "k": 0 }, { "dd": 500, "n": 300, "k": 0 }, { "dd": 700, "n": 1000, "k": 0 } ]
-      ],
-      "keelK":   [ 0, 1 ],
-      "weights": [ { "dx": 0, "w": [1, 0] }, { "dx": 4000, "w": [0, 1] } ]
-    }
-  ]
+  "name": "demo",
+  "length": 1000,
+  "sheerPlan": [ { "dx": 0, "y": 205, "w": [1, 0] }, { "dx": 1000, "y": 0, "w": [0, 1] } ],
+  "sheerTrim": [ { "dx": 0, "depth": 15 }, { "dx": 1000, "depth": 10 } ],
+  "transom":   { "x": 38, "depthTop": 14, "dDepthBot": 166, "transomRake": -0.3459 },
+  "templates": [
+    [ { "dd": 0, "n": 0, "k": 0 }, { "dd": 100, "n": 62, "k": 1 }, { "dd": 150, "n": 225, "k": 0 } ],
+    [ { "dd": 0, "n": 0, "k": 0 }, { "dd": 125, "n": 75, "k": 0 }, { "dd": 175, "n": 250, "k": 0 } ]
+  ],
+  "keelK": [ 0, 1 ]
 }
 ```
 
-A document carries one *or more* variants: the editor reads and writes a single-variant document
-(one hull), while the interpolation viewer loads a multi-variant document — or several documents —
-as one blend family. Complete examples live in [`examples/`](examples/). What is *not* fixed is
-**versioning and migration**: the format carries no version tag, so a breaking change to these
-structures has no migration story.
+Each document is one hull; the editor reads and writes one, and the interpolation viewer loads
+several documents as one blend family. Complete examples live in [`examples/`](examples/).
 
 ## Out of scope
 
@@ -660,12 +652,15 @@ Deliberately deferred and not modelled:
   hull. A design needing a longitudinal authored as its own surface curve is a different
   parameterization.
 - **Plating and scantlings.** The model describes a molded surface, not a shell.
-- **Format versioning and migration.** The JSON format is specified (see [Persistence](#persistence)),
-  but it carries no version tag and there is no migration story for breaking changes.
-- **Cross-topology morphing.** Blending designs with different control-point counts requires
-  an explicit correspondence and is not modelled — a different `templateCount` or `weightPoints`
-  is likewise a different topology. (Differing knuckles are *not* cross-topology — they blend
-  like any other number.)
+- **Format version tags.** The JSON carries its `length` (which doubles as a scale tag) and the
+  importer reads the legacy layouts (see [Persistence](#persistence)), but there is no explicit
+  version field, so a future breaking change has no declared migration path.
+- **Exact cross-topology morphing.** Blending designs with different control-point counts *is*
+  supported — the blender promotes the family to a common form (see
+  [Interpolation](#interpolation-and-blending)) — but by a shape-preserving **refit**, not an
+  exact correspondence: the promoted hulls drift by a sub-percent amount. A morph that holds
+  every count exactly (true knot insertion / a named point correspondence) is not modelled.
+  (Differing knuckles need no promotion — they blend like any other number.)
 - **Recovering a blend's design intent.** A blend is valid but anonymous — track provenance
   outside the document if it matters.
 
