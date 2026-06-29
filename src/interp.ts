@@ -113,41 +113,223 @@ function drawAfterLayout(): void {
   });
 }
 
-// update just the normalized % labels in place — called on every slider input so dragging a slider doesn't
-// rebuild (and destroy) the slider element mid-drag, which would abort the drag after the first input event.
-function updatePercents(): void {
-  const total = hulls.reduce((a, x) => a + x.weight, 0) || 1;
-  const pcts = document.querySelectorAll<HTMLElement>("#hullList .pct");
-  hulls.forEach((h, i) => {
-    if (pcts[i]) pcts[i].textContent = `${((h.weight / total) * 100).toFixed(0)}%`;
+// ---------- the blend control: a single slider for 2 hulls, a barycentric "pad" for 3+ ----------
+// The control's position is the source of truth; each hull's weight is read off it (a straight split for the
+// slider, mean-value coordinates for the pad) and renormalized in blend(). A 2-hull blend is a 1-D simplex
+// (the slider); 3 hulls a triangle (the pad is then exact); 4–5 a regular polygon (the pad explores a 2-D
+// slice of the simplex — every corner, edge and the centre are reachable).
+const PAD = 260,
+  PADC = PAD / 2,
+  PADR = 88;
+type Pt = { x: number; y: number };
+let puck: Pt = { x: PADC, y: PADC }; // pad position (viewBox coords), for N ≥ 3
+let tTwo = 0.5; // slider position 0..1, for N === 2
+
+// the regular-polygon vertices for n hulls (vertex 0 at the top, going clockwise)
+function padVerts(n: number): Pt[] {
+  return Array.from({ length: n }, (_, i) => {
+    const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+    return { x: PADC + PADR * Math.cos(a), y: PADC + PADR * Math.sin(a) };
   });
 }
 
-// ---------- the weights panel (one slider per loaded hull) ----------
+// inside the (convex) polygon? winding-agnostic: inside ⇔ all edge cross-products share one sign
+function insidePoly(p: Pt, V: Pt[]): boolean {
+  let pos = false,
+    neg = false;
+  for (let i = 0; i < V.length; i++) {
+    const j = (i + 1) % V.length,
+      cr = (V[j].x - V[i].x) * (p.y - V[i].y) - (V[j].y - V[i].y) * (p.x - V[i].x);
+    if (cr > 1e-9) pos = true;
+    else if (cr < -1e-9) neg = true;
+  }
+  return !(pos && neg);
+}
+
+// clamp p into the polygon (project onto the nearest edge if outside), then nudge a hair inward so the
+// mean-value formula never sees a point exactly on an edge (where an angle → π and tan blows up)
+function clampPoly(p: Pt, V: Pt[]): Pt {
+  let q = p;
+  if (!insidePoly(p, V)) {
+    let bd = Infinity;
+    for (let i = 0; i < V.length; i++) {
+      const a = V[i],
+        b = V[(i + 1) % V.length],
+        dx = b.x - a.x,
+        dy = b.y - a.y,
+        t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1), 0, 1),
+        cxp = a.x + t * dx,
+        cyp = a.y + t * dy,
+        d = (cxp - p.x) ** 2 + (cyp - p.y) ** 2;
+      if (d < bd) {
+        bd = d;
+        q = { x: cxp, y: cyp };
+      }
+    }
+  }
+  return { x: q.x + (PADC - q.x) * 1e-3, y: q.y + (PADC - q.y) * 1e-3 };
+}
+
+// mean-value coordinates of p w.r.t. polygon V — non-negative and summing to 1 for p inside a convex V,
+// reducing to ordinary barycentric coordinates when V is a triangle
+function meanValue(p: Pt, V: Pt[]): number[] {
+  const n = V.length,
+    s = V.map((v) => ({ x: v.x - p.x, y: v.y - p.y })),
+    r = s.map((d) => Math.hypot(d.x, d.y));
+  for (let i = 0; i < n; i++) if (r[i] < 1e-6) return V.map((_, k) => (k === i ? 1 : 0));
+  const half: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n,
+      dot = s[i].x * s[j].x + s[i].y * s[j].y,
+      crs = s[i].x * s[j].y - s[i].y * s[j].x;
+    half[i] = Math.tan(Math.atan2(Math.abs(crs), dot) / 2);
+  }
+  let sum = 0;
+  const w = V.map((_, i) => {
+    const wi = (half[(i - 1 + n) % n] + half[i]) / r[i];
+    sum += wi;
+    return wi;
+  });
+  return w.map((x) => x / (sum || 1));
+}
+
+// read the hull weights off the current control position
+function setWeightsFromControl(): void {
+  const n = hulls.length;
+  if (n === 2) {
+    hulls[0].weight = 1 - tTwo;
+    hulls[1].weight = tTwo;
+  } else if (n >= 3) {
+    const w = meanValue(puck, padVerts(n));
+    hulls.forEach((h, i) => (h.weight = w[i]));
+  } else if (n === 1) hulls[0].weight = 1;
+}
+
+// reset the control to the centre (an equal blend)
+function resetBlend(): void {
+  puck = { x: PADC, y: PADC };
+  tTwo = 0.5;
+}
+
+// update the live readout in place — NOT a rebuild (rebuilding mid-drag would abort the drag)
+function updateReadout(): void {
+  const n = hulls.length,
+    total = hulls.reduce((a, x) => a + x.weight, 0) || 1,
+    pct = (i: number): string => `${((hulls[i].weight / total) * 100).toFixed(0)}%`;
+  if (n === 2) {
+    const pa = document.querySelector<HTMLElement>(".twopct .pa"),
+      pb = document.querySelector<HTMLElement>(".twopct .pb");
+    if (pa) pa.textContent = pct(0);
+    if (pb) pb.textContent = pct(1);
+  } else if (n >= 3) {
+    const pk = document.getElementById("puck");
+    if (pk) {
+      pk.setAttribute("cx", `${puck.x}`);
+      pk.setAttribute("cy", `${puck.y}`);
+    }
+    const V = padVerts(n);
+    hulls.forEach((_, i) => {
+      const sp = document.getElementById(`spoke${i}`);
+      if (sp) {
+        sp.setAttribute("x1", `${puck.x}`);
+        sp.setAttribute("y1", `${puck.y}`);
+        sp.setAttribute("x2", `${V[i].x}`);
+        sp.setAttribute("y2", `${V[i].y}`);
+        sp.setAttribute("stroke-opacity", `${(0.12 + 0.88 * (hulls[i].weight / total)).toFixed(2)}`);
+      }
+    });
+    const pcts = document.querySelectorAll<HTMLElement>("#hullList .legrow .pct");
+    hulls.forEach((_, i) => pcts[i] && (pcts[i].textContent = pct(i)));
+  }
+}
+
+// (re)build the blend control for the current family (the control position drives the weights)
 function renderPanel(): void {
   const list = document.getElementById("hullList")!;
+  setWeightsFromControl();
   list.replaceChildren();
-  hulls.forEach((h, i) => {
-    const row = document.createElement("div");
-    row.className = "hullrow";
-    const total = hulls.reduce((a, x) => a + x.weight, 0) || 1;
-    const pct = ((h.weight / total) * 100).toFixed(0);
-    row.innerHTML =
-      `<div class="hullhead">` +
-      `<span class="dot" style="background:${palette[i % palette.length]}"></span>` +
-      `<span class="hullname" title="${h.name}">${h.name}</span>` +
-      `<span class="pct">${pct}%</span>` +
+  const n = hulls.length,
+    col = (i: number): string => palette[i % palette.length];
+  if (n < 2) return; // 0–1 hulls: nothing to blend (the status line explains)
+
+  if (n === 2) {
+    const wrap = document.createElement("div");
+    wrap.className = "twoslider";
+    wrap.innerHTML =
+      `<div class="twoends">` +
+      `<span class="e"><span class="dot" style="background:${col(0)}"></span><span class="nm" title="${hulls[0].name}">${hulls[0].name}</span></span>` +
+      `<span class="e r"><span class="dot" style="background:${col(1)}"></span><span class="nm" title="${hulls[1].name}">${hulls[1].name}</span></span>` +
       `</div>` +
-      `<input type="range" class="wslider" min="0" max="100" step="1" value="${Math.round(h.weight * 100)}" data-i="${i}">`;
-    list.append(row);
-  });
-  list.querySelectorAll<HTMLInputElement>(".wslider").forEach((sl) => {
+      `<input type="range" id="tslider" min="0" max="100" step="1" value="${Math.round(tTwo * 100)}">` +
+      `<div class="twopct"><span class="pa"></span><span class="pb"></span></div>`;
+    list.append(wrap);
+    const sl = wrap.querySelector<HTMLInputElement>("#tslider")!;
     sl.addEventListener("input", () => {
-      hulls[+sl.dataset.i!].weight = +sl.value / 100;
-      updatePercents(); // in-place; do NOT rebuild the panel while a slider is being dragged
+      tTwo = +sl.value / 100;
+      setWeightsFromControl();
+      updateReadout(); // in-place; do NOT rebuild while the slider is being dragged
       refresh();
     });
+    updateReadout();
+    return;
+  }
+
+  // n ≥ 3: a polygon pad (drag the puck) + a legend of names/percentages
+  const V = padVerts(n);
+  const polyD = V.map((v, i) => `${i ? "L" : "M"}${v.x.toFixed(1)} ${v.y.toFixed(1)}`).join(" ") + "Z";
+  let svg =
+    `<svg id="blendPad" viewBox="0 0 ${PAD} ${PAD}" preserveAspectRatio="xMidYMid meet">` +
+    `<path d="${polyD}" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5" stroke-linejoin="round"/>`;
+  for (let i = 0; i < n; i++)
+    svg += `<line id="spoke${i}" x1="${PADC}" y1="${PADC}" x2="${V[i].x.toFixed(1)}" y2="${V[i].y.toFixed(1)}" stroke="${col(i)}" stroke-width="2" stroke-opacity="0.5"/>`;
+  for (let i = 0; i < n; i++)
+    svg += `<circle cx="${V[i].x.toFixed(1)}" cy="${V[i].y.toFixed(1)}" r="6" fill="${col(i)}" stroke="#fff" stroke-width="1.5"/>`;
+  svg += `<circle id="puck" class="puck" cx="${puck.x}" cy="${puck.y}" r="9" fill="#fff" stroke="var(--ink)" stroke-width="2.5"/></svg>`;
+  const padwrap = document.createElement("div");
+  padwrap.className = "padwrap";
+  padwrap.innerHTML = svg;
+  list.append(padwrap);
+
+  const legend = document.createElement("div");
+  legend.className = "padlegend";
+  legend.innerHTML = hulls
+    .map(
+      (h, i) =>
+        `<div class="legrow"><span class="dot" style="background:${col(i)}"></span>` +
+        `<span class="nm" title="${h.name}">${h.name}</span><span class="pct"></span></div>`,
+    )
+    .join("");
+  list.append(legend);
+
+  // drag the puck (or press anywhere in the pad to jump it there)
+  const padEl = padwrap.querySelector<SVGSVGElement>("#blendPad")!;
+  const toVB = (e: PointerEvent): Pt => {
+    const r = padEl.getBoundingClientRect();
+    return { x: ((e.clientX - r.left) / r.width) * PAD, y: ((e.clientY - r.top) / r.height) * PAD };
+  };
+  let dragging = false;
+  const move = (e: PointerEvent): void => {
+    puck = clampPoly(toVB(e), V);
+    setWeightsFromControl();
+    updateReadout();
+    refresh();
+  };
+  padEl.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    padEl.setPointerCapture(e.pointerId);
+    e.preventDefault();
+    move(e);
   });
+  padEl.addEventListener("pointermove", (e) => {
+    if (dragging) move(e);
+  });
+  const end = (e: PointerEvent): void => {
+    dragging = false;
+    if (padEl.hasPointerCapture(e.pointerId)) padEl.releasePointerCapture(e.pointerId);
+  };
+  padEl.addEventListener("pointerup", end);
+  padEl.addEventListener("pointercancel", end);
+  updateReadout();
 }
 
 function updateStatus(): void {
@@ -282,6 +464,7 @@ async function loadFiles(files: FileList | File[]): Promise<void> {
       errs.push(`${f.name}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
+  resetBlend(); // a fresh family starts centred (equal blend)
   renderPanel();
   updateStatus();
   refresh();
@@ -300,6 +483,7 @@ async function loadByIds(ids: string[]): Promise<void> {
       errs.push(`${id}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
+  resetBlend(); // a fresh family starts centred (equal blend)
   renderPanel();
   updateStatus();
   refresh();
@@ -323,9 +507,9 @@ function init(): void {
     if (e.dataTransfer?.files?.length) loadFiles(e.dataTransfer.files);
   });
 
-  // equal-weights reset
+  // recenter the control → an equal blend
   document.getElementById("equalBtn")!.addEventListener("click", () => {
-    hulls.forEach((h) => (h.weight = 1));
+    resetBlend();
     renderPanel();
     refresh();
   });

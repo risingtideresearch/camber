@@ -66,14 +66,31 @@
   .hullhead .rm:hover{color:var(--slider);background:none;}
   input[type=range]{width:100%;accent-color:var(--slider);}
   .hint{font-size:12px;color:var(--mut);}
+  /* blend pad (3+ hulls): a draggable puck in a polygon of hulls */
+  .padwrap{display:flex;justify-content:center;padding:2px 0;}
+  #blendPad{width:100%;max-width:260px;height:auto;touch-action:none;cursor:pointer;user-select:none;}
+  #blendPad .puck{cursor:grab;}
+  .padlegend{display:flex;flex-direction:column;gap:6px;}
+  .legrow{display:flex;align-items:center;gap:8px;font-size:13px;}
+  .legrow .dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto;}
+  .legrow .nm{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .legrow .pct{font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink);}
+  /* single slider (exactly 2 hulls) */
+  .twoslider{display:flex;flex-direction:column;gap:6px;}
+  .twoends{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;font-weight:600;}
+  .twoends .e{display:flex;align-items:center;gap:6px;min-width:0;}
+  .twoends .e.r{flex-direction:row-reverse;text-align:right;}
+  .twoends .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px;}
+  .twoends .dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto;}
+  .twopct{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums;font-weight:700;font-size:13px;color:var(--ink);}
 </style>
 </head>
 <body>
 <header>
   <h1>Hull interpolation blender</h1>
-  <p>Move the weight sliders to blend between the chosen hulls. Every blend of valid hulls of the same
-  topology is itself a valid hull. Name it and use <strong>Save As</strong> to store the result as a new
-  design in the library.</p>
+  <p>Blend between the chosen hulls — a slider for two, or drag the dot in the blend pad for three or more.
+  Every blend of valid hulls of the same topology is itself a valid hull. Name it and use
+  <strong>Save As</strong> to store the result as a new design in the library.</p>
 </header>
 <div class="wrap">
   <div class="card">
@@ -114,7 +131,7 @@
         <div class="ctl">
           <div id="status">Load 2–5 exported hulls to begin.</div>
           <div id="hullList"></div>
-          <div class="hint">Weights are relative and renormalize to sum to 100%. The blend is always a valid hull.</div>
+          <div class="hint">Drag toward a hull for more of it; the centre is an equal blend. The result is always a valid hull.</div>
         </div>
       </div>
     </div>
