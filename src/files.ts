@@ -52,7 +52,8 @@ let selectedId: string | null = null;
 
 // blend mode: pick a base design's compatible family, then open them in the interpolation viewer
 let blendMode = false;
-let blendSig: string | null = null; // the topology signature being blended
+let blendSig: string | null = null; // non-null while blend mode is active (the base's full topology signature)
+let blendBaseLength: number | null = null; // the base hull's length — peers must share it (counts may differ)
 const blendSel = new Set<string>(); // ids chosen for the blend
 
 const topoById = new Map<string, Topo | null>(); // recomputed each render
@@ -66,10 +67,12 @@ function selectedRow(): DesignRow | undefined {
   return rows.find((r) => r.id === selectedId);
 }
 
-// is this design blend-compatible with the active base (same topology signature)?
+// is this design blend-compatible with the active base? The interpolator promotes differing control-point
+// counts to a common topology, so the only hard requirement is a shared length — which (the model's fixed L)
+// every tool-authored hull meets. So any parseable design of the same length can join the blend.
 function isCompatible(id: string): boolean {
   const t = topoById.get(id);
-  return blendSig != null && !!t && topoSig(t) === blendSig;
+  return blendSig != null && !!t && t.length === blendBaseLength;
 }
 
 // reflect selection / blend state into the toolbar + cards
@@ -80,16 +83,16 @@ function syncUI(): void {
 
   if (blendMode) {
     const compat = rows.filter((r) => isCompatible(r.id)).length;
-    blendInfo.textContent = `${blendSel.size} selected · pick 2–5 of ${compat} compatible hulls`;
+    blendInfo.textContent = `${blendSel.size} selected · pick 2–5 of ${compat} blendable hulls`;
     blendOpenBtn.disabled = blendSel.size < 2 || blendSel.size > 5;
   } else {
     const row = selectedRow();
     selNameEl.textContent = row ? row.name : "No design selected";
     selNameEl.classList.toggle("none", !row);
     for (const b of [openBtn, exportJsonBtn, exportStepBtn, exportStlBtn, deleteBtn]) b.disabled = !row;
-    // Blend needs the selected design plus at least one topology-compatible peer
+    // Blend needs the selected design plus at least one same-length peer (counts are reconciled on open)
     const t = row ? topoById.get(row.id) : null;
-    const peers = t ? rows.filter((r) => { const o = topoById.get(r.id); return o && topoSig(o) === topoSig(t); }).length : 0;
+    const peers = t ? rows.filter((r) => { const o = topoById.get(r.id); return o && o.length === t.length; }).length : 0;
     blendBtn.disabled = peers < 2;
   }
   syncCards();
@@ -129,6 +132,7 @@ function enterBlend(): void {
   if (!row || !t) return;
   blendMode = true;
   blendSig = topoSig(t);
+  blendBaseLength = t.length;
   blendSel.clear();
   blendSel.add(row.id);
   syncUI();
@@ -136,6 +140,7 @@ function enterBlend(): void {
 function exitBlend(): void {
   blendMode = false;
   blendSig = null;
+  blendBaseLength = null;
   blendSel.clear();
   syncUI();
 }

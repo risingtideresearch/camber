@@ -15,6 +15,7 @@ import { clamp } from "./math.js";
 import { state, L, prepare, type Sheer, type StationCP } from "./model.js";
 import { draw3d } from "./render.js";
 import { buildJson, parseDocument, type HullData, type ParsedDoc } from "./json.js";
+import { promoteFamily } from "./promote.js";
 import { getDesign, insertDesign, updateDesign } from "./supabase.js";
 import { buildPreviewSvg } from "./preview.js";
 
@@ -24,45 +25,22 @@ interface Hull {
   weight: number;
 }
 
-// the loaded family (2–5 hulls) and the topology the first one fixes
+// the loaded family (2–5 hulls); only the shared length is fixed by the first hull — differing control-point
+// counts are reconciled by promoting the whole family to a common topology (see promoteFamily) before blending
 const hulls: Hull[] = [];
-let topo: {
-  plan: number;
-  trim: number;
-  section: number;
-  templates: number;
-  length: number;
-} | null = null;
+let famLength: number | null = null;
+let promoted = false; // did the last load need topology promotion? (surfaced in the status line)
 const palette: string[] = ["#2b6cb0", "#dd6b20", "#0f766e", "#7c3aed", "#b45309"];
 
-// check a freshly parsed hull against the family's topology (the first hull fixes it). Throws on
-// mismatch — only hulls of one topology (and length) can blend.
-function checkTopology(data: HullData, length: number): void {
-  const t = {
-    plan: data.cp.length,
-    trim: data.trim.length,
-    section: data.templates[0].length,
-    templates: data.templates.length,
-    length,
-  };
-  if (!topo) {
-    topo = t;
+// the only hard requirement is a shared length (the model's fixed L, so this never actually trips for hulls
+// authored in this tool). Control-point counts may differ — promoteFamily lifts them to a common topology.
+function checkLength(length: number): void {
+  if (famLength == null) {
+    famLength = length;
     return;
   }
-  if (
-    t.plan !== topo.plan ||
-    t.trim !== topo.trim ||
-    t.section !== topo.section ||
-    t.templates !== topo.templates
-  )
-    throw new Error(
-      `topology mismatch — plan/trim/section/templates counts ` +
-        `${t.plan}/${t.trim}/${t.section}/${t.templates}, the family has ` +
-        `${topo.plan}/${topo.trim}/${topo.section}/${topo.templates}. ` +
-        `Only one topology can blend.`,
-    );
-  if (Math.abs(t.length - topo.length) > 1e-6)
-    throw new Error(`length mismatch — ${t.length} vs the family's ${topo.length}. Lengths must match.`);
+  if (Math.abs(length - famLength) > 1e-6)
+    throw new Error(`length mismatch — ${length} vs the family's ${famLength}. Lengths must match.`);
 }
 
 // ---------- the blend: Σ wᵢ·Vᵢ componentwise over the shared topology → the shared model state ----------
@@ -339,7 +317,9 @@ function updateStatus(): void {
   } else if (hulls.length === 1) {
     status.textContent = "1 hull loaded — needs at least one more to interpolate.";
   } else {
-    status.textContent = `${hulls.length} hulls · blending`;
+    status.textContent =
+      `${hulls.length} hulls · blending` +
+      (promoted ? " · mixed topologies promoted to a common form (pure-hull ends approximate to a few mm)" : "");
   }
   refreshSaveUI();
 }
@@ -442,7 +422,7 @@ function addParsedDoc(parsed: ParsedDoc, base: string, errs: string[]): void {
       break;
     }
     try {
-      checkTopology(data, parsed.length);
+      checkLength(parsed.length);
     } catch (e) {
       errs.push(`${base}: ${e instanceof Error ? e.message : String(e)}`);
       vi++;
@@ -464,6 +444,7 @@ async function loadFiles(files: FileList | File[]): Promise<void> {
       errs.push(`${f.name}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
+  promoted = promoteFamily(hulls.map((h) => h.data)); // lift mixed topologies to a common one before blending
   resetBlend(); // a fresh family starts centred (equal blend)
   renderPanel();
   updateStatus();
@@ -483,6 +464,7 @@ async function loadByIds(ids: string[]): Promise<void> {
       errs.push(`${id}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
+  promoted = promoteFamily(hulls.map((h) => h.data)); // lift mixed topologies to a common one before blending
   resetBlend(); // a fresh family starts centred (equal blend)
   renderPanel();
   updateStatus();
