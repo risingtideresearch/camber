@@ -161,10 +161,9 @@ interface Topo {
   trim: number;
   section: number;
   templates: number;
-  variants: number;
 }
-// the topology that governs blending. parseDocument normalizes it (filling legacy aft/fore defaults), so this
-// matches what the interpolation viewer checks. Returns null if the document can't be parsed.
+// the control-point counts (and length) shown on a card and used to gate blending. parseDocument infers them
+// from the document's arrays (and migrates legacy docs). Returns null if the document can't be parsed.
 function topoOf(row: DesignRow): Topo | null {
   try {
     const p = parseDocument(JSON.stringify(row.document));
@@ -174,7 +173,6 @@ function topoOf(row: DesignRow): Topo | null {
       trim: p.topology.sheerTrim,
       section: p.topology.section,
       templates: p.topology.templateCount,
-      variants: p.variants.length,
     };
   } catch {
     return null;
@@ -223,9 +221,7 @@ function renderGrid(): void {
         statChip(t.section, "section"),
         statChip(t.plan, "plan"),
         statChip(t.trim, "trim"),
-        statChip(t.length, "mm"),
       );
-      if (t.variants > 1) tt.append(statChip(t.variants, "variants"));
       card.append(tt);
     }
 

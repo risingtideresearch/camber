@@ -1,14 +1,16 @@
-// ---------- HullDocument JSON: the on-disk format, plus editor export / import ----------
+// ---------- hull-document JSON: the on-disk format, plus editor export / import ----------
 //
-// The on-disk shape is the `HullDocument` from the data model (see README): one `topology`
-// (control-point counts), one shared `length`, and one or more `variants`. Each variant is
-// increment-encoded — sheer/trim points carry a forward step `dx` (point 0 holds the anchor x₀),
-// section points carry a depth step `dd` (point 0 is the pinned sheer point), and the transom is
-// `{x, depthTop, dDepthBot, transomRake}`. Increments are what make any convex blend valid.
+// One document = one hull (no topology block, no variants wrapper — control-point counts are implied by the
+// arrays). It is increment-encoded — sheer/trim points carry a forward step `dx` (point 0 holds the anchor
+// x₀), section points carry a depth step `dd` (point 0 is the pinned sheer point), and the transom is
+// `{x, depthTop, dDepthBot, transomRake}`. Increments are what make any convex blend valid. `length` is the
+// document's unitless scale (the current model's L); coordinates are rescaled to L on import, so a legacy
+// 4000-unit document still loads correctly.
 //
-// The live model works in absolute coordinates, so we ENCODE on export and DECODE on import. This
-// module is the single source of truth for the format — the editor and the interpolation viewer
-// both go through it.
+// The importer also still reads the LEGACY shape (a `topology`/`variants` wrapper around one or more hulls)
+// so older saved/exported documents keep working. The live model works in absolute coordinates, so we ENCODE
+// on export and DECODE on import. This module is the single source of truth for the format — the editor and
+// the interpolation viewer both go through it.
 
 import { clamp } from "./math.js";
 import {
@@ -130,28 +132,21 @@ function decTransom(t: Transom): TransomCP[] {
   return [top, { x: t.x + (z - top.z) * t.transomRake, z }];
 }
 
-// ---------- export: the current model as a single-variant HullDocument ----------
+// ---------- export: the current model as a single-hull document ----------
+// One document = one hull. `length` is the unitless scale (the model's L) and doubles as a scale/version tag
+// for the importer (legacy multi-hull documents carry a `topology`/`variants` wrapper and length 4000).
+// Control-point counts are implied by the array lengths, so there is no separate topology block.
 export function buildJson(): string {
   const s = state.sheer;
   const doc = {
     length: L,
     waterline: state.waterline,
     deckRakeDeg: (state.deckRake * 180) / Math.PI,
-    topology: {
-      sheerPlan: s.cp.length, // the unified station count: drives both the plan curve and the blend
-      sheerTrim: s.trim.length,
-      section: state.templates[0].length,
-      templateCount: state.templates.length,
-    },
-    variants: [
-      {
-        sheerPlan: encPlan(s.cp), // each plan point carries its blend weights w
-        sheerTrim: encTrim(s.trim),
-        transom: encTransom(s.transom),
-        templates: state.templates.map(encSection),
-        keelK: state.keelK.slice(),
-      },
-    ],
+    sheerPlan: encPlan(s.cp), // each plan point carries its blend weights w
+    sheerTrim: encTrim(s.trim),
+    transom: encTransom(s.transom),
+    templates: state.templates.map(encSection),
+    keelK: state.keelK.slice(),
   };
   return JSON.stringify(doc, null, 2);
 }
@@ -177,11 +172,6 @@ function num(v: unknown, ctx: string): number {
 function obj(v: unknown, ctx: string): Record<string, unknown> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) throw new Error(`${ctx} must be an object`);
   return v as Record<string, unknown>;
-}
-function intCount(v: unknown, ctx: string, min: number): number {
-  const n = num(v, ctx);
-  if (!Number.isInteger(n) || n < min) throw new Error(`${ctx} must be an integer ≥ ${min}`);
-  return n;
 }
 // parse a fixed-length array of point objects, applying `field` to each (already an object)
 function points<T>(
@@ -221,113 +211,140 @@ function linearPath(k: number, length: number): WeightCP[] {
   ];
 }
 
-// parse + validate a HullDocument and decode every variant to absolute model coordinates. Throws on
-// any structural problem; nothing is committed until the whole document validates.
+// decode one hull — a flat document, or one entry of a legacy `variants` array — to absolute model
+// coordinates. Control-point counts are taken from the arrays themselves; `docLength` only places the
+// default blend handoff for legacy documents that lack per-station weights.
+function decodeVariant(v: Record<string, unknown>, c: string, docLength: number): HullData {
+  // templates first — they fix the template count K and the shared section-point count
+  const rawTpls: unknown[] =
+    "templates" in v
+      ? Array.isArray(v.templates) && v.templates.length >= 1
+        ? v.templates
+        : (() => {
+            throw new Error(`${c}.templates must be a non-empty array`);
+          })()
+      : "aft" in v && "fore" in v
+        ? [v.aft, v.fore] // legacy aft/fore pair → two templates
+        : (() => {
+            throw new Error(`${c} has no templates (and no legacy aft/fore pair)`);
+          })();
+  if (!Array.isArray(rawTpls[0])) throw new Error(`${c}.templates[0] must be an array of section points`);
+  const nSec = rawTpls[0].length;
+  if (nSec < 2) throw new Error(`${c} sections must have ≥ 2 points`);
+  const nTpl = rawTpls.length;
+  const templates: StationCP[][] = rawTpls.map((tp, ti) =>
+    decSection(
+      points(tp, `${c}.templates[${ti}]`, nSec, (o, i) => ({
+        dd: num(o.dd, `${c}.templates[${ti}][${i}].dd`),
+        n: num(o.n, `${c}.templates[${ti}][${i}].n`),
+        k: typeof o.k === "number" ? o.k : 0,
+      })),
+    ),
+  );
+
+  // plan stations (each carries its blend weights w in the unified format)
+  if (!Array.isArray(v.sheerPlan) || v.sheerPlan.length < 2)
+    throw new Error(`${c}.sheerPlan must be an array of ≥ 2 points`);
+  const cp = decPlan(
+    points(v.sheerPlan, `${c}.sheerPlan`, v.sheerPlan.length, (o, i) => ({
+      dx: num(o.dx, `${c}.sheerPlan[${i}].dx`),
+      y: num(o.y, `${c}.sheerPlan[${i}].y`),
+      w: Array.isArray(o.w) ? weightVec(o.w, `${c}.sheerPlan[${i}].w`, nTpl) : undefined,
+    })),
+  );
+
+  if (!Array.isArray(v.sheerTrim) || v.sheerTrim.length < 2)
+    throw new Error(`${c}.sheerTrim must be an array of ≥ 2 points`);
+  const trim = decTrim(
+    points(v.sheerTrim, `${c}.sheerTrim`, v.sheerTrim.length, (o, i) => ({
+      dx: num(o.dx, `${c}.sheerTrim[${i}].dx`),
+      depth: num(o.depth, `${c}.sheerTrim[${i}].depth`),
+      k: typeof o.k === "number" ? o.k : 0,
+    })),
+  );
+
+  // keelK: optional per-template keel knuckle; missing/short → 0 (smooth)
+  const keelK = Array.from({ length: nTpl }, (_, j) =>
+    Array.isArray(v.keelK) && typeof v.keelK[j] === "number" ? clamp(v.keelK[j] as number, 0, 1) : 0,
+  );
+
+  // blend weights: unified (already on each station) or MIGRATE a legacy document — a separate `weights`
+  // path, or none (→ the default linear handoff) — by sampling that path at each station's x.
+  if (cp.every((p) => p.w.length === nTpl)) {
+    cp.forEach((p) => (p.w = normW(p.w)));
+  } else {
+    const oldW =
+      "weights" in v && Array.isArray(v.weights)
+        ? decWeights(
+            points(v.weights, `${c}.weights`, v.weights.length, (o, i) => ({
+              dx: num(o.dx, `${c}.weights[${i}].dx`),
+              w: weightVec(o.w, `${c}.weights[${i}].w`, nTpl),
+            })),
+          )
+        : linearPath(nTpl, docLength);
+    const wf = buildWeightSampler(oldW);
+    cp.forEach((p) => (p.w = wf(p.x)));
+  }
+
+  const to = obj(v.transom, `${c}.transom`);
+  const transom = decTransom({
+    x: num(to.x, `${c}.transom.x`),
+    depthTop: num(to.depthTop, `${c}.transom.depthTop`),
+    dDepthBot: num(to.dDepthBot, `${c}.transom.dDepthBot`),
+    transomRake: num(to.transomRake, `${c}.transom.transomRake`),
+  });
+
+  return { name: typeof v.name === "string" ? v.name : undefined, cp, trim, transom, templates, keelK };
+}
+
+// scale a decoded hull's length-dimensioned coordinates by `s` — used to lift a legacy 4000-unit document to
+// the model's current unitless length. Knuckles k and blend weights w are dimensionless and left alone.
+function scaleHull(d: HullData, s: number): void {
+  d.cp.forEach((p) => ((p.x *= s), (p.y *= s)));
+  d.trim.forEach((p) => ((p.x *= s), (p.z *= s)));
+  d.transom.forEach((p) => ((p.x *= s), (p.z *= s)));
+  d.templates.forEach((tpl) => tpl.forEach((p) => ((p.n *= s), (p.d *= s))));
+}
+
+// parse + validate a hull document and decode it to absolute model coordinates. Reads the current flat
+// single-hull shape AND the legacy topology/variants wrapper; counts come from the arrays. The document's
+// `length` is its unitless scale — coordinates are rescaled to the model's L on import (so a legacy 4000-unit
+// document loads at the current scale). Throws on any structural problem; nothing is committed until it all
+// validates.
 export function parseDocument(text: string): ParsedDoc {
   const doc = obj(JSON.parse(text), "document");
-  if (!("topology" in doc) || !("variants" in doc))
-    throw new Error("not a HullDocument (missing topology and/or variants)");
-  const length = num(doc.length, "length");
-  // waterline + deck rake are optional (older documents predate them); default to 0 = WL at the deck, no rake
+  const legacy = "variants" in doc; // legacy multi-hull documents wrap variants in a topology/variants block
+  if (!legacy && !("sheerPlan" in doc))
+    throw new Error("not a hull document (no sheerPlan, and no legacy variants)");
+  const docLength =
+    typeof doc.length === "number" && isFinite(doc.length) && doc.length > 0 ? doc.length : L;
   const waterline = typeof doc.waterline === "number" && isFinite(doc.waterline) ? doc.waterline : 0;
   const deckRakeDeg =
     typeof doc.deckRakeDeg === "number" && isFinite(doc.deckRakeDeg) ? doc.deckRakeDeg : 0;
-  const t = obj(doc.topology, "topology");
-  const nPlan = intCount(t.sheerPlan, "topology.sheerPlan", 2);
-  const nTrim = intCount(t.sheerTrim, "topology.sheerTrim", 2);
-  const nSec = intCount(t.section, "topology.section", 2);
-  // templateCount / weightPoints are optional: a legacy two-template (aft/fore) document predates them,
-  // and reads as K = 2 templates on a straight (linear) blend path.
-  const nTpl = "templateCount" in t ? intCount(t.templateCount, "topology.templateCount", 1) : 2;
-  const nWt = "weightPoints" in t ? intCount(t.weightPoints, "topology.weightPoints", 1) : 2;
 
-  if (!Array.isArray(doc.variants) || doc.variants.length < 1)
-    throw new Error("variants must be a non-empty array");
+  const rawList: Record<string, unknown>[] = legacy
+    ? Array.isArray(doc.variants) && doc.variants.length
+      ? doc.variants.map((vv, i) => obj(vv, `variants[${i}]`))
+      : (() => {
+          throw new Error("variants must be a non-empty array");
+        })()
+    : [doc];
+  const variants = rawList.map((v, i) => decodeVariant(v, legacy ? `variants[${i}]` : "document", docLength));
 
-  const variants: HullData[] = doc.variants.map((vv, vi) => {
-    const v = obj(vv, `variants[${vi}]`);
-    const c = `variants[${vi}]`;
-    const cp = decPlan(
-      points(v.sheerPlan, `${c}.sheerPlan`, nPlan, (o, i) => ({
-        dx: num(o.dx, `${c}.sheerPlan[${i}].dx`),
-        y: num(o.y, `${c}.sheerPlan[${i}].y`),
-        w: Array.isArray(o.w) ? weightVec(o.w, `${c}.sheerPlan[${i}].w`, nTpl) : undefined, // unified format
-      })),
-    );
-    const trim = decTrim(
-      points(v.sheerTrim, `${c}.sheerTrim`, nTrim, (o, i) => ({
-        dx: num(o.dx, `${c}.sheerTrim[${i}].dx`),
-        depth: num(o.depth, `${c}.sheerTrim[${i}].depth`),
-        k: typeof o.k === "number" ? o.k : 0, // k optional, defaults to 0 (smooth) for legacy docs
-      })),
-    );
-    const secList = (arr: unknown, ctx: string) =>
-      decSection(
-        points(arr, ctx, nSec, (o, i) => ({
-          dd: num(o.dd, `${ctx}[${i}].dd`),
-          n: num(o.n, `${ctx}[${i}].n`),
-          k: typeof o.k === "number" ? o.k : 0, // k optional, defaults to 0 (smooth)
-        })),
-      );
-    // templates: the new `templates` array, or the legacy aft/fore pair (→ two templates)
-    let templates: StationCP[][];
-    if ("templates" in v) {
-      if (!Array.isArray(v.templates) || v.templates.length !== nTpl)
-        throw new Error(`${c}.templates must be an array of ${nTpl} templates (matching the topology)`);
-      templates = v.templates.map((tp, ti) => secList(tp, `${c}.templates[${ti}]`));
-    } else if ("aft" in v && "fore" in v) {
-      templates = [secList(v.aft, `${c}.aft`), secList(v.fore, `${c}.fore`)];
-    } else {
-      throw new Error(`${c} has no templates (and no legacy aft/fore pair)`);
-    }
-    // keelK: optional per-template keel knuckle; legacy docs (and any missing/short array) default to 0
-    const keelK = Array.from({ length: nTpl }, (_, j) =>
-      Array.isArray(v.keelK) && typeof v.keelK[j] === "number" ? clamp(v.keelK[j], 0, 1) : 0,
-    );
-    // Blend weights now ride on each station (cp.w). The unified format already filled them; MIGRATE an old
-    // document — which stored a separate `weights` path (or none → the default linear handoff) — by sampling
-    // that path at each station's x. Same resampling the editor uses when a station is dragged along x.
-    if (cp.every((p) => p.w.length === nTpl)) {
-      cp.forEach((p) => (p.w = normW(p.w))); // unified format: project each onto the simplex
-    } else {
-      const oldW =
-        "weights" in v
-          ? decWeights(
-              points(v.weights, `${c}.weights`, nWt, (o, i) => ({
-                dx: num(o.dx, `${c}.weights[${i}].dx`),
-                w: weightVec(o.w, `${c}.weights[${i}].w`, nTpl),
-              })),
-            )
-          : linearPath(nTpl, length);
-      const wf = buildWeightSampler(oldW);
-      cp.forEach((p) => (p.w = wf(p.x)));
-    }
-    const to = obj(v.transom, `${c}.transom`);
-    const transom = decTransom({
-      x: num(to.x, `${c}.transom.x`),
-      depthTop: num(to.depthTop, `${c}.transom.depthTop`),
-      dDepthBot: num(to.dDepthBot, `${c}.transom.dDepthBot`),
-      transomRake: num(to.transomRake, `${c}.transom.transomRake`),
-    });
-    return {
-      name: typeof v.name === "string" ? v.name : undefined,
-      cp,
-      trim,
-      transom,
-      templates,
-      keelK,
-    };
-  });
+  // normalize to the model's length (decoded coordinates are in the document's units)
+  const s = L / docLength;
+  if (Math.abs(s - 1) > 1e-9) variants.forEach((d) => scaleHull(d, s));
 
+  const t0 = variants[0];
   return {
-    length,
-    waterline,
+    length: L,
+    waterline: waterline * s,
     deckRake: (deckRakeDeg * Math.PI) / 180,
     topology: {
-      sheerPlan: nPlan,
-      sheerTrim: nTrim,
-      section: nSec,
-      templateCount: nTpl,
+      sheerPlan: t0.cp.length,
+      sheerTrim: t0.trim.length,
+      section: t0.templates[0].length,
+      templateCount: t0.templates.length,
     },
     variants,
   };
