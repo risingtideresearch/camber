@@ -22,8 +22,8 @@ import { dirname, join } from "path";
 // the largest jump in keel deadrise (degrees) between adjacent stations we accept as "smooth". The fixed
 // reflected-keel construction lands around 0.3–0.9°; the old stepped one spiked above 20°. 1.5° is a wide
 // margin that still catches any return of the stepping.
-const THRESHOLD_DEG = 1.5;
-const DX = 4; // station spacing (mm) for the sweep — fine enough to resolve a step as a single jump
+const THRESHOLD_DEG = 1.5; // deadrise is an ANGLE — scale-invariant, unchanged by the unitless rescale
+const DX = 1; // station spacing (units) for the sweep — fine enough to resolve a step as a single jump
 const KEEL_KS = [0, 0.5, 1]; // keel-knuckle settings to exercise (flat → V)
 
 // the example hulls live alongside the repo; resolve from this file so the cwd does not matter
@@ -45,7 +45,7 @@ function deadriseDeg(x: number): number {
   if (!s.keel) return NaN;
   const p = s.pts,
     keel = p[p.length - 1],
-    band = p.filter((q) => q[2] <= keel[2] + 70);
+    band = p.filter((q) => q[2] <= keel[2] + 18);
   if (band.length < 3) return NaN;
   let n = 0,
     sy = 0,

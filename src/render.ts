@@ -218,7 +218,7 @@ export function render(): void {
 type CuspPt = { x: number; outer: [number, number]; inner: [number, number]; zTop: number; zBot: number };
 function cuspRuns(): CuspPt[][] {
   const yf = state.sheer.yf,
-    e = 4,
+    e = 1,
     N = 120,
     runs: CuspPt[][] = [];
   let run: CuspPt[] = [];
@@ -1159,8 +1159,8 @@ function buildLongitudinalMesh(idx: number, view: Vec3): Mesh {
   const tpl = state.templates;
   if (idx < 0 || idx >= tpl[0].length) return { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 };
   const N = 160,
-    HW = 5, // ribbon half-width (mm) — a thin guide line
-    BIAS = 22, // shift toward the eye (mm) so the line floats just above the hull it lies on
+    HW = 1.25, // ribbon half-width (units) — a thin guide line
+    BIAS = 6, // shift toward the eye (units) so the line floats just above the hull it lies on
     off = V.scale(view, BIAS);
   const W: Vec3[] = [],
     keep: boolean[] = []; // each sample trimmed the same way the hull surface is
@@ -1491,7 +1491,7 @@ function projExtent(
 // the rake. The live hull then just sits inside that fixed frame, centered.
 const REF_YAW = -0.62,
   REF_PITCH = 0.42,
-  NOMINAL: number[] = [0, -950, -1300, 4000, 950, 0]; // [x0,y0,z0, x1,y1,z1]
+  NOMINAL: number[] = [0, -238, -325, 1000, 238, 0]; // [x0,y0,z0, x1,y1,z1]
 
 // ---------- lines-plan wireframe (SVG overlay) ----------
 // A white, unshaded line drawing in the style of a hand-drawn hull lines plan: a transparent mesh of
@@ -1673,7 +1673,7 @@ function drawLines(svg: SVGSVGElement, kind: View3DMode, rebuild: boolean): void
       vy = -c2 * c1,
       vz = c2 * s1 * sT + s2 * cT;
     const vl = Math.hypot(vx, vy, vz) || 1,
-      BIAS = 60; // clear the coarse flat-facet chords (the guide rides facet interiors, not edges)
+      BIAS = 15; // clear the coarse flat-facet chords (the guide rides facet interiors, not edges)
     (vx /= vl), (vy /= vl), (vz /= vl);
     const tpl = state.templates,
       NP = 120,
@@ -1779,7 +1779,7 @@ export function draw3d(rebuild?: boolean): void {
   gl.uniform1f(loc.uCY, live.cY);
   gl.uniform1f(loc.ucxm, cxm);
   gl.uniform1f(loc.uczm, czm);
-  gl.uniform1f(loc.uDepth, 3000);
+  gl.uniform1f(loc.uDepth, 750); // depth-range scale; ÷4 with the unitless L=1000 rescale to keep ndcz unchanged
   gl.uniform1f(loc.uRakeC, Math.cos(state.deckRake)); // deck rake floats the hull at its trim
   gl.uniform1f(loc.uRakeS, Math.sin(state.deckRake));
   gl.uniform1f(loc.uAlpha, 1.0);

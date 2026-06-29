@@ -74,37 +74,37 @@ export interface Section {
 }
 
 // ---------- geometric domain constants ----------
-export const L = 4000; // length overall (x: 0 = transom, L = bow)
+export const L = 1000; // length overall, UNITLESS (x: 0 = transom, L = bow). All coordinates are in these units.
 // Forward room past the LOA shown in the plan/profile editors. The boat length stays L, but a tumblehome bow
 // closes a little past it (the emergent stem), so the sheer-TRIM line is allowed to carry control points into
 // [L, L+XFWD] to shape that overhang; the 2D strips reserve this much extra x so those points are reachable.
-export const XFWD = 400;
+export const XFWD = 100;
 // station coordinate bounds: n from NMIN (outboard → tumblehome) to NMAX (inboard); d down from the sheer
-export const NMIN = -450,
-  NMAX = 1350,
-  DMAX = 1350;
+export const NMIN = -113,
+  NMAX = 338,
+  DMAX = 338;
 
 // ---------- defaults ----------
 const SHEER_DEF: [number, number][] = [
-  [0, 820],
-  [1000, 900],
-  [2000, 880],
-  [3000, 640],
-  [4000, 0],
+  [0, 205],
+  [250, 225],
+  [500, 220],
+  [750, 160],
+  [1000, 0],
 ]; // 2D plan curve, flat deck z=0 (meets CL fwd)
 // sheer trim line in profile (x, z): the real sheer, constrained below the flat deck (z ≤ 0). The strip
 // of swept sheet between the deck (z=0) and this line is trimmed off the final shape. Lowest amidships.
 const SHEER_TRIM_DEF: [number, number][] = [
-  [0, -60],
-  [1333, -280],
-  [2667, -260],
-  [4000, -40],
+  [0, -15],
+  [333, -70],
+  [667, -65],
+  [1000, -10],
 ];
 // transom: a raked plane at the stern, given by two profile points (x, z) — top (near the sheer) and
 // bottom (near the keel). The hull keeps the forward side (x ≥ xTransom(z)); the cut is a solid face.
 const TRANSOM_DEF: [number, number][] = [
-  [150, -55],
-  [380, -720],
+  [38, -14],
+  [95, -180],
 ];
 // station sections in the local frame: d = down from the sheer, n = inboard offset. Point 0 = sheer,
 // pinned at the origin. The curve descends from the sheer; the centerline clip closes the bottom.
@@ -117,17 +117,17 @@ const TRANSOM_DEF: [number, number][] = [
 const TEMPLATE_DEFS: [number, number, number][][] = [
   [
     [0, 0, 0],
-    [90, 320, 0],
-    [260, 640, 1],
-    [560, 880, 0],
-    [980, 1000, 0],
+    [23, 80, 0],
+    [65, 160, 1],
+    [140, 220, 0],
+    [245, 250, 0],
   ], // fuller (transom), hard chine at the bilge
   [
     [0, 0, 0],
-    [150, 430, 0],
-    [400, 840, 0],
-    [720, 1120, 0],
-    [1020, 1220, 0],
+    [38, 108, 0],
+    [100, 210, 0],
+    [180, 280, 0],
+    [255, 305, 0],
   ], // deeper / finer (bow), round bilge
 ];
 // the default weight curve: full weight on template 0 at the transom, handing off linearly to the last
@@ -184,8 +184,8 @@ export const state: State = {
   templates: [],
   keelK: [],
   weightFn: () => [1],
-  x0: 2000,
-  waterline: 600,
+  x0: 500,
+  waterline: 150,
   deckRake: 0,
   rot: { yaw: -0.62, pitch: 0.42 },
   zoom: 1,
@@ -207,8 +207,8 @@ export function resetModel(): void {
     yf: () => 0,
     zf: () => 0,
   };
-  state.x0 = 2000;
-  state.waterline = 600;
+  state.x0 = 500;
+  state.waterline = 150;
   state.deckRake = 0;
 }
 

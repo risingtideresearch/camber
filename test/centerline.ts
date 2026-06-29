@@ -30,19 +30,19 @@ import { dirname, join } from "path";
 // the most the centerline may ride above the deepest keel point in a true transverse section before we call
 // it a pucker. The fair construction lands at ~0 (the centerline IS the deepest point); the old mirror bug
 // spiked to +8 mm at a narrow transom. 1.5 mm is wide of the discretisation noise but well under the bug.
-const THRESHOLD_MM = 1.5;
+const THRESHOLD_MM = 0.375; // (units; ÷4 of the old 1.5 mm under the unitless L=1000 rescale)
 // the most the section depth may dip below its running max while scanning sheer→keel (a keel inflection /
 // bulge). Clean keels land at ~0; the flat-bottom-inflection bug reached several mm. 1.0 mm is the cap.
-const REVERSAL_MM = 1.0;
+const REVERSAL_MM = 0.25; // (units; ÷4 of the old 1.0 mm)
 // max near-keel longitudinal buttock curvature index (|d²z/dx²|·1e3) over the mid-body. A transverse ridge
 // can be 0 yet the keel still wrinkle ALONG the hull — e.g. the keel-rounding anchor stepping as the keel
 // crossing slides past a chine (the "Keel Distortion" flat-bottom hull spiked to ~88 here before the
 // chine-proximity fade fix; clean hulls sit under ~6).
-const KEEL_BUTTOCK_MAX = 10;
-const BUTTOCK_YS = [60, 120, 180]; // half-breadths (mm) near the keel at which to judge longitudinal fairness
+const KEEL_BUTTOCK_MAX = 40; // curvature index = |d²z/dx²|·1e3 — scales ×4 under the ÷4 length rescale (was 10)
+const BUTTOCK_YS = [15, 30, 45]; // half-breadths (units) near the keel at which to judge longitudinal fairness
 const M = 44; // section columns per half — matches the 3D mesh (buildHullMesh)
 const NS = 180; // station sweep resolution — matches the 3D mesh
-const BAND_MM = 90; // half-breadth window around the centerline within which we judge the keel shape
+const BAND_MM = 23; // half-breadth window (units) around the centerline within which we judge the keel shape
 
 function examplesDir(): string {
   let d = dirname(fileURLToPath(import.meta.url));
@@ -102,7 +102,7 @@ function worstRidge(): { ridge: number; x: number } {
   let worst = -Infinity,
     at = 0;
   // sample inside the keel-bearing span, clear of the degenerate bow tip
-  for (let X = x0 + 40; X <= x1 - 200; X += 25) {
+  for (let X = x0 + 10; X <= x1 - 50; X += 6) {
     const sec = trueSection(rows, X);
     if (!sec) continue;
     const band = sec.filter((p) => Math.abs(p.y) <= BAND_MM);
@@ -123,7 +123,7 @@ function worstRidge(): { ridge: number; x: number } {
 function worstReversal(): { rev: number; x: number } {
   let worst = 0,
     at = 0;
-  for (let x = 0.01 * L; x <= 0.99 * L; x += 8) {
+  for (let x = 0.01 * L; x <= 0.99 * L; x += 2) {
     const st = stationAt(x, true);
     if (!st.tmax) continue;
     const us = st.tmax / 2,
@@ -166,9 +166,9 @@ function worstKeelButtock(): { curv: number; x: number; y: number } {
   const keelXs = rows.map((r) => r[M][0]);
   const lo = Math.min(...keelXs),
     hi = Math.max(...keelXs);
-  const x0 = lo + 150,
+  const x0 = lo + 38,
     x1 = hi - 0.3 * (hi - lo),
-    dx = 25;
+    dx = 6;
   const xs: number[] = [];
   for (let X = x0; X <= x1; X += dx) xs.push(X);
   let curv = 0,

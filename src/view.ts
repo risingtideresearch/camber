@@ -15,20 +15,20 @@ export const invX = (vx: number): number => (vx - PXpad) / SX;
 // profile: z up, flat deck at 0, keel below — same px/mm as x (isometric)
 export const Ptop = 20,
   Pbot = 24,
-  ZMIN = -1400,
-  ZMAX = 320,
+  ZMIN = -350,
+  ZMAX = 80,
   SZ = SX,
   PH = (ZMAX - ZMIN) * SZ + Ptop + Pbot, // height so the z range fits at the isometric scale
   PZbase = PH - Pbot;
 export const zScreenP = (z: number): number => PZbase - (z - ZMIN) * SZ;
 export const invZp = (vy: number): number => ZMIN + (PZbase - vy) / SZ;
-export const ZTRIMMIN = -1100; // sheer trim must stay below the deck: z in [ZTRIMMIN,0]
+export const ZTRIMMIN = -275; // sheer trim must stay below the deck: z in [ZTRIMMIN,0]
 
 // plan: a single half-breadth — breadth grows upward at the same px/mm as x (isometric). The centerline used
 // to sit on the BOTTOM edge; now the strip reserves a band BELOW it (down to YMIN < 0) so the sheer plan can
 // be drawn crossing the centerline at a tumblehome bow, where the deck edge tucks past y = 0.
-export const YMAX = 1100,
-  YMIN = -220, // room below the centerline for the bow's centerline crossing
+export const YMAX = 275,
+  YMIN = -55, // room below the centerline for the bow's centerline crossing
   SYP = SX,
   Ppad = 18,
   LH = (YMAX - YMIN) * SYP + 2 * Ppad, // height so [YMIN, YMAX] fits at the isometric scale
