@@ -120,81 +120,10 @@
 </style>
 </head>
 <body>
-<div class="app">
-  <div class="appbar">
-    <div class="toolbar" id="toolbar">
-      <button class="tool active" data-tool="select" title="Select — click a point to select it, then drag to move, Delete to remove, or set its knuckle">
-        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 1.4l9.6 5.3-4.3.9-1 4.4z"/></svg>Select</button>
-      <button class="tool" data-tool="add" title="Add — click empty space in an editor to add a control point there">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>Add</button>
-    </div>
-    <div class="selinfo" id="selinfo">
-      <span class="sel-label muted" id="selLabel">No point selected</span>
-      <label class="sel-knuckle" id="selKnuckleWrap">Knuckle
-        <input type="range" id="selKnuckle" min="0" max="1" step="0.01" title="0 = smooth · 1 = hard corner">
-      </label>
-      <button id="selDelete" title="Delete the selected point (Delete / Backspace)">Delete</button>
-    </div>
-    <span class="tabsep"></span>
-    <label class="ctl" title="Design waterline — depth below the sheer origin (deck datum)">WL
-      <input type="range" id="wlRange" min="0" max="1400" step="10">
-      <span class="ctlval" id="wlVal"></span></label>
-    <label class="ctl" title="Deck rake — bow-up trim angle; rotates the whole hull about the sheer origin">Rake
-      <input type="range" id="rakeRange" min="-12" max="12" step="0.5">
-      <span class="ctlval" id="rakeVal"></span></label>
-    <div class="toolacts">
-      <input id="docName" class="docname" placeholder="Untitled" maxlength="120"
-             title="Design name — edit to rename" spellcheck="false">
-      <span class="savestate" id="saveState"></span>
-      <button id="saveDesign" title="Save the design (Ctrl/Cmd-S) — becomes “Save As” when you change the name">Save</button>
-      <button id="revertDesign" title="Discard changes since the last save">Revert</button>
-      <span class="tabsep"></span>
-      <button id="toFiles" title="Close and return to the design library">Close</button>
-    </div>
-  </div>
-  <div class="main">
-    <div class="leftcol">
-      <div class="top3d">
-        <canvas id="cv3d"></canvas>
-        <svg id="lines3d" class="lines3d" style="display:none"></svg>
-        <div class="view3dctl" id="view3dModes">
-          <button class="vmode on" data-mode="render" title="Shaded hull">Render</button>
-          <button class="vmode" data-mode="body" title="Lines plan — body (stations)">Body</button>
-          <button class="vmode" data-mode="buttocks" title="Lines plan — buttocks (constant-y cuts)">Buttocks</button>
-          <button class="vmode" data-mode="waterline" title="Lines plan — waterlines (constant-z cuts)">Waterline</button>
-          <button class="vmode" data-mode="zebra" title="Zebra-stripe fairness check">Zebra</button>
-          <button class="vmode" data-mode="sheet" title="Untrimmed swept sheet (one side)">Sheet</button>
-        </div>
-      </div>
-      <div class="viewstrip"><svg id="svgWeights" viewBox="0 0 1000 150" preserveAspectRatio="xMidYMid meet"></svg></div>
-      <div class="viewstrip"><svg id="svgPlan" viewBox="0 0 1000 278" preserveAspectRatio="xMidYMid meet"></svg></div>
-      <div class="viewstrip"><svg id="svgProfile" viewBox="0 0 1000 422.4" preserveAspectRatio="xMidYMid meet"></svg></div>
-    </div>
-    <div class="rightcol">
-      <div class="card sidecard">
-        <div class="tabstrip" id="sideTabs"></div>
-        <div class="sidefit">
-          <div class="sidepanel">
-            <div id="templateCards"></div>
-          </div>
-        </div>
-        <div class="keelrow">
-          <label class="ctl" id="keelCtl" title="Keel knuckle for the active template — 0 = smooth (C¹ across the centerline), 1 = a hard V">Keel
-            <input type="range" id="keelRange" min="0" max="1" step="0.01">
-            <span class="ctlval" id="keelVal">—</span></label>
-        </div>
-      </div>
-      <div class="card cutcard">
-        <div class="cap">Cut <span class="val" id="profVal">—</span></div>
-        <div class="sidefit">
-          <div class="sidepanel">
-            <svg id="svgCut" viewBox="0 0 360 360"></svg>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
+<!-- The editor is a React app (src/editor.tsx → dist/camber.js). It renders the full UI into #root
+     and drives the unchanged imperative core (model / render / interaction / …). The big <style>
+     block above is preserved verbatim; the React components reproduce the same ids/classes. -->
+<div id="root"></div>
 
 <script type="module" src="dist/camber.js"></script>
 </body>
