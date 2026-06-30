@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "esbuild src/main.ts --bundle --format=esm --outfile=dist/camber.js --sourcemap && esbuild src/files.ts --bundle --format=esm --outfile=dist/files.js --sourcemap && esbuild src/interp.ts --bundle --format=esm --outfile=dist/interpolate.js --sourcemap",
+    "dev": "esbuild camber=src/main.ts files=src/files.ts interpolate=src/interp.ts --bundle --format=esm --sourcemap --outdir=dist --servedir=. --serve=127.0.0.1:8000 --watch --banner:js=\"new EventSource('/esbuild').addEventListener('change', () => location.reload())\"",
     "watch": "esbuild src/main.ts --bundle --format=esm --outfile=dist/camber.js --sourcemap --watch",
     "watch:files": "esbuild src/files.ts --bundle --format=esm --outfile=dist/files.js --sourcemap --watch",
     "watch:interp": "esbuild src/interp.ts --bundle --format=esm --outfile=dist/interpolate.js --sourcemap --watch",
