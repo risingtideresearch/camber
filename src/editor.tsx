@@ -9,7 +9,7 @@
 // resolves its element references at module-eval time) is pulled in lazily by EditorApp's boot
 // effect, after React has committed the markup — so those references resolve against a live DOM.
 import { createRoot } from "react-dom/client";
-import { EditorApp } from "./ui/EditorApp";
+import { EditorApp } from "./editor/EditorApp";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("editor: #root container not found");

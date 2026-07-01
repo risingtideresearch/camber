@@ -10,12 +10,12 @@ import {
   insertDesign,
   deleteDesign,
   type DesignRow,
-} from "./supabase";
-import { parseDocument, loadJsonText } from "./json";
-import { buildStep } from "./step";
-import { buildStl } from "./stl";
-import { resetModel } from "./model";
-import { buildPreviewSvg } from "./preview";
+} from "./core/supabase";
+import { parseDocument, loadJsonText } from "./core/json";
+import { buildStep } from "./core/step";
+import { buildStl } from "./core/stl";
+import { resetModel } from "./core/model";
+import { buildPreviewSvg } from "./core/preview";
 
 // Render a design's stored 3/4 wireframe (built in the editor at save time) as a card thumbnail. Using an
 // <img> with a data-URI keeps it self-contained and, crucially, script-disabled — so a preview string from

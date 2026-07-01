@@ -3,9 +3,9 @@
 import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { state, L, resetModel, prepare, weightsAt } from "../../src/model";
-import { loadJsonText } from "../../src/json";
-import { mapX, wY, WH } from "../../src/view";
+import { state, L, resetModel, prepare, weightsAt } from "../../src/core/model";
+import { loadJsonText } from "../../src/core/json";
+import { mapX, wY, WH } from "../../src/core/view";
 
 resetModel();
 if (process.env.CAMBER_DOC)

@@ -54,7 +54,7 @@ import {
   sideTabs,
   tplColor,
   cv3d,
-} from "./dom";
+} from "../editor/dom";
 import { trimmedHullGrid } from "./step";
 import {
   startDrag,

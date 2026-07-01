@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { View3DMode } from "../model";
+import type { View3DMode } from "../core/model";
 // Type-only import: erased at compile time, so it does NOT pull the imperative core (and thus
 // `dom.ts`, which resolves element refs at module-eval) in before the DOM is mounted. The actual
 // module is loaded via dynamic import() in the boot effect below, after React commits the markup.
