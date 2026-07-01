@@ -14,6 +14,7 @@
     "test": "npm run test:smooth && npm run test:centerline"
   },
   "devDependencies": {
+    "@types/node": "^26.0.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
