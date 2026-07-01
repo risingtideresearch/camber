@@ -23,7 +23,6 @@ jobs:
         with:
           node-version: 22
       - run: npm ci || npm install
-      # vite build emits the full site (all three pages + hashed bundles + sourcemaps) into dist/.
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
