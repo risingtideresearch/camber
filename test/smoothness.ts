@@ -10,7 +10,7 @@
 // stations — i.e. if the swept keel is no longer smooth. It runs at keel knuckle 0 (flat), 0.5, and 1 (V),
 // since the failure mode lives in the flattening path.
 //
-// Run with `npm run test:smooth` (esbuild bundles this to dist/ and runs it under node). Exit code is
+// Run with `npm run test:smooth` (tsx runs this directly under node). Exit code is
 // non-zero on any failure so it can gate CI.
 
 import { resetModel, prepare, state, L, sweptSection } from "../src/model.js";

@@ -17,7 +17,7 @@
 // the bottom UP into an inflection — a depth reversal — so REVERSAL_MM caps how far the depth may dip below
 // its running max on the way to the keel.
 //
-// Run with `npm run test:centerline` (esbuild bundles to dist/ and runs under node). Non-zero exit on any
+// Run with `npm run test:centerline` (tsx runs this directly under node). Non-zero exit on any
 // failure so it can gate CI alongside the keel-smoothness test.
 
 import { resetModel, prepare, L, sweptSection, stationAt } from "../src/model.js";

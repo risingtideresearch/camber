@@ -23,17 +23,11 @@ jobs:
         with:
           node-version: 22
       - run: npm ci || npm install
+      # vite build emits the full site (all three pages + hashed bundles + sourcemaps) into dist/.
       - run: npm run build
-      - name: Assemble site
-        run: |
-          mkdir -p _site/dist
-          # all three pages (index = design library, editor, interpolate) and their bundles + sourcemaps
-          cp ./*.html _site/
-          cp dist/*.js _site/dist/
-          cp dist/*.js.map _site/dist/ 2>/dev/null || true
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: dist
 
   deploy:
     needs: build

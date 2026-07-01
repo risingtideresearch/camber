@@ -1,7 +1,7 @@
 // ---------- Supabase: cloud storage for hull designs ----------
 //
-// A thin wrapper over the PostgREST REST endpoint (no @supabase/supabase-js dependency — this app is a
-// plain esbuild bundle, and a few fetch() calls keep it that way). The `designs` table holds one row per
+// A thin wrapper over the PostgREST REST endpoint (no @supabase/supabase-js dependency — a few fetch()
+// calls keep this app a small, dependency-light bundle). The `designs` table holds one row per
 // saved HullDocument: { id, name, document (jsonb), created_at }. Access is open (RLS allows the anon role
 // to select/insert/update/delete), so the publishable anon key below is safe to ship in the client.
 
