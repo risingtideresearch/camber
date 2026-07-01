@@ -1,0 +1,10 @@
+{
+  // Standalone config so IDEs can typecheck these Node render scripts with the app's real
+  // compiler options (bundler resolution, DOM+node types) instead of fragile inferred defaults.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["*.ts"]
+}

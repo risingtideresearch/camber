@@ -4,8 +4,9 @@
 import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { state, L, resetModel, prepare, clippedSection, forwardLimit, transomEdge, type Vec3 } from "../../src/model.js";
+import { state, L, resetModel, prepare, clippedSection, forwardLimit, transomEdge } from "../../src/model.js";
 import { loadJsonText } from "../../src/json.js";
+import type { Vec3 } from "../../src/math.js";
 import { mapX, zScreenP, PH } from "../../src/view.js";
 
 const doc = process.env.CAMBER_DOC;

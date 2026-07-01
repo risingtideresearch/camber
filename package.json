@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tools/preview",
     "test:smooth": "tsx test/smoothness.ts",
     "test:centerline": "tsx test/centerline.ts",
     "test": "npm run test:smooth && npm run test:centerline"

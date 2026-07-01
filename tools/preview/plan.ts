@@ -4,7 +4,7 @@
 import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { state, L, resetModel, prepare, sweptSection, forwardLimit, type Vec3 } from "../../src/model.js";
+import { state, L, resetModel, prepare, sweptSection, forwardLimit } from "../../src/model.js";
 import { loadJsonText } from "../../src/json.js";
 
 const doc = process.env.CAMBER_DOC;

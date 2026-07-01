@@ -16,9 +16,10 @@ import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { readFileSync } from "node:fs";
-import { state, L, resetModel, prepare, sweptSection, forwardLimit, immersion, worldZ, weightsAt, frameAt, xTransom, type Vec3 } from "../../src/model.js";
+import { state, L, resetModel, prepare, sweptSection, forwardLimit, worldZ, weightsAt, frameAt, xTransom } from "../../src/model.js";
 import { trimmedHullGrid, buildStep } from "../../src/step.js";
 import { loadJsonText } from "../../src/json.js";
+import type { Vec3 } from "../../src/math.js";
 
 type P2 = { x: number; y: number; d: number };
 
