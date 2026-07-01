@@ -1,3 +1,5 @@
+import "./ViewStrips.css";
+
 // The blend / plan / profile strips. Empty SVGs that `render.ts` draws into (by id); the controller
 // overrides their viewBox heights at boot from the isometric-scale constants (LH/PH/WH in view.ts).
 // React renders them once with the static placeholder viewBoxes and never reconciles their children.

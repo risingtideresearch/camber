@@ -1,3 +1,5 @@
+import "./TrimControls.css";
+
 // The design-waterline and deck-rake sliders. React-owned: the values are React state (mirroring
 // `state.waterline` / `state.deckRake`), and each change pushes to the controller, which mutates the
 // model and re-renders. These ids touch no imperative code, so React controls them fully.

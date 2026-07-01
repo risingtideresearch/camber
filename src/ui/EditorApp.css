@@ -1,0 +1,116 @@
+/* Editor-wide element primitives (buttons, svgs), the app shell layout, the top app bar, and a couple
+   of generic primitives (.card, .tabsep) shared by more than one component. Component-specific rules
+   live in the CSS file next to each component. */
+
+svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: none;
+}
+
+button {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+  color: #4a5568;
+}
+button:hover {
+  background: #f1f5f9;
+}
+button.on {
+  background: var(--ink);
+  color: #fff;
+  border-color: var(--ink);
+}
+button.on:hover {
+  background: var(--ink);
+}
+
+/* app shell: everything fits the window — a full-width toolbar across the very top, then two columns:
+   the LEFT column stacks the 3D view, the plan, and the profile; the RIGHT column stacks the tabbed
+   section editor (a true square) and the vertical blend control. No page scroll. */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+} /* drawing tool: don't select text while dragging */
+.main {
+  display: flex;
+  gap: 14px;
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 14px 24px;
+  justify-content: center;
+}
+/* left column: 3D (flexes to fill) above the plan and profile strips (sized by their isometric aspect) */
+.leftcol {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* right column: its width is the square's side (set by fitLayout in main.ts); the section editor sits on
+   top as a true square, the blend control fills the rest below it. */
+.rightcol {
+  flex: 0 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* the toolbar: a single full-width row across the very top of the app, so the section editor below can
+   own the whole right column. Wraps to a second row only on a narrow window. */
+.appbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.appbar button {
+  padding: 6px 10px;
+}
+.appbar .selinfo {
+  gap: 8px;
+} /* contextual selection info, constant width — no reflow on select */
+.appbar .sel-label {
+  min-width: 92px;
+} /* reserve room for "No point selected" so the bar doesn't jump */
+.appbar .sel-knuckle {
+  flex: 0 0 auto;
+  min-width: 120px;
+}
+.appbar .sel-knuckle input {
+  flex: 0 0 66px;
+  width: 66px;
+}
+.appbar .ctl input[type="range"] {
+  width: 84px;
+}
+
+/* generic card surface, shared by the side panel and the cut panel */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+/* thin vertical divider between app-bar groups */
+.tabsep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--line);
+  margin: 2px 3px;
+}

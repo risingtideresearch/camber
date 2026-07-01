@@ -1,3 +1,5 @@
+import "./DesignBar.css";
+
 // The right-aligned design actions: the editable name, the save-state text, and Save / Revert /
 // Close. React-owned. A single Save button does both roles — it reads "Save" while the title still
 // matches the saved design (overwrite) and flips to "Save As…" once the name is changed (insert a

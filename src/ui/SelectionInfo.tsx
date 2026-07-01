@@ -1,3 +1,5 @@
+import "./SelectionInfo.css";
+
 // The contextual selection readout: label, knuckle slider, delete. Static markup — `interaction.ts`
 // owns it entirely (`refreshSelUI()` sets `#selLabel` text + the disabled states / slider value, and
 // `initInteraction()` wires the `#selKnuckle` input and `#selDelete` click). The inputs are left

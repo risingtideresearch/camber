@@ -1,3 +1,5 @@
+import "./CutPanel.css";
+
 // The live cut-station panel. `render.ts` draws into `#svgCut` and writes the `#profVal` readout
 // (draft / WL beam) by id, so both are static here.
 export function CutPanel() {

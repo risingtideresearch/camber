@@ -1,0 +1,31 @@
+.toolbar {
+  display: inline-flex;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.toolbar .tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  padding: 6px 12px;
+}
+.toolbar .tool:first-child {
+  border-left: 0;
+}
+.toolbar .tool svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+.toolbar .tool.active {
+  background: var(--ink);
+  color: #fff;
+}
+.toolbar .tool.active:hover {
+  background: var(--ink);
+}

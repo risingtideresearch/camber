@@ -1,0 +1,18 @@
+/* labeled slider control ("WL", "Rake", "Keel", …). Shared with the keel row in SidePanel, which
+   adds its own layout overrides on top of this base. */
+.ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--mut);
+}
+.ctl input[type="range"] {
+  width: 92px;
+  vertical-align: middle;
+}
+.ctl .ctlval {
+  font-weight: 600;
+  color: var(--ink);
+  min-width: 38px;
+}

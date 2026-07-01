@@ -1,4 +1,5 @@
 import type { View3DMode } from "../model.js";
+import "./ThreeDView.css";
 
 // The 3D viewport: the WebGL canvas and the lines-plan SVG overlay are drawn into by `render.ts`
 // (and `interaction.ts` handles drag-rotate / scroll-zoom on `#cv3d`), so both are static. The

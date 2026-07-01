@@ -1,3 +1,5 @@
+import "./SidePanel.css";
+
 // The section-template editor: the tab strip and the per-template editors are built imperatively by
 // `render.ts` into the empty `#sideTabs` / `#templateCards` containers; the keel-knuckle slider is
 // driven by `interaction.ts` (`refreshKeelUI()` + the `#keelRange` input listener). All static here —

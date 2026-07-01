@@ -1,0 +1,37 @@
+.selinfo {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.selinfo .sel-label {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 13px;
+}
+.selinfo .sel-label.muted {
+  color: var(--mut);
+  font-weight: 400;
+}
+.selinfo .sel-knuckle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--mut);
+}
+.selinfo .sel-knuckle input {
+  flex: 1;
+  width: auto;
+  vertical-align: middle;
+}
+.selinfo .sel-knuckle:has(input:disabled) {
+  opacity: 0.45;
+}
+#selDelete {
+  align-self: flex-start;
+}
+#selDelete:disabled,
+#selKnuckle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

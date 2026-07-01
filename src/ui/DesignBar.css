@@ -1,0 +1,46 @@
+.toolacts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+} /* right-align actions; wraps only if it can't fit */
+
+/* the open-design name: an editable title at the start of the action group */
+.docname {
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px 8px;
+  max-width: 190px;
+}
+.docname::placeholder {
+  color: var(--mut);
+  font-weight: 400;
+}
+.docname:hover {
+  border-color: var(--line);
+}
+.docname:focus {
+  outline: none;
+  border-color: #2b6cb0;
+  background: #fff;
+}
+.docname.dirty {
+  border-color: #dd9b20;
+} /* amber edge while there are unsaved edits */
+
+/* save status text next to the Save button */
+.savestate {
+  font-size: 12px;
+  min-width: 90px;
+  color: var(--mut);
+}
+.savestate.dirty {
+  color: #b7791f;
+}
+.savestate.saved {
+  color: #2f855a;
+}

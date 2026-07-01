@@ -1,3 +1,5 @@
+import "./Toolbar.css";
+
 // The edit-tool toolbar (Select / Add). Rendered as static markup with the exact ids/classes the
 // imperative core expects: `interaction.ts`'s `initInteraction()` attaches the click handler to
 // `#toolbar` and `setTool()` toggles the `.active` class. React renders these buttons once with

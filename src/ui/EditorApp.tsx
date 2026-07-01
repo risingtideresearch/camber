@@ -12,6 +12,7 @@ import { ThreeDView } from "./ThreeDView.js";
 import { ViewStrips } from "./ViewStrips.js";
 import { SidePanel } from "./SidePanel.js";
 import { CutPanel } from "./CutPanel.js";
+import "./EditorApp.css";
 
 type Controller = typeof import("./editorController.js");
 
