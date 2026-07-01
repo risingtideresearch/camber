@@ -12,7 +12,17 @@ import {
   type ActiveTarget,
   type WeightCP,
 } from "./model.js";
-import { invX, invY, invZp, invN, invD, invWY, YMAX, YMIN, ZTRIMMIN } from "./view.js";
+import {
+  invX,
+  invY,
+  invZp,
+  invN,
+  invD,
+  invWY,
+  YMAX,
+  YMIN,
+  ZTRIMMIN,
+} from "./view.js";
 import { svgL, svgP, svgW, tplCards } from "./dom.js";
 import { render, draw3d, activeTemplateIndex } from "./render.js";
 
@@ -41,7 +51,11 @@ type DragSpec = {
 
 // map a client (screen) point to the svg's viewBox coordinates via its CTM — handles any CSS scaling and
 // preserveAspectRatio letterboxing (the editor svgs are fit-to-box, so their box ≠ their viewBox aspect)
-function svgPoint(svg: SVGSVGElement, clientX: number, clientY: number): [number, number] {
+function svgPoint(
+  svg: SVGSVGElement,
+  clientX: number,
+  clientY: number,
+): [number, number] {
   const m = svg.getScreenCTM();
   if (!m) return [0, 0];
   const pt = svg.createSVGPoint();
@@ -51,7 +65,11 @@ function svgPoint(svg: SVGSVGElement, clientX: number, clientY: number): [number
   return [p.x, p.y];
 }
 
-export function startDrag(d: DragSpec, svg: SVGSVGElement, e: PointerEvent): void {
+export function startDrag(
+  d: DragSpec,
+  svg: SVGSVGElement,
+  e: PointerEvent,
+): void {
   drag = { ...d, svg, px0: e.clientX };
   // a drag on a control point selects it (persistently); the x-cut slider / rotation leave the selection
   if (d.kind === "sheer") select("plan", d.idx!);
@@ -105,7 +123,8 @@ function moveTransom(d: Drag, vx: number, vy: number): void {
 // drag a station's blend in the weight strip: only the simplex split (the band boundary). x is shared with
 // the plan curve and is edited there, so the blend strip has no x-handle.
 function moveWeight(d: Drag, vy: number): void {
-  if (d.wpart !== "x") setWeightBoundary(state.sheer.cp[d.idx!], d.bnd!, clamp(invWY(vy), 0, 1));
+  if (d.wpart !== "x")
+    setWeightBoundary(state.sheer.cp[d.idx!], d.bnd!, clamp(invWY(vy), 0, 1));
 }
 
 // The weight CP carries a barycentric vector w ∈ Δ^{K−1}. We edit it through its cumulative boundaries
@@ -202,9 +221,17 @@ function addTemplatePoint(ti: number, n: number, d: number): number {
     if (j === ti) {
       const dlo = Math.min(a.d, b.d),
         dhi = Math.max(a.d, b.d);
-      tpl.splice(best, 0, { n: clamp(n, NMIN, NMAX), d: clamp(d, dlo, dhi), k: 0 });
+      tpl.splice(best, 0, {
+        n: clamp(n, NMIN, NMAX),
+        d: clamp(d, dlo, dhi),
+        k: 0,
+      });
     } else {
-      tpl.splice(best, 0, { n: lerp(a.n, b.n, bt), d: lerp(a.d, b.d, bt), k: lerp(a.k, b.k, bt) });
+      tpl.splice(best, 0, {
+        n: lerp(a.n, b.n, bt),
+        d: lerp(a.d, b.d, bt),
+        k: lerp(a.k, b.k, bt),
+      });
     }
   });
   return best;
@@ -219,7 +246,6 @@ function removeStationPoint(idx: number): void {
 // lands on it (stations are unified, so this adds the plan handle too).
 const addWeightPoint = (x: number): number => addStation(x, state.sheer.yf(x));
 const removeWeightPoint = removeStation;
-
 
 // ---------- add / remove whole templates ----------
 // a new template starts as a copy of the last and enters every weight CP at zero weight, so the hull is
@@ -296,9 +322,24 @@ export function clearSelection(): void {
 // weight curve keeps its two ends; the transom is a fixed pair of points.
 function canDelete(s: { tgt: ActiveTarget; idx: number }): boolean {
   if (s.tgt === "transom") return false;
-  if (s.tgt === "plan") return state.sheer.cp.length > 3 && s.idx > 0 && s.idx < state.sheer.cp.length - 1;
-  if (s.tgt === "trim") return state.sheer.trim.length > 3 && s.idx > 0 && s.idx < state.sheer.trim.length - 1;
-  if (s.tgt === "weight") return state.sheer.cp.length > 3 && s.idx > 0 && s.idx < state.sheer.cp.length - 1;
+  if (s.tgt === "plan")
+    return (
+      state.sheer.cp.length > 3 &&
+      s.idx > 0 &&
+      s.idx < state.sheer.cp.length - 1
+    );
+  if (s.tgt === "trim")
+    return (
+      state.sheer.trim.length > 3 &&
+      s.idx > 0 &&
+      s.idx < state.sheer.trim.length - 1
+    );
+  if (s.tgt === "weight")
+    return (
+      state.sheer.cp.length > 3 &&
+      s.idx > 0 &&
+      s.idx < state.sheer.cp.length - 1
+    );
   const len = state.templates[0].length; // template
   return len > 3 && s.idx > 0 && s.idx < len - 1;
 }
@@ -310,7 +351,8 @@ function hasKnuckle(s: { tgt: ActiveTarget; idx: number }): boolean {
 }
 
 function labelFor(s: { tgt: ActiveTarget; idx: number; ti?: number }): string {
-  if (s.tgt === "template") return `Template ${(s.ti ?? 0) + 1} · point ${s.idx + 1}`;
+  if (s.tgt === "template")
+    return `Template ${(s.ti ?? 0) + 1} · point ${s.idx + 1}`;
   if (s.tgt === "weight") return `Blend point ${s.idx + 1}`;
   const name = { plan: "Sheer (plan)", trim: "Sheer trim", transom: "Transom" }[
     s.tgt as "plan" | "trim" | "transom"
@@ -394,15 +436,27 @@ export function stnPointDown(
   }
   startDrag({ kind: "stn", ti, idx }, svg, e);
 }
-export function sheerPointDown(idx: number, svg: SVGSVGElement, e: PointerEvent): void {
+export function sheerPointDown(
+  idx: number,
+  svg: SVGSVGElement,
+  e: PointerEvent,
+): void {
   e.stopPropagation();
   startDrag({ kind: "sheer", idx }, svg, e);
 }
-export function trimPointDown(idx: number, svg: SVGSVGElement, e: PointerEvent): void {
+export function trimPointDown(
+  idx: number,
+  svg: SVGSVGElement,
+  e: PointerEvent,
+): void {
   e.stopPropagation();
   startDrag({ kind: "trim", idx }, svg, e);
 }
-export function transomPointDown(idx: number, svg: SVGSVGElement, e: PointerEvent): void {
+export function transomPointDown(
+  idx: number,
+  svg: SVGSVGElement,
+  e: PointerEvent,
+): void {
   e.stopPropagation();
   startDrag({ kind: "transom", idx }, svg, e);
 }
@@ -420,7 +474,11 @@ export function weightHandleDown(
 }
 
 // background pointerdown on a (dynamic) template editor: add a point in "add" mode, else clear selection
-export function templateBgDown(ti: number, svg: SVGSVGElement, e: PointerEvent): void {
+export function templateBgDown(
+  ti: number,
+  svg: SVGSVGElement,
+  e: PointerEvent,
+): void {
   if (state.tool === "add") {
     const [vx, vy] = vbCoords(svg, e),
       idx = addTemplatePoint(ti, invN(vx), invD(vy));
@@ -465,7 +523,11 @@ export function initInteraction(): void {
     if (!drag) return;
     if (drag.kind === "rot") {
       state.rot.yaw = drag.yaw0! + (e.clientX - drag.px0!) * 0.008;
-      state.rot.pitch = clamp(drag.pitch0! + (e.clientY - drag.py0!) * 0.008, -1.45, 1.45);
+      state.rot.pitch = clamp(
+        drag.pitch0! + (e.clientY - drag.py0!) * 0.008,
+        -1.45,
+        1.45,
+      );
       draw3d(false); // rotation only redraws GL (mesh is cached)
       return;
     }
@@ -502,13 +564,19 @@ export function initInteraction(): void {
       deleteSelected();
     }
   });
-  document.getElementById("selDelete")!.addEventListener("click", deleteSelected);
+  document
+    .getElementById("selDelete")!
+    .addEventListener("click", deleteSelected);
   document
     .getElementById("selKnuckle")!
-    .addEventListener("input", (e) => setSelectedKnuckle(parseFloat((e.target as HTMLInputElement).value)));
+    .addEventListener("input", (e) =>
+      setSelectedKnuckle(parseFloat((e.target as HTMLInputElement).value)),
+    );
   document
     .getElementById("keelRange")!
-    .addEventListener("input", (e) => setActiveKeel(parseFloat((e.target as HTMLInputElement).value)));
+    .addEventListener("input", (e) =>
+      setActiveKeel(parseFloat((e.target as HTMLInputElement).value)),
+    );
 
   // editor backgrounds: in "add" mode click empty space to add a point there (then back to select, with
   // the new point selected); in "select" mode an empty click clears the selection.
@@ -527,8 +595,14 @@ export function initInteraction(): void {
       }
     });
   };
-  onBg(svgL, (vx, vy) => ({ tgt: "plan", idx: addSheerPoint(invX(vx), invY(vy)) }));
-  onBg(svgP, (vx, vy) => ({ tgt: "trim", idx: addTrimPoint(invX(vx), invZp(vy)) }));
+  onBg(svgL, (vx, vy) => ({
+    tgt: "plan",
+    idx: addSheerPoint(invX(vx), invY(vy)),
+  }));
+  onBg(svgP, (vx, vy) => ({
+    tgt: "trim",
+    idx: addTrimPoint(invX(vx), invZp(vy)),
+  }));
   // the weight editor (persistent element): add a blend control point at the clicked x
   svgW.addEventListener("pointerdown", (e) => {
     if (state.tool === "add") {

@@ -76,9 +76,17 @@ export interface ParsedDoc {
 
 // ---------- encode: absolute model coords → increment-encoded on-disk form ----------
 const encPlan = (cp: SheerCP[]): PlanPoint[] =>
-  cp.map((p, i) => ({ dx: i === 0 ? p.x : p.x - cp[i - 1].x, y: p.y, w: p.w.slice() }));
+  cp.map((p, i) => ({
+    dx: i === 0 ? p.x : p.x - cp[i - 1].x,
+    y: p.y,
+    w: p.w.slice(),
+  }));
 const encTrim = (trim: TrimCP[]): TrimPoint[] =>
-  trim.map((p, i) => ({ dx: i === 0 ? p.x : p.x - trim[i - 1].x, depth: -p.z, k: p.k }));
+  trim.map((p, i) => ({
+    dx: i === 0 ? p.x : p.x - trim[i - 1].x,
+    depth: -p.z,
+    k: p.k,
+  }));
 const encSection = (pts: StationCP[]): SectionPoint[] =>
   pts.map((p, i) => ({ dd: i === 0 ? 0 : p.d - pts[i - 1].d, n: p.n, k: p.k }));
 function encTransom(t: TransomCP[]): Transom {
@@ -166,11 +174,13 @@ export function downloadJson(): void {
 // ---------- import / parse ----------
 // structural validators that throw a clear message rather than loading a broken model
 function num(v: unknown, ctx: string): number {
-  if (typeof v !== "number" || !isFinite(v)) throw new Error(`${ctx} must be a finite number`);
+  if (typeof v !== "number" || !isFinite(v))
+    throw new Error(`${ctx} must be a finite number`);
   return v;
 }
 function obj(v: unknown, ctx: string): Record<string, unknown> {
-  if (typeof v !== "object" || v === null || Array.isArray(v)) throw new Error(`${ctx} must be an object`);
+  if (typeof v !== "object" || v === null || Array.isArray(v))
+    throw new Error(`${ctx} must be an object`);
   return v as Record<string, unknown>;
 }
 // parse a fixed-length array of point objects, applying `field` to each (already an object)
@@ -181,14 +191,17 @@ function points<T>(
   field: (o: Record<string, unknown>, i: number) => T,
 ): T[] {
   if (!Array.isArray(v)) throw new Error(`${ctx} must be an array`);
-  if (v.length !== count) throw new Error(`${ctx} must have ${count} points (matching the topology)`);
+  if (v.length !== count)
+    throw new Error(`${ctx} must have ${count} points (matching the topology)`);
   return v.map((p, i) => field(obj(p, `${ctx}[${i}]`), i));
 }
 // a length-K barycentric weight vector of finite numbers (validity — simplex membership — is enforced
 // on decode by clamping negatives and renormalizing, exactly as a convex blend would stay in the simplex)
 function weightVec(v: unknown, ctx: string, k: number): number[] {
   if (!Array.isArray(v) || v.length !== k)
-    throw new Error(`${ctx} must be an array of ${k} weights (one per template)`);
+    throw new Error(
+      `${ctx} must be an array of ${k} weights (one per template)`,
+    );
   return v.map((x, i) => num(x, `${ctx}[${i}]`));
 }
 // project a weight vector onto the simplex (clamp float noise away, renormalize to Σ = 1)
@@ -204,7 +217,8 @@ function normW(w: number[]): number[] {
 // the default straight blend path: full weight on template 0 at the stern, handing off to the last
 // template at the bow — the multi-template analog of the old linear x/L tween (an edge of the simplex)
 function linearPath(k: number, length: number): WeightCP[] {
-  const e = (j: number) => Array.from({ length: k }, (_, i) => (i === j ? 1 : 0));
+  const e = (j: number) =>
+    Array.from({ length: k }, (_, i) => (i === j ? 1 : 0));
   return [
     { x: 0, w: e(0) },
     { x: length, w: e(k - 1) },
@@ -214,7 +228,11 @@ function linearPath(k: number, length: number): WeightCP[] {
 // decode one hull — a flat document, or one entry of a legacy `variants` array — to absolute model
 // coordinates. Control-point counts are taken from the arrays themselves; `docLength` only places the
 // default blend handoff for legacy documents that lack per-station weights.
-function decodeVariant(v: Record<string, unknown>, c: string, docLength: number): HullData {
+function decodeVariant(
+  v: Record<string, unknown>,
+  c: string,
+  docLength: number,
+): HullData {
   // templates first — they fix the template count K and the shared section-point count
   const rawTpls: unknown[] =
     "templates" in v
@@ -226,9 +244,12 @@ function decodeVariant(v: Record<string, unknown>, c: string, docLength: number)
       : "aft" in v && "fore" in v
         ? [v.aft, v.fore] // legacy aft/fore pair → two templates
         : (() => {
-            throw new Error(`${c} has no templates (and no legacy aft/fore pair)`);
+            throw new Error(
+              `${c} has no templates (and no legacy aft/fore pair)`,
+            );
           })();
-  if (!Array.isArray(rawTpls[0])) throw new Error(`${c}.templates[0] must be an array of section points`);
+  if (!Array.isArray(rawTpls[0]))
+    throw new Error(`${c}.templates[0] must be an array of section points`);
   const nSec = rawTpls[0].length;
   if (nSec < 2) throw new Error(`${c} sections must have ≥ 2 points`);
   const nTpl = rawTpls.length;
@@ -249,7 +270,9 @@ function decodeVariant(v: Record<string, unknown>, c: string, docLength: number)
     points(v.sheerPlan, `${c}.sheerPlan`, v.sheerPlan.length, (o, i) => ({
       dx: num(o.dx, `${c}.sheerPlan[${i}].dx`),
       y: num(o.y, `${c}.sheerPlan[${i}].y`),
-      w: Array.isArray(o.w) ? weightVec(o.w, `${c}.sheerPlan[${i}].w`, nTpl) : undefined,
+      w: Array.isArray(o.w)
+        ? weightVec(o.w, `${c}.sheerPlan[${i}].w`, nTpl)
+        : undefined,
     })),
   );
 
@@ -265,7 +288,9 @@ function decodeVariant(v: Record<string, unknown>, c: string, docLength: number)
 
   // keelK: optional per-template keel knuckle; missing/short → 0 (smooth)
   const keelK = Array.from({ length: nTpl }, (_, j) =>
-    Array.isArray(v.keelK) && typeof v.keelK[j] === "number" ? clamp(v.keelK[j] as number, 0, 1) : 0,
+    Array.isArray(v.keelK) && typeof v.keelK[j] === "number"
+      ? clamp(v.keelK[j] as number, 0, 1)
+      : 0,
   );
 
   // blend weights: unified (already on each station) or MIGRATE a legacy document — a separate `weights`
@@ -294,7 +319,14 @@ function decodeVariant(v: Record<string, unknown>, c: string, docLength: number)
     transomRake: num(to.transomRake, `${c}.transom.transomRake`),
   });
 
-  return { name: typeof v.name === "string" ? v.name : undefined, cp, trim, transom, templates, keelK };
+  return {
+    name: typeof v.name === "string" ? v.name : undefined,
+    cp,
+    trim,
+    transom,
+    templates,
+    keelK,
+  };
 }
 
 // scale a decoded hull's length-dimensioned coordinates by `s` — used to lift a legacy 4000-unit document to
@@ -315,12 +347,21 @@ export function parseDocument(text: string): ParsedDoc {
   const doc = obj(JSON.parse(text), "document");
   const legacy = "variants" in doc; // legacy multi-hull documents wrap variants in a topology/variants block
   if (!legacy && !("sheerPlan" in doc))
-    throw new Error("not a hull document (no sheerPlan, and no legacy variants)");
+    throw new Error(
+      "not a hull document (no sheerPlan, and no legacy variants)",
+    );
   const docLength =
-    typeof doc.length === "number" && isFinite(doc.length) && doc.length > 0 ? doc.length : L;
-  const waterline = typeof doc.waterline === "number" && isFinite(doc.waterline) ? doc.waterline : 0;
+    typeof doc.length === "number" && isFinite(doc.length) && doc.length > 0
+      ? doc.length
+      : L;
+  const waterline =
+    typeof doc.waterline === "number" && isFinite(doc.waterline)
+      ? doc.waterline
+      : 0;
   const deckRakeDeg =
-    typeof doc.deckRakeDeg === "number" && isFinite(doc.deckRakeDeg) ? doc.deckRakeDeg : 0;
+    typeof doc.deckRakeDeg === "number" && isFinite(doc.deckRakeDeg)
+      ? doc.deckRakeDeg
+      : 0;
 
   const rawList: Record<string, unknown>[] = legacy
     ? Array.isArray(doc.variants) && doc.variants.length
@@ -329,7 +370,9 @@ export function parseDocument(text: string): ParsedDoc {
           throw new Error("variants must be a non-empty array");
         })()
     : [doc];
-  const variants = rawList.map((v, i) => decodeVariant(v, legacy ? `variants[${i}]` : "document", docLength));
+  const variants = rawList.map((v, i) =>
+    decodeVariant(v, legacy ? `variants[${i}]` : "document", docLength),
+  );
 
   // normalize to the model's length (decoded coordinates are in the document's units)
   const s = L / docLength;
@@ -390,7 +433,9 @@ export function importJson(after: () => void): void {
               `Open the interpolation viewer to blend all ${n}.`,
           );
       } catch (e) {
-        alert("JSON import failed: " + (e instanceof Error ? e.message : String(e)));
+        alert(
+          "JSON import failed: " + (e instanceof Error ? e.message : String(e)),
+        );
       }
     };
     reader.readAsText(file);

@@ -14,7 +14,12 @@
 import { clamp } from "./math.js";
 import { state, L, prepare, type Sheer, type StationCP } from "./model.js";
 import { draw3d } from "./render.js";
-import { buildJson, parseDocument, type HullData, type ParsedDoc } from "./json.js";
+import {
+  buildJson,
+  parseDocument,
+  type HullData,
+  type ParsedDoc,
+} from "./json.js";
 import { promoteFamily } from "./promote.js";
 import { hydrostatics, type Hydro } from "./hydro.js";
 import { getDesign, insertDesign, updateDesign } from "./supabase.js";
@@ -31,7 +36,13 @@ interface Hull {
 const hulls: Hull[] = [];
 let famLength: number | null = null;
 let promoted = false; // did the last load need topology promotion? (surfaced in the status line)
-const palette: string[] = ["#2b6cb0", "#dd6b20", "#0f766e", "#7c3aed", "#b45309"];
+const palette: string[] = [
+  "#2b6cb0",
+  "#dd6b20",
+  "#0f766e",
+  "#7c3aed",
+  "#b45309",
+];
 
 // the only hard requirement is a shared length (the model's fixed L, so this never actually trips for hulls
 // authored in this tool). Control-point counts may differ — promoteFamily lifts them to a common topology.
@@ -41,7 +52,9 @@ function checkLength(length: number): void {
     return;
   }
   if (Math.abs(length - famLength) > 1e-6)
-    throw new Error(`length mismatch — ${length} vs the family's ${famLength}. Lengths must match.`);
+    throw new Error(
+      `length mismatch — ${length} vs the family's ${famLength}. Lengths must match.`,
+    );
 }
 
 // ---------- the blend: Σ wᵢ·Vᵢ componentwise over the shared topology → the shared model state ----------
@@ -53,7 +66,9 @@ function blend(): void {
     x: hulls.reduce((a, h, k) => a + w[k] * h.data.cp[i].x, 0),
     y: hulls.reduce((a, h, k) => a + w[k] * h.data.cp[i].y, 0),
     // the blend weights ride on the station — a convex blend of simplex points is itself in the simplex
-    w: cp0.w.map((_, j) => hulls.reduce((a, h, k) => a + w[k] * h.data.cp[i].w[j], 0)),
+    w: cp0.w.map((_, j) =>
+      hulls.reduce((a, h, k) => a + w[k] * h.data.cp[i].w[j], 0),
+    ),
   }));
   const trim = hulls[0].data.trim.map((_, i) => ({
     x: hulls.reduce((a, h, k) => a + w[k] * h.data.trim[i].x, 0),
@@ -98,25 +113,45 @@ function renderMetrics(): void {
     body.innerHTML = `<div class="mrow"><span class="mk">—</span><span class="mv">load hulls</span></div>`;
     return;
   }
-  const loa = parseFloat((document.getElementById("loaInput") as HTMLInputElement)?.value ?? "") || 0;
-  const u = ((document.getElementById("unitSel") as HTMLSelectElement)?.value ?? "m") as "m" | "ft";
-  const water = ((document.getElementById("waterSel") as HTMLSelectElement)?.value ?? "salt") as "salt" | "fresh";
+  const loa =
+    parseFloat(
+      (document.getElementById("loaInput") as HTMLInputElement)?.value ?? "",
+    ) || 0;
+  const u = ((document.getElementById("unitSel") as HTMLSelectElement)?.value ??
+    "m") as "m" | "ft";
+  const water = ((document.getElementById("waterSel") as HTMLSelectElement)
+    ?.value ?? "salt") as "salt" | "fresh";
   const s = loa > 0 ? loa / L : 0; // chosen units per model unit
-  const rho = u === "m" ? (water === "salt" ? 1.025 : 1.0) : water === "salt" ? 64.0 : 62.4; // t/m³ or lb/ft³
+  const rho =
+    u === "m"
+      ? water === "salt"
+        ? 1.025
+        : 1.0
+      : water === "salt"
+        ? 64.0
+        : 62.4; // t/m³ or lb/ft³
   const amid = (h.xAft + h.xFwd) / 2;
   const lcbPct = ((h.lcb - amid) / h.lwl) * 100; // + fwd of amidships
   const slender = h.vol > 0 ? h.lwl / Math.cbrt(h.vol) : NaN; // unitless (model units cancel)
 
-  const num = (v: number, d = 2): string => (Number.isFinite(v) ? v.toFixed(d) : "—");
-  const len = (v: number): string => (s ? `${(v * s).toFixed(v * s < 10 ? 2 : 1)} ${u}` : "—");
-  const area = (v: number): string => (s ? `${(v * s * s).toFixed(2)} ${u}²` : "—");
+  const num = (v: number, d = 2): string =>
+    Number.isFinite(v) ? v.toFixed(d) : "—";
+  const len = (v: number): string =>
+    s ? `${(v * s).toFixed(v * s < 10 ? 2 : 1)} ${u}` : "—";
+  const area = (v: number): string =>
+    s ? `${(v * s * s).toFixed(2)} ${u}²` : "—";
   const rows: string[] = [];
-  const sec = (t: string): void => void rows.push(`<div class="msec">${t}</div>`);
+  const sec = (t: string): void =>
+    void rows.push(`<div class="msec">${t}</div>`);
   const row = (k: string, v: string): void =>
-    void rows.push(`<div class="mrow"><span class="mk">${k}</span><span class="mv">${v}</span></div>`);
+    void rows.push(
+      `<div class="mrow"><span class="mk">${k}</span><span class="mv">${v}</span></div>`,
+    );
 
   if (!h.validWaterplane)
-    rows.push(`<div class="mnote">Waterline sits above the sheer — no waterplane. Lower the design waterline.</div>`);
+    rows.push(
+      `<div class="mnote">Waterline sits above the sheer — no waterplane. Lower the design waterline.</div>`,
+    );
   sec("Dimensions");
   row("LWL", len(h.lwl));
   row("Beam (WL)", len(h.bwl));
@@ -128,7 +163,12 @@ function renderMetrics(): void {
   row("C_w waterplane", num(h.cw, 3));
   sec("Displacement");
   row("∇ volume", s ? `${(h.vol * s ** 3).toFixed(2)} ${u}³` : "—");
-  row("Δ displacement", s ? `${(h.vol * s ** 3 * rho * (u === "m" ? 1 : 1 / 2240)).toFixed(3)} ${u === "m" ? "t" : "LT"}` : "—");
+  row(
+    "Δ displacement",
+    s
+      ? `${(h.vol * s ** 3 * rho * (u === "m" ? 1 : 1 / 2240)).toFixed(3)} ${u === "m" ? "t" : "LT"}`
+      : "—",
+  );
   row("Wetted area", area(h.wettedArea));
   sec("Stability · geometry");
   row("KB", len(h.kb));
@@ -138,11 +178,24 @@ function renderMetrics(): void {
   row("L / B", num(h.lwl / h.bwl, 2));
   row("B / T", num(h.bwl / h.draft, 2));
   row("L / ∇⅓", num(slender, 2));
-  row("LCB", Number.isFinite(lcbPct) ? `${Math.abs(lcbPct).toFixed(1)}% ${lcbPct >= 0 ? "fwd" : "aft"}` : "—");
-  row("Deadrise", Number.isFinite(h.deadrise) ? `${h.deadrise.toFixed(0)}°` : "—");
-  row("½ entrance", Number.isFinite(h.halfEntrance) ? `${h.halfEntrance.toFixed(0)}°` : "—");
+  row(
+    "LCB",
+    Number.isFinite(lcbPct)
+      ? `${Math.abs(lcbPct).toFixed(1)}% ${lcbPct >= 0 ? "fwd" : "aft"}`
+      : "—",
+  );
+  row(
+    "Deadrise",
+    Number.isFinite(h.deadrise) ? `${h.deadrise.toFixed(0)}°` : "—",
+  );
+  row(
+    "½ entrance",
+    Number.isFinite(h.halfEntrance) ? `${h.halfEntrance.toFixed(0)}°` : "—",
+  );
   if (!h.closed)
-    rows.push(`<div class="mnote">Some sections don't close on the centerline — ∇ is approximate.</div>`);
+    rows.push(
+      `<div class="mnote">Some sections don't close on the centerline — ∇ is approximate.</div>`,
+    );
   body.innerHTML = rows.join("");
 }
 
@@ -180,7 +233,8 @@ function insidePoly(p: Pt, V: Pt[]): boolean {
     neg = false;
   for (let i = 0; i < V.length; i++) {
     const j = (i + 1) % V.length,
-      cr = (V[j].x - V[i].x) * (p.y - V[i].y) - (V[j].y - V[i].y) * (p.x - V[i].x);
+      cr =
+        (V[j].x - V[i].x) * (p.y - V[i].y) - (V[j].y - V[i].y) * (p.x - V[i].x);
     if (cr > 1e-9) pos = true;
     else if (cr < -1e-9) neg = true;
   }
@@ -197,7 +251,11 @@ function clampPoly(p: Pt, V: Pt[]): Pt {
         b = V[(i + 1) % V.length],
         dx = b.x - a.x,
         dy = b.y - a.y,
-        t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1), 0, 1),
+        t = clamp(
+          ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1),
+          0,
+          1,
+        ),
         cx = a.x + t * dx,
         cy = a.y + t * dy,
         d = (cx - p.x) ** 2 + (cy - p.y) ** 2;
@@ -215,7 +273,8 @@ function meanValue(p: Pt, V: Pt[]): number[] {
   const n = V.length,
     s = V.map((v) => ({ x: v.x - p.x, y: v.y - p.y })),
     r = s.map((d) => Math.hypot(d.x, d.y));
-  for (let i = 0; i < n; i++) if (r[i] < 1e-6) return V.map((_, k) => (k === i ? 1 : 0));
+  for (let i = 0; i < n; i++)
+    if (r[i] < 1e-6) return V.map((_, k) => (k === i ? 1 : 0));
   const half: number[] = [];
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n,
@@ -254,7 +313,8 @@ function resetBlend(): void {
 function updateReadout(): void {
   const n = hulls.length,
     total = hulls.reduce((a, x) => a + x.weight, 0) || 1,
-    pct = (i: number): string => `${((hulls[i].weight / total) * 100).toFixed(0)}%`;
+    pct = (i: number): string =>
+      `${((hulls[i].weight / total) * 100).toFixed(0)}%`;
   if (n === 2) {
     const pa = document.querySelector<HTMLElement>(".twopct .pa"),
       pb = document.querySelector<HTMLElement>(".twopct .pb");
@@ -274,10 +334,15 @@ function updateReadout(): void {
         sp.setAttribute("y1", `${puck.y}`);
         sp.setAttribute("x2", `${V[i].x}`);
         sp.setAttribute("y2", `${V[i].y}`);
-        sp.setAttribute("stroke-opacity", `${(0.12 + 0.88 * (hulls[i].weight / total)).toFixed(2)}`);
+        sp.setAttribute(
+          "stroke-opacity",
+          `${(0.12 + 0.88 * (hulls[i].weight / total)).toFixed(2)}`,
+        );
       }
     });
-    const pcts = document.querySelectorAll<HTMLElement>("#hullList .legrow .pct");
+    const pcts = document.querySelectorAll<HTMLElement>(
+      "#hullList .legrow .pct",
+    );
     hulls.forEach((_, i) => pcts[i] && (pcts[i].textContent = pct(i)));
   }
 }
@@ -316,7 +381,10 @@ function renderPanel(): void {
   // n ≥ 3: a polygon pad (drag the puck) + a legend. The <g id="heat"> layer (clipped to the polygon) is
   // filled by the metric heatmap; the puck/spokes/dots sit on top.
   const V = padVerts(n);
-  const polyD = V.map((v, i) => `${i ? "L" : "M"}${v.x.toFixed(1)} ${v.y.toFixed(1)}`).join(" ") + "Z";
+  const polyD =
+    V.map((v, i) => `${i ? "L" : "M"}${v.x.toFixed(1)} ${v.y.toFixed(1)}`).join(
+      " ",
+    ) + "Z";
   let svg =
     `<svg id="blendPad" viewBox="0 0 ${PAD} ${PAD}" preserveAspectRatio="xMidYMid meet">` +
     `<defs><clipPath id="padClip"><path d="${polyD}"/></clipPath></defs>` +
@@ -348,7 +416,10 @@ function renderPanel(): void {
   const padEl = padwrap.querySelector<SVGSVGElement>("#blendPad")!;
   const toVB = (e: PointerEvent): Pt => {
     const r = padEl.getBoundingClientRect();
-    return { x: ((e.clientX - r.left) / r.width) * PAD, y: ((e.clientY - r.top) / r.height) * PAD };
+    return {
+      x: ((e.clientX - r.left) / r.width) * PAD,
+      y: ((e.clientY - r.top) / r.height) * PAD,
+    };
   };
   let dragging = false;
   const move = (e: PointerEvent): void => {
@@ -368,7 +439,8 @@ function renderPanel(): void {
   });
   const end = (e: PointerEvent): void => {
     dragging = false;
-    if (padEl.hasPointerCapture(e.pointerId)) padEl.releasePointerCapture(e.pointerId);
+    if (padEl.hasPointerCapture(e.pointerId))
+      padEl.releasePointerCapture(e.pointerId);
   };
   padEl.addEventListener("pointerup", end);
   padEl.addEventListener("pointercancel", end);
@@ -400,7 +472,11 @@ let heatMetric = "none";
 // every continuous metric the hydrostatics engine produces (lengths/areas/volume in model units — the
 // explorer plots relative values, so units don't matter here; the metrics panel carries the dimensioned ones)
 const amid = (h: Hydro): number => (h.xAft + h.xFwd) / 2;
-const HEAT_METRICS: { key: string; label: string; get: (h: Hydro) => number }[] = [
+const HEAT_METRICS: {
+  key: string;
+  label: string;
+  get: (h: Hydro) => number;
+}[] = [
   // dimensions
   { key: "lwl", label: "LWL", get: (h) => h.lwl },
   { key: "bwl", label: "Beam · WL", get: (h) => h.bwl },
@@ -417,8 +493,16 @@ const HEAT_METRICS: { key: string; label: string; get: (h: Hydro) => number }[] 
   { key: "cw", label: "Cw · waterplane", get: (h) => h.cw },
   { key: "cvp", label: "Cvp · vert. prismatic", get: (h) => h.cvp },
   // centroids & initial stability
-  { key: "lcb", label: "LCB · %", get: (h) => ((h.lcb - amid(h)) / h.lwl) * 100 },
-  { key: "lcf", label: "LCF · %", get: (h) => ((h.lcf - amid(h)) / h.lwl) * 100 },
+  {
+    key: "lcb",
+    label: "LCB · %",
+    get: (h) => ((h.lcb - amid(h)) / h.lwl) * 100,
+  },
+  {
+    key: "lcf",
+    label: "LCF · %",
+    get: (h) => ((h.lcf - amid(h)) / h.lwl) * 100,
+  },
   { key: "kb", label: "KB", get: (h) => h.kb },
   { key: "bmt", label: "BMt", get: (h) => h.bmt },
   { key: "kmt", label: "KMt", get: (h) => h.kmt },
@@ -453,7 +537,12 @@ let lastHydro: Hydro | null = null; // hydrostatics of the current (live) blend;
 let scatterX = "loverb",
   scatterY = "cb";
 type MetricDef = (typeof HEAT_METRICS)[number];
-let scatterMap: { sx: (v: number) => number; sy: (v: number) => number; defX: MetricDef; defY: MetricDef } | null = null;
+let scatterMap: {
+  sx: (v: number) => number;
+  sy: (v: number) => number;
+  defX: MetricDef;
+  defY: MetricDef;
+} | null = null;
 
 function computeSamples(): void {
   samples = [];
@@ -468,7 +557,13 @@ function computeSamples(): void {
       hulls[1].weight = t;
       blend();
       prepare();
-      samples.push({ gx: i, gy: 0, pos: { x: 0, y: 0 }, t, h: hydrostatics(SAMPLE_NS, SAMPLE_M) });
+      samples.push({
+        gx: i,
+        gy: 0,
+        pos: { x: 0, y: 0 },
+        t,
+        h: hydrostatics(SAMPLE_NS, SAMPLE_M),
+      });
     }
   } else {
     const V = padVerts(n),
@@ -482,7 +577,13 @@ function computeSamples(): void {
         hulls.forEach((h, i) => (h.weight = w[i]));
         blend();
         prepare();
-        samples.push({ gx, gy, pos: { x: cx, y: cy }, t: 0, h: hydrostatics(SAMPLE_NS, SAMPLE_M) });
+        samples.push({
+          gx,
+          gy,
+          pos: { x: cx, y: cy },
+          t: 0,
+          h: hydrostatics(SAMPLE_NS, SAMPLE_M),
+        });
       }
   }
   hulls.forEach((h, i) => (h.weight = saved[i]));
@@ -514,7 +615,11 @@ function updateHeatLegend(def: { label: string } | null, lo = 0, hi = 0): void {
     return;
   }
   const fmt = (v: number): string =>
-    Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
+    Math.abs(v) >= 100
+      ? v.toFixed(0)
+      : Math.abs(v) >= 1
+        ? v.toFixed(2)
+        : v.toFixed(3);
   el.innerHTML =
     `<span class="hl-k">${def.label}</span><span class="hl-lo">${fmt(lo)}</span>` +
     `<span class="hl-bar"></span><span class="hl-hi">${fmt(hi)}</span>`;
@@ -531,10 +636,13 @@ function paintHeatmap(): void {
     return;
   }
   const cell = PAD / HEAT_G;
-  const vals = samples.map((s) => (s.h && s.h.validWaterplane ? def.get(s.h) : NaN));
+  const vals = samples.map((s) =>
+    s.h && s.h.validWaterplane ? def.get(s.h) : NaN,
+  );
   let lo = Infinity,
     hi = -Infinity;
-  for (const v of vals) if (Number.isFinite(v)) (lo = Math.min(lo, v)), (hi = Math.max(hi, v));
+  for (const v of vals)
+    if (Number.isFinite(v)) ((lo = Math.min(lo, v)), (hi = Math.max(hi, v)));
   if (!(hi > lo)) {
     g.innerHTML = "";
     updateHeatLegend(null);
@@ -544,7 +652,9 @@ function paintHeatmap(): void {
     s = (cell + 0.7).toFixed(1); // slight overlap to hide seams
   let html = "";
   samples.forEach((smp, i) => {
-    const fill = Number.isFinite(vals[i]) ? heatColor((vals[i] - lo) / span) : "#e5e7eb";
+    const fill = Number.isFinite(vals[i])
+      ? heatColor((vals[i] - lo) / span)
+      : "#e5e7eb";
     html += `<rect x="${(smp.gx * cell).toFixed(1)}" y="${(smp.gy * cell).toFixed(1)}" width="${s}" height="${s}" fill="${fill}" opacity="0.85"/>`;
   });
   g.innerHTML = html;
@@ -567,7 +677,11 @@ function renderScatter(): void {
   if (!defX || !defY) return note("pick two metrics");
   if (samples.length < 2) return note("load a blend to explore");
   const pts = samples
-    .map((smp) => ({ smp, x: smp.h && smp.h.validWaterplane ? defX.get(smp.h) : NaN, y: smp.h && smp.h.validWaterplane ? defY.get(smp.h) : NaN }))
+    .map((smp) => ({
+      smp,
+      x: smp.h && smp.h.validWaterplane ? defX.get(smp.h) : NaN,
+      y: smp.h && smp.h.validWaterplane ? defY.get(smp.h) : NaN,
+    }))
     .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
   if (pts.length < 2) return note("no valid samples at this waterline");
   let xlo = Infinity,
@@ -589,9 +703,15 @@ function renderScatter(): void {
   const plotW = SCW - SCM.l - SCM.r,
     plotH = SCH - SCM.t - SCM.b;
   const sx = (v: number): number => SCM.l + ((v - xlo) / (xhi - xlo)) * plotW;
-  const sy = (v: number): number => SCM.t + (1 - (v - ylo) / (yhi - ylo)) * plotH;
+  const sy = (v: number): number =>
+    SCM.t + (1 - (v - ylo) / (yhi - ylo)) * plotH;
   scatterMap = { sx, sy, defX, defY };
-  const fmt = (v: number): string => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3));
+  const fmt = (v: number): string =>
+    Math.abs(v) >= 100
+      ? v.toFixed(0)
+      : Math.abs(v) >= 1
+        ? v.toFixed(2)
+        : v.toFixed(3);
   let html = `<rect x="${SCM.l}" y="${SCM.t}" width="${plotW}" height="${plotH}" fill="#fbfcfe" stroke="#e2e8f0"/>`;
   // axes: min/max tick labels
   html += `<text x="${SCM.l}" y="${SCH - 22}" font-size="10" fill="#718096">${fmt(xlo)}</text>`;
@@ -647,11 +767,14 @@ function updateStatus(): void {
   if (hulls.length === 0) {
     status.textContent = "Open a blend from the design library to begin.";
   } else if (hulls.length === 1) {
-    status.textContent = "1 hull loaded — needs at least one more to interpolate.";
+    status.textContent =
+      "1 hull loaded — needs at least one more to interpolate.";
   } else {
     status.textContent =
       `${hulls.length} hulls · blending` +
-      (promoted ? " · mixed topologies promoted to a common form (pure-hull ends approximate to a few mm)" : "");
+      (promoted
+        ? " · mixed topologies promoted to a common form (pure-hull ends approximate to a few mm)"
+        : "");
   }
   refreshSaveUI();
 }
@@ -666,12 +789,15 @@ let savedSnapshot = ""; // buildJson() of the last save
 let savingNow = false;
 let flashUntil = 0;
 
-const nameInput = () => document.getElementById("blendName") as HTMLInputElement;
+const nameInput = () =>
+  document.getElementById("blendName") as HTMLInputElement;
 const saveBtnEl = () => document.getElementById("saveAs") as HTMLButtonElement;
 const saveStateEl = () => document.getElementById("saveState")!;
 
 function defaultBlendName(): string {
-  return hulls.length ? `Blend of ${hulls.map((h) => h.name).join(" + ")}`.slice(0, 120) : "Untitled blend";
+  return hulls.length
+    ? `Blend of ${hulls.map((h) => h.name).join(" + ")}`.slice(0, 120)
+    : "Untitled blend";
 }
 // would saving create a new row? (never saved, or the name was changed away from the saved design)
 function willFork(): boolean {
@@ -681,7 +807,9 @@ function willFork(): boolean {
 function isDirty(): boolean {
   if (hulls.length === 0) return false;
   if (currentId == null) return true; // never saved → always unsaved work
-  return buildJson() !== savedSnapshot || nameInput().value.trim() !== savedName;
+  return (
+    buildJson() !== savedSnapshot || nameInput().value.trim() !== savedName
+  );
 }
 function refreshSaveUI(): void {
   saveBtnEl().textContent = willFork() ? "Save As…" : "Save";
@@ -740,7 +868,11 @@ async function doSave(): Promise<void> {
 }
 
 function closeToLibrary(): void {
-  if (isDirty() && !confirm("Discard the unsaved blend and return to the library?")) return;
+  if (
+    isDirty() &&
+    !confirm("Discard the unsaved blend and return to the library?")
+  )
+    return;
   window.location.href = "index.html";
 }
 
@@ -750,7 +882,9 @@ function addParsedDoc(parsed: ParsedDoc, base: string, errs: string[]): void {
   let vi = 0;
   for (const data of parsed.variants) {
     if (hulls.length >= 5) {
-      errs.push(`${base}: family is full (max 5 hulls) — some variants skipped`);
+      errs.push(
+        `${base}: family is full (max 5 hulls) — some variants skipped`,
+      );
       break;
     }
     try {
@@ -760,7 +894,8 @@ function addParsedDoc(parsed: ParsedDoc, base: string, errs: string[]): void {
       vi++;
       continue;
     }
-    const name = data.name ?? (parsed.variants.length > 1 ? `${base} #${vi + 1}` : base);
+    const name =
+      data.name ?? (parsed.variants.length > 1 ? `${base} #${vi + 1}` : base);
     hulls.push({ name, data, weight: 1 });
     vi++;
   }
@@ -771,7 +906,11 @@ async function loadFiles(files: FileList | File[]): Promise<void> {
   const errs: string[] = [];
   for (const f of Array.from(files)) {
     try {
-      addParsedDoc(parseDocument(await f.text()), f.name.replace(/\.json$/i, "") || "hull", errs);
+      addParsedDoc(
+        parseDocument(await f.text()),
+        f.name.replace(/\.json$/i, "") || "hull",
+        errs,
+      );
     } catch (e) {
       errs.push(`${f.name}: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -782,7 +921,8 @@ async function loadFiles(files: FileList | File[]): Promise<void> {
   updateStatus();
   refresh();
   drawAfterLayout();
-  if (errs.length) alert("Some files could not be loaded:\n\n" + errs.join("\n"));
+  if (errs.length)
+    alert("Some files could not be loaded:\n\n" + errs.join("\n"));
 }
 
 // ---------- library loading (opened from the design library with ?ids=a,b,c) ----------
@@ -802,7 +942,8 @@ async function loadByIds(ids: string[]): Promise<void> {
   updateStatus();
   refresh();
   drawAfterLayout();
-  if (errs.length) alert("Some designs could not be loaded:\n\n" + errs.join("\n"));
+  if (errs.length)
+    alert("Some designs could not be loaded:\n\n" + errs.join("\n"));
 }
 
 // ---------- wire up ----------
@@ -829,9 +970,13 @@ function init(): void {
   });
 
   // save the current blend to the library / close back to it
-  document.getElementById("blendName")!.addEventListener("input", refreshSaveUI);
+  document
+    .getElementById("blendName")!
+    .addEventListener("input", refreshSaveUI);
   document.getElementById("saveAs")!.addEventListener("click", doSave);
-  document.getElementById("closeBtn")!.addEventListener("click", closeToLibrary);
+  document
+    .getElementById("closeBtn")!
+    .addEventListener("click", closeToLibrary);
   // metrics scale inputs: geometry is unchanged, so just reformat the readout
   for (const id of ["loaInput", "unitSel", "waterSel"])
     document.getElementById(id)!.addEventListener("input", renderMetrics);
@@ -839,13 +984,17 @@ function init(): void {
   const msel = document.getElementById("metricSel") as HTMLSelectElement;
   msel.innerHTML =
     `<option value="none">none</option>` +
-    HEAT_METRICS.map((m) => `<option value="${m.key}">${m.label}</option>`).join("");
+    HEAT_METRICS.map(
+      (m) => `<option value="${m.key}">${m.label}</option>`,
+    ).join("");
   msel.addEventListener("change", () => {
     heatMetric = msel.value;
     paintHeatmap();
   });
   // scatter explorer: two metric axes (populate from HEAT_METRICS) + click a point to jump there
-  const opts = HEAT_METRICS.map((m) => `<option value="${m.key}">${m.label}</option>`).join("");
+  const opts = HEAT_METRICS.map(
+    (m) => `<option value="${m.key}">${m.label}</option>`,
+  ).join("");
   for (const [id, get, set] of [
     ["scatterX", () => scatterX, (v: string) => (scatterX = v)],
     ["scatterY", () => scatterY, (v: string) => (scatterY = v)],
@@ -878,10 +1027,14 @@ function init(): void {
   // 3D display mode — a single mutually-exclusive choice (render / lines / zebra / sheet), like the editor
   const view3dModes = document.getElementById("view3dModes")!;
   view3dModes.addEventListener("click", (e) => {
-    const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button.vmode");
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>(
+      "button.vmode",
+    );
     if (!b) return;
     state.view3dMode = b.dataset.mode as typeof state.view3dMode;
-    view3dModes.querySelectorAll(".vmode").forEach((x) => x.classList.toggle("on", x === b));
+    view3dModes
+      .querySelectorAll(".vmode")
+      .forEach((x) => x.classList.toggle("on", x === b));
     if (hulls.length) draw3d(true);
   });
 
@@ -889,13 +1042,22 @@ function init(): void {
   const cv = document.getElementById("cv3d") as HTMLCanvasElement;
   let rot: { px: number; py: number; yaw: number; pitch: number } | null = null;
   cv.addEventListener("pointerdown", (e) => {
-    rot = { px: e.clientX, py: e.clientY, yaw: state.rot.yaw, pitch: state.rot.pitch };
+    rot = {
+      px: e.clientX,
+      py: e.clientY,
+      yaw: state.rot.yaw,
+      pitch: state.rot.pitch,
+    };
     e.preventDefault();
   });
   window.addEventListener("pointermove", (e) => {
     if (!rot || !hulls.length) return;
     state.rot.yaw = rot.yaw + (e.clientX - rot.px) * 0.008;
-    state.rot.pitch = clamp(rot.pitch + (e.clientY - rot.py) * 0.008, -1.45, 1.45);
+    state.rot.pitch = clamp(
+      rot.pitch + (e.clientY - rot.py) * 0.008,
+      -1.45,
+      1.45,
+    );
     draw3d(false);
   });
   window.addEventListener("pointerup", () => (rot = null));

@@ -75,7 +75,14 @@ function gridX(svg: SVGSVGElement, top: number, bot: number): void {
   for (let q = 0; q <= 4; q++) {
     const x = mapX((L * q) / 4);
     svg.append(
-      el("line", { x1: x, y1: top, x2: x, y2: bot, stroke: "#edf2f7", "stroke-width": 1 }),
+      el("line", {
+        x1: x,
+        y1: top,
+        x2: x,
+        y2: bot,
+        stroke: "#edf2f7",
+        "stroke-width": 1,
+      }),
     );
   }
 }
@@ -94,14 +101,18 @@ function stationLine(svg: SVGSVGElement, top: number, bot: number): void {
     opacity: 0,
     style: "cursor:ew-resize",
   });
-  hit.addEventListener("pointerdown", (e) => startDrag({ kind: "slider" }, svg, e));
+  hit.addEventListener("pointerdown", (e) =>
+    startDrag({ kind: "slider" }, svg, e),
+  );
   svg.append(hit);
   const tri = el("path", {
     d: `M${x - 6} ${top} L${x + 6} ${top} L${x} ${top + 9} Z`,
     fill: "var(--slider)",
     style: "cursor:ew-resize",
   });
-  tri.addEventListener("pointerdown", (e) => startDrag({ kind: "slider" }, svg, e));
+  tri.addEventListener("pointerdown", (e) =>
+    startDrag({ kind: "slider" }, svg, e),
+  );
   svg.append(tri);
 }
 
@@ -122,7 +133,11 @@ function cutTrace(svg: SVGSVGElement, proj: Proj): void {
 
 // ---------- design waterline (the horizontal world plane at worldZ = −state.waterline) ----------
 // immersion stats for a cut section: draft = deepest point below the WL, beam = breadth at the WL.
-function waterlineStats(sec: Section): { draft: number; beam: number; wet: boolean } {
+function waterlineStats(sec: Section): {
+  draft: number;
+  beam: number;
+  wet: boolean;
+} {
   let draft = 0,
     beam = 0,
     wet = false;
@@ -215,7 +230,13 @@ export function render(): void {
 // open bottom). This is section-aware: a station is flagged only where the rendered section actually reaches
 // offset R. Each run carries, per station, the plan edges (world x,y at offsets R and n_max) and the profile
 // band (z at the offset-R depth and at the deepest depth), so both views can shade the same folded region.
-type CuspPt = { x: number; outer: [number, number]; inner: [number, number]; zTop: number; zBot: number };
+type CuspPt = {
+  x: number;
+  outer: [number, number];
+  inner: [number, number];
+  zTop: number;
+  zBot: number;
+};
 function cuspRuns(): CuspPt[][] {
   const yf = state.sheer.yf,
     e = 1,
@@ -232,7 +253,10 @@ function cuspRuns(): CuspPt[][] {
       ypp = (yf(x + e) - 2 * yf(x) + yf(x - e)) / (e * e);
     let hit: CuspPt | null = null;
     // concave toward the centerline, and tight enough that R is below the geometric centerline reach
-    if (ypp < -1e-9 && Math.pow(1 + yp * yp, 1.5) / -ypp < yf(x) * Math.sqrt(1 + yp * yp)) {
+    if (
+      ypp < -1e-9 &&
+      Math.pow(1 + yp * yp, 1.5) / -ypp < yf(x) * Math.sqrt(1 + yp * yp)
+    ) {
       const R = Math.pow(1 + yp * yp, 1.5) / -ypp,
         fr = frameAt(x),
         sec = sweptSection(x, 72, true);
@@ -272,7 +296,14 @@ function drawPlan(sections: Section[], _zmin: number): void {
   // faint band below the centerline (y < 0): "past the centerline" — where the sheer plan crosses to close a
   // tumblehome bow.
   svg.append(
-    el("rect", { x: PXpad, y: Lbase, width: 1000 - 2 * PXpad, height: LH - Lbase, fill: "var(--keel)", opacity: 0.05 }),
+    el("rect", {
+      x: PXpad,
+      y: Lbase,
+      width: 1000 - 2 * PXpad,
+      height: LH - Lbase,
+      fill: "var(--keel)",
+      opacity: 0.05,
+    }),
   );
   // centerline (y = 0)
   svg.append(
@@ -380,7 +411,12 @@ function drawPlan(sections: Section[], _zmin: number): void {
   for (const run of cuspRuns()) {
     const ring = run
       .map((s): [number, number] => [mapX(s.outer[0]), yPlan(s.outer[1])])
-      .concat(run.slice().reverse().map((s): [number, number] => [mapX(s.inner[0]), yPlan(s.inner[1])]));
+      .concat(
+        run
+          .slice()
+          .reverse()
+          .map((s): [number, number] => [mapX(s.inner[0]), yPlan(s.inner[1])]),
+      );
     svg.append(
       el("path", {
         d: poly(ring) + "Z",
@@ -474,11 +510,13 @@ function drawProfile(sections: Section[], _zmin: number): void {
     // the bow stem: the CONTIGUOUS run of forwardmost sections whose top has dived below the authored trim
     // (the tumblehome lens). Only the forward run — a section's top can also drop below the trim near the
     // transom (the raked transom clip), and including those would draw a stray line back to the transom.
-    const dived = (s: Section): boolean => s.pts[0][2] < state.sheer.zf(s.pts[0][0]) - 3;
+    const dived = (s: Section): boolean =>
+      s.pts[0][2] < state.sheer.zf(s.pts[0][0]) - 3;
     let b = closing.length;
     while (b > 0 && dived(closing[b - 1])) b--;
     const stem = closing.slice(b).map((s) => s.pts[0]); // forward, increasing x
-    if (stem.length) for (let i = stem.length - 1; i >= 0; i--) keel.push(stem[i]); // forefoot → back to the trim
+    if (stem.length)
+      for (let i = stem.length - 1; i >= 0; i--) keel.push(stem[i]); // forefoot → back to the trim
     else keel.push([xFwd, 0, state.sheer.zf(xFwd)]); // a fine bow closes straight onto the trim at the stem
   }
   if (keel.length > 1)
@@ -553,7 +591,9 @@ function drawProfile(sections: Section[], _zmin: number): void {
   // stations, in red — the same folded region the plan view shades.
   for (const run of cuspRuns()) {
     const top = run.map((s): [number, number] => [mapX(s.x), zScreenP(s.zTop)]),
-      bot = run.map((s): [number, number] => [mapX(s.x), zScreenP(s.zBot)]).reverse();
+      bot = run
+        .map((s): [number, number] => [mapX(s.x), zScreenP(s.zBot)])
+        .reverse();
     svg.append(
       el("path", {
         d: poly(top.concat(bot)) + "Z",
@@ -589,13 +629,22 @@ function drawProfile(sections: Section[], _zmin: number): void {
       "stroke-width": 1.5,
     }),
   );
-  state.sheer.trim.forEach((cp, idx) => trimDot(svg, idx, mapX(cp.x), zScreenP(cp.z), cp.k));
-  state.sheer.transom.forEach((cp, idx) => transomDot(svg, idx, mapX(cp.x), zScreenP(cp.z)));
+  state.sheer.trim.forEach((cp, idx) =>
+    trimDot(svg, idx, mapX(cp.x), zScreenP(cp.z), cp.k),
+  );
+  state.sheer.transom.forEach((cp, idx) =>
+    transomDot(svg, idx, mapX(cp.x), zScreenP(cp.z)),
+  );
 }
 
 // one section-template editor (template `ti`): the other templates ghosted faint behind it, this one
 // solid with draggable nodes. Built into a fresh svg by drawTemplates each render.
-function stnCurve(svg: SVGSVGElement, pts: StationCP[], c: string, op: number): void {
+function stnCurve(
+  svg: SVGSVGElement,
+  pts: StationCP[],
+  c: string,
+  op: number,
+): void {
   const ns = pts.map((p) => p.n),
     ds = pts.map((p) => p.d),
     ks = pts.map((p) => p.k),
@@ -628,12 +677,31 @@ function drawStation(svg: SVGSVGElement, ti: number): void {
     arr = state.templates[ti];
   // axes: sheer point at origin (top-left), n inboard →, d down ↓
   svg.append(
-    el("line", { x1: snX(NMIN), y1: snY(0), x2: snX(NMAX), y2: snY(0), stroke: "#edf2f7", "stroke-width": 1 }),
+    el("line", {
+      x1: snX(NMIN),
+      y1: snY(0),
+      x2: snX(NMAX),
+      y2: snY(0),
+      stroke: "#edf2f7",
+      "stroke-width": 1,
+    }),
   );
   svg.append(
-    el("line", { x1: snX(0), y1: snY(0), x2: snX(0), y2: snY(DMAX), stroke: "#e2e8f0", "stroke-width": 1.2 }),
+    el("line", {
+      x1: snX(0),
+      y1: snY(0),
+      x2: snX(0),
+      y2: snY(DMAX),
+      stroke: "#e2e8f0",
+      "stroke-width": 1.2,
+    }),
   );
-  const sh = el("text", { x: snX(0) + 6, y: snY(0) - 6, "font-size": 10, fill: COL.mut || "#718096" });
+  const sh = el("text", {
+    x: snX(0) + 6,
+    y: snY(0) - 6,
+    "font-size": 10,
+    fill: COL.mut || "#718096",
+  });
   sh.textContent = "sheer";
   svg.append(sh);
   // faint ghosts of every other template, then this one solid
@@ -661,7 +729,9 @@ function drawStation(svg: SVGSVGElement, ti: number): void {
       stroke: sel ? "#fff" : end ? col : "#fff",
       "stroke-width": 1.8,
     });
-    node.addEventListener("pointerdown", (e) => stnPointDown(ti, idx, end, svg, e));
+    node.addEventListener("pointerdown", (e) =>
+      stnPointDown(ti, idx, end, svg, e),
+    );
     svg.append(node);
   });
   // when a template point is selected, mark the corresponding index on every OTHER template's ghost curve
@@ -686,9 +756,14 @@ function buildTemplateSvgs(): void {
   tplCards.replaceChildren();
   tplEls = [];
   state.templates.forEach((_, j) => {
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg") as SVGSVGElement;
+    const svg = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "svg",
+    ) as SVGSVGElement;
     svg.setAttribute("viewBox", "0 0 360 360");
-    svg.addEventListener("pointerdown", (e) => templateBgDown(j, svg, e as PointerEvent));
+    svg.addEventListener("pointerdown", (e) =>
+      templateBgDown(j, svg, e as PointerEvent),
+    );
     tplCards.append(svg);
     tplEls.push(svg);
   });
@@ -741,7 +816,8 @@ function buildSideTabs(): void {
   const add = document.createElement("button");
   add.className = "tab tabadd";
   add.textContent = "+";
-  add.title = "Add a section template (enters the blend at zero weight; raise it in the blend editor)";
+  add.title =
+    "Add a section template (enters the blend at zero weight; raise it in the blend editor)";
   add.disabled = K >= 7;
   add.addEventListener("click", () => addTemplate());
   sideTabs.append(add);
@@ -778,7 +854,16 @@ function drawWeights(svg: SVGSVGElement): void {
   gridX(svg, top, bot); // vertical x-gridlines (quarters of the length) — aligned with plan/profile
   // simplex guides at 0 / ½ / 1: horizontal
   for (const g of [0, 0.5, 1])
-    svg.append(el("line", { x1: xL, y1: wY(g), x2: xR, y2: wY(g), stroke: "#edf2f7", "stroke-width": 1 }));
+    svg.append(
+      el("line", {
+        x1: xL,
+        y1: wY(g),
+        x2: xR,
+        y2: wY(g),
+        stroke: "#edf2f7",
+        "stroke-width": 1,
+      }),
+    );
   // stacked bands from the sampled curve (each band a horizontal ribbon, its top/bottom edges varying with x)
   const NS = 120,
     xs: number[] = [],
@@ -796,10 +881,20 @@ function drawWeights(svg: SVGSVGElement): void {
     cum.push(c);
   }
   for (let j = 0; j < K; j++) {
-    const upper = xs.map((x, i): [number, number] => [mapX(x), wY(cum[i][j + 1])]),
-      lower = xs.map((x, i): [number, number] => [mapX(x), wY(cum[i][j])]).reverse();
+    const upper = xs.map((x, i): [number, number] => [
+        mapX(x),
+        wY(cum[i][j + 1]),
+      ]),
+      lower = xs
+        .map((x, i): [number, number] => [mapX(x), wY(cum[i][j])])
+        .reverse();
     svg.append(
-      el("path", { d: poly(upper.concat(lower)) + "Z", fill: tplColor(j), opacity: 0.5, stroke: "none" }),
+      el("path", {
+        d: poly(upper.concat(lower)) + "Z",
+        fill: tplColor(j),
+        opacity: 0.5,
+        stroke: "none",
+      }),
     );
   }
   // stern / bow labels (x runs stern→bow, left→right)
@@ -807,7 +902,13 @@ function drawWeights(svg: SVGSVGElement): void {
     ["stern", xL, "start"],
     ["bow", xR, "end"],
   ] as const) {
-    const t = el("text", { x, y: top - 4, "font-size": 10, fill: COL.mut, "text-anchor": anchor });
+    const t = el("text", {
+      x,
+      y: top - 4,
+      "font-size": 10,
+      fill: COL.mut,
+      "text-anchor": anchor,
+    });
     t.textContent = txt;
     svg.append(t);
   }
@@ -816,9 +917,20 @@ function drawWeights(svg: SVGSVGElement): void {
   // station at its x; x is set in the plan view (the station is shared), so there is no x-handle here.
   state.sheer.cp.forEach((cp, i) => {
     const x = mapX(cp.x),
-      sel = state.selected && state.selected.tgt === "weight" && state.selected.idx === i;
+      sel =
+        state.selected &&
+        state.selected.tgt === "weight" &&
+        state.selected.idx === i;
     svg.append(
-      el("line", { x1: x, y1: top, x2: x, y2: bot, stroke: "#fff", "stroke-width": 1, opacity: 0.75 }),
+      el("line", {
+        x1: x,
+        y1: top,
+        x2: x,
+        y2: bot,
+        stroke: "#fff",
+        "stroke-width": 1,
+        opacity: 0.75,
+      }),
     );
     const C: number[] = [];
     let s = 0;
@@ -837,7 +949,9 @@ function drawWeights(svg: SVGSVGElement): void {
         "stroke-width": 2,
         style: "cursor:ns-resize",
       });
-      h.addEventListener("pointerdown", (e) => weightHandleDown(i, "bnd", b, svg, e as PointerEvent));
+      h.addEventListener("pointerdown", (e) =>
+        weightHandleDown(i, "bnd", b, svg, e as PointerEvent),
+      );
       svg.append(h);
     }
   });
@@ -849,12 +963,31 @@ function drawWeights(svg: SVGSVGElement): void {
 function drawCutStation(svg: SVGSVGElement): void {
   svg.replaceChildren();
   svg.append(
-    el("line", { x1: snX(NMIN), y1: snY(0), x2: snX(NMAX), y2: snY(0), stroke: "#edf2f7", "stroke-width": 1 }),
+    el("line", {
+      x1: snX(NMIN),
+      y1: snY(0),
+      x2: snX(NMAX),
+      y2: snY(0),
+      stroke: "#edf2f7",
+      "stroke-width": 1,
+    }),
   );
   svg.append(
-    el("line", { x1: snX(0), y1: snY(0), x2: snX(0), y2: snY(DMAX), stroke: "#e2e8f0", "stroke-width": 1.2 }),
+    el("line", {
+      x1: snX(0),
+      y1: snY(0),
+      x2: snX(0),
+      y2: snY(DMAX),
+      stroke: "#e2e8f0",
+      "stroke-width": 1.2,
+    }),
   );
-  const sh = el("text", { x: snX(0) + 6, y: snY(0) - 6, "font-size": 10, fill: "#718096" });
+  const sh = el("text", {
+    x: snX(0) + 6,
+    y: snY(0) - 6,
+    "font-size": 10,
+    fill: "#718096",
+  });
   sh.textContent = "sheer";
   svg.append(sh);
 
@@ -980,7 +1113,12 @@ function drawCutStation(svg: SVGSVGElement): void {
         "stroke-dasharray": "5 4",
       }),
     );
-    const tl = el("text", { x: snX(NMIN) + 4, y: snY(dtrim) - 4, "font-size": 10, fill: COL.sheer });
+    const tl = el("text", {
+      x: snX(NMIN) + 4,
+      y: snY(dtrim) - 4,
+      "font-size": 10,
+      fill: COL.sheer,
+    });
     tl.textContent = "sheer trim";
     svg.append(tl);
     if (!empty)
@@ -1021,7 +1159,9 @@ function drawCutStation(svg: SVGSVGElement): void {
   // (no keel-point marker here — it would sit right on the seam and hide the very continuity being inspected;
   // the blended keel knuckle is shown by the keel slider)
   // design waterline at this station: the depth where worldZ = −waterline (combines sinkage + rake)
-  const dWL = (state.waterline + state.x0 * Math.sin(state.deckRake)) / Math.cos(state.deckRake);
+  const dWL =
+    (state.waterline + state.x0 * Math.sin(state.deckRake)) /
+    Math.cos(state.deckRake);
   if (dWL > 0 && dWL < DMAX) {
     svg.append(
       el("line", {
@@ -1035,7 +1175,13 @@ function drawCutStation(svg: SVGSVGElement): void {
         "stroke-dasharray": "5 4",
       }),
     );
-    const wt = el("text", { x: snX(NMAX) - 4, y: snY(dWL) - 4, "text-anchor": "end", "font-size": 10, fill: COL.wl });
+    const wt = el("text", {
+      x: snX(NMAX) - 4,
+      y: snY(dWL) - 4,
+      "text-anchor": "end",
+      "font-size": 10,
+      fill: COL.wl,
+    });
     wt.textContent = "WL";
     svg.append(wt);
   }
@@ -1119,7 +1265,11 @@ void main(){
   }
 }`;
 
-function glShader(gl: WebGLRenderingContext, type: number, src: string): WebGLShader {
+function glShader(
+  gl: WebGLRenderingContext,
+  type: number,
+  src: string,
+): WebGLShader {
   const s = gl.createShader(type)!;
   gl.shaderSource(s, src);
   gl.compileShader(s);
@@ -1128,7 +1278,11 @@ function glShader(gl: WebGLRenderingContext, type: number, src: string): WebGLSh
   return s;
 }
 function initGL(): void {
-  GL = cv3d.getContext("webgl", { antialias: true, alpha: true, premultipliedAlpha: false });
+  GL = cv3d.getContext("webgl", {
+    antialias: true,
+    alpha: true,
+    premultipliedAlpha: false,
+  });
   const gl = GL!;
   prog = gl.createProgram()!;
   gl.attachShader(prog, glShader(gl, gl.VERTEX_SHADER, VERT_SRC));
@@ -1137,9 +1291,29 @@ function initGL(): void {
   gl.useProgram(prog);
   loc = {};
   ["aPos", "aNormal"].forEach((n) => (loc[n] = gl.getAttribLocation(prog!, n)));
-  ["uc1", "us1", "uc2", "us2", "uKX", "uKY", "uCX", "uCY", "ucxm", "uczm", "uDepth", "uRakeC", "uRakeS", "uLight", "uView", "uBase", "uStripes", "uAlpha", "uZebra", "uWaterZ", "uPaint"].forEach(
-    (n) => (loc[n] = gl.getUniformLocation(prog!, n)),
-  );
+  [
+    "uc1",
+    "us1",
+    "uc2",
+    "us2",
+    "uKX",
+    "uKY",
+    "uCX",
+    "uCY",
+    "ucxm",
+    "uczm",
+    "uDepth",
+    "uRakeC",
+    "uRakeS",
+    "uLight",
+    "uView",
+    "uBase",
+    "uStripes",
+    "uAlpha",
+    "uZebra",
+    "uWaterZ",
+    "uPaint",
+  ].forEach((n) => (loc[n] = gl.getUniformLocation(prog!, n)));
   posBuf = gl.createBuffer();
   nrmBuf = gl.createBuffer();
   gl.enable(gl.DEPTH_TEST);
@@ -1157,7 +1331,8 @@ function initGL(): void {
 // proud of the surface without z-fighting.
 function buildLongitudinalMesh(idx: number, view: Vec3): Mesh {
   const tpl = state.templates;
-  if (idx < 0 || idx >= tpl[0].length) return { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 };
+  if (idx < 0 || idx >= tpl[0].length)
+    return { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 };
   const N = 160,
     HW = 1.25, // ribbon half-width (units) — a thin guide line
     BIAS = 6, // shift toward the eye (units) so the line floats just above the hull it lies on
@@ -1196,8 +1371,16 @@ function buildLongitudinalMesh(idx: number, view: Vec3): Mesh {
       if (V.dot(w, w) < 1e-9) w = V.cross(t, [0, 0, 1]);
       const wn = V.scale(V.norm(w), HW),
         c = M[i];
-      Ls.push([c[0] + wn[0] + off[0], c[1] + wn[1] + off[1], c[2] + wn[2] + off[2]]);
-      Rs.push([c[0] - wn[0] + off[0], c[1] - wn[1] + off[1], c[2] - wn[2] + off[2]]);
+      Ls.push([
+        c[0] + wn[0] + off[0],
+        c[1] + wn[1] + off[1],
+        c[2] + wn[2] + off[2],
+      ]);
+      Rs.push([
+        c[0] - wn[0] + off[0],
+        c[1] - wn[1] + off[1],
+        c[2] - wn[2] + off[2],
+      ]);
     }
     for (let i = 0; i < N; i++) {
       if (!keep[i] || !keep[i + 1]) continue; // break the ribbon across trimmed-away spans
@@ -1207,7 +1390,11 @@ function buildLongitudinalMesh(idx: number, view: Vec3): Mesh {
   };
   emitSide(1);
   emitSide(-1);
-  return { pos: new Float32Array(P), nrm: new Float32Array(Nn), count: P.length / 3 };
+  return {
+    pos: new Float32Array(P),
+    nrm: new Float32Array(Nn),
+    count: P.length / 3,
+  };
 }
 
 // A fair section grid sampled uniformly in x and WITHOUT the transom cut (clipQuad does that below, so
@@ -1249,7 +1436,8 @@ function bilgeRows(
     // full width: starboard sheer→keel (cols 0..M), then port keel→sheer (cols M+1..2M) as the y-mirror,
     // dropping the duplicate keel point so a closed section reads as one smooth curve through y=0.
     const full: Vec3[] = s.pts.slice();
-    for (let j = M - 1; j >= 0; j--) full.push([s.pts[j][0], -s.pts[j][1], s.pts[j][2]]);
+    for (let j = M - 1; j >= 0; j--)
+      full.push([s.pts[j][0], -s.pts[j][1], s.pts[j][2]]);
     rows.push(full);
     open.push(s.open);
     // map the half-section crease columns to the full row: a chine at half-col c sits at c and 2M−c; the
@@ -1329,7 +1517,10 @@ function clipQuad(poly: PN[]): { inside: PN[]; cut: [Vec3, Vec3] | null } {
       cutPts.push(ip);
     }
   }
-  return { inside: out, cut: cutPts.length === 2 ? [cutPts[0], cutPts[1]] : null };
+  return {
+    inside: out,
+    cut: cutPts.length === 2 ? [cutPts[0], cutPts[1]] : null,
+  };
 }
 
 // build the hull triangle soup by clipping the fair grid against the transom plane; also collect the cut
@@ -1346,8 +1537,13 @@ function buildHullMesh(trimmed: boolean): { hull: Mesh; cuts: [Vec3, Vec3][] } {
     Nn: number[] = [],
     cuts: [Vec3, Vec3][] = [];
   if (R < 2 || C < 2)
-    return { hull: { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 }, cuts };
-  const nrmC = rows.map((_, i) => rows[i].map((_, j) => gridNormal(rows, i, j)));
+    return {
+      hull: { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 },
+      cuts,
+    };
+  const nrmC = rows.map((_, i) =>
+    rows[i].map((_, j) => gridNormal(rows, i, j)),
+  );
   // the normal at vertex (i,j) as seen from the strip on side `dir` (+1 = the strip to its right, −1 left).
   // On a crease column the two sides use one-sided normals (the crease's two faces), blended toward the
   // smooth central normal by the local crease strength — so a hard knuckle reads as an edge and a faded
@@ -1357,7 +1553,8 @@ function buildHullMesh(trimmed: boolean): { hull: Mesh; cuts: [Vec3, Vec3][] } {
     if (s <= 1e-6) return nrmC[i][j];
     return V.norm(lerpV(nrmC[i][j], gridNormal(rows, i, j, dir), s));
   };
-  const emit = (a: PN, b: PN, c: PN): void => pushTri(P, Nn, a.p, a.n, b.p, b.n, c.p, c.n);
+  const emit = (a: PN, b: PN, c: PN): void =>
+    pushTri(P, Nn, a.p, a.n, b.p, b.n, c.p, c.n);
   for (let i = 0; i < R - 1; i++)
     for (let j = 0; j < C - 1; j++) {
       // the keel sits at column M of a full-width row; where the section is open there is no surface
@@ -1377,9 +1574,17 @@ function buildHullMesh(trimmed: boolean): { hull: Mesh; cuts: [Vec3, Vec3][] } {
       }
       const { inside, cut } = clipQuad(quad);
       if (cut) cuts.push(cut);
-      for (let k = 1; k + 1 < inside.length; k++) emit(inside[0], inside[k], inside[k + 1]); // fan
+      for (let k = 1; k + 1 < inside.length; k++)
+        emit(inside[0], inside[k], inside[k + 1]); // fan
     }
-  return { hull: { pos: new Float32Array(P), nrm: new Float32Array(Nn), count: P.length / 3 }, cuts };
+  return {
+    hull: {
+      pos: new Float32Array(P),
+      nrm: new Float32Array(Nn),
+      count: P.length / 3,
+    },
+    cuts,
+  };
 }
 
 // the ordered starboard transom edge (sheer→keel) recovered from the hull-clip cut segments: collapse to
@@ -1399,14 +1604,16 @@ function transomCurve(cuts: [Vec3, Vec3][]): Vec3[] {
       }
     }
   pts.sort((a, b) => b[2] - a[2]); // top (z high, at the sheer) → bottom (z low, at the keel)
-  if (pts.length) pts[pts.length - 1] = [pts[pts.length - 1][0], 0, pts[pts.length - 1][2]];
+  if (pts.length)
+    pts[pts.length - 1] = [pts[pts.length - 1][0], 0, pts[pts.length - 1][2]];
   return pts;
 }
 
 // the flat transom panel, built from the shared hull edge so it meets the hull with no gap or overlap
 function buildTransomMesh(cuts: [Vec3, Vec3][]): Mesh {
   const e = transomCurve(cuts);
-  if (e.length < 2) return { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 };
+  if (e.length < 2)
+    return { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 };
   const [ta, tb] = state.sheer.transom,
     slope = (tb.x - ta.x) / (tb.z - ta.z || 1),
     nt = V.norm([-1, 0, slope]), // outward (aft-facing)
@@ -1420,7 +1627,11 @@ function buildTransomMesh(cuts: [Vec3, Vec3][]): Mesh {
     pushTri(P, Nn, a, nt, ap, nt, bp, nt);
     pushTri(P, Nn, a, nt, bp, nt, b, nt);
   }
-  return { pos: new Float32Array(P), nrm: new Float32Array(Nn), count: P.length / 3 };
+  return {
+    pos: new Float32Array(P),
+    nrm: new Float32Array(Nn),
+    count: P.length / 3,
+  };
 }
 function drawMesh(gl: WebGLRenderingContext, mesh: Mesh, base: number[]): void {
   if (!mesh.count) return;
@@ -1441,9 +1652,16 @@ let meshHull: Mesh | null = null,
 
 function computeBBox(pos: Float32Array): number[] | null {
   if (!pos.length) return null;
-  let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+  let x0 = Infinity,
+    y0 = Infinity,
+    z0 = Infinity,
+    x1 = -Infinity,
+    y1 = -Infinity,
+    z1 = -Infinity;
   for (let i = 0; i < pos.length; i += 3) {
-    const x = pos[i], y = pos[i + 1], z = pos[i + 2];
+    const x = pos[i],
+      y = pos[i + 1],
+      z = pos[i + 2];
     if (x < x0) x0 = x;
     if (y < y0) y0 = y;
     if (z < z0) z0 = z;
@@ -1457,8 +1675,17 @@ function computeBBox(pos: Float32Array): number[] | null {
 // project a world point to screen space (world units), boat-centered — mirrors the vertex shader so the
 // CPU can frame the camera to the mesh bounding box
 function screenXY(
-  px: number, py: number, pz: number,
-  c1: number, s1: number, c2: number, s2: number, rc: number, rs: number, cxm: number, czm: number,
+  px: number,
+  py: number,
+  pz: number,
+  c1: number,
+  s1: number,
+  c2: number,
+  s2: number,
+  rc: number,
+  rs: number,
+  cxm: number,
+  czm: number,
 ): [number, number] {
   const rx = px * rc - pz * rs,
     rz = px * rs + pz * rc,
@@ -1471,19 +1698,47 @@ function screenXY(
 
 // the screen-space extent (and center) of the bbox's 8 corners under a given rotation
 function projExtent(
-  bb: number[], c1: number, s1: number, c2: number, s2: number, rc: number, rs: number, cxm: number, czm: number,
+  bb: number[],
+  c1: number,
+  s1: number,
+  c2: number,
+  s2: number,
+  rc: number,
+  rs: number,
+  cxm: number,
+  czm: number,
 ): { exX: number; exY: number; cX: number; cY: number } {
-  let sxmin = Infinity, sxmax = -Infinity, symin = Infinity, symax = -Infinity;
+  let sxmin = Infinity,
+    sxmax = -Infinity,
+    symin = Infinity,
+    symax = -Infinity;
   for (let ix = 0; ix < 2; ix++)
     for (let iy = 0; iy < 2; iy++)
       for (let iz = 0; iz < 2; iz++) {
-        const [sx, sy] = screenXY(bb[ix ? 3 : 0], bb[iy ? 4 : 1], bb[iz ? 5 : 2], c1, s1, c2, s2, rc, rs, cxm, czm);
+        const [sx, sy] = screenXY(
+          bb[ix ? 3 : 0],
+          bb[iy ? 4 : 1],
+          bb[iz ? 5 : 2],
+          c1,
+          s1,
+          c2,
+          s2,
+          rc,
+          rs,
+          cxm,
+          czm,
+        );
         if (sx < sxmin) sxmin = sx;
         if (sx > sxmax) sxmax = sx;
         if (sy < symin) symin = sy;
         if (sy > symax) symax = sy;
       }
-  return { exX: Math.max(sxmax - sxmin, 1), exY: Math.max(symax - symin, 1), cX: (sxmin + sxmax) / 2, cY: (symin + symax) / 2 };
+  return {
+    exX: Math.max(sxmax - sxmin, 1),
+    exY: Math.max(symax - symin, 1),
+    cX: (sxmin + sxmax) / 2,
+    cY: (symin + symax) / 2,
+  };
 }
 
 // the zoom is fixed: it frames a NOMINAL hull box (≈ the default hull's overall size) at a reference
@@ -1516,7 +1771,11 @@ interface LineQuad {
   wl: [ProjPt, ProjPt][]; // design-waterline crossing through this facet (blue, all modes)
 }
 
-function drawLines(svg: SVGSVGElement, kind: View3DMode, rebuild: boolean): void {
+function drawLines(
+  svg: SVGSVGElement,
+  kind: View3DMode,
+  rebuild: boolean,
+): void {
   if (rebuild || !linesGrid) linesGrid = trimmedHullGrid(LINES_NS, LINES_M);
   const { grid, creaseCols } = linesGrid;
   svg.replaceChildren();
@@ -1535,13 +1794,18 @@ function drawLines(svg: SVGSVGElement, kind: View3DMode, rebuild: boolean): void
   const proj = ([x, y, z]: Vec3): ProjPt => {
     const rx = x * cT - z * sT,
       rz = x * sT + z * cT;
-    return { x: rx * c1 - y * s1, y: -((rx * s1 + y * c1) * s2 + rz * c2), d: -c2 * s1 * rx - c2 * c1 * y + s2 * rz };
+    return {
+      x: rx * c1 - y * s1,
+      y: -((rx * s1 + y * c1) * s2 + rz * c2),
+      d: -c2 * s1 * rx - c2 * c1 * y + s2 * rz,
+    };
   };
   // projected point grids for both sides (starboard + the y-mirror)
   const SP = grid.map((row) => row.map(proj));
   const PP = grid.map((row) => row.map(([x, y, z]) => proj([x, -y, z])));
   const crease = new Set(creaseCols);
-  const showStation = (i: number): boolean => i === 0 || i === NS || i % LINES_STATION_STEP === 0;
+  const showStation = (i: number): boolean =>
+    i === 0 || i === NS || i % LINES_STATION_STEP === 0;
   const gridM = grid.map((row) => row.map(([x, y, z]): Vec3 => [x, -y, z])); // port-side world points
 
   // line-family levels (only the active mode's are used): evenly spaced constant-y (buttocks) and constant
@@ -1558,10 +1822,19 @@ function drawLines(svg: SVGSVGElement, kind: View3DMode, rebuild: boolean): void
     }
   const NB = 8,
     NW = 12,
-    buttLevels = Array.from({ length: NB }, (_, k) => (ymax * (k + 1)) / (NB + 1)),
-    wlLevels = Array.from({ length: NW }, (_, k) => zlo + ((zhi - zlo) * (k + 1)) / (NW + 1));
+    buttLevels = Array.from(
+      { length: NB },
+      (_, k) => (ymax * (k + 1)) / (NB + 1),
+    ),
+    wlLevels = Array.from(
+      { length: NW },
+      (_, k) => zlo + ((zhi - zlo) * (k + 1)) / (NW + 1),
+    );
   // marching: the segment where field f crosses `level` across a facet's 4 corners (linear on each edge)
-  const march = (corn: { p: ProjPt; f: number }[], level: number): [ProjPt, ProjPt] | null => {
+  const march = (
+    corn: { p: ProjPt; f: number }[],
+    level: number,
+  ): [ProjPt, ProjPt] | null => {
     const cr: ProjPt[] = [];
     for (let k = 0; k < 4; k++) {
       const a = corn[k],
@@ -1570,7 +1843,11 @@ function drawLines(svg: SVGSVGElement, kind: View3DMode, rebuild: boolean): void
         fb = b.f - level;
       if (fa < 0 !== fb < 0 && fa !== fb) {
         const t = fa / (fa - fb);
-        cr.push({ x: a.p.x + t * (b.p.x - a.p.x), y: a.p.y + t * (b.p.y - a.p.y), d: a.p.d + t * (b.p.d - a.p.d) });
+        cr.push({
+          x: a.p.x + t * (b.p.x - a.p.x),
+          y: a.p.y + t * (b.p.y - a.p.y),
+          d: a.p.d + t * (b.p.d - a.p.d),
+        });
       }
     }
     return cr.length >= 2 ? [cr[0], cr[1]] : null;
@@ -1581,7 +1858,10 @@ function drawLines(svg: SVGSVGElement, kind: View3DMode, rebuild: boolean): void
     maxX = -Infinity,
     maxY = -Infinity;
   const quads: LineQuad[] = [];
-  for (const [G, GW] of [[SP, grid], [PP, gridM]] as [ProjPt[][], Vec3[][]][])
+  for (const [G, GW] of [
+    [SP, grid],
+    [PP, gridM],
+  ] as [ProjPt[][], Vec3[][]][])
     for (let i = 0; i < NS; i++)
       for (let j = 0; j < M; j++) {
         const A = G[i][j],
@@ -1608,15 +1888,22 @@ function drawLines(svg: SVGSVGElement, kind: View3DMode, rebuild: boolean): void
           if (showStation(i) && i !== 0) fam.push([A, B]); // station at this row (the transom is drawn bold)
           if (i === NS - 1 && showStation(NS)) fam.push([D, C]); // bow/forwardmost station
         } else if (kind === "buttocks") {
-          const corn = [{ p: A, f: Math.abs(wA[1]) }, { p: B, f: Math.abs(wB[1]) }, { p: C, f: Math.abs(wC[1]) }, { p: D, f: Math.abs(wD[1]) }];
+          const corn = [
+            { p: A, f: Math.abs(wA[1]) },
+            { p: B, f: Math.abs(wB[1]) },
+            { p: C, f: Math.abs(wC[1]) },
+            { p: D, f: Math.abs(wD[1]) },
+          ];
           for (const lv of buttLevels) {
             const s = march(corn, lv);
             if (s) fam.push(s);
           }
         } else {
           const corn = [
-            { p: A, f: worldZ(wA[0], wA[2]) }, { p: B, f: worldZ(wB[0], wB[2]) },
-            { p: C, f: worldZ(wC[0], wC[2]) }, { p: D, f: worldZ(wD[0], wD[2]) },
+            { p: A, f: worldZ(wA[0], wA[2]) },
+            { p: B, f: worldZ(wB[0], wB[2]) },
+            { p: C, f: worldZ(wC[0], wC[2]) },
+            { p: D, f: worldZ(wD[0], wD[2]) },
           ];
           for (const lv of wlLevels) {
             const s = march(corn, lv);
@@ -1624,9 +1911,20 @@ function drawLines(svg: SVGSVGElement, kind: View3DMode, rebuild: boolean): void
           }
         }
         // design waterline (blue, all modes): worldZ crosses −waterline
-        const dc = [{ p: A, f: worldZ(wA[0], wA[2]) }, { p: B, f: worldZ(wB[0], wB[2]) }, { p: C, f: worldZ(wC[0], wC[2]) }, { p: D, f: worldZ(wD[0], wD[2]) }];
+        const dc = [
+          { p: A, f: worldZ(wA[0], wA[2]) },
+          { p: B, f: worldZ(wB[0], wB[2]) },
+          { p: C, f: worldZ(wC[0], wC[2]) },
+          { p: D, f: worldZ(wD[0], wD[2]) },
+        ];
         const dwl = march(dc, -state.waterline);
-        quads.push({ poly: [A, B, C, D], depth: (A.d + B.d + C.d + D.d) / 4, bold, fam, wl: dwl ? [dwl] : [] });
+        quads.push({
+          poly: [A, B, C, D],
+          depth: (A.d + B.d + C.d + D.d) / 4,
+          bold,
+          fam,
+          wl: dwl ? [dwl] : [],
+        });
       }
   quads.sort((a, b) => a.depth - b.depth); // far → near: nearer white facets are drawn last and occlude
 
@@ -1635,8 +1933,14 @@ function drawLines(svg: SVGSVGElement, kind: View3DMode, rebuild: boolean): void
   // tracks the live hull, so it pivots in place at a constant size instead of rescaling as you rotate.
   const ref = projExtent(
     NOMINAL,
-    Math.cos(REF_YAW), Math.sin(REF_YAW), Math.cos(REF_PITCH), Math.sin(REF_PITCH),
-    1, 0, L / 2, (ZMIN + ZMAX) / 2,
+    Math.cos(REF_YAW),
+    Math.sin(REF_YAW),
+    Math.cos(REF_PITCH),
+    Math.sin(REF_PITCH),
+    1,
+    0,
+    L / 2,
+    (ZMIN + ZMAX) / 2,
   );
   const w = svg.clientWidth || 800,
     h = svg.clientHeight || 400;
@@ -1654,11 +1958,18 @@ function drawLines(svg: SVGSVGElement, kind: View3DMode, rebuild: boolean): void
   // Painter's: each quad is an opaque WHITE facet (a white hairline stroke only closes the anti-alias seams).
   // Nearer facets, drawn later, paint over the lines behind them, so the far side is hidden like a solid hull.
   // Per facet we draw the occluded interior lines: stations, chines, and the design-waterline crossing (blue).
-  const pts = (q: ProjPt[]): string => q.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const pts = (q: ProjPt[]): string =>
+    q.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
   const line = (p0: ProjPt, p1: ProjPt, w: number, color: string): SVGElement =>
     el("line", {
-      x1: p0.x.toFixed(1), y1: p0.y.toFixed(1), x2: p1.x.toFixed(1), y2: p1.y.toFixed(1),
-      stroke: color, "stroke-width": w, "stroke-linecap": "round", "vector-effect": "non-scaling-stroke",
+      x1: p0.x.toFixed(1),
+      y1: p0.y.toFixed(1),
+      x2: p1.x.toFixed(1),
+      y2: p1.y.toFixed(1),
+      stroke: color,
+      "stroke-width": w,
+      "stroke-linecap": "round",
+      "vector-effect": "non-scaling-stroke",
     });
   // The selected template point's longitudinal (the locus it sweeps) is drawn occluded like everything else:
   // its segments are mixed INTO the painter's order, each at its own depth, biased a hair toward the eye so it
@@ -1674,7 +1985,7 @@ function drawLines(svg: SVGSVGElement, kind: View3DMode, rebuild: boolean): void
       vz = c2 * s1 * sT + s2 * cT;
     const vl = Math.hypot(vx, vy, vz) || 1,
       BIAS = 15; // clear the coarse flat-facet chords (the guide rides facet interiors, not edges)
-    (vx /= vl), (vy /= vl), (vz /= vl);
+    ((vx /= vl), (vy /= vl), (vz /= vl));
     const tpl = state.templates,
       NP = 120,
       WP: Vec3[] = [],
@@ -1689,15 +2000,27 @@ function drawLines(svg: SVGSVGElement, kind: View3DMode, rebuild: boolean): void
         d += wt[t] * tpl[t][li].d;
       }
       const fr = frameAt(x),
-        w: Vec3 = [fr.p[0] + n * fr.n[0] + d * fr.d[0], fr.p[1] + n * fr.n[1] + d * fr.d[1], fr.p[2] + n * fr.n[2] + d * fr.d[2]];
+        w: Vec3 = [
+          fr.p[0] + n * fr.n[0] + d * fr.d[0],
+          fr.p[1] + n * fr.n[1] + d * fr.d[1],
+          fr.p[2] + n * fr.n[2] + d * fr.d[2],
+        ];
       WP.push(w);
       keep.push(d >= -state.sheer.zf(x) && w[1] >= 0 && w[0] >= xTransom(w[2]));
     }
     for (const sgn of [1, -1])
       for (let i = 0; i < NP; i++) {
         if (!keep[i] || !keep[i + 1]) continue;
-        const a = proj([WP[i][0] + vx * BIAS, sgn * WP[i][1] + vy * BIAS, WP[i][2] + vz * BIAS]),
-          b = proj([WP[i + 1][0] + vx * BIAS, sgn * WP[i + 1][1] + vy * BIAS, WP[i + 1][2] + vz * BIAS]);
+        const a = proj([
+            WP[i][0] + vx * BIAS,
+            sgn * WP[i][1] + vy * BIAS,
+            WP[i][2] + vz * BIAS,
+          ]),
+          b = proj([
+            WP[i + 1][0] + vx * BIAS,
+            sgn * WP[i + 1][1] + vy * BIAS,
+            WP[i + 1][2] + vz * BIAS,
+          ]);
         items.push({ depth: (a.d + b.d) / 2, seg: [a, b] });
       }
   }
@@ -1770,7 +2093,17 @@ export function draw3d(rebuild?: boolean): void {
     rc = Math.cos(state.deckRake),
     rs = Math.sin(state.deckRake),
     bb = meshBBox ?? NOMINAL;
-  const ref = projExtent(NOMINAL, Math.cos(REF_YAW), Math.sin(REF_YAW), Math.cos(REF_PITCH), Math.sin(REF_PITCH), 1, 0, cxm, czm),
+  const ref = projExtent(
+      NOMINAL,
+      Math.cos(REF_YAW),
+      Math.sin(REF_YAW),
+      Math.cos(REF_PITCH),
+      Math.sin(REF_PITCH),
+      1,
+      0,
+      cxm,
+      czm,
+    ),
     live = projExtent(bb, c1, s1, c2, s2, rc, rs, cxm, czm),
     pxScale = 0.92 * Math.min(w / ref.exX, h / ref.exY) * state.zoom;
   gl.uniform1f(loc.uKX, (pxScale * 2) / w);
@@ -1828,39 +2161,90 @@ const SELB = "#2563eb"; // selected control point blue — in plan/profile, wher
 // is the given point the current selection? (for templates, the template index `ti` must match too)
 function isSelected(tgt: ActiveTarget, idx: number, ti?: number): boolean {
   const a = state.selected;
-  return !!a && a.tgt === tgt && a.idx === idx && (ti === undefined || a.ti === ti);
+  return (
+    !!a && a.tgt === tgt && a.idx === idx && (ti === undefined || a.ti === ti)
+  );
 }
 
 // a small red ✕ marking the spot that corresponds (same index) to the selected point — drawn on the other
 // templates' ghost curves so you can see where that control point lands on the other sections
 function redX(svg: SVGSVGElement, sx: number, sy: number): void {
   const r = 4.5;
-  for (const [dx, dy] of [[-1, -1], [-1, 1]] as const)
+  for (const [dx, dy] of [
+    [-1, -1],
+    [-1, 1],
+  ] as const)
     svg.append(
-      el("line", { x1: sx + dx * r, y1: sy + dy * r, x2: sx - dx * r, y2: sy - dy * r, stroke: SEL, "stroke-width": 2, "stroke-linecap": "round" }),
+      el("line", {
+        x1: sx + dx * r,
+        y1: sy + dy * r,
+        x2: sx - dx * r,
+        y2: sy - dy * r,
+        stroke: SEL,
+        "stroke-width": 2,
+        "stroke-linecap": "round",
+      }),
     );
 }
 
 // mark the point that CORRESPONDS (same index) to the current selection on the interpolated cut station:
 // a dashed amber ring over a dot in `col`, reading as "linked", matching the amber 3D guide ribbon.
-function linkDot(svg: SVGSVGElement, sx: number, sy: number, col: string): void {
+function linkDot(
+  svg: SVGSVGElement,
+  sx: number,
+  sy: number,
+  col: string,
+): void {
   svg.append(
-    el("circle", { cx: sx, cy: sy, r: 8, fill: "none", stroke: HILITE, "stroke-width": 2, opacity: 0.9, "stroke-dasharray": "3 3" }),
+    el("circle", {
+      cx: sx,
+      cy: sy,
+      r: 8,
+      fill: "none",
+      stroke: HILITE,
+      "stroke-width": 2,
+      opacity: 0.9,
+      "stroke-dasharray": "3 3",
+    }),
   );
-  svg.append(el("circle", { cx: sx, cy: sy, r: 3.5, fill: col, stroke: "#fff", "stroke-width": 1.2 }));
+  svg.append(
+    el("circle", {
+      cx: sx,
+      cy: sy,
+      r: 3.5,
+      fill: col,
+      stroke: "#fff",
+      "stroke-width": 1.2,
+    }),
+  );
 }
 // the selected template-point index, or null when the selection isn't a template point
 function selStationIdx(): number | null {
   const a = state.selected;
-  return a && a.tgt === "template" && a.idx < state.templates[0].length ? a.idx : null;
+  return a && a.tgt === "template" && a.idx < state.templates[0].length
+    ? a.idx
+    : null;
 }
 
 function cpDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
-  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: isSelected("plan", idx) ? SELB : COL.sheer, stroke: "#fff", "stroke-width": 1.5 });
+  const c = el("circle", {
+    cx: sx,
+    cy: sy,
+    r: 5.5,
+    fill: isSelected("plan", idx) ? SELB : COL.sheer,
+    stroke: "#fff",
+    "stroke-width": 1.5,
+  });
   c.addEventListener("pointerdown", (e) => sheerPointDown(idx, svg, e));
   svg.append(c);
 }
-function trimDot(svg: SVGSVGElement, idx: number, sx: number, sy: number, k: number): void {
+function trimDot(
+  svg: SVGSVGElement,
+  idx: number,
+  sx: number,
+  sy: number,
+  k: number,
+): void {
   // morph round (k=0, smooth) → square (k=1, hard corner) via corner radius, like the template nodes
   const s = 5.5,
     rad = (1 - Math.min(Math.max(k, 0), 1)) * s;
@@ -1878,8 +2262,20 @@ function trimDot(svg: SVGSVGElement, idx: number, sx: number, sy: number, k: num
   c.addEventListener("pointerdown", (e) => trimPointDown(idx, svg, e));
   svg.append(c);
 }
-function transomDot(svg: SVGSVGElement, idx: number, sx: number, sy: number): void {
-  const c = el("circle", { cx: sx, cy: sy, r: 5.5, fill: isSelected("transom", idx) ? SELB : "var(--transom)", stroke: "#fff", "stroke-width": 1.5 });
+function transomDot(
+  svg: SVGSVGElement,
+  idx: number,
+  sx: number,
+  sy: number,
+): void {
+  const c = el("circle", {
+    cx: sx,
+    cy: sy,
+    r: 5.5,
+    fill: isSelected("transom", idx) ? SELB : "var(--transom)",
+    stroke: "#fff",
+    "stroke-width": 1.5,
+  });
   c.addEventListener("pointerdown", (e) => transomPointDown(idx, svg, e));
   svg.append(c);
 }

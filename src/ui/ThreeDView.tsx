@@ -7,8 +7,16 @@ import type { View3DMode } from "../model.js";
 const MODES: { mode: View3DMode; label: string; title: string }[] = [
   { mode: "render", label: "Render", title: "Shaded hull" },
   { mode: "body", label: "Body", title: "Lines plan — body (stations)" },
-  { mode: "buttocks", label: "Buttocks", title: "Lines plan — buttocks (constant-y cuts)" },
-  { mode: "waterline", label: "Waterline", title: "Lines plan — waterlines (constant-z cuts)" },
+  {
+    mode: "buttocks",
+    label: "Buttocks",
+    title: "Lines plan — buttocks (constant-y cuts)",
+  },
+  {
+    mode: "waterline",
+    label: "Waterline",
+    title: "Lines plan — waterlines (constant-z cuts)",
+  },
   { mode: "zebra", label: "Zebra", title: "Zebra-stripe fairness check" },
   { mode: "sheet", label: "Sheet", title: "Untrimmed swept sheet (one side)" },
 ];

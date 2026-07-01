@@ -5,13 +5,25 @@ export function ViewStrips() {
   return (
     <>
       <div className="viewstrip">
-        <svg id="svgWeights" viewBox="0 0 1000 150" preserveAspectRatio="xMidYMid meet" />
+        <svg
+          id="svgWeights"
+          viewBox="0 0 1000 150"
+          preserveAspectRatio="xMidYMid meet"
+        />
       </div>
       <div className="viewstrip">
-        <svg id="svgPlan" viewBox="0 0 1000 278" preserveAspectRatio="xMidYMid meet" />
+        <svg
+          id="svgPlan"
+          viewBox="0 0 1000 278"
+          preserveAspectRatio="xMidYMid meet"
+        />
       </div>
       <div className="viewstrip">
-        <svg id="svgProfile" viewBox="0 0 1000 422.4" preserveAspectRatio="xMidYMid meet" />
+        <svg
+          id="svgProfile"
+          viewBox="0 0 1000 422.4"
+          preserveAspectRatio="xMidYMid meet"
+        />
       </div>
     </>
   );

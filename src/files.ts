@@ -5,7 +5,12 @@
 // reuse the same code paths as the editor: JSON is the stored document verbatim; STEP and STL load the
 // document into the model and run their writers (which fair the surfaces via prepare() internally).
 
-import { listDesigns, insertDesign, deleteDesign, type DesignRow } from "./supabase.js";
+import {
+  listDesigns,
+  insertDesign,
+  deleteDesign,
+  type DesignRow,
+} from "./supabase.js";
 import { parseDocument, loadJsonText } from "./json.js";
 import { buildStep } from "./step.js";
 import { buildStl } from "./stl.js";
@@ -36,16 +41,24 @@ const selToolbar = document.getElementById("selToolbar") as HTMLElement;
 const selNameEl = document.getElementById("selName") as HTMLElement;
 const blendBtn = document.getElementById("blendBtn") as HTMLButtonElement;
 const openBtn = document.getElementById("openBtn") as HTMLButtonElement;
-const exportJsonBtn = document.getElementById("exportJsonBtn") as HTMLButtonElement;
-const exportStepBtn = document.getElementById("exportStepBtn") as HTMLButtonElement;
-const exportStlBtn = document.getElementById("exportStlBtn") as HTMLButtonElement;
+const exportJsonBtn = document.getElementById(
+  "exportJsonBtn",
+) as HTMLButtonElement;
+const exportStepBtn = document.getElementById(
+  "exportStepBtn",
+) as HTMLButtonElement;
+const exportStlBtn = document.getElementById(
+  "exportStlBtn",
+) as HTMLButtonElement;
 const deleteBtn = document.getElementById("deleteBtn") as HTMLButtonElement;
 const newBtn = document.getElementById("newDesign") as HTMLButtonElement;
 const importBtn = document.getElementById("importJson") as HTMLButtonElement;
 const blendBar = document.getElementById("blendBar") as HTMLElement;
 const blendInfo = document.getElementById("blendInfo") as HTMLElement;
 const blendOpenBtn = document.getElementById("blendOpen") as HTMLButtonElement;
-const blendCancelBtn = document.getElementById("blendCancel") as HTMLButtonElement;
+const blendCancelBtn = document.getElementById(
+  "blendCancel",
+) as HTMLButtonElement;
 
 let rows: DesignRow[] = [];
 let selectedId: string | null = null;
@@ -89,10 +102,22 @@ function syncUI(): void {
     const row = selectedRow();
     selNameEl.textContent = row ? row.name : "No design selected";
     selNameEl.classList.toggle("none", !row);
-    for (const b of [openBtn, exportJsonBtn, exportStepBtn, exportStlBtn, deleteBtn]) b.disabled = !row;
+    for (const b of [
+      openBtn,
+      exportJsonBtn,
+      exportStepBtn,
+      exportStlBtn,
+      deleteBtn,
+    ])
+      b.disabled = !row;
     // Blend needs the selected design plus at least one same-length peer (counts are reconciled on open)
     const t = row ? topoById.get(row.id) : null;
-    const peers = t ? rows.filter((r) => { const o = topoById.get(r.id); return o && o.length === t.length; }).length : 0;
+    const peers = t
+      ? rows.filter((r) => {
+          const o = topoById.get(r.id);
+          return o && o.length === t.length;
+        }).length
+      : 0;
     blendBtn.disabled = peers < 2;
   }
   syncCards();
@@ -179,7 +204,8 @@ function topoOf(row: DesignRow): Topo | null {
   }
 }
 // the blend signature: only designs with an identical one (length + all control-point counts) can interpolate
-const topoSig = (t: Topo): string => `${t.length}|${t.plan}/${t.trim}/${t.section}/${t.templates}`;
+const topoSig = (t: Topo): string =>
+  `${t.length}|${t.plan}/${t.trim}/${t.section}/${t.templates}`;
 
 function statChip(val: number, label: string): HTMLElement {
   const s = document.createElement("span");
@@ -253,7 +279,8 @@ async function refresh(): Promise<void> {
     gridEl.textContent = "";
     emptyEl.style.display = "";
     emptyEl.className = "empty err";
-    emptyEl.textContent = "Failed to load designs: " + (e instanceof Error ? e.message : String(e));
+    emptyEl.textContent =
+      "Failed to load designs: " + (e instanceof Error ? e.message : String(e));
     return;
   }
   if (selectedId && !rows.some((r) => r.id === selectedId)) selectedId = null;
@@ -261,7 +288,8 @@ async function refresh(): Promise<void> {
   if (!rows.length) {
     emptyEl.style.display = "";
     emptyEl.className = "empty";
-    emptyEl.textContent = "No designs yet. Create one with “+ New design”, or import a JSON file.";
+    emptyEl.textContent =
+      "No designs yet. Create one with “+ New design”, or import a JSON file.";
   }
 }
 
@@ -300,9 +328,15 @@ exportJsonBtn.addEventListener("click", () => {
   if (!row) return;
   try {
     // pretty-print the stored document on the way out
-    downloadBlob(`${safeName(row.name)}.json`, JSON.stringify(row.document, null, 2), "application/json");
+    downloadBlob(
+      `${safeName(row.name)}.json`,
+      JSON.stringify(row.document, null, 2),
+      "application/json",
+    );
   } catch (e) {
-    alert("Export JSON failed: " + (e instanceof Error ? e.message : String(e)));
+    alert(
+      "Export JSON failed: " + (e instanceof Error ? e.message : String(e)),
+    );
   }
 });
 
@@ -314,9 +348,15 @@ exportStepBtn.addEventListener("click", () => {
     resetModel();
     loadJsonText(JSON.stringify(row.document)); // load into the model singleton; buildStep fairs + samples it
     const stamp = new Date().toISOString().replace(/\.\d+Z$/, "");
-    downloadBlob(`${safeName(row.name)}.step`, buildStep(stamp), "application/step");
+    downloadBlob(
+      `${safeName(row.name)}.step`,
+      buildStep(stamp),
+      "application/step",
+    );
   } catch (e) {
-    alert("Export STEP failed: " + (e instanceof Error ? e.message : String(e)));
+    alert(
+      "Export STEP failed: " + (e instanceof Error ? e.message : String(e)),
+    );
   } finally {
     exportStepBtn.disabled = false;
   }
@@ -329,7 +369,11 @@ exportStlBtn.addEventListener("click", () => {
   try {
     resetModel();
     loadJsonText(JSON.stringify(row.document)); // load into the model singleton; buildStl fairs + meshes it
-    downloadBlob(`${safeName(row.name)}.stl`, buildStl(safeName(row.name)), "model/stl");
+    downloadBlob(
+      `${safeName(row.name)}.stl`,
+      buildStl(safeName(row.name)),
+      "model/stl",
+    );
   } catch (e) {
     alert("Export STL failed: " + (e instanceof Error ? e.message : String(e)));
   } finally {

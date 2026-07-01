@@ -133,7 +133,8 @@ const TEMPLATE_DEFS: [number, number, number][][] = [
 // the default weight curve: full weight on template 0 at the transom, handing off linearly to the last
 // template at the bow — i.e. exactly the old linear aft→fore tween (a straight edge of the simplex).
 function defaultWeights(k: number): WeightCP[] {
-  const e = (j: number) => Array.from({ length: k }, (_, i) => (i === j ? 1 : 0));
+  const e = (j: number) =>
+    Array.from({ length: k }, (_, i) => (i === j ? 1 : 0));
   return [
     { x: 0, w: e(0) },
     { x: L, w: e(k - 1) },
@@ -148,7 +149,8 @@ export type Tool = "select" | "add";
 // "body" / "buttocks" / "waterline" are the three lines-plan modes: same drawing, differing only in which
 // non-chine line family is drawn (stations / constant-y cuts / constant-z cuts). render / zebra / sheet are
 // the shaded GL modes.
-export type View3DMode = "render" | "body" | "buttocks" | "waterline" | "zebra" | "sheet";
+export type View3DMode =
+  "render" | "body" | "buttocks" | "waterline" | "zebra" | "sheet";
 export const LINES_MODES: View3DMode[] = ["body", "buttocks", "waterline"];
 // curve fairing: "pchip" = C¹ monotone, shape-preserving (the default, guarantees the invariants);
 // "c2" = C² natural cubic (curvature-continuous, interpolating — but can overshoot); "bspline" = an
@@ -196,7 +198,9 @@ export const state: State = {
 };
 
 export function resetModel(): void {
-  state.templates = TEMPLATE_DEFS.map((t) => t.map((c) => ({ n: c[0], d: c[1], k: c[2] })));
+  state.templates = TEMPLATE_DEFS.map((t) =>
+    t.map((c) => ({ n: c[0], d: c[1], k: c[2] })),
+  );
   state.keelK = state.templates.map(() => 0); // keels default to C¹-smooth across the centerline
   // each station carries its blend w, sampled here from the default linear aft→fore handoff
   const wf0 = buildWeightSampler(defaultWeights(state.templates.length));
@@ -219,7 +223,8 @@ export function resetModel(): void {
 // at worldZ = −waterline, so immersion(x,z) > 0 means the point is submerged.
 export const worldZ = (x: number, z: number): number =>
   x * Math.sin(state.deckRake) + z * Math.cos(state.deckRake);
-export const immersion = (x: number, z: number): number => -state.waterline - worldZ(x, z);
+export const immersion = (x: number, z: number): number =>
+  -state.waterline - worldZ(x, z);
 
 export function prepare(): void {
   const sheer = state.sheer;
@@ -232,7 +237,8 @@ export function prepare(): void {
   const yfRaw = clampedBSplineSamplerX(sheer.cp.map((p) => [p.x, p.y]));
   const xEnd = sheer.cp[sheer.cp.length - 1].x,
     slopeEnd = yfRaw(xEnd) - yfRaw(xEnd - 1);
-  sheer.yf = (x: number) => (x <= xEnd ? yfRaw(x) : yfRaw(xEnd) + (x - xEnd) * slopeEnd);
+  sheer.yf = (x: number) =>
+    x <= xEnd ? yfRaw(x) : yfRaw(xEnd) + (x - xEnd) * slopeEnd;
   // profile sheer-trim z(x) ≤ 0: the same knuckle-aware fairing the templates use (interpolating, with
   // per-point knuckles), parameterized by x — so a hard sheer-line corner is possible, like a chine.
   sheer.zf = fairEval(
@@ -263,7 +269,9 @@ function normSimplex(w: number[]): number[] {
   return s > 0 ? c.map((v) => v / s) : c.map(() => 1 / c.length);
 }
 
-export function buildWeightSampler(weights: WeightCP[]): (x: number) => number[] {
+export function buildWeightSampler(
+  weights: WeightCP[],
+): (x: number) => number[] {
   const cps = weights.length;
   if (cps <= 1) {
     const w = cps ? normSimplex(weights[0].w) : [1];
@@ -313,8 +321,13 @@ export function buildWeightSampler(weights: WeightCP[]): (x: number) => number[]
 // "bspline" mode an approximating clamped cubic B-spline of the component over t (C², no overshoot — the
 // points are a control polygon, not interpolated except at the ends). The c2 and bspline modes ignore the
 // knuckles; they are for comparing fairness, not for guaranteed validity.
-export function fairEval(ts: number[], fs: number[], ks: number[]): (u: number) => number {
-  if (state.fairing === "bspline") return clampedBSplineSamplerX(ts.map((t, i) => [t, fs[i]]));
+export function fairEval(
+  ts: number[],
+  fs: number[],
+  ks: number[],
+): (u: number) => number {
+  if (state.fairing === "bspline")
+    return clampedBSplineSamplerX(ts.map((t, i) => [t, fs[i]]));
   if (state.fairing === "c2") {
     const m = naturalCubicSlopes(ts, fs),
       t0 = ts[0],
@@ -409,7 +422,13 @@ const KEEL_FLAT_FLARE = 12 * (Math.PI / 180),
 // is smooth. The keel knuckle kc sets the character (0 = flat/round, 1 = hard V), eased toward a V where
 // the plan flare would make a flat keel unfair (see KEEL_FLAT_FLARE/KEEL_V_FLARE). Returns null for an
 // open section (the curve never reaches the centerline) or a degenerate frame.
-function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], kc: number): Station | null {
+function mirrorKeelStation(
+  x: number,
+  ns: number[],
+  ds: number[],
+  ks: number[],
+  kc: number,
+): Station | null {
   const fr = frameAt(x),
     ny = fr.n[1],
     py = fr.p[1];
@@ -456,7 +475,11 @@ function mirrorKeelStation(x: number, ns: number[], ds: number[], ks: number[], 
   // Ease a flat keel toward its natural V as flare rises, so an oblique centerline meeting becomes a fair V
   // instead of a ridge (the narrow-flared-transom pucker). keelK is the floor: flatten f = (1−kc)·(1−flareV).
   const flare = Math.atan2(Math.abs(fr.n[0]), Math.abs(fr.n[1]));
-  let flareV = clamp((flare - KEEL_FLAT_FLARE) / (KEEL_V_FLARE - KEEL_FLAT_FLARE), 0, 1);
+  let flareV = clamp(
+    (flare - KEEL_FLAT_FLARE) / (KEEL_V_FLARE - KEEL_FLAT_FLARE),
+    0,
+    1,
+  );
   flareV = flareV * flareV * (3 - 2 * flareV); // smoothstep
   const f = (1 - clamp(kc, 0, 1)) * (1 - flareV); // flatten amount: 1 = round keel, 0 = natural V
   // reflected symmetric section over U ∈ [0, 2·ustar], keel at the midpoint U = ustar. The keel character is
@@ -530,10 +553,22 @@ export function stationAt(x: number, mirrorKeel = false): Station {
     // swept lens has vanished). For the trimmed hull that means NO hull here — return a degenerate (tmax 0)
     // station so sweptSection reports `aft`. (Falling back to the raw, un-mirrored half-section instead would
     // resurrect the full deep section past the closure — the "wings".)
-    return mirrorKeelStation(x, ns, ds, ks, keelKAt(xw)) ?? { tmax: 0, n: () => 0, d: () => 0, ts: [0] };
+    return (
+      mirrorKeelStation(x, ns, ds, ks, keelKAt(xw)) ?? {
+        tmax: 0,
+        n: () => 0,
+        d: () => 0,
+        ts: [0],
+      }
+    );
   }
   const ts = chordParam(ns, ds);
-  return { tmax: ts[m - 1], n: fairEval(ts, ns, ks), d: fairEval(ts, ds, ks), ts };
+  return {
+    tmax: ts[m - 1],
+    n: fairEval(ts, ns, ks),
+    d: fairEval(ts, ds, ks),
+    ts,
+  };
 }
 
 // the transom plane in profile: longitudinal position x of the cut at height z (linear through the two
@@ -549,7 +584,12 @@ export function xTransom(z: number): number {
 // reaches the centerline. Untrimmed, it runs the full station from the deck — the raw swept sheet.
 // Because the flat sheer makes the station's d-axis point straight down, z = -d(u): the sheer trim at
 // z = z_s(x) is simply the station depth d = -z_s(x).
-export function sweptSection(x: number, M: number, trim: boolean, clipTransom = true): Section {
+export function sweptSection(
+  x: number,
+  M: number,
+  trim: boolean,
+  clipTransom = true,
+): Section {
   const fr = frameAt(x),
     st = stationAt(x, trim); // trimmed hull: the keel-knuckle symmetric section; sheet: the raw half
   const W = (u: number): Vec3 => {
@@ -582,7 +622,10 @@ export function sweptSection(x: number, M: number, trim: boolean, clipTransom = 
           // clamp ≥ 0: at a bow lens the very top of the section already sits below the trim (da ≥ dtrim), so
           // the interpolation would go negative — keep the whole section from its top instead of crossing the
           // centerline to port. (For a normal section the top is the deck at d=0 < dtrim, so this is a no-op.)
-          umin = Math.max(0, (st.tmax * (i - 1 + (dtrim - da) / (st.d(u) - da || 1))) / FN);
+          umin = Math.max(
+            0,
+            (st.tmax * (i - 1 + (dtrim - da) / (st.d(u) - da || 1))) / FN,
+          );
           break;
         }
       }
@@ -658,14 +701,22 @@ export function sweptSection(x: number, M: number, trim: boolean, clipTransom = 
   let colU: number[];
   const evenU = (j: number) => ua + ((ub - ua) * j) / M;
   const pots =
-    trim && st.ts ? st.ts.map((_, i) => i).filter((i) => state.templates.some((t) => (t[i]?.k ?? 0) > 0)) : [];
+    trim && st.ts
+      ? st.ts
+          .map((_, i) => i)
+          .filter((i) => state.templates.some((t) => (t[i]?.k ?? 0) > 0))
+      : [];
   if (pots.length) {
     const w = weightsAt(x),
       margin = (ub - ua) * 0.04;
     const kn = pots
       .map((i) => ({
         u: clamp(st.ts![i], ua + margin, ub - margin), // clamp so the anchor count is constant along the hull
-        k: clamp(state.templates.reduce((s, t, j) => s + w[j] * (t[i]?.k ?? 0), 0), 0, 1),
+        k: clamp(
+          state.templates.reduce((s, t, j) => s + w[j] * (t[i]?.k ?? 0), 0),
+          0,
+          1,
+        ),
       }))
       .sort((a, b) => a.u - b.u);
     // The crease column itself always SITS ON the chine (the template point's swept locus), so the drawn /
@@ -768,7 +819,11 @@ export function transomEdge(): Vec3[] {
 }
 
 // trace a contour where component `comp` (1=y, 2=z) equals `val` across a set of sections → runs of pts
-export function contour(sections: Section[], val: number, comp: number): Vec3[][] {
+export function contour(
+  sections: Section[],
+  val: number,
+  comp: number,
+): Vec3[][] {
   const runs: Vec3[][] = [];
   let run: Vec3[] = [];
   for (const s of sections) {

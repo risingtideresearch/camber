@@ -12,7 +12,14 @@
 // approximation (exact in the limit).
 
 import { lerp, type Vec3 } from "./math.js";
-import { state, L, clippedSection, forwardLimit, immersion, worldZ } from "./model.js";
+import {
+  state,
+  L,
+  clippedSection,
+  forwardLimit,
+  immersion,
+  worldZ,
+} from "./model.js";
 
 export interface Hydro {
   // principal dimensions (model units)
@@ -94,9 +101,18 @@ function stripOf(sec: { pts: Vec3[] }): Omit<Strip, "x" | "draft" | "keel"> {
     const zw = worldZ((a[0] + b[0]) / 2, (a[2] + b[2]) / 2);
     zMomH += ((ya + yb) / 2) * dz * zw;
   }
-  return { area: 2 * areaH, beam: 2 * bHalf, girth: 2 * girthH, zMom: 2 * zMomH };
+  return {
+    area: 2 * areaH,
+    beam: 2 * bHalf,
+    girth: 2 * girthH,
+    zMom: 2 * zMomH,
+  };
 }
-const lerp3 = (a: Vec3, b: Vec3, t: number): Vec3 => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+const lerp3 = (a: Vec3, b: Vec3, t: number): Vec3 => [
+  lerp(a[0], b[0], t),
+  lerp(a[1], b[1], t),
+  lerp(a[2], b[2], t),
+];
 
 // deadrise (deg) of a section near the keel: least-squares slope of (half-breadth, depth) over the lowest
 // ~7% of the model depth, as an angle from horizontal
@@ -171,7 +187,9 @@ export function hydrostatics(ns: number = NS, m: number = M): Hydro | null {
   const bwl = Math.max(...strips.map((s) => s.beam)),
     draft = Math.max(...strips.map((s) => s.draft)),
     maxSectionArea = Math.max(...strips.map((s) => s.area));
-  const midStrip = strips.reduce((m, s) => (Math.abs(s.x - amid) < Math.abs(m.x - amid) ? s : m));
+  const midStrip = strips.reduce((m, s) =>
+    Math.abs(s.x - amid) < Math.abs(m.x - amid) ? s : m,
+  );
   const midshipArea = midStrip.area;
   const lcb = vol > 0 ? lcbN / vol : amid,
     lcf = aw > 0 ? lcfN / aw : amid,
@@ -205,7 +223,10 @@ export function hydrostatics(ns: number = NS, m: number = M): Hydro | null {
   if (fwd.length >= 2) {
     const f0 = fwd[0],
       f1 = fwd[fwd.length - 1];
-    if (f1.x !== f0.x) halfEntrance = Math.atan(Math.abs(f1.beam - f0.beam) / 2 / (f1.x - f0.x)) * (180 / Math.PI);
+    if (f1.x !== f0.x)
+      halfEntrance =
+        Math.atan(Math.abs(f1.beam - f0.beam) / 2 / (f1.x - f0.x)) *
+        (180 / Math.PI);
   }
 
   return {

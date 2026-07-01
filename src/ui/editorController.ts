@@ -75,9 +75,14 @@ export function saveView(name: string): SaveView {
   const buttonLabel = isFork(name) ? "Save As…" : "Save";
   if (currentId == null) {
     const dirty = isDirty();
-    return { buttonLabel, kind: dirty ? "dirty" : "", text: dirty ? "Unsaved" : "Not saved" };
+    return {
+      buttonLabel,
+      kind: dirty ? "dirty" : "",
+      text: dirty ? "Unsaved" : "Not saved",
+    };
   }
-  if (isUnsaved(name)) return { buttonLabel, kind: "dirty", text: "Unsaved changes" };
+  if (isUnsaved(name))
+    return { buttonLabel, kind: "dirty", text: "Unsaved changes" };
   return { buttonLabel, kind: "saved", text: "Saved" };
 }
 
@@ -111,7 +116,10 @@ export function fitLayout(): void {
   const w = mainEl.clientWidth,
     h = mainEl.clientHeight;
   if (!w || !h) return;
-  const side = Math.max(MIN_SIDE, Math.min(MAX_SIDE, Math.min(w * 0.34, h * 0.42)));
+  const side = Math.max(
+    MIN_SIDE,
+    Math.min(MAX_SIDE, Math.min(w * 0.34, h * 0.42)),
+  );
   rightCol.style.width = `${side}px`;
   const stripAspect = (WH + LH + PH) / 1000;
   const leftMax = Math.max(360, (h - side - LEFT_GAP) / stripAspect);
@@ -149,7 +157,10 @@ export async function boot(): Promise<BootResult> {
       name = opened.name;
     } catch (e) {
       console.error("open design failed:", e);
-      alert("Couldn't open that design: " + (e instanceof Error ? e.message : String(e)));
+      alert(
+        "Couldn't open that design: " +
+          (e instanceof Error ? e.message : String(e)),
+      );
       resetModel(); // discard any partial load; fall back to a clean default hull
       currentId = null;
       savedName = null;
@@ -198,7 +209,11 @@ export async function save(name: string): Promise<{ name: string } | null> {
   if (create || fork) {
     const newId = await insertDesign(finalName, json, preview);
     currentId = newId;
-    history.replaceState(null, "", `editor.html?id=${encodeURIComponent(newId)}`);
+    history.replaceState(
+      null,
+      "",
+      `editor.html?id=${encodeURIComponent(newId)}`,
+    );
   } else {
     await updateDesign(currentId!, json, preview);
   }

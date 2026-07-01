@@ -42,15 +42,23 @@ async function ok(res: Response): Promise<Response> {
 // list saved designs, newest first (including the document + prebuilt preview)
 export async function listDesigns(): Promise<DesignRow[]> {
   const res = await ok(
-    await fetch(`${REST}?select=id,name,created_at,document,preview&order=created_at.desc`, { headers }),
+    await fetch(
+      `${REST}?select=id,name,created_at,document,preview&order=created_at.desc`,
+      { headers },
+    ),
   );
   return res.json();
 }
 
 // fetch one design's name + full document (the document is returned as the JSON text the editor expects)
-export async function getDesign(id: string): Promise<{ name: string; documentText: string }> {
+export async function getDesign(
+  id: string,
+): Promise<{ name: string; documentText: string }> {
   const res = await ok(
-    await fetch(`${REST}?select=name,document&id=eq.${encodeURIComponent(id)}`, { headers }),
+    await fetch(
+      `${REST}?select=name,document&id=eq.${encodeURIComponent(id)}`,
+      { headers },
+    ),
   );
   const rows = (await res.json()) as { name: string; document: unknown }[];
   if (!rows.length) throw new Error("design not found");
@@ -67,7 +75,11 @@ export async function insertDesign(
     await fetch(REST, {
       method: "POST",
       headers: { ...headers, Prefer: "return=representation" },
-      body: JSON.stringify({ name, document: JSON.parse(documentJson), preview }),
+      body: JSON.stringify({
+        name,
+        document: JSON.parse(documentJson),
+        preview,
+      }),
     }),
   );
   const rows = (await res.json()) as { id: string }[];
@@ -75,7 +87,11 @@ export async function insertDesign(
 }
 
 // overwrite an existing design's document + preview (the "Save" of an already-open design)
-export async function updateDesign(id: string, documentJson: string, preview: string): Promise<void> {
+export async function updateDesign(
+  id: string,
+  documentJson: string,
+  preview: string,
+): Promise<void> {
   await ok(
     await fetch(`${REST}?id=eq.${encodeURIComponent(id)}`, {
       method: "PATCH",
@@ -88,6 +104,9 @@ export async function updateDesign(id: string, documentJson: string, preview: st
 // delete a design by id
 export async function deleteDesign(id: string): Promise<void> {
   await ok(
-    await fetch(`${REST}?id=eq.${encodeURIComponent(id)}`, { method: "DELETE", headers }),
+    await fetch(`${REST}?id=eq.${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers,
+    }),
   );
 }

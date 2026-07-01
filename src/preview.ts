@@ -77,9 +77,15 @@ export function buildPreviewSvg(): string {
 
   const path = (line: [number, number][]): string =>
     "M" + line.map(([x, y]) => `${Math.round(x)} ${Math.round(y)}`).join("L");
-  const grp = (lines: [number, number][][], stroke: string, w: number): string =>
+  const grp = (
+    lines: [number, number][][],
+    stroke: string,
+    w: number,
+  ): string =>
     `<g fill="none" stroke="${stroke}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round">` +
-    lines.map((l) => `<path vector-effect="non-scaling-stroke" d="${path(l)}"/>`).join("") +
+    lines
+      .map((l) => `<path vector-effect="non-scaling-stroke" d="${path(l)}"/>`)
+      .join("") +
     `</g>`;
 
   return (

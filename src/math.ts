@@ -6,7 +6,8 @@ export type Vec2 = [number, number];
 export const clamp = (x: number, a: number, b: number): number =>
   Math.max(a, Math.min(b, x));
 
-export const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+export const lerp = (a: number, b: number, t: number): number =>
+  a + (b - a) * t;
 
 export const V = {
   sub: (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],

@@ -20,7 +20,13 @@
 // Run with `npm run test:centerline` (tsx runs this directly under node). Non-zero exit on any
 // failure so it can gate CI alongside the keel-smoothness test.
 
-import { resetModel, prepare, L, sweptSection, stationAt } from "../src/model.js";
+import {
+  resetModel,
+  prepare,
+  L,
+  sweptSection,
+  stationAt,
+} from "../src/model.js";
 import { parseDocument, loadHull } from "../src/json.js";
 import { type Vec3 } from "../src/math.js";
 import { readFileSync, readdirSync, existsSync } from "fs";
@@ -67,7 +73,8 @@ function fullRows(): Vec3[][] {
     const s = sweptSection((L * i) / NS, M, true, false);
     if (s.aft) continue;
     const full: Vec3[] = s.pts.slice();
-    for (let j = M - 1; j >= 0; j--) full.push([s.pts[j][0], -s.pts[j][1], s.pts[j][2]]);
+    for (let j = M - 1; j >= 0; j--)
+      full.push([s.pts[j][0], -s.pts[j][1], s.pts[j][2]]);
     rows.push(full);
   }
   return rows;
@@ -75,7 +82,10 @@ function fullRows(): Vec3[][] {
 
 // the true transverse section at world-x = X0: walk each column's longitudinal polyline and read (y,z) where
 // it crosses X0. Returns points sorted by y (port -> starboard), or null if the keel isn't reached cleanly.
-function trueSection(rows: Vec3[][], X0: number): { y: number; z: number }[] | null {
+function trueSection(
+  rows: Vec3[][],
+  X0: number,
+): { y: number; z: number }[] | null {
   const C = rows[0].length,
     R = rows.length,
     pts: { y: number; z: number }[] = [];
@@ -107,7 +117,9 @@ function worstRidge(): { ridge: number; x: number } {
     if (!sec) continue;
     const band = sec.filter((p) => Math.abs(p.y) <= BAND_MM);
     if (band.length < 3) continue;
-    const zCenter = band.reduce((b, p) => (Math.abs(p.y) < Math.abs(b.y) ? p : b)).z;
+    const zCenter = band.reduce((b, p) =>
+      Math.abs(p.y) < Math.abs(b.y) ? p : b,
+    ).z;
     const zDeep = Math.min(...band.map((p) => p.z)); // most negative = deepest
     const ridge = zCenter - zDeep; // 0 if the centerline is the deepest point; > 0 if it rides up
     if (ridge > worst) {
@@ -152,7 +164,8 @@ function zAtHalfBreadth(sec: { y: number; z: number }[], Y: number): number {
   for (let i = 0; i < sec.length - 1; i++) {
     const a = sec[i],
       b = sec[i + 1];
-    if ((a.y - Y) * (b.y - Y) <= 0 && a.y !== b.y) return a.z + ((Y - a.y) / (b.y - a.y)) * (b.z - a.z);
+    if ((a.y - Y) * (b.y - Y) <= 0 && a.y !== b.y)
+      return a.z + ((Y - a.y) / (b.y - a.y)) * (b.z - a.z);
   }
   return NaN;
 }
@@ -180,7 +193,8 @@ function worstKeelButtock(): { curv: number; x: number; y: number } {
       return s ? zAtHalfBreadth(s, Y) : NaN;
     });
     for (let i = 1; i < xs.length - 1; i++) {
-      if (!isFinite(Z[i - 1]) || !isFinite(Z[i]) || !isFinite(Z[i + 1])) continue;
+      if (!isFinite(Z[i - 1]) || !isFinite(Z[i]) || !isFinite(Z[i + 1]))
+        continue;
       const c = (Math.abs(Z[i + 1] - 2 * Z[i] + Z[i - 1]) / (dx * dx)) * 1e3;
       if (c > curv) {
         curv = c;
@@ -199,13 +213,21 @@ function loadCase(path: string | null): void {
 }
 
 function listJson(dir: string): string[] {
-  return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".json")).sort() : [];
+  return existsSync(dir)
+    ? readdirSync(dir)
+        .filter((f) => f.endsWith(".json"))
+        .sort()
+    : [];
 }
 
 function main(): number {
-  const cases: { name: string; path: string | null }[] = [{ name: "default", path: null }];
-  for (const f of listJson(examplesDir())) cases.push({ name: f, path: join(examplesDir(), f) });
-  for (const f of listJson(fixturesDir())) cases.push({ name: `${f} (fixture)`, path: join(fixturesDir(), f) });
+  const cases: { name: string; path: string | null }[] = [
+    { name: "default", path: null },
+  ];
+  for (const f of listJson(examplesDir()))
+    cases.push({ name: f, path: join(examplesDir(), f) });
+  for (const f of listJson(fixturesDir()))
+    cases.push({ name: `${f} (fixture)`, path: join(fixturesDir(), f) });
   let failures = 0;
   console.log(
     `Centerline fairness — keel ridge in a true transverse section (≤${THRESHOLD_MM} mm), keel-shape ` +
@@ -216,14 +238,17 @@ function main(): number {
     const { ridge, x } = worstRidge();
     const { rev, x: rx } = worstReversal();
     const { curv, x: bx } = worstKeelButtock();
-    const bad = ridge > THRESHOLD_MM || rev > REVERSAL_MM || curv > KEEL_BUTTOCK_MAX;
+    const bad =
+      ridge > THRESHOLD_MM || rev > REVERSAL_MM || curv > KEEL_BUTTOCK_MAX;
     if (bad) failures++;
     console.log(
       `  ${bad ? "FAIL" : "ok  "}  ${name.padEnd(26)} ridge ${ridge.toFixed(2)} @ x=${Math.round(x)}` +
         `   reversal ${rev.toFixed(2)} @ x=${Math.round(rx)}   keel-fair ${curv.toFixed(1)} @ x=${Math.round(bx)}${bad ? "  ✗" : ""}`,
     );
   }
-  console.log(`\n${failures === 0 ? "PASS" : "FAIL"} — ${cases.length - failures}/${cases.length} cases fair`);
+  console.log(
+    `\n${failures === 0 ? "PASS" : "FAIL"} — ${cases.length - failures}/${cases.length} cases fair`,
+  );
   return failures === 0 ? 0 : 1;
 }
 

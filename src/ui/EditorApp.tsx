@@ -72,12 +72,20 @@ export function EditorApp() {
         setName(res.name);
         nameRef.current = res.name;
         flashUntilRef.current = Date.now() + 1400; // hold "Saved ✓" before the poll resumes
-        setSave({ buttonLabel: ctrl.saveView(res.name).buttonLabel, kind: "saved", text: "Saved ✓" });
+        setSave({
+          buttonLabel: ctrl.saveView(res.name).buttonLabel,
+          kind: "saved",
+          text: "Saved ✓",
+        });
       } else {
         setSave(ctrl.saveView(nameRef.current)); // cancelled (no name given) — back to steady state
       }
     } catch (e) {
-      setSave({ buttonLabel: ctrl.saveView(nameRef.current).buttonLabel, kind: "dirty", text: "Save failed" });
+      setSave({
+        buttonLabel: ctrl.saveView(nameRef.current).buttonLabel,
+        kind: "dirty",
+        text: "Save failed",
+      });
       alert("Save failed: " + (e instanceof Error ? e.message : String(e)));
     } finally {
       savingRef.current = false;
@@ -91,7 +99,8 @@ export function EditorApp() {
   useEffect(() => {
     const id = setInterval(() => {
       const ctrl = ctrlRef.current;
-      if (!ctrl || savingRef.current || Date.now() < flashUntilRef.current) return;
+      if (!ctrl || savingRef.current || Date.now() < flashUntilRef.current)
+        return;
       setSave(ctrl.saveView(nameRef.current));
     }, 300);
     return () => clearInterval(id);
@@ -159,7 +168,10 @@ export function EditorApp() {
   };
   const onClose = () => {
     const ctrl = ctrlRef.current;
-    if (ctrl?.isUnsaved(nameRef.current) && !confirm("Discard unsaved changes and return to the library?"))
+    if (
+      ctrl?.isUnsaved(nameRef.current) &&
+      !confirm("Discard unsaved changes and return to the library?")
+    )
       return;
     window.location.href = "index.html";
   };
@@ -170,7 +182,12 @@ export function EditorApp() {
         <Toolbar />
         <SelectionInfo />
         <span className="tabsep" />
-        <TrimControls waterline={waterline} rakeDeg={rakeDeg} onWaterline={onWaterline} onRake={onRake} />
+        <TrimControls
+          waterline={waterline}
+          rakeDeg={rakeDeg}
+          onWaterline={onWaterline}
+          onRake={onRake}
+        />
         <DesignBar
           name={name}
           dirty={save.kind === "dirty"}

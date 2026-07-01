@@ -55,7 +55,8 @@ export function naturalCubicSlopes(xs: number[], ys: number[]): number[] {
   for (let i = n - 2; i >= 1; i--) M[i] = (r[i] - (h[i] / 6) * M[i + 1]) / b[i];
   // first derivatives at the knots, recovered from the second derivatives
   const m = Array(n);
-  for (let i = 0; i < n - 1; i++) m[i] = d[i] - (h[i] * (2 * M[i] + M[i + 1])) / 6;
+  for (let i = 0; i < n - 1; i++)
+    m[i] = d[i] - (h[i] * (2 * M[i] + M[i + 1])) / 6;
   m[n - 1] = d[n - 2] + (h[n - 2] * (2 * M[n - 1] + M[n - 2])) / 6;
   return m;
 }
@@ -90,8 +91,10 @@ export function knuckleSlopes(
   for (let i = 0; i < n; i++) {
     const k = Math.min(Math.max(ks[i] ?? 0, 0), 1);
     if (k === 0) continue;
-    if (i > 0) L[i] = m[i] + ((ys[i] - ys[i - 1]) / (xs[i] - xs[i - 1]) - m[i]) * k; // toward left secant
-    if (i < n - 1) R[i] = m[i] + ((ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]) - m[i]) * k; // toward right secant
+    if (i > 0)
+      L[i] = m[i] + ((ys[i] - ys[i - 1]) / (xs[i] - xs[i - 1]) - m[i]) * k; // toward left secant
+    if (i < n - 1)
+      R[i] = m[i] + ((ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]) - m[i]) * k; // toward right secant
   }
   return { L, R };
 }

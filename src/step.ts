@@ -8,7 +8,14 @@
 // hull's aft edge. Both live in one OPEN_SHELL (the hull is open along the deck/sheer edge).
 
 import { V, type Vec3 } from "./math.js";
-import { L, sweptSection, xTransom, state, prepare, forwardLimit } from "./model.js";
+import {
+  L,
+  sweptSection,
+  xTransom,
+  state,
+  prepare,
+  forwardLimit,
+} from "./model.js";
 
 // ---------- B-spline numerics ----------
 
@@ -178,13 +185,21 @@ function interpSurfaceCreased(
     R = [mk(nv + 1), mk(nv + 1), mk(nv + 1)];
   for (let l = 0; l <= nv; l++)
     for (let c = 0; c < 3; c++) {
-      const sol = luSolve(Au.LU, Au.piv, Q.map((row) => row[l][c]));
+      const sol = luSolve(
+        Au.LU,
+        Au.piv,
+        Q.map((row) => row[l][c]),
+      );
       for (let i = 0; i <= nu; i++) R[c][i][l] = sol[i];
     }
   // segment bounds in v: split at crease columns, dropping any that would leave a strip shorter than q+1
-  const creases = creaseCols.filter((c) => c > 0 && c < nv).sort((a, b) => a - b);
+  const creases = creaseCols
+    .filter((c) => c > 0 && c < nv)
+    .sort((a, b) => a - b);
   const bounds = [0];
-  for (const c of creases) if (c - bounds[bounds.length - 1] >= q + 1 && nv - c >= q + 1) bounds.push(c);
+  for (const c of creases)
+    if (c - bounds[bounds.length - 1] >= q + 1 && nv - c >= q + 1)
+      bounds.push(c);
   bounds.push(nv);
   // per-segment params/knots/LU, and the spliced combined v-knot vector
   const segs = bounds.slice(0, -1).map((a, si) => {
@@ -198,7 +213,10 @@ function interpSurfaceCreased(
     if (si === 0) Vk = segs[si].knots.slice();
     else {
       const vc = vb[segs[si].a]; // crease param: drop the (q+1) clamp from each side, splice in q copies ⇒ C0
-      Vk = Vk.slice(0, Vk.length - (q + 1)).concat(new Array(q).fill(vc), segs[si].knots.slice(q + 1));
+      Vk = Vk.slice(0, Vk.length - (q + 1)).concat(
+        new Array(q).fill(vc),
+        segs[si].knots.slice(q + 1),
+      );
     }
   }
   const Ncv = Vk.length - q - 1; // combined v-control count
@@ -215,7 +233,11 @@ function interpSurfaceCreased(
       }
     }
   const net: Vec3[][] = Array.from({ length: nu + 1 }, (_, i) =>
-    Array.from({ length: Ncv }, (_, l): Vec3 => [P[0][i][l], P[1][i][l], P[2][i][l]]),
+    Array.from({ length: Ncv }, (_, l): Vec3 => [
+      P[0][i][l],
+      P[1][i][l],
+      P[2][i][l],
+    ]),
   );
   return { net, p, q, U, Vk };
 }
@@ -250,7 +272,10 @@ function compressKnots(U: number[]): { knots: number[]; mults: number[] } {
 // that fraction crosses the transom plane and sweep forward from there to the bow. Because the sections
 // are full (sheer→keel, never renormalised to a clipped sliver), the surface stays fair right to the
 // stern, and row 0 lies on the transom plane so the hull and transom share an exact edge.
-export function trimmedHullGrid(NS: number, M: number): { grid: Vec3[][]; creaseCols: number[] } {
+export function trimmedHullGrid(
+  NS: number,
+  M: number,
+): { grid: Vec3[][]; creaseCols: number[] } {
   const cols = M + 1,
     gate = (p: Vec3): number => p[0] - xTransom(p[2]),
     fair = (x: number): Vec3[] => sweptSection(x, M, true, false).pts;
@@ -274,7 +299,10 @@ export function trimmedHullGrid(NS: number, M: number): { grid: Vec3[][]; crease
     prev = cur;
   }
   const xf = forwardLimit(); // the hull closes here, not necessarily at L (the fine bow trims away forward)
-  const grid: Vec3[][] = Array.from({ length: NS + 1 }, () => new Array<Vec3>(cols));
+  const grid: Vec3[][] = Array.from(
+    { length: NS + 1 },
+    () => new Array<Vec3>(cols),
+  );
   for (let j = 0; j < cols; j++)
     for (let i = 0; i <= NS; i++) {
       // cosine spacing clusters stations at the transom edge and the bow so the fine bow tapers gradually
@@ -310,7 +338,9 @@ class StepDoc {
     return i;
   }
   point(p: Vec3): number {
-    return this.add(`CARTESIAN_POINT('',(${fmt(p[0])},${fmt(p[1])},${fmt(p[2])}))`);
+    return this.add(
+      `CARTESIAN_POINT('',(${fmt(p[0])},${fmt(p[1])},${fmt(p[2])}))`,
+    );
   }
   dir(d: Vec3): number {
     return this.add(`DIRECTION('',(${fmt(d[0])},${fmt(d[1])},${fmt(d[2])}))`);
@@ -325,7 +355,12 @@ class StepDoc {
       "ENDSEC;",
       "DATA;",
     ];
-    return head.join("\n") + "\n" + this.lines.join("\n") + "\nENDSEC;\nEND-ISO-10303-21;\n";
+    return (
+      head.join("\n") +
+      "\n" +
+      this.lines.join("\n") +
+      "\nENDSEC;\nEND-ISO-10303-21;\n"
+    );
   }
 }
 
@@ -343,7 +378,9 @@ function emitSurfaceFace(
   const nu = net.length - 1,
     nv = net[0].length - 1;
   const cp = net.map((row) => row.map((pt) => d.point(pt))); // shared cartesian points
-  const surfRows = cp.map((row) => `(${row.map((id) => `#${id}`).join(",")})`).join(",");
+  const surfRows = cp
+    .map((row) => `(${row.map((id) => `#${id}`).join(",")})`)
+    .join(",");
   const uk = compressKnots(U),
     vk = compressKnots(Vk);
   const surf = d.add(
@@ -389,7 +426,12 @@ function emitSurfaceFace(
 // face's aft edge — the kernel sews them into one watertight skin. The aft row runs starboard-sheer →
 // keel → port-sheer (the keel is interior, on the centerline), and the face is closed at the top by a
 // straight line across the breadth between the two sheer ends.
-function emitTransomFace(d: StepDoc, net: Vec3[][], q: number, Vk: number[]): number | null {
+function emitTransomFace(
+  d: StepDoc,
+  net: Vec3[][],
+  q: number,
+  Vk: number[],
+): number | null {
   const nv = net[0].length - 1;
   if (nv < 2) return null;
   const cp = net[0].map((p) => d.point([p[0], p[1], p[2]] as Vec3)); // full aft row, shared with the hull
@@ -402,7 +444,9 @@ function emitTransomFace(d: StepDoc, net: Vec3[][], q: number, Vk: number[]): nu
     ),
     topVec = d.add(`VECTOR('',#${d.dir([0, 1, 0])},1.0)`),
     topLine = d.add(`LINE('',#${cp[nv]},#${topVec})`); // across the breadth at the sheer
-  const eBottom = d.add(`EDGE_CURVE('',#${vSheerS},#${vSheerP},#${cBottom},.T.)`), // sheerS → keel → sheerP
+  const eBottom = d.add(
+      `EDGE_CURVE('',#${vSheerS},#${vSheerP},#${cBottom},.T.)`,
+    ), // sheerS → keel → sheerP
     eTop = d.add(`EDGE_CURVE('',#${vSheerP},#${vSheerS},#${topLine},.T.)`);
   const o1 = d.add(`ORIENTED_EDGE('',*,*,#${eBottom},.T.)`),
     o2 = d.add(`ORIENTED_EDGE('',*,*,#${eTop},.T.)`);
@@ -410,7 +454,9 @@ function emitTransomFace(d: StepDoc, net: Vec3[][], q: number, Vk: number[]): nu
     bound = d.add(`FACE_OUTER_BOUND('',#${loop},.T.)`);
   const [ta, tb] = state.sheer.transom,
     slope = (tb.x - ta.x) / (tb.z - ta.z || 1),
-    place = d.add(`AXIS2_PLACEMENT_3D('',#${d.point(net[0][0])},#${d.dir(V.norm([1, 0, -slope]))},#${d.dir([0, 1, 0])})`),
+    place = d.add(
+      `AXIS2_PLACEMENT_3D('',#${d.point(net[0][0])},#${d.dir(V.norm([1, 0, -slope]))},#${d.dir([0, 1, 0])})`,
+    ),
     plane = d.add(`PLANE('',#${place})`);
   return d.add(`ADVANCED_FACE('',(#${bound}),#${plane},.T.)`);
 }
@@ -429,7 +475,8 @@ export function buildStep(date: string): string {
   // smoothly when the keel approach is exactly horizontal, and otherwise fold into a welt: the "pucker").
   const grid: Vec3[][] = half.map((row) => {
     const full = row.slice();
-    for (let j = M - 1; j >= 0; j--) full.push([row[j][0], -row[j][1], row[j][2]] as Vec3);
+    for (let j = M - 1; j >= 0; j--)
+      full.push([row[j][0], -row[j][1], row[j][2]] as Vec3);
     return full;
   });
 
@@ -452,7 +499,9 @@ export function buildStep(date: string): string {
   const tf = emitTransomFace(d, hull.net, hull.q, hull.Vk);
   if (tf) faces.push(tf);
 
-  const shell = d.add(`OPEN_SHELL('',(${faces.map((f) => `#${f}`).join(",")}))`),
+  const shell = d.add(
+      `OPEN_SHELL('',(${faces.map((f) => `#${f}`).join(",")}))`,
+    ),
     ssm = d.add(`SHELL_BASED_SURFACE_MODEL('',(#${shell}))`);
   // geometric context: millimetres, 0.01 mm accuracy
   const o = d.point([0, 0, 0]),
@@ -462,19 +511,27 @@ export function buildStep(date: string): string {
   const lu = d.add("( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) )"),
     au = d.add("( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) )"),
     su = d.add("( NAMED_UNIT(*) SI_UNIT($,.STERADIAN.) SOLID_ANGLE_UNIT() )"),
-    unc = d.add(`UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(0.01),#${lu},'accuracy','')`),
+    unc = d.add(
+      `UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(0.01),#${lu},'accuracy','')`,
+    ),
     ctx = d.add(
       `( GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#${unc})) ` +
         `GLOBAL_UNIT_ASSIGNED_CONTEXT((#${lu},#${au},#${su})) REPRESENTATION_CONTEXT('camber','3D') )`,
     );
-  const rep = d.add(`MANIFOLD_SURFACE_SHAPE_REPRESENTATION('camber',(#${axis},#${ssm}),#${ctx})`);
+  const rep = d.add(
+    `MANIFOLD_SURFACE_SHAPE_REPRESENTATION('camber',(#${axis},#${ssm}),#${ctx})`,
+  );
   // product structure so the geometry is attached to a part
   const appctx = d.add("APPLICATION_CONTEXT('automotive design')");
-  d.add(`APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2000,#${appctx})`);
+  d.add(
+    `APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2000,#${appctx})`,
+  );
   const pctx = d.add(`PRODUCT_CONTEXT('',#${appctx},'mechanical')`),
     prod = d.add(`PRODUCT('camber','camber hull','',(#${pctx}))`),
     pdf = d.add(`PRODUCT_DEFINITION_FORMATION('','',#${prod})`),
-    pdctx = d.add(`PRODUCT_DEFINITION_CONTEXT('part definition',#${appctx},'design')`),
+    pdctx = d.add(
+      `PRODUCT_DEFINITION_CONTEXT('part definition',#${appctx},'design')`,
+    ),
     pd = d.add(`PRODUCT_DEFINITION('','',#${pdf},#${pdctx})`),
     pds = d.add(`PRODUCT_DEFINITION_SHAPE('','',#${pd})`);
   d.add(`SHAPE_DEFINITION_REPRESENTATION(#${pds},#${rep})`);

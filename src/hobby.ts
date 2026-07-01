@@ -90,8 +90,14 @@ export function hobbySegs(pts: Vec2[]): HobbySeg[] {
     segs.push({
       P0,
       P3,
-      P1: [P0[0] + rho * d[i] * Math.cos(aS), P0[1] + rho * d[i] * Math.sin(aS)],
-      P2: [P3[0] - sig * d[i] * Math.cos(aE), P3[1] - sig * d[i] * Math.sin(aE)],
+      P1: [
+        P0[0] + rho * d[i] * Math.cos(aS),
+        P0[1] + rho * d[i] * Math.sin(aS),
+      ],
+      P2: [
+        P3[0] - sig * d[i] * Math.cos(aE),
+        P3[1] - sig * d[i] * Math.sin(aE),
+      ],
     });
   }
   return segs;

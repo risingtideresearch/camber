@@ -42,7 +42,10 @@ export function DesignBar({
         onChange={(e) => onName(e.target.value)}
         onBlur={onNameBlur}
       />
-      <span className={"savestate" + (saveKind ? " " + saveKind : "")} id="saveState">
+      <span
+        className={"savestate" + (saveKind ? " " + saveKind : "")}
+        id="saveState"
+      >
         {saveText}
       </span>
       <button
@@ -53,11 +56,19 @@ export function DesignBar({
       >
         {saveLabel}
       </button>
-      <button id="revertDesign" title="Discard changes since the last save" onClick={onRevert}>
+      <button
+        id="revertDesign"
+        title="Discard changes since the last save"
+        onClick={onRevert}
+      >
         Revert
       </button>
       <span className="tabsep" />
-      <button id="toFiles" title="Close and return to the design library" onClick={onClose}>
+      <button
+        id="toFiles"
+        title="Close and return to the design library"
+        onClick={onClose}
+      >
         Close
       </button>
     </div>

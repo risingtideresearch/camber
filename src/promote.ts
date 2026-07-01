@@ -66,7 +66,8 @@ function gaussSolve(A: number[][], b: number[]): number[] {
   for (let i = 0; i < n; i++) M[i][i] += 1e-9;
   for (let c = 0; c < n; c++) {
     let pv = c;
-    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[pv][c])) pv = r;
+    for (let r = c + 1; r < n; r++)
+      if (Math.abs(M[r][c]) > Math.abs(M[pv][c])) pv = r;
     [M[c], M[pv]] = [M[pv], M[c]];
     for (let r = 0; r < n; r++)
       if (r !== c) {
@@ -91,7 +92,8 @@ function bsplineRefit(pts: Vec2[], N: number): Vec2[] {
   }
   // chord-length parameters for the samples
   const d = [0];
-  for (let i = 1; i <= S; i++) d[i] = d[i - 1] + Math.hypot(Q[i][0] - Q[i - 1][0], Q[i][1] - Q[i - 1][1]);
+  for (let i = 1; i <= S; i++)
+    d[i] = d[i - 1] + Math.hypot(Q[i][0] - Q[i - 1][0], Q[i][1] - Q[i - 1][1]);
   const tot = d[S] || 1,
     t = d.map((v) => v / tot);
   const p = Math.min(3, N - 1),
@@ -138,7 +140,9 @@ function bsplineRefit(pts: Vec2[], N: number): Vec2[] {
 // raise the template count to K by appending duplicates of the last template at zero blend weight
 function promoteTemplates(data: HullData, K: number): void {
   while (data.templates.length < K) {
-    data.templates.push(data.templates[data.templates.length - 1].map((p) => ({ ...p })));
+    data.templates.push(
+      data.templates[data.templates.length - 1].map((p) => ({ ...p })),
+    );
     data.cp.forEach((c) => c.w.push(0)); // the new template contributes nothing to THIS hull (Σw still = 1)
   }
 }
@@ -224,7 +228,12 @@ export function promoteFamily(datas: HullData[]): boolean {
     K = Math.max(...datas.map((d) => d.templates.length));
   let changed = false;
   for (const d of datas) {
-    if (d.cp.length !== N || d.trim.length !== T || d.templates[0].length !== S || d.templates.length !== K)
+    if (
+      d.cp.length !== N ||
+      d.trim.length !== T ||
+      d.templates[0].length !== S ||
+      d.templates.length !== K
+    )
       changed = true;
     promoteTemplates(d, K); // first — sets each station's weight vector to length K
     promotePlan(d, N); // then refit the plan (weights resampled with the final K length)

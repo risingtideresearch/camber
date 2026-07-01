@@ -1,197 +1,693 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Constant camber — hull interpolation viewer</title>
-<style>
-  :root{
-    --sheer:#dd6b20; --keel:#0f766e; --aft:#2b6cb0; --fore:#7c3aed; --station:#94a3b8;
-    --wl:#0ea5e9; --bt:#64748b; --deck:#cbd5e1; --transom:#b45309;
-    --ink:#1a202c; --mut:#718096; --bg:#f7fafc; --panel:#ffffff; --line:#e2e8f0;
-    --slider:#e11d48;
-  }
-  *{box-sizing:border-box}
-  body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-       color:var(--ink);background:var(--bg);}
-  header{padding:16px 24px 0;}
-  header h1{margin:0;font-size:18px;}
-  header p{margin:4px 0 0;color:var(--mut);font-size:13px;max-width:820px;}
-  .wrap{display:flex;flex-direction:column;gap:14px;padding:14px 24px 32px;max-width:1500px;}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;}
-  .row{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;}
-  .row .main{flex:1 1 560px;display:flex;flex-direction:column;gap:14px;}
-  .row .side{flex:0 1 320px;display:flex;flex-direction:column;gap:14px;}
-  .cap{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 8px;
-       display:flex;justify-content:space-between;align-items:baseline;}
-  .cap .val{text-transform:none;letter-spacing:0;font-weight:600;color:var(--ink);font-size:13px;}
-  #cv3d{display:block;width:100%;aspect-ratio:1000/460;touch-action:none;cursor:grab;border-radius:6px;
-        background:linear-gradient(#eef3f8,#d7e0ea);}
-  .cv3dwrap{position:relative;}
-  /* lines-plan overlay: white, covers the GL canvas; pointer-events pass through so drag-rotate still works */
-  .lines3d{position:absolute;inset:0;width:100%;height:100%;background:#ebeef2;pointer-events:none;border-radius:6px;}
-  button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 12px;font:inherit;
-         cursor:pointer;color:#4a5568;}
-  button:hover{background:#f1f5f9;}
-  button:disabled{opacity:.45;cursor:default;}
-  button:disabled:hover{background:#fff;}
-  button.on{background:var(--ink);color:#fff;border-color:var(--ink);}
-  button.primary{background:var(--ink);color:#fff;border-color:var(--ink);}
-  /* 3D mode segmented control: joined buttons, one active */
-  .view3dctl{display:inline-flex;gap:0;}
-  .view3dctl .vmode{border-radius:0;margin-left:-1px;}
-  .view3dctl .vmode:first-child{border-radius:8px 0 0 8px;margin-left:0;}
-  .view3dctl .vmode:last-child{border-radius:0 8px 8px 0;}
-  .view3dctl .vmode.on{position:relative;z-index:1;}
-  button.primary:hover{background:#2d3748;}
-  .barrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
-  .docname{font:inherit;font-weight:600;color:var(--ink);background:transparent;border:1px solid var(--line);
-       border-radius:8px;padding:6px 10px;max-width:240px;}
-  .docname::placeholder{color:var(--mut);font-weight:400;}
-  .docname:focus{outline:none;border-color:#2b6cb0;background:#fff;}
-  .savestate{font-size:12px;min-width:74px;color:var(--mut);}
-  .savestate.dirty{color:#b7791f;}
-  .savestate.saved{color:#2f855a;}
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Constant camber — hull interpolation viewer</title>
+    <style>
+      :root {
+        --sheer: #dd6b20;
+        --keel: #0f766e;
+        --aft: #2b6cb0;
+        --fore: #7c3aed;
+        --station: #94a3b8;
+        --wl: #0ea5e9;
+        --bt: #64748b;
+        --deck: #cbd5e1;
+        --transom: #b45309;
+        --ink: #1a202c;
+        --mut: #718096;
+        --bg: #f7fafc;
+        --panel: #ffffff;
+        --line: #e2e8f0;
+        --slider: #e11d48;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font:
+          14px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+      }
+      header {
+        padding: 16px 24px 0;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 18px;
+      }
+      header p {
+        margin: 4px 0 0;
+        color: var(--mut);
+        font-size: 13px;
+        max-width: 820px;
+      }
+      .wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding: 14px 24px 32px;
+        max-width: 1500px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px 16px;
+      }
+      .row {
+        display: flex;
+        gap: 14px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .row .main {
+        flex: 1 1 560px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .row .side {
+        flex: 0 1 320px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .cap {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--mut);
+        margin: 0 0 8px;
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+      }
+      .cap .val {
+        text-transform: none;
+        letter-spacing: 0;
+        font-weight: 600;
+        color: var(--ink);
+        font-size: 13px;
+      }
+      #cv3d {
+        display: block;
+        width: 100%;
+        aspect-ratio: 1000/460;
+        touch-action: none;
+        cursor: grab;
+        border-radius: 6px;
+        background: linear-gradient(#eef3f8, #d7e0ea);
+      }
+      .cv3dwrap {
+        position: relative;
+      }
+      /* lines-plan overlay: white, covers the GL canvas; pointer-events pass through so drag-rotate still works */
+      .lines3d {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        background: #ebeef2;
+        pointer-events: none;
+        border-radius: 6px;
+      }
+      button {
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 8px;
+        padding: 6px 12px;
+        font: inherit;
+        cursor: pointer;
+        color: #4a5568;
+      }
+      button:hover {
+        background: #f1f5f9;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      button:disabled:hover {
+        background: #fff;
+      }
+      button.on {
+        background: var(--ink);
+        color: #fff;
+        border-color: var(--ink);
+      }
+      button.primary {
+        background: var(--ink);
+        color: #fff;
+        border-color: var(--ink);
+      }
+      /* 3D mode segmented control: joined buttons, one active */
+      .view3dctl {
+        display: inline-flex;
+        gap: 0;
+      }
+      .view3dctl .vmode {
+        border-radius: 0;
+        margin-left: -1px;
+      }
+      .view3dctl .vmode:first-child {
+        border-radius: 8px 0 0 8px;
+        margin-left: 0;
+      }
+      .view3dctl .vmode:last-child {
+        border-radius: 0 8px 8px 0;
+      }
+      .view3dctl .vmode.on {
+        position: relative;
+        z-index: 1;
+      }
+      button.primary:hover {
+        background: #2d3748;
+      }
+      .barrow {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .docname {
+        font: inherit;
+        font-weight: 600;
+        color: var(--ink);
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 6px 10px;
+        max-width: 240px;
+      }
+      .docname::placeholder {
+        color: var(--mut);
+        font-weight: 400;
+      }
+      .docname:focus {
+        outline: none;
+        border-color: #2b6cb0;
+        background: #fff;
+      }
+      .savestate {
+        font-size: 12px;
+        min-width: 74px;
+        color: var(--mut);
+      }
+      .savestate.dirty {
+        color: #b7791f;
+      }
+      .savestate.saved {
+        color: #2f855a;
+      }
 
-  /* ---- interpolation control panel ---- */
-  .ctl{display:flex;flex-direction:column;gap:12px;}
-  #status{font-size:13px;color:var(--mut);}
-  #hullList{display:flex;flex-direction:column;gap:12px;}
-  .hullrow{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:#fbfcfe;}
-  .hullhead{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
-  .hullhead .dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto;}
-  .hullhead .hullname{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:13px;}
-  .hullhead .pct{font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink);font-size:13px;}
-  .hullhead .rm{border:0;background:none;color:var(--mut);padding:0 4px;font-size:14px;line-height:1;cursor:pointer;}
-  .hullhead .rm:hover{color:var(--slider);background:none;}
-  input[type=range]{width:100%;accent-color:var(--slider);}
-  .hint{font-size:12px;color:var(--mut);}
-  /* blend pad (3+ hulls): draggable coloured hull dots around a fixed centre (the blend) */
-  .padwrap{display:flex;justify-content:center;padding:2px 0;}
-  #blendPad{width:100%;max-width:260px;height:auto;touch-action:none;cursor:pointer;user-select:none;}
-  #blendPad .puck{cursor:grab;}
-  #blendPad .puck:active{cursor:grabbing;}
-  /* metric heatmap selector + legend */
-  .heatrow{display:flex;align-items:center;gap:8px;font-size:13px;}
-  .heatrow label{color:var(--mut);}
-  .heatrow select{flex:1 1 auto;font:inherit;border:1px solid var(--line);border-radius:6px;padding:3px 6px;background:#fff;}
-  #heatLegend{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);min-height:16px;}
-  #heatLegend:empty{display:none;}
-  #heatLegend .hl-k{flex:1 1 auto;color:var(--ink);font-weight:600;}
-  #heatLegend .hl-bar{width:64px;height:9px;border-radius:3px;border:1px solid var(--line);
-    background:linear-gradient(90deg,rgb(44,123,182),rgb(255,255,191),rgb(215,25,28));}
-  #heatLegend .hl-lo,#heatLegend .hl-hi{font-variant-numeric:tabular-nums;}
-  /* scatter explorer */
-  .scataxes{display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;}
-  .scataxes label{color:var(--mut);font-size:12px;}
-  .scataxes select{font:inherit;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:2px 5px;background:#fff;}
-  #scatter{display:block;width:100%;height:auto;}
-  #scatter .spt{cursor:pointer;}
-  #scatter .spt:hover{fill-opacity:1;}
-  .padlegend{display:flex;flex-direction:column;gap:6px;}
-  .legrow{display:flex;align-items:center;gap:8px;font-size:13px;}
-  .legrow .dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto;}
-  .legrow .nm{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .legrow .pct{font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink);}
-  /* single slider (exactly 2 hulls) */
-  .twoslider{display:flex;flex-direction:column;gap:6px;}
-  .twoends{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;font-weight:600;}
-  .twoends .e{display:flex;align-items:center;gap:6px;min-width:0;}
-  .twoends .e.r{flex-direction:row-reverse;text-align:right;}
-  .twoends .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px;}
-  .twoends .dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto;}
-  .twopct{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums;font-weight:700;font-size:13px;color:var(--ink);}
-  /* metrics panel */
-  .scalerow{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--mut);}
-  .scalerow label{display:flex;align-items:center;gap:6px;color:var(--ink);}
-  .scalerow input{width:72px;font:inherit;border:1px solid var(--line);border-radius:6px;padding:3px 6px;}
-  .scalerow select{font:inherit;border:1px solid var(--line);border-radius:6px;padding:3px 6px;background:#fff;}
-  .metrics{display:flex;flex-direction:column;gap:1px;}
-  .msec{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin:8px 0 2px;}
-  .mrow{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:1px 0;}
-  .mrow .mk{color:var(--mut);}
-  .mrow .mv{font-variant-numeric:tabular-nums;font-weight:600;color:var(--ink);white-space:nowrap;}
-  .mnote{font-size:12px;color:#b7791f;margin:4px 0;}
-</style>
-</head>
-<body>
-<header>
-  <h1>Hull interpolation blender</h1>
-  <p>Blend between the chosen hulls — a slider for two, or drag the dot in the blend pad for three or more.
-  Every blend of valid hulls of the same topology is itself a valid hull. Name it and use
-  <strong>Save As</strong> to store the result as a new design in the library.</p>
-</header>
-<div class="wrap">
-  <div class="card">
-    <div class="barrow">
-      <input id="blendName" class="docname" placeholder="Untitled blend" maxlength="120"
-             title="Name for the saved blend" spellcheck="false">
-      <span class="savestate" id="saveState"></span>
-      <button id="saveAs" class="primary" title="Save the current blend as a new design in the library" disabled>Save As…</button>
-      <button id="equalBtn" title="Reset all weights to equal">Equalize weights</button>
-      <span style="flex:1"></span>
-      <button id="closeBtn" title="Close and return to the design library">Close</button>
-    </div>
-  </div>
+      /* ---- interpolation control panel ---- */
+      .ctl {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #status {
+        font-size: 13px;
+        color: var(--mut);
+      }
+      #hullList {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .hullrow {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 10px;
+        background: #fbfcfe;
+      }
+      .hullhead {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      .hullhead .dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        flex: 0 0 auto;
+      }
+      .hullhead .hullname {
+        flex: 1 1 auto;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .hullhead .pct {
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+        color: var(--ink);
+        font-size: 13px;
+      }
+      .hullhead .rm {
+        border: 0;
+        background: none;
+        color: var(--mut);
+        padding: 0 4px;
+        font-size: 14px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      .hullhead .rm:hover {
+        color: var(--slider);
+        background: none;
+      }
+      input[type="range"] {
+        width: 100%;
+        accent-color: var(--slider);
+      }
+      .hint {
+        font-size: 12px;
+        color: var(--mut);
+      }
+      /* blend pad (3+ hulls): draggable coloured hull dots around a fixed centre (the blend) */
+      .padwrap {
+        display: flex;
+        justify-content: center;
+        padding: 2px 0;
+      }
+      #blendPad {
+        width: 100%;
+        max-width: 260px;
+        height: auto;
+        touch-action: none;
+        cursor: pointer;
+        user-select: none;
+      }
+      #blendPad .puck {
+        cursor: grab;
+      }
+      #blendPad .puck:active {
+        cursor: grabbing;
+      }
+      /* metric heatmap selector + legend */
+      .heatrow {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+      }
+      .heatrow label {
+        color: var(--mut);
+      }
+      .heatrow select {
+        flex: 1 1 auto;
+        font: inherit;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 3px 6px;
+        background: #fff;
+      }
+      #heatLegend {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--mut);
+        min-height: 16px;
+      }
+      #heatLegend:empty {
+        display: none;
+      }
+      #heatLegend .hl-k {
+        flex: 1 1 auto;
+        color: var(--ink);
+        font-weight: 600;
+      }
+      #heatLegend .hl-bar {
+        width: 64px;
+        height: 9px;
+        border-radius: 3px;
+        border: 1px solid var(--line);
+        background: linear-gradient(
+          90deg,
+          rgb(44, 123, 182),
+          rgb(255, 255, 191),
+          rgb(215, 25, 28)
+        );
+      }
+      #heatLegend .hl-lo,
+      #heatLegend .hl-hi {
+        font-variant-numeric: tabular-nums;
+      }
+      /* scatter explorer */
+      .scataxes {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        text-transform: none;
+        letter-spacing: 0;
+      }
+      .scataxes label {
+        color: var(--mut);
+        font-size: 12px;
+      }
+      .scataxes select {
+        font: inherit;
+        font-size: 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 2px 5px;
+        background: #fff;
+      }
+      #scatter {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      #scatter .spt {
+        cursor: pointer;
+      }
+      #scatter .spt:hover {
+        fill-opacity: 1;
+      }
+      .padlegend {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .legrow {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+      }
+      .legrow .dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        flex: 0 0 auto;
+      }
+      .legrow .nm {
+        flex: 1 1 auto;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .legrow .pct {
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+        color: var(--ink);
+      }
+      /* single slider (exactly 2 hulls) */
+      .twoslider {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .twoends {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .twoends .e {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+      .twoends .e.r {
+        flex-direction: row-reverse;
+        text-align: right;
+      }
+      .twoends .nm {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 120px;
+      }
+      .twoends .dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        flex: 0 0 auto;
+      }
+      .twopct {
+        display: flex;
+        justify-content: space-between;
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+        font-size: 13px;
+        color: var(--ink);
+      }
+      /* metrics panel */
+      .scalerow {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--mut);
+      }
+      .scalerow label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--ink);
+      }
+      .scalerow input {
+        width: 72px;
+        font: inherit;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 3px 6px;
+      }
+      .scalerow select {
+        font: inherit;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 3px 6px;
+        background: #fff;
+      }
+      .metrics {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+      .msec {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--mut);
+        margin: 8px 0 2px;
+      }
+      .mrow {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 13px;
+        padding: 1px 0;
+      }
+      .mrow .mk {
+        color: var(--mut);
+      }
+      .mrow .mv {
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        color: var(--ink);
+        white-space: nowrap;
+      }
+      .mnote {
+        font-size: 12px;
+        color: #b7791f;
+        margin: 4px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Hull interpolation blender</h1>
+      <p>
+        Blend between the chosen hulls — a slider for two, or drag the dot in
+        the blend pad for three or more. Every blend of valid hulls of the same
+        topology is itself a valid hull. Name it and use
+        <strong>Save As</strong> to store the result as a new design in the
+        library.
+      </p>
+    </header>
+    <div class="wrap">
+      <div class="card">
+        <div class="barrow">
+          <input
+            id="blendName"
+            class="docname"
+            placeholder="Untitled blend"
+            maxlength="120"
+            title="Name for the saved blend"
+            spellcheck="false"
+          />
+          <span class="savestate" id="saveState"></span>
+          <button
+            id="saveAs"
+            class="primary"
+            title="Save the current blend as a new design in the library"
+            disabled
+          >
+            Save As…
+          </button>
+          <button id="equalBtn" title="Reset all weights to equal">
+            Equalize weights
+          </button>
+          <span style="flex: 1"></span>
+          <button id="closeBtn" title="Close and return to the design library">
+            Close
+          </button>
+        </div>
+      </div>
 
-  <div class="row">
-    <div class="main">
-      <div class="card">
-        <div class="cap"><span>3D · blended hull</span>
-          <span style="display:flex;gap:8px;align-items:center;">
-            <span class="view3dctl" id="view3dModes">
-              <button class="vmode on" data-mode="render" title="Shaded hull">Render</button>
-              <button class="vmode" data-mode="body" title="Lines plan — body (stations)">Body</button>
-              <button class="vmode" data-mode="buttocks" title="Lines plan — buttocks (constant-y cuts)">Buttocks</button>
-              <button class="vmode" data-mode="waterline" title="Lines plan — waterlines (constant-z cuts)">Waterline</button>
-              <button class="vmode" data-mode="zebra" title="Zebra-stripe fairness check">Zebra</button>
-              <button class="vmode" data-mode="sheet" title="Untrimmed swept sheet (one side)">Sheet</button>
-            </span>
-            <span class="val">drag to rotate</span></span></div>
-        <div class="cv3dwrap">
-          <canvas id="cv3d"></canvas>
-          <svg id="lines3d" class="lines3d" style="display:none"></svg>
-        </div>
-      </div>
-      <div class="card">
-        <div class="cap"><span>Blend explorer</span>
-          <span class="scataxes">
-            <label>Y</label><select id="scatterY" title="Vertical-axis metric"></select>
-            <label>vs X</label><select id="scatterX" title="Horizontal-axis metric"></select>
-          </span>
-        </div>
-        <svg id="scatter" viewBox="0 0 480 270" preserveAspectRatio="xMidYMid meet"></svg>
-        <div class="hint">Each dot is a sampled blend, plotted by the two metrics. Click one to jump the blend there; the red ring is the current blend.</div>
-      </div>
-    </div>
-    <div class="side">
-      <div class="card">
-        <div class="cap"><span>Hull family &amp; blend weights</span></div>
-        <div class="ctl">
-          <div id="status">Load 2–5 exported hulls to begin.</div>
-          <div id="hullList"></div>
-          <div class="heatrow"><label for="metricSel">Colour by</label><select id="metricSel" title="Colour the pad by a metric's value across the blend space"></select></div>
-          <div id="heatLegend"></div>
-          <div class="hint">Drag toward a hull for more of it; the centre is an equal blend. Pick a metric to colour the pad by its value across the blend space.</div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="cap"><span>Metrics</span></div>
-        <div class="ctl">
-          <div class="scalerow">
-            <label title="Overall length the model's x=L maps to — sets the scale for the dimensional metrics">LOA
-              <input id="loaInput" type="number" min="0" step="0.1" value="12"></label>
-            <select id="unitSel" title="Length unit"><option value="m">m</option><option value="ft">ft</option></select>
-            <select id="waterSel" title="Water density"><option value="salt">salt</option><option value="fresh">fresh</option></select>
+      <div class="row">
+        <div class="main">
+          <div class="card">
+            <div class="cap">
+              <span>3D · blended hull</span>
+              <span style="display: flex; gap: 8px; align-items: center">
+                <span class="view3dctl" id="view3dModes">
+                  <button
+                    class="vmode on"
+                    data-mode="render"
+                    title="Shaded hull"
+                  >
+                    Render
+                  </button>
+                  <button
+                    class="vmode"
+                    data-mode="body"
+                    title="Lines plan — body (stations)"
+                  >
+                    Body
+                  </button>
+                  <button
+                    class="vmode"
+                    data-mode="buttocks"
+                    title="Lines plan — buttocks (constant-y cuts)"
+                  >
+                    Buttocks
+                  </button>
+                  <button
+                    class="vmode"
+                    data-mode="waterline"
+                    title="Lines plan — waterlines (constant-z cuts)"
+                  >
+                    Waterline
+                  </button>
+                  <button
+                    class="vmode"
+                    data-mode="zebra"
+                    title="Zebra-stripe fairness check"
+                  >
+                    Zebra
+                  </button>
+                  <button
+                    class="vmode"
+                    data-mode="sheet"
+                    title="Untrimmed swept sheet (one side)"
+                  >
+                    Sheet
+                  </button>
+                </span>
+                <span class="val">drag to rotate</span></span
+              >
+            </div>
+            <div class="cv3dwrap">
+              <canvas id="cv3d"></canvas>
+              <svg id="lines3d" class="lines3d" style="display: none"></svg>
+            </div>
           </div>
-          <div id="metricsBody" class="metrics"></div>
-          <div class="hint">Unitless metrics show always; dimensional ones use the length scale above. Stability is geometry only (KMt) — GM needs a weight/KG.</div>
+          <div class="card">
+            <div class="cap">
+              <span>Blend explorer</span>
+              <span class="scataxes">
+                <label>Y</label
+                ><select id="scatterY" title="Vertical-axis metric"></select>
+                <label>vs X</label
+                ><select id="scatterX" title="Horizontal-axis metric"></select>
+              </span>
+            </div>
+            <svg
+              id="scatter"
+              viewBox="0 0 480 270"
+              preserveAspectRatio="xMidYMid meet"
+            ></svg>
+            <div class="hint">
+              Each dot is a sampled blend, plotted by the two metrics. Click one
+              to jump the blend there; the red ring is the current blend.
+            </div>
+          </div>
+        </div>
+        <div class="side">
+          <div class="card">
+            <div class="cap"><span>Hull family &amp; blend weights</span></div>
+            <div class="ctl">
+              <div id="status">Load 2–5 exported hulls to begin.</div>
+              <div id="hullList"></div>
+              <div class="heatrow">
+                <label for="metricSel">Colour by</label
+                ><select
+                  id="metricSel"
+                  title="Colour the pad by a metric's value across the blend space"
+                ></select>
+              </div>
+              <div id="heatLegend"></div>
+              <div class="hint">
+                Drag toward a hull for more of it; the centre is an equal blend.
+                Pick a metric to colour the pad by its value across the blend
+                space.
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="cap"><span>Metrics</span></div>
+            <div class="ctl">
+              <div class="scalerow">
+                <label
+                  title="Overall length the model's x=L maps to — sets the scale for the dimensional metrics"
+                  >LOA
+                  <input
+                    id="loaInput"
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value="12"
+                /></label>
+                <select id="unitSel" title="Length unit">
+                  <option value="m">m</option>
+                  <option value="ft">ft</option>
+                </select>
+                <select id="waterSel" title="Water density">
+                  <option value="salt">salt</option>
+                  <option value="fresh">fresh</option>
+                </select>
+              </div>
+              <div id="metricsBody" class="metrics"></div>
+              <div class="hint">
+                Unitless metrics show always; dimensional ones use the length
+                scale above. Stability is geometry only (KMt) — GM needs a
+                weight/KG.
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
-  </div>
-</div>
 
-<script type="module" src="/src/interp.ts"></script>
-</body>
+    <script type="module" src="/src/interp.ts"></script>
+  </body>
 </html>

@@ -102,9 +102,16 @@ function loadCase(name: string): void {
 }
 
 function main(): number {
-  const cases = ["default", ...readdirSync(examplesDir()).filter((f) => f.endsWith(".json")).sort()];
+  const cases = [
+    "default",
+    ...readdirSync(examplesDir())
+      .filter((f) => f.endsWith(".json"))
+      .sort(),
+  ];
   let failures = 0;
-  console.log(`Keel smoothness — worst adjacent-station deadrise jump (threshold ${THRESHOLD_DEG}°)\n`);
+  console.log(
+    `Keel smoothness — worst adjacent-station deadrise jump (threshold ${THRESHOLD_DEG}°)\n`,
+  );
   for (const name of cases) {
     const cells: string[] = [];
     let caseFailed = false;
@@ -114,12 +121,18 @@ function main(): number {
       const { jump, x } = worstStep();
       const bad = jump > THRESHOLD_DEG;
       if (bad) caseFailed = true;
-      cells.push(`k=${k}: ${jump.toFixed(2)}°@${Math.round(x)}${bad ? " ✗" : ""}`);
+      cells.push(
+        `k=${k}: ${jump.toFixed(2)}°@${Math.round(x)}${bad ? " ✗" : ""}`,
+      );
     }
     if (caseFailed) failures++;
-    console.log(`  ${caseFailed ? "FAIL" : "ok  "}  ${name.padEnd(26)} ${cells.join("   ")}`);
+    console.log(
+      `  ${caseFailed ? "FAIL" : "ok  "}  ${name.padEnd(26)} ${cells.join("   ")}`,
+    );
   }
-  console.log(`\n${failures === 0 ? "PASS" : "FAIL"} — ${cases.length - failures}/${cases.length} cases smooth`);
+  console.log(
+    `\n${failures === 0 ? "PASS" : "FAIL"} — ${cases.length - failures}/${cases.length} cases smooth`,
+  );
   return failures === 0 ? 0 : 1;
 }
 

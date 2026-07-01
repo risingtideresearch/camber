@@ -8,10 +8,18 @@ interface TrimControlsProps {
   onRake: (deg: number) => void;
 }
 
-export function TrimControls({ waterline, rakeDeg, onWaterline, onRake }: TrimControlsProps) {
+export function TrimControls({
+  waterline,
+  rakeDeg,
+  onWaterline,
+  onRake,
+}: TrimControlsProps) {
   return (
     <>
-      <label className="ctl" title="Design waterline — depth below the sheer origin (deck datum)">
+      <label
+        className="ctl"
+        title="Design waterline — depth below the sheer origin (deck datum)"
+      >
         WL
         <input
           type="range"

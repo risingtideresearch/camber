@@ -41,7 +41,8 @@ export function buildStl(name = "camber"): string {
   // duplicate keel point — so the keel is one interior column rather than a mirrored seam.
   const grid: Vec3[][] = half.map((row) => {
     const full = row.slice();
-    for (let j = M - 1; j >= 0; j--) full.push([row[j][0], -row[j][1], row[j][2]]);
+    for (let j = M - 1; j >= 0; j--)
+      full.push([row[j][0], -row[j][1], row[j][2]]);
     return full;
   });
   const NS = grid.length - 1,

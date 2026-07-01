@@ -53,9 +53,19 @@ export const COL = {
 };
 
 // per-template accent colors, cycled. Template 0 is the old "aft" blue; later ones fan toward purple/amber.
-const TPL_PALETTE = ["#2b6cb0", "#7c3aed", "#dd6b20", "#0f766e", "#b45309", "#be185d", "#0369a1"];
+const TPL_PALETTE = [
+  "#2b6cb0",
+  "#7c3aed",
+  "#dd6b20",
+  "#0f766e",
+  "#b45309",
+  "#be185d",
+  "#0369a1",
+];
 export function tplColor(i: number): string {
-  return TPL_PALETTE[((i % TPL_PALETTE.length) + TPL_PALETTE.length) % TPL_PALETTE.length];
+  return TPL_PALETTE[
+    ((i % TPL_PALETTE.length) + TPL_PALETTE.length) % TPL_PALETTE.length
+  ];
 }
 
 // a uniform sampling of x across the hull length, used by the plan/profile sweep curves. Runs to L+XFWD so

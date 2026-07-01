@@ -10,9 +10,19 @@ export function SelectionInfo() {
       </span>
       <label className="sel-knuckle" id="selKnuckleWrap">
         Knuckle
-        <input type="range" id="selKnuckle" min="0" max="1" step="0.01" title="0 = smooth · 1 = hard corner" />
+        <input
+          type="range"
+          id="selKnuckle"
+          min="0"
+          max="1"
+          step="0.01"
+          title="0 = smooth · 1 = hard corner"
+        />
       </label>
-      <button id="selDelete" title="Delete the selected point (Delete / Backspace)">
+      <button
+        id="selDelete"
+        title="Delete the selected point (Delete / Backspace)"
+      >
         Delete
       </button>
     </div>

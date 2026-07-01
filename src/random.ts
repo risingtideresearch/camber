@@ -92,7 +92,8 @@ import { state, L, NMIN, NMAX, DMAX } from "./model.js";
 import { YMAX, ZTRIMMIN } from "./view.js";
 import { loadJsonText } from "./json.js";
 
-const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
+const clamp = (v: number, lo: number, hi: number): number =>
+  v < lo ? lo : v > hi ? hi : v;
 const sigmoid = (u: number): number => 1 / (1 + Math.exp(-u));
 const logit = (p: number): number => Math.log(p / (1 - p));
 
@@ -105,19 +106,37 @@ function randn(): number {
 
 // ---------- residual decoders: each maps one θ-coordinate `z` onto a slot, centred at `target` at z=0 ----------
 // bounded interval (lo,hi): the README's transom-x transform, shifted so z=0 ⇒ target. Always interior.
-const bounded = (z: number, target: number, lo: number, hi: number, spread = 1): number =>
-  lo + (hi - lo) * sigmoid(spread * z + logit(clamp((target - lo) / (hi - lo), 1e-4, 1 - 1e-4)));
+const bounded = (
+  z: number,
+  target: number,
+  lo: number,
+  hi: number,
+  spread = 1,
+): number =>
+  lo +
+  (hi - lo) *
+    sigmoid(
+      spread * z + logit(clamp((target - lo) / (hi - lo), 1e-4, 1 - 1e-4)),
+    );
 // positive ray (0,∞): geometric residual, z=0 ⇒ target. The full ray (incl. arbitrarily small) is reachable.
-const positive = (z: number, target: number, spread = 1): number => target * Math.exp(spread * z);
+const positive = (z: number, target: number, spread = 1): number =>
+  target * Math.exp(spread * z);
 // free real ℝ: additive residual, z=0 ⇒ target.
-const real = (z: number, target: number, scale: number): number => target + scale * z;
+const real = (z: number, target: number, scale: number): number =>
+  target + scale * z;
 
 const smooth = (r: number): number => {
   r = clamp(r, 0, 1);
   return r * r * (3 - 2 * r); // smoothstep
 };
 // a smooth unimodal profile over f ∈ [0,1]: `v0` at f=0, peak `vp` at f=`fp`, `v1` at f=1
-function bump(f: number, fp: number, v0: number, vp: number, v1: number): number {
+function bump(
+  f: number,
+  fp: number,
+  v0: number,
+  vp: number,
+  v1: number,
+): number {
   if (f <= fp) return v0 + (vp - v0) * smooth(fp <= 0 ? 1 : f / fp);
   return vp + (v1 - vp) * smooth(fp >= 1 ? 1 : (f - fp) / (1 - fp));
 }
@@ -142,7 +161,9 @@ function buildSection(
   const pts = [{ n: 0, d: 0, k: 0 }]; // pinned sheer point
   const bIdx = S >= 3 ? clamp(Math.round((S - 1) * 0.55), 1, S - 2) : -1; // which point is the bilge
   for (let i = 1; i < S; i++) {
-    let n: number, d: number, k = 0;
+    let n: number,
+      d: number,
+      k = 0;
     if (S < 3) {
       n = nKeel;
       d = dKeel;
@@ -181,7 +202,10 @@ function decodeDoc(z: Coord): string {
 
   // #2 helper: a base ± ½Δ residual pair, consuming two coordinates. Δ=0 (second coord 0) ⇒ aft & fore
   // get the SAME residual (constant-camber-consistent); a nonzero Δ lets the two ends deviate per-point.
-  const pair = (baseSpread: number, deltaSpread: number): { aft: number; fore: number } => {
+  const pair = (
+    baseSpread: number,
+    deltaSpread: number,
+  ): { aft: number; fore: number } => {
     const b = baseSpread * z(),
       d = deltaSpread * z();
     return { aft: b - 0.5 * d, fore: b + 0.5 * d };
@@ -192,7 +216,8 @@ function decodeDoc(z: Coord): string {
     fPeak = bounded(z(), 0.58, 0.5, 0.68),
     Btransom = Bmax * bounded(z(), 0.78, 0.55, 0.95),
     Bbow = Bmax * bounded(z(), 0.04, 0.005, 0.12);
-  const beam = (x: number): number => clamp(bump(clamp(x, 0, L) / L, fPeak, Btransom, Bmax, Bbow), 0, YMAX);
+  const beam = (x: number): number =>
+    clamp(bump(clamp(x, 0, L) / L, fPeak, Btransom, Bmax, Bbow), 0, YMAX);
   const tx = (x: number): number => {
     const e = 25,
       a = Math.max(x - e, 0),
@@ -203,7 +228,9 @@ function decodeDoc(z: Coord): string {
   // transom beam and the fine bow are governed by their backbone latents). Multiplicative ⇒ y ≥ 0 always.
   const planY = Array.from({ length: P }, (_, i) => {
     const y = beam((L * i) / (P - 1));
-    return i === 0 || i === P - 1 ? y : clamp(y * Math.exp(0.12 * z()), 0, YMAX);
+    return i === 0 || i === P - 1
+      ? y
+      : clamp(y * Math.exp(0.12 * z()), 0, YMAX);
   });
 
   // --- #3: keel reach as a residual on the decoded beam. The binding station is the widest one (n
@@ -274,19 +301,30 @@ function decodeDoc(z: Coord): string {
     dBow = bounded(z(), 45, 15, 110),
     fLow = bounded(z(), 0.45, 0.32, 0.58);
   const trimDepth = (x: number): number =>
-    clamp(bump(clamp(x, 0, L) / L, fLow, dTransom, dMaxTrim, dBow), 0, DEPTH_MAX);
+    clamp(
+      bump(clamp(x, 0, L) / L, fLow, dTransom, dMaxTrim, dBow),
+      0,
+      DEPTH_MAX,
+    );
   // #2: per-point depth residuals on interior trim points (ends governed by their backbone latents)
   const sheerTrim = Array.from({ length: Q }, (_, i) => {
     const d = trimDepth((L * i) / (Q - 1));
     return {
       dx: i === 0 ? 0 : L / (Q - 1),
-      depth: i === 0 || i === Q - 1 ? d : clamp(d * Math.exp(0.13 * z()), 0, DEPTH_MAX),
+      depth:
+        i === 0 || i === Q - 1
+          ? d
+          : clamp(d * Math.exp(0.13 * z()), 0, DEPTH_MAX),
     };
   });
 
   // --- transom: top edge meets the sheer at the stern (predicted, no own coord); immersion ∝ aft draft ---
   const depthTop = clamp(trimDepth(0), 5, DEPTH_MAX * 0.5),
-    depthBot = clamp(bounded(z(), 0.7, 0.45, 0.95) * draftAft * 0.8, depthTop + 40, DEPTH_MAX);
+    depthBot = clamp(
+      bounded(z(), 0.7, 0.45, 0.95) * draftAft * 0.8,
+      depthTop + 40,
+      DEPTH_MAX,
+    );
   const transom = {
     x: clamp(bounded(z(), 150, 60, 360), 0, L * 0.45),
     depthTop,
@@ -299,7 +337,16 @@ function decodeDoc(z: Coord): string {
     waterline: state.waterline, // preserve the current trim controls; only the shape is resampled
     deckRakeDeg: (state.deckRake * 180) / Math.PI,
     topology: { sheerPlan: P, sheerTrim: Q, section: S },
-    variants: [{ name: "random", sheerPlan, sheerTrim, transom, aft: encSection(aft), fore: encSection(fore) }],
+    variants: [
+      {
+        name: "random",
+        sheerPlan,
+        sheerTrim,
+        transom,
+        aft: encSection(aft),
+        fore: encSection(fore),
+      },
+    ],
   };
   return JSON.stringify(doc);
 }

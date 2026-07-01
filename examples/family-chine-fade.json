@@ -21,7 +21,12 @@
         { "dx": 1334, "depth": 260 },
         { "dx": 1333, "depth": 40 }
       ],
-      "transom": { "x": 150, "depthTop": 55, "dDepthBot": 665, "transomRake": -0.3458646616541353 },
+      "transom": {
+        "x": 150,
+        "depthTop": 55,
+        "dDepthBot": 665,
+        "transomRake": -0.3458646616541353
+      },
       "aft": [
         { "dd": 0, "n": 0, "k": 0 },
         { "dd": 320, "n": 90, "k": 0 },
@@ -52,7 +57,12 @@
         { "dx": 1334, "depth": 230 },
         { "dx": 1333, "depth": 70 }
       ],
-      "transom": { "x": 120, "depthTop": 80, "dDepthBot": 700, "transomRake": 0 },
+      "transom": {
+        "x": 120,
+        "depthTop": 80,
+        "dDepthBot": 700,
+        "transomRake": 0
+      },
       "aft": [
         { "dd": 0, "n": 0, "k": 0 },
         { "dd": 380, "n": 70, "k": 0 },

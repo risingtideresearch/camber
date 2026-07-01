@@ -8,30 +8,50 @@ import { loadJsonText } from "../../src/json.js";
 import { mapX, wY, WH } from "../../src/view.js";
 
 resetModel();
-if (process.env.CAMBER_DOC) loadJsonText(readFileSync(process.env.CAMBER_DOC, "utf8"));
+if (process.env.CAMBER_DOC)
+  loadJsonText(readFileSync(process.env.CAMBER_DOC, "utf8"));
 prepare();
 
 const TPL = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c", "#0891b2"];
-const poly = (pts: [number, number][]) => pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+const poly = (pts: [number, number][]) =>
+  pts
+    .map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`)
+    .join(" ");
 
 const K = state.templates.length;
-const top = wY(1), bot = wY(0);
+const top = wY(1),
+  bot = wY(0);
 const xEnd = state.sheer.cp[state.sheer.cp.length - 1].x;
-const xL = mapX(0), xR = mapX(xEnd);
+const xL = mapX(0),
+  xR = mapX(xEnd);
 
 let body = `<rect x="0" y="0" width="1000" height="${WH}" fill="#fff"/>`;
-for (const g of [0, 0.5, 1]) body += `<line x1="${xL}" y1="${wY(g)}" x2="${xR}" y2="${wY(g)}" stroke="#edf2f7" stroke-width="1"/>`;
+for (const g of [0, 0.5, 1])
+  body += `<line x1="${xL}" y1="${wY(g)}" x2="${xR}" y2="${wY(g)}" stroke="#edf2f7" stroke-width="1"/>`;
 
-const NS = 120, xs: number[] = [], cum: number[][] = [];
+const NS = 120,
+  xs: number[] = [],
+  cum: number[][] = [];
 for (let i = 0; i <= NS; i++) {
-  const x = (xEnd * i) / NS, w = weightsAt(x), c = [0];
+  const x = (xEnd * i) / NS,
+    w = weightsAt(x),
+    c = [0];
   let s = 0;
-  for (let j = 0; j < K; j++) { s += w[j]; c.push(s); }
-  xs.push(x); cum.push(c);
+  for (let j = 0; j < K; j++) {
+    s += w[j];
+    c.push(s);
+  }
+  xs.push(x);
+  cum.push(c);
 }
 for (let j = 0; j < K; j++) {
-  const upper = xs.map((x, i): [number, number] => [mapX(x), wY(cum[i][j + 1])]);
-  const lower = xs.map((x, i): [number, number] => [mapX(x), wY(cum[i][j])]).reverse();
+  const upper = xs.map((x, i): [number, number] => [
+    mapX(x),
+    wY(cum[i][j + 1]),
+  ]);
+  const lower = xs
+    .map((x, i): [number, number] => [mapX(x), wY(cum[i][j])])
+    .reverse();
   body += `<path d="${poly(upper.concat(lower))}Z" fill="${TPL[j % TPL.length]}" opacity="0.5"/>`;
 }
 for (const cp of state.sheer.cp) {

@@ -24,7 +24,13 @@ function findSpan(n: number, p: number, u: number, U: number[]): number {
 }
 
 // de Boor's algorithm: the curve point at parameter u in span `span`
-function deBoor(span: number, u: number, U: number[], P: Vec2[], p: number): Vec2 {
+function deBoor(
+  span: number,
+  u: number,
+  U: number[],
+  P: Vec2[],
+  p: number,
+): Vec2 {
   const d: Vec2[] = [];
   for (let j = 0; j <= p; j++) d[j] = [P[span - p + j][0], P[span - p + j][1]];
   for (let r = 1; r <= p; r++)
@@ -32,7 +38,10 @@ function deBoor(span: number, u: number, U: number[], P: Vec2[], p: number): Vec
       const i = span - p + j,
         den = U[i + p - r + 1] - U[i],
         a = den > 0 ? (u - U[i]) / den : 0;
-      d[j] = [(1 - a) * d[j - 1][0] + a * d[j][0], (1 - a) * d[j - 1][1] + a * d[j][1]];
+      d[j] = [
+        (1 - a) * d[j - 1][0] + a * d[j][0],
+        (1 - a) * d[j - 1][1] + a * d[j][1],
+      ];
     }
   return d[p];
 }
