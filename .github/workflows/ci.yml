@@ -16,5 +16,6 @@ jobs:
           node-version: 22
       - run: npm ci || npm install
       - run: npm run typecheck
+      - run: npm run lint
       - run: npm run formatcheck
       - run: npm test
