@@ -642,7 +642,10 @@ function paintHeatmap(): void {
   let lo = Infinity,
     hi = -Infinity;
   for (const v of vals)
-    if (Number.isFinite(v)) ((lo = Math.min(lo, v)), (hi = Math.max(hi, v)));
+    if (Number.isFinite(v)) {
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
+    }
   if (!(hi > lo)) {
     g.innerHTML = "";
     updateHeatLegend(null);

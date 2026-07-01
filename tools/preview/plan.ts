@@ -26,7 +26,7 @@ const N = 200;
 for (let i = 0; i <= N; i++) {
   const x = (xFwd * i) / N;
   sheerPts.push([x, state.sheer.yf(x)]);
-  const s: any = sweptSection(x, 24, true, false);
+  const s = sweptSection(x, 24, true, false);
   if (s.aft) continue;
   let my = -1e9;
   for (const p of s.pts) my = Math.max(my, p[1]);

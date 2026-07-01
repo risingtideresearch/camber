@@ -215,7 +215,7 @@ function promoteSection(data: HullData, S: number): void {
       const tm = (pts[bi].t + pts[bi + 1].t) / 2;
       pts.splice(bi + 1, 0, { n: nf(tm), d: df(tm), k: 0, t: tm });
     }
-    return pts.map(({ t, ...p }) => p); // drop the helper param
+    return pts.map(({ t: _t, ...p }) => p); // drop the helper param
   });
 }
 

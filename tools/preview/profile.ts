@@ -12,6 +12,7 @@ import {
   clippedSection,
   forwardLimit,
   transomEdge,
+  type Section,
 } from "../../src/model.js";
 import { loadJsonText } from "../../src/json.js";
 import type { Vec3 } from "../../src/math.js";
@@ -32,7 +33,7 @@ const path = (d: string, stroke: string, w: number, extra = ""): string =>
 // sections to the forward closure, cosine-clustered (same as render.ts)
 const NSEC = 80,
   xFwd = forwardLimit(),
-  sections: any[] = [];
+  sections: Section[] = [];
 for (let i = 0; i <= NSEC; i++)
   sections.push(
     clippedSection((xFwd * (1 - Math.cos((Math.PI * i) / NSEC))) / 2, 18),
@@ -54,7 +55,7 @@ const keel = closing.map((s) => s.pts[s.pts.length - 1] as Vec3);
 const te = transomEdge();
 if (keel.length) {
   if (te.length) keel.unshift(te[te.length - 1]);
-  const dived = (s: any) => s.pts[0][2] < state.sheer.zf(s.pts[0][0]) - 3;
+  const dived = (s: Section) => s.pts[0][2] < state.sheer.zf(s.pts[0][0]) - 3;
   let b = closing.length;
   while (b > 0 && dived(closing[b - 1])) b--;
   const stem = closing.slice(b).map((s) => s.pts[0] as Vec3);
@@ -78,7 +79,7 @@ body += path(
 );
 // trim control polygon (faint)
 body += path(
-  poly(state.sheer.trim.map((cp: any) => [mapX(cp.x), zScreenP(cp.z)])),
+  poly(state.sheer.trim.map((cp) => [mapX(cp.x), zScreenP(cp.z)])),
   "#dd6b20",
   1,
   'opacity="0.4" stroke-dasharray="3 4"',

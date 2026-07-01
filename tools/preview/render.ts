@@ -225,7 +225,9 @@ function renderLines(
       vz = c2 * s1 * sT + s2 * cT;
     const vl = Math.hypot(vx, vy, vz) || 1,
       BIAS = 60;
-    ((vx /= vl), (vy /= vl), (vz /= vl));
+    vx /= vl;
+    vy /= vl;
+    vz /= vl;
     const tpl = state.templates,
       NP = 120,
       WP: Vec3[] = [],
@@ -324,7 +326,9 @@ function renderShaded(
     Vy = -c2 * c1,
     Vz = c2 * s1 * sT + s2 * cT;
   const Vl = Math.hypot(Vx, Vy, Vz) || 1;
-  ((Vx /= Vl), (Vy /= Vl), (Vz /= Vl));
+  Vx /= Vl;
+  Vy /= Vl;
+  Vz /= Vl;
   const R = rows.length,
     C = rows[0].length;
   let minX = 1e9,

@@ -31,9 +31,13 @@ export function EditorApp() {
   const ctrlRef = useRef<Controller | null>(null);
   const bootedRef = useRef(false);
   const nameRef = useRef(name);
-  nameRef.current = name;
   const savingRef = useRef(false); // true while a save request is in flight
   const flashUntilRef = useRef(0); // keep a transient "Saving…" / "Saved ✓" until this timestamp
+
+  // keep nameRef in sync with the latest name so async readers (doSave, the poll) see it fresh
+  useEffect(() => {
+    nameRef.current = name;
+  }, [name]);
 
   // ---------- boot: mount the imperative core once, after the DOM exists ----------
   useEffect(() => {

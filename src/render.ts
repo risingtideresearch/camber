@@ -1207,7 +1207,8 @@ function drawCutStation(svg: SVGSVGElement): void {
 // mode bands the surface by the reflected eye direction so unfair (non-smooth) spots show as kinked lines.
 let GL: WebGLRenderingContext | null = null,
   prog: WebGLProgram | null = null,
-  loc: Record<string, any> = {},
+  attr: Record<string, number> = {}, // vertex attribute locations (GLint)
+  loc: Record<string, WebGLUniformLocation | null> = {}, // uniform locations
   posBuf: WebGLBuffer | null = null,
   nrmBuf: WebGLBuffer | null = null;
 
@@ -1289,8 +1290,11 @@ function initGL(): void {
   gl.attachShader(prog, glShader(gl, gl.FRAGMENT_SHADER, FRAG_SRC));
   gl.linkProgram(prog);
   gl.useProgram(prog);
+  attr = {};
   loc = {};
-  ["aPos", "aNormal"].forEach((n) => (loc[n] = gl.getAttribLocation(prog!, n)));
+  ["aPos", "aNormal"].forEach(
+    (n) => (attr[n] = gl.getAttribLocation(prog!, n)),
+  );
   [
     "uc1",
     "us1",
@@ -1637,12 +1641,12 @@ function drawMesh(gl: WebGLRenderingContext, mesh: Mesh, base: number[]): void {
   if (!mesh.count) return;
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
   gl.bufferData(gl.ARRAY_BUFFER, mesh.pos, gl.DYNAMIC_DRAW);
-  gl.enableVertexAttribArray(loc.aPos);
-  gl.vertexAttribPointer(loc.aPos, 3, gl.FLOAT, false, 0, 0);
+  gl.enableVertexAttribArray(attr.aPos);
+  gl.vertexAttribPointer(attr.aPos, 3, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf);
   gl.bufferData(gl.ARRAY_BUFFER, mesh.nrm, gl.DYNAMIC_DRAW);
-  gl.enableVertexAttribArray(loc.aNormal);
-  gl.vertexAttribPointer(loc.aNormal, 3, gl.FLOAT, false, 0, 0);
+  gl.enableVertexAttribArray(attr.aNormal);
+  gl.vertexAttribPointer(attr.aNormal, 3, gl.FLOAT, false, 0, 0);
   gl.uniform3fv(loc.uBase, base);
   gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
 }
@@ -1985,7 +1989,9 @@ function drawLines(
       vz = c2 * s1 * sT + s2 * cT;
     const vl = Math.hypot(vx, vy, vz) || 1,
       BIAS = 15; // clear the coarse flat-facet chords (the guide rides facet interiors, not edges)
-    ((vx /= vl), (vy /= vl), (vz /= vl));
+    vx /= vl;
+    vy /= vl;
+    vz /= vl;
     const tpl = state.templates,
       NP = 120,
       WP: Vec3[] = [],

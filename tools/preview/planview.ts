@@ -47,7 +47,7 @@ body += path(
 const beam: [number, number][] = [];
 for (let i = 0; i <= 200; i++) {
   const x = (xFwd * i) / 200,
-    s: any = sweptSection(x, 24, true, false);
+    s = sweptSection(x, 24, true, false);
   if (s.aft) continue;
   let my = -1e9;
   for (const p of s.pts) my = Math.max(my, p[1]);
