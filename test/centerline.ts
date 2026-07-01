@@ -20,15 +20,9 @@
 // Run with `npm run test:centerline` (tsx runs this directly under node). Non-zero exit on any
 // failure so it can gate CI alongside the keel-smoothness test.
 
-import {
-  resetModel,
-  prepare,
-  L,
-  sweptSection,
-  stationAt,
-} from "../src/model.js";
-import { parseDocument, loadHull } from "../src/json.js";
-import { type Vec3 } from "../src/math.js";
+import { resetModel, prepare, L, sweptSection, stationAt } from "../src/model";
+import { parseDocument, loadHull } from "../src/json";
+import { type Vec3 } from "../src/math";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";

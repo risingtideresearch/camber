@@ -7,7 +7,7 @@
 // centerline, with no mirror seam to fold into a welt. The transom is a single planar face sharing the
 // hull's aft edge. Both live in one OPEN_SHELL (the hull is open along the deck/sheer edge).
 
-import { V, type Vec3 } from "./math.js";
+import { V, type Vec3 } from "./math";
 import {
   L,
   sweptSection,
@@ -15,7 +15,7 @@ import {
   state,
   prepare,
   forwardLimit,
-} from "./model.js";
+} from "./model";
 
 // ---------- B-spline numerics ----------
 

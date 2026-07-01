@@ -13,14 +13,14 @@
 // `buildPreviewSvg`, `resetModel`, `render`, `draw3d`, `initInteraction`, `refreshSelUI`) is used
 // exactly as before — none of the core modules change.
 
-import { resetModel, state, type View3DMode } from "../model.js";
-import { render, draw3d } from "../render.js";
-import { initInteraction, refreshSelUI } from "../interaction.js";
-import { buildJson, loadJsonText } from "../json.js";
-import { getDesign, insertDesign, updateDesign } from "../supabase.js";
-import { buildPreviewSvg } from "../preview.js";
-import { svgL, svgP, svgW } from "../dom.js";
-import { LH, PH, WH } from "../view.js";
+import { resetModel, state, type View3DMode } from "../model";
+import { render, draw3d } from "../render";
+import { initInteraction, refreshSelUI } from "../interaction";
+import { buildJson, loadJsonText } from "../json";
+import { getDesign, insertDesign, updateDesign } from "../supabase";
+import { buildPreviewSvg } from "../preview";
+import { svgL, svgP, svgW } from "../dom";
+import { LH, PH, WH } from "../view";
 
 // the trim/view values React mirrors after a load or revert (the model is the source of truth)
 export interface TrimSnapshot {

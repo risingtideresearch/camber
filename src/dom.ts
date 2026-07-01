@@ -1,7 +1,7 @@
 // ---------- DOM + SVG helpers and shared element references ----------
 
-import { type Vec2 } from "./math.js";
-import { L, XFWD } from "./model.js";
+import { type Vec2 } from "./math";
+import { L, XFWD } from "./model";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 

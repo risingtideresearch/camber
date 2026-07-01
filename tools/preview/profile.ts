@@ -13,10 +13,10 @@ import {
   forwardLimit,
   transomEdge,
   type Section,
-} from "../../src/model.js";
-import { loadJsonText } from "../../src/json.js";
-import type { Vec3 } from "../../src/math.js";
-import { mapX, zScreenP, PH } from "../../src/view.js";
+} from "../../src/model";
+import { loadJsonText } from "../../src/json";
+import type { Vec3 } from "../../src/math";
+import { mapX, zScreenP, PH } from "../../src/view";
 
 const doc = process.env.CAMBER_DOC;
 resetModel();

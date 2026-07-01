@@ -13,8 +13,8 @@
 // Run with `npm run test:smooth` (tsx runs this directly under node). Exit code is
 // non-zero on any failure so it can gate CI.
 
-import { resetModel, prepare, state, L, sweptSection } from "../src/model.js";
-import { parseDocument, loadHull } from "../src/json.js";
+import { resetModel, prepare, state, L, sweptSection } from "../src/model";
+import { parseDocument, loadHull } from "../src/json";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";

@@ -1,4 +1,4 @@
-import type { View3DMode } from "../model.js";
+import type { View3DMode } from "../model";
 import "./ThreeDView.css";
 
 // The 3D viewport: the WebGL canvas and the lines-plan SVG overlay are drawn into by `render.ts`

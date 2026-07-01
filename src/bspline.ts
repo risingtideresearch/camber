@@ -6,7 +6,7 @@
 // points, a single quadratic for three). It is evaluated as y(x) by inverting the monotone x(u) component,
 // so the sweep sees a genuinely C² function (no resample-and-lerp step).
 
-import { clamp, type Vec2 } from "./math.js";
+import { clamp, type Vec2 } from "./math";
 
 // the knot span containing u for a clamped knot vector (The NURBS Book, A2.1)
 function findSpan(n: number, p: number, u: number, U: number[]): number {

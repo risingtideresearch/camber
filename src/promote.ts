@@ -13,10 +13,10 @@
 // Length is shared by construction (the model's fixed L) and the transom is always two points, so neither
 // needs promotion.
 
-import { type Vec2 } from "./math.js";
-import { fairEval, chordParam, buildWeightSampler } from "./model.js";
-import { clampedBSplineSamplerX } from "./bspline.js";
-import { type HullData } from "./json.js";
+import { type Vec2 } from "./math";
+import { fairEval, chordParam, buildWeightSampler } from "./model";
+import { clampedBSplineSamplerX } from "./bspline";
+import { type HullData } from "./json";
 
 // ---- minimal clamped-B-spline machinery for the least-squares refit (NURBS Book A2.1/A2.2) ----
 function findSpan(n: number, p: number, u: number, U: number[]): number {

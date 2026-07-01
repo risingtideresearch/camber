@@ -12,7 +12,7 @@
 // on export and DECODE on import. This module is the single source of truth for the format — the editor and
 // the interpolation viewer both go through it.
 
-import { clamp } from "./math.js";
+import { clamp } from "./math";
 import {
   state,
   L,
@@ -22,7 +22,7 @@ import {
   type TransomCP,
   type StationCP,
   type WeightCP,
-} from "./model.js";
+} from "./model";
 
 // ---------- on-disk types ----------
 interface PlanPoint {

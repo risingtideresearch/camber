@@ -11,8 +11,8 @@ import {
   prepare,
   sweptSection,
   forwardLimit,
-} from "../../src/model.js";
-import { loadJsonText } from "../../src/json.js";
+} from "../../src/model";
+import { loadJsonText } from "../../src/json";
 
 const doc = process.env.CAMBER_DOC;
 resetModel();

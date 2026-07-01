@@ -27,10 +27,10 @@ import {
   weightsAt,
   frameAt,
   xTransom,
-} from "../../src/model.js";
-import { trimmedHullGrid, buildStep } from "../../src/step.js";
-import { loadJsonText } from "../../src/json.js";
-import type { Vec3 } from "../../src/math.js";
+} from "../../src/model";
+import { trimmedHullGrid, buildStep } from "../../src/step";
+import { loadJsonText } from "../../src/json";
+import type { Vec3 } from "../../src/math";
 
 type P2 = { x: number; y: number; d: number };
 

@@ -88,9 +88,9 @@
 //   Past the end of θ the coordinate source returns 0 (the backbone value), so a short or empty θ
 //   simply yields the canonical hull — which is exactly how `meanDoc()` works.
 
-import { state, L, NMIN, NMAX, DMAX } from "./model.js";
-import { YMAX, ZTRIMMIN } from "./view.js";
-import { loadJsonText } from "./json.js";
+import { state, L, NMIN, NMAX, DMAX } from "./model";
+import { YMAX, ZTRIMMIN } from "./view";
+import { loadJsonText } from "./json";
 
 const clamp = (v: number, lo: number, hi: number): number =>
   v < lo ? lo : v > hi ? hi : v;

@@ -1,14 +1,14 @@
 // ---------- the parametric hull model + the constant-camber sweep ----------
 
-import { clamp, lerp, V, type Vec3 } from "./math.js";
+import { clamp, lerp, V, type Vec3 } from "./math";
 import {
   knuckleSlopes,
   hermiteEvalLR,
   pchipSlopes,
   hermiteEval,
   naturalCubicSlopes,
-} from "./pchip.js";
-import { clampedBSplineSamplerX } from "./bspline.js";
+} from "./pchip";
+import { clampedBSplineSamplerX } from "./bspline";
 
 // ---------- types ----------
 // A longitudinal control STATION: it carries both the plan half-breadth y AND the blend weight w (the

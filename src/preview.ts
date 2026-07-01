@@ -5,9 +5,9 @@
 // ever loading the model. Geometry reuses trimmedHullGrid (the same station×offset point grid the STEP export
 // samples); the projection reproduces the 3D canvas's orthographic camera (see render.ts VERT_SRC).
 
-import { state, prepare } from "./model.js";
-import { trimmedHullGrid } from "./step.js";
-import type { Vec3 } from "./math.js";
+import { state, prepare } from "./model";
+import { trimmedHullGrid } from "./step";
+import type { Vec3 } from "./math";
 
 // a pleasing fixed 3/4 view (matches the editor's default 3D orientation)
 const YAW = -0.62,

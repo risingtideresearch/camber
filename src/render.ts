@@ -1,6 +1,6 @@
 // ---------- rendering: the five 2D views + the shaded 3D hull ----------
 
-import { V, lerp, type Vec3 } from "./math.js";
+import { V, lerp, type Vec3 } from "./math";
 import {
   state,
   L,
@@ -23,7 +23,7 @@ import {
   type Section,
   type StationCP,
   type ActiveTarget,
-} from "./model.js";
+} from "./model";
 import {
   PXpad,
   mapX,
@@ -40,7 +40,7 @@ import {
   NMIN,
   NMAX,
   wY,
-} from "./view.js";
+} from "./view";
 import {
   el,
   poly,
@@ -54,8 +54,8 @@ import {
   sideTabs,
   tplColor,
   cv3d,
-} from "./dom.js";
-import { trimmedHullGrid } from "./step.js";
+} from "./dom";
+import { trimmedHullGrid } from "./step";
 import {
   startDrag,
   sheerPointDown,
@@ -67,7 +67,7 @@ import {
   addTemplate,
   removeTemplate,
   refreshKeelUI,
-} from "./interaction.js";
+} from "./interaction";
 
 type Proj = (p: Vec3) => [number, number];
 

@@ -5,9 +5,9 @@
 // triangulate the quad mesh. The stern is closed with a triangle fan over the transom edge; the deck stays
 // open (as in the STEP OPEN_SHELL). Output is ASCII STL in millimetres — the model's native units.
 
-import { prepare } from "./model.js";
-import { trimmedHullGrid } from "./step.js";
-import { type Vec3 } from "./math.js";
+import { prepare } from "./model";
+import { trimmedHullGrid } from "./step";
+import { type Vec3 } from "./math";
 
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const cross = (a: Vec3, b: Vec3): Vec3 => [

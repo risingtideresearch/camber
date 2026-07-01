@@ -1,6 +1,6 @@
 // ---------- pointer interaction: dragging points, the cut slider, 3D rotation, and the edit tools ----------
 
-import { clamp, lerp } from "./math.js";
+import { clamp, lerp } from "./math";
 import {
   state,
   L,
@@ -11,7 +11,7 @@ import {
   weightsAt,
   type ActiveTarget,
   type WeightCP,
-} from "./model.js";
+} from "./model";
 import {
   invX,
   invY,
@@ -22,9 +22,9 @@ import {
   YMAX,
   YMIN,
   ZTRIMMIN,
-} from "./view.js";
-import { svgL, svgP, svgW, tplCards } from "./dom.js";
-import { render, draw3d, activeTemplateIndex } from "./render.js";
+} from "./view";
+import { svgL, svgP, svgW, tplCards } from "./dom";
+import { render, draw3d, activeTemplateIndex } from "./render";
 
 interface Drag {
   kind: "slider" | "sheer" | "trim" | "transom" | "stn" | "weight" | "rot";

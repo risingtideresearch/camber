@@ -11,19 +11,19 @@
 // so blending absolutes is valid and gives the same hull. Blending is defined only within one topology, so
 // all loaded hulls must agree on point counts and length.
 
-import { clamp } from "./math.js";
-import { state, L, prepare, type Sheer, type StationCP } from "./model.js";
-import { draw3d } from "./render.js";
+import { clamp } from "./math";
+import { state, L, prepare, type Sheer, type StationCP } from "./model";
+import { draw3d } from "./render";
 import {
   buildJson,
   parseDocument,
   type HullData,
   type ParsedDoc,
-} from "./json.js";
-import { promoteFamily } from "./promote.js";
-import { hydrostatics, type Hydro } from "./hydro.js";
-import { getDesign, insertDesign, updateDesign } from "./supabase.js";
-import { buildPreviewSvg } from "./preview.js";
+} from "./json";
+import { promoteFamily } from "./promote";
+import { hydrostatics, type Hydro } from "./hydro";
+import { getDesign, insertDesign, updateDesign } from "./supabase";
+import { buildPreviewSvg } from "./preview";
 
 interface Hull {
   name: string;

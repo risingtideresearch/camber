@@ -11,7 +11,7 @@
 // waterline is a clean horizontal cut in every section; at a small rake it is the usual station-plane
 // approximation (exact in the limit).
 
-import { lerp, type Vec3 } from "./math.js";
+import { lerp, type Vec3 } from "./math";
 import {
   state,
   L,
@@ -19,7 +19,7 @@ import {
   forwardLimit,
   immersion,
   worldZ,
-} from "./model.js";
+} from "./model";
 
 export interface Hydro {
   // principal dimensions (model units)

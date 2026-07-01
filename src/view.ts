@@ -1,6 +1,6 @@
 // ---------- view transforms: world coordinates → screen (SVG viewBox) coordinates ----------
 
-import { L, XFWD, NMIN, NMAX, DMAX } from "./model.js";
+import { L, XFWD, NMIN, NMAX, DMAX } from "./model";
 
 // shared longitudinal (x) mapping for plan + profile. SX (px per mm, set by fitting the length L — plus the
 // forward trim overhang XFWD — across the 1000-wide panel) is the SINGLE isometric scale: the plan's breadth

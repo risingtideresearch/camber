@@ -10,9 +10,9 @@ import {
   prepare,
   sweptSection,
   forwardLimit,
-} from "../../src/model.js";
-import { loadJsonText } from "../../src/json.js";
-import { mapX, yPlan, LH, Lbase, PXpad, YMAX } from "../../src/view.js";
+} from "../../src/model";
+import { loadJsonText } from "../../src/json";
+import { mapX, yPlan, LH, Lbase, PXpad, YMAX } from "../../src/view";
 
 resetModel();
 if (process.env.CAMBER_DOC)

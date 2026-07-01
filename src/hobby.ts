@@ -1,6 +1,6 @@
 // ---------- Hobby curve (open, tension 1, curl 1) — used for the sheer line ----------
 
-import { clamp, type Vec2 } from "./math.js";
+import { clamp, type Vec2 } from "./math";
 
 interface HobbySeg {
   P0: Vec2;
