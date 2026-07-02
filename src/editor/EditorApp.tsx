@@ -39,7 +39,7 @@ import { Toolbar } from "./Toolbar";
 import { SelectionInfo } from "./SelectionInfo";
 import { TrimControls } from "./TrimControls";
 import { DesignBar } from "./DesignBar";
-import { View3d } from "./View3d";
+import { View3d } from "../components/View3d";
 import { WeightsView } from "./WeightsView";
 import { PlanView } from "./PlanView";
 import { ProfileView } from "./ProfileView";

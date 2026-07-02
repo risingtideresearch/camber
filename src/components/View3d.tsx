@@ -35,9 +35,10 @@ interface View3dProps {
   model: Model;
   modelVersion: number;
   selection: ModelSelection;
+  title?: string; // optional label overlaid top-left of the canvas (e.g. "Blended Hull")
 }
 
-export function View3d({ model, modelVersion, selection }: View3dProps) {
+export function View3d({ model, modelVersion, selection, title }: View3dProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const paramsRef = useRef<Draw3dParams>(createDraw3dParams());
   // the display mode is React-owned; the rebuild effect copies it into paramsRef before each draw, so
@@ -127,6 +128,7 @@ export function View3d({ model, modelVersion, selection }: View3dProps) {
         onPointerUp={onPointerUp}
       />
       <svg id="lines3d" className="lines3d" style={{ display: "none" }} />
+      {title && <div className="view3dtitle">{title}</div>}
       <div className="view3dctl" id="view3dModes">
         {MODES.map((m) => (
           <button

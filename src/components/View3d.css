@@ -15,6 +15,18 @@
   gap: 0;
   z-index: 1;
 }
+/* optional label overlaid at the top-left of the canvas (e.g. "Blended Hull") */
+.view3dtitle {
+  position: absolute;
+  top: 10px;
+  left: 14px;
+  z-index: 1;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+  pointer-events: none;
+}
 /* segmented control: joined buttons, one active */
 .view3dctl .vmode {
   border-radius: 0;
