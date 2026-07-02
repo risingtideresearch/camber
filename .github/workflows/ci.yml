@@ -15,6 +15,10 @@ jobs:
         with:
           node-version: 22
       - run: npm ci || npm install
+      # The offline render harness is an isolated package with its own deps.
+      # typecheck runs `tsc -p tools/preview`, so it needs those installed too.
+      # Lockfile is gitignored, hence `install` not `ci`.
+      - run: npm install --prefix tools/preview
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run formatcheck
