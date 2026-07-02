@@ -5,6 +5,8 @@ import { parseDocument, type ParsedDoc } from "../core/json";
 import { promoteFamily } from "../core/promote";
 import { getDesign } from "../core/supabase";
 import { View3d } from "../components/View3d";
+import { Button } from "../components/Button";
+import { FilenameInput } from "../components/FilenameInput";
 import {
   blend,
   computeSamples,
@@ -359,7 +361,7 @@ export function InterpolateApp() {
       !confirm("Discard the unsaved blend and return to the library?")
     )
       return;
-    window.location.href = "index.html";
+    window.location.href = "library.html";
   };
   // jump the blend control to a sampled point (clicked in the scatter)
   const onJump = useCallback((i: number) => {
@@ -384,36 +386,33 @@ export function InterpolateApp() {
       <div className="wrap">
         <div className="card">
           <div className="barrow">
-            <input
-              className="docname"
-              placeholder="Untitled blend"
-              maxLength={120}
-              title="Name for the saved blend"
-              spellCheck={false}
+            <FilenameInput
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              placeholder="Untitled blend"
+              title="Name for the saved blend"
+              onChange={setName}
             />
             <span className={"savestate" + (save.kind ? " " + save.kind : "")}>
               {save.text}
             </span>
-            <button
-              className="primary"
+            <Button
+              variant="primary"
               title="Save the current blend as a new design in the library"
               disabled={n < 1 || saving}
               onClick={() => void doSave()}
             >
               {save.buttonLabel}
-            </button>
-            <button title="Reset all weights to equal" onClick={onEqualize}>
+            </Button>
+            <Button title="Reset all weights to equal" onClick={onEqualize}>
               Equalize weights
-            </button>
+            </Button>
             <span style={{ flex: 1 }} />
-            <button
+            <Button
               title="Close and return to the design library"
               onClick={onClose}
             >
               Close
-            </button>
+            </Button>
           </div>
         </div>
 

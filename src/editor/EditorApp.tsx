@@ -347,7 +347,7 @@ export function EditorApp() {
       !confirm("Discard unsaved changes and return to the library?")
     )
       return;
-    window.location.href = "index.html";
+    window.location.href = "library.html";
   };
 
   return (

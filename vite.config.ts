@@ -2,8 +2,10 @@ import { resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Multi-page app: three independent HTML entry points, each pulling in its own source module.
-//   index.html       → src/files.ts          (design library)
+// Multi-page app. index.html is a bare redirect to the library (the home page); the other three HTML
+// entry points each pull in their own source module.
+//   index.html       → (redirect to library.html)
+//   library.html     → src/library.tsx       (React design library)
 //   editor.html      → src/editor.tsx        (React editor)
 //   interpolate.html → src/interpolate.tsx   (React interpolation viewer)
 //
@@ -17,6 +19,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         index: resolve(import.meta.dirname, "index.html"),
+        library: resolve(import.meta.dirname, "library.html"),
         editor: resolve(import.meta.dirname, "editor.html"),
         interpolate: resolve(import.meta.dirname, "interpolate.html"),
       },

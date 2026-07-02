@@ -1,0 +1,12 @@
+/* The shared top bar (src/components/TopBar): a full-width strip with a bottom rule. */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.topbar .spacer {
+  flex: 1;
+}

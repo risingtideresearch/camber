@@ -1,0 +1,26 @@
+/* The shared editable design-name field (src/components/FilenameInput). */
+.filename {
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px 8px;
+  max-width: 200px;
+}
+.filename::placeholder {
+  color: var(--mut);
+  font-weight: 400;
+}
+.filename:hover {
+  border-color: var(--line);
+}
+.filename:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: #fff;
+}
+.filename.dirty {
+  border-color: #dd9b20;
+} /* amber edge while there are unsaved edits */

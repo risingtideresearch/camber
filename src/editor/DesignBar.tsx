@@ -1,3 +1,5 @@
+import { Button } from "../components/Button";
+import { FilenameInput } from "../components/FilenameInput";
 import "./DesignBar.css";
 
 // The right-aligned design actions: the editable name, the save-state text, and Save / Revert /
@@ -33,46 +35,31 @@ export function DesignBar({
 }: DesignBarProps) {
   return (
     <div className="toolacts">
-      <input
-        id="docName"
-        className={"docname" + (dirty ? " dirty" : "")}
-        placeholder="Untitled"
-        maxLength={120}
-        title="Design name — edit to rename"
-        spellCheck={false}
+      <FilenameInput
         value={name}
-        onChange={(e) => onName(e.target.value)}
+        placeholder="Untitled"
+        title="Design name — edit to rename"
+        dirty={dirty}
+        onChange={onName}
         onBlur={onNameBlur}
       />
-      <span
-        className={"savestate" + (saveKind ? " " + saveKind : "")}
-        id="saveState"
-      >
+      <span className={"savestate" + (saveKind ? " " + saveKind : "")}>
         {saveText}
       </span>
-      <button
-        id="saveDesign"
+      <Button
         title="Save the design (Ctrl/Cmd-S) — becomes “Save As” when you change the name"
         onClick={onSave}
         disabled={saving}
       >
         {saveLabel}
-      </button>
-      <button
-        id="revertDesign"
-        title="Discard changes since the last save"
-        onClick={onRevert}
-      >
+      </Button>
+      <Button title="Discard changes since the last save" onClick={onRevert}>
         Revert
-      </button>
+      </Button>
       <span className="tabsep" />
-      <button
-        id="toFiles"
-        title="Close and return to the design library"
-        onClick={onClose}
-      >
+      <Button title="Close and return to the design library" onClick={onClose}>
         Close
-      </button>
+      </Button>
     </div>
   );
 }

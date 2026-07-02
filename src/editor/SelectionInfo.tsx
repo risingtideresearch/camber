@@ -1,5 +1,6 @@
 import type { Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
+import { Button } from "../components/Button";
 import { canDelete, hasKnuckle, labelFor, selArr } from "./selection";
 import "./SelectionInfo.css";
 
@@ -43,14 +44,14 @@ export function SelectionInfo({
           onChange={(e) => onKnuckle(parseFloat(e.target.value))}
         />
       </label>
-      <button
+      <Button
         id="selDelete"
         title="Delete the selected point (Delete / Backspace)"
         disabled={!deletable}
         onClick={onDelete}
       >
         Delete
-      </button>
+      </Button>
     </div>
   );
 }

@@ -3,33 +3,7 @@
    buttons and inputs live here too so the app is self-contained alongside base.css. */
 
 /* ---------- global element resets for this app ---------- */
-button {
-  border: 1px solid var(--line);
-  background: #fff;
-  border-radius: 8px;
-  padding: 6px 12px;
-  font: inherit;
-  cursor: pointer;
-  color: #4a5568;
-}
-button:hover {
-  background: #f1f5f9;
-}
-button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-button:disabled:hover {
-  background: #fff;
-}
-button.primary {
-  background: var(--ink);
-  color: #fff;
-  border-color: var(--ink);
-}
-button.primary:hover {
-  background: #2d3748;
-}
+/* Buttons use the shared <Button> (src/components/Button); the name field uses the shared FilenameInput. */
 input[type="range"] {
   width: 100%;
   accent-color: var(--slider);
@@ -87,25 +61,6 @@ header p {
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
-}
-.docname {
-  font: inherit;
-  font-weight: 600;
-  color: var(--ink);
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 6px 10px;
-  max-width: 240px;
-}
-.docname::placeholder {
-  color: var(--mut);
-  font-weight: 400;
-}
-.docname:focus {
-  outline: none;
-  border-color: #2b6cb0;
-  background: #fff;
 }
 .savestate {
   font-size: 12px;
