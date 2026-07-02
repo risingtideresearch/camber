@@ -85,7 +85,6 @@ export function EditorApp() {
   // window-level listeners / the poll read at their latest — kept in refs so those one-time effects and async
   // handlers see fresh state without re-subscribing every render.
   const idRef = useRef<DesignId>(newDesignId());
-  const bootedRef = useRef(false);
   const selectionRef = useRef(selection);
   const nameRef = useRef(name);
   const savingRef = useRef(false);
@@ -166,8 +165,6 @@ export function EditorApp() {
 
   // ---------- boot: load the URL design (if any) once, after the model is created ----------
   useEffect(() => {
-    if (bootedRef.current) return; // one-shot: boot must not run twice
-    bootedRef.current = true;
     let cancelled = false;
     void (async () => {
       const rowId = new URLSearchParams(window.location.search).get("id");
