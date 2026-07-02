@@ -88,7 +88,7 @@
 //   Past the end of θ the coordinate source returns 0 (the backbone value), so a short or empty θ
 //   simply yields the canonical hull — which is exactly how `meanDoc()` works.
 
-import { state, L, NMIN, NMAX, DMAX } from "./model";
+import { type Model, L, NMIN, NMAX, DMAX } from "./model";
 import { YMAX, ZTRIMMIN } from "./view";
 import { loadJsonText } from "./json";
 
@@ -194,10 +194,10 @@ const encSection = (pts: { n: number; d: number; k: number }[]) =>
 type Coord = () => number;
 
 // The reparameterization φ: θ → HullDocument (on-disk increment encoding), over the CURRENT topology.
-function decodeDoc(z: Coord): string {
-  const P = state.sheer.cp.length, // sheerPlan count
-    Q = state.sheer.trim.length, // sheerTrim count
-    S = state.templates[0].length; // section count (every template shares it)
+function decodeDoc(model: Model, z: Coord): string {
+  const P = model.sheer.cp.length, // sheerPlan count
+    Q = model.sheer.trim.length, // sheerTrim count
+    S = model.templates[0].length; // section count (every template shares it)
   const DEPTH_MAX = -ZTRIMMIN;
 
   // #2 helper: a base ± ½Δ residual pair, consuming two coordinates. Δ=0 (second coord 0) ⇒ aft & fore
@@ -334,8 +334,8 @@ function decodeDoc(z: Coord): string {
 
   const doc = {
     length: L,
-    waterline: state.waterline, // preserve the current trim controls; only the shape is resampled
-    deckRakeDeg: (state.deckRake * 180) / Math.PI,
+    waterline: model.waterline, // preserve the current trim controls; only the shape is resampled
+    deckRakeDeg: (model.deckRake * 180) / Math.PI,
     topology: { sheerPlan: P, sheerTrim: Q, section: S },
     variants: [
       {
@@ -355,18 +355,18 @@ function decodeDoc(z: Coord): string {
 // coordinate, i.e. a single scalar temperature on the whole prior: 0 = the canonical boat, larger =
 // further from it (and eventually off the boat-prior — e.g. an open bottom — but ALWAYS a valid hull,
 // since φ is onto the valid region for every θ). Returns a HullDocument JSON string.
-export function randomDoc(adventure = 1): string {
-  return decodeDoc(() => adventure * randn());
+export function randomDoc(model: Model, adventure = 1): string {
+  return decodeDoc(model, () => adventure * randn());
 }
 // θ = 0 → the canonical hull the prior is centred on. Useful for verifying "small θ ⇒ sensible boat"
 // and as a known-good baseline; equivalently, decoding an empty/zero θ (the coordinate source returns 0).
-export function meanDoc(): string {
-  return decodeDoc(() => 0);
+export function meanDoc(model: Model): string {
+  return decodeDoc(model, () => 0);
 }
 
 // Decode a fresh random variant and load it into the live model (through the canonical json.ts path).
 // NOTE: currently called by nothing — the UI button was removed. Retained so the generator can be
 // re-hooked to a control or invoked from a console/test without re-deriving the wiring.
-export function randomizeModel(): void {
-  loadJsonText(randomDoc());
+export function randomizeModel(model: Model): void {
+  loadJsonText(model, randomDoc(model));
 }

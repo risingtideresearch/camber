@@ -5,7 +5,7 @@ import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
-  state,
+  createModel,
   L,
   resetModel,
   prepare,
@@ -18,10 +18,12 @@ import { loadJsonText } from "../../src/core/json";
 import type { Vec3 } from "../../src/core/math";
 import { mapX, zScreenP, PH } from "../../src/core/view";
 
+const model = createModel();
+
 const doc = process.env.CAMBER_DOC;
-resetModel();
-if (doc) loadJsonText(readFileSync(doc, "utf8"));
-prepare();
+resetModel(model);
+if (doc) loadJsonText(model, readFileSync(doc, "utf8"));
+prepare(model);
 
 const poly = (pts: [number, number][]): string =>
   pts
@@ -32,11 +34,15 @@ const path = (d: string, stroke: string, w: number, extra = ""): string =>
 
 // sections to the forward closure, cosine-clustered (same as render.ts)
 const NSEC = 80,
-  xFwd = forwardLimit(),
+  xFwd = forwardLimit(model),
   sections: Section[] = [];
 for (let i = 0; i <= NSEC; i++)
   sections.push(
-    clippedSection((xFwd * (1 - Math.cos((Math.PI * i) / NSEC))) / 2, 18),
+    clippedSection(
+      model,
+      (xFwd * (1 - Math.cos((Math.PI * i) / NSEC))) / 2,
+      18,
+    ),
   );
 
 let body = "";
@@ -44,24 +50,24 @@ let body = "";
 body += `<line x1="${mapX(0)}" y1="${zScreenP(0)}" x2="${mapX(L)}" y2="${zScreenP(0)}" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="2 4"/>`;
 
 // DWL (blue), all the way forward to the closure
-const wlS = Math.sin(state.deckRake),
-  wlC = Math.cos(state.deckRake);
-const zWL = (x: number) => (-state.waterline - x * wlS) / wlC;
+const wlS = Math.sin(model.deckRake),
+  wlC = Math.cos(model.deckRake);
+const zWL = (x: number) => (-model.waterline - x * wlS) / wlC;
 body += `<line x1="${mapX(0)}" y1="${zScreenP(zWL(0))}" x2="${mapX(xFwd)}" y2="${zScreenP(zWL(xFwd))}" stroke="#0ea5e9" stroke-width="1.8"/>`;
 
 // keel + stem (green), matching the mesh: keel rises to the forefoot, then the diving top edge back to the trim
 const closing = sections.filter((s) => s.keel && s.pts.length > 1);
 const keel = closing.map((s) => s.pts[s.pts.length - 1] as Vec3);
-const te = transomEdge();
+const te = transomEdge(model);
 if (keel.length) {
   if (te.length) keel.unshift(te[te.length - 1]);
-  const dived = (s: Section) => s.pts[0][2] < state.sheer.zf(s.pts[0][0]) - 3;
+  const dived = (s: Section) => s.pts[0][2] < model.sheer.zf(s.pts[0][0]) - 3;
   let b = closing.length;
   while (b > 0 && dived(closing[b - 1])) b--;
   const stem = closing.slice(b).map((s) => s.pts[0] as Vec3);
   if (stem.length)
     for (let i = stem.length - 1; i >= 0; i--) keel.push(stem[i]);
-  else keel.push([xFwd, 0, state.sheer.zf(xFwd)]);
+  else keel.push([xFwd, 0, model.sheer.zf(xFwd)]);
 }
 body += path(
   poly(keel.map((p) => [mapX(p[0]), zScreenP(p[2])])),
@@ -73,13 +79,13 @@ body += path(
 const xs: number[] = [];
 for (let i = 0; i <= 110; i++) xs.push(((L + 400) * i) / 110);
 body += path(
-  poly(xs.map((x) => [mapX(x), zScreenP(state.sheer.zf(x))])),
+  poly(xs.map((x) => [mapX(x), zScreenP(model.sheer.zf(x))])),
   "#dd6b20",
   2.4,
 );
 // trim control polygon (faint)
 body += path(
-  poly(state.sheer.trim.map((cp) => [mapX(cp.x), zScreenP(cp.z)])),
+  poly(model.sheer.trim.map((cp) => [mapX(cp.x), zScreenP(cp.z)])),
   "#dd6b20",
   1,
   'opacity="0.4" stroke-dasharray="3 4"',

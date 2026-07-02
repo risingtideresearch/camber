@@ -141,17 +141,6 @@ function defaultWeights(k: number): WeightCP[] {
   ];
 }
 
-// ---------- mutable model + view state ----------
-export type Tool = "select" | "add";
-// the 3D view's mutually-exclusive display mode: "render" = shaded trimmed hull; "body" / "buttocks" /
-// "waterline" = the lines plan (SVG overlay) with that non-chine family; "zebra" = zebra-striped trimmed hull
-// (fairness check); "sheet" = the untrimmed shaded sweep (one side, no trims/mirror).
-// "body" / "buttocks" / "waterline" are the three lines-plan modes: same drawing, differing only in which
-// non-chine line family is drawn (stations / constant-y cuts / constant-z cuts). render / zebra / sheet are
-// the shaded GL modes.
-export type View3DMode =
-  "render" | "body" | "buttocks" | "waterline" | "zebra" | "sheet";
-export const LINES_MODES: View3DMode[] = ["body", "buttocks", "waterline"];
 // curve fairing: "pchip" = C¹ monotone, shape-preserving (the default, guarantees the invariants);
 // "c2" = C² natural cubic (curvature-continuous, interpolating — but can overshoot); "bspline" = an
 // approximating clamped cubic B-spline (C² and variation-diminishing, so no overshoot — the control points
@@ -159,11 +148,8 @@ export const LINES_MODES: View3DMode[] = ["body", "buttocks", "waterline"];
 // per-point knuckles (no chines); the weight curve only honors c2 (in logit space) and ignores bspline.
 export type Fairing = "pchip" | "c2" | "bspline";
 
-// which kind of control point is currently selected, so the renderer can highlight it. A "template"
-// selection also carries which template (state.selected.ti); a "weight" selection is a weight CP.
-export type ActiveTarget = "plan" | "trim" | "transom" | "template" | "weight";
-
-export interface State {
+// Represents a specific hull
+export interface Model {
   sheer: Sheer;
   templates: StationCP[][]; // K ≥ 1 section templates, index-aligned (all share the section count)
   keelK: number[]; // per-template keel (centerline) knuckle ∈ [0,1]: 0 = C¹-smooth keel across the
@@ -173,61 +159,54 @@ export interface State {
   waterline: number; // depth (≥0) of the design waterline below the sheer origin (deck datum at x=0, z=0)
   deckRake: number; // deck rake angle (rad, +ve = bow up): a rigid rotation of the whole hull about the
   // transverse (y) axis through the sheer origin. Everything is built deck-flat (z=0); the boat floats at this rake.
-  rot: { yaw: number; pitch: number };
-  zoom: number; // 3D view zoom multiplier on the fixed framing (1 = default; scroll wheel adjusts)
-  view3dMode: View3DMode; // mutually-exclusive 3D display mode (render / body / buttocks / waterline / zebra / sheet)
   fairing: Fairing; // which curve fairing to use (session toggle; not part of the saved model)
-  tool: Tool;
-  selected: { tgt: ActiveTarget; idx: number; ti?: number } | null;
 }
 
-export const state: State = {
-  sheer: null as unknown as Sheer,
-  templates: [],
-  keelK: [],
-  weightFn: () => [1],
-  x0: 500,
-  waterline: 150,
-  deckRake: 0,
-  rot: { yaw: -0.62, pitch: 0.42 },
-  zoom: 1,
-  view3dMode: "render", // shaded trimmed hull by default
-  fairing: "pchip", // C¹ shape-preserving (keeps the chines); "c2"/"bspline" are code-toggle experiments
-  tool: "select", // "select" = click a point to select (then drag/delete/knuckle); "add" = click to add
-  selected: null, // the persistently selected control point (highlighted in the editors)
-};
+export function createModel(): Model {
+  return {
+    sheer: null as unknown as Sheer,
+    templates: [],
+    keelK: [],
+    weightFn: () => [1],
+    x0: 500,
+    waterline: 150,
+    deckRake: 0,
+    fairing: "pchip", // C¹ shape-preserving (keeps the chines); "c2"/"bspline" are code-toggle experiments
+  };
+}
 
-export function resetModel(): void {
-  state.templates = TEMPLATE_DEFS.map((t) =>
+export function resetModel(model: Model): void {
+  model.templates = TEMPLATE_DEFS.map((t) =>
     t.map((c) => ({ n: c[0], d: c[1], k: c[2] })),
   );
-  state.keelK = state.templates.map(() => 0); // keels default to C¹-smooth across the centerline
+  model.keelK = model.templates.map(() => 0); // keels default to C¹-smooth across the centerline
   // each station carries its blend w, sampled here from the default linear aft→fore handoff
-  const wf0 = buildWeightSampler(defaultWeights(state.templates.length));
-  state.sheer = {
+  const wf0 = buildWeightSampler(model, defaultWeights(model.templates.length));
+  model.sheer = {
     cp: SHEER_DEF.map((c) => ({ x: c[0], y: c[1], w: wf0(c[0]) })),
     trim: SHEER_TRIM_DEF.map((c) => ({ x: c[0], z: c[1], k: 0 })),
     transom: TRANSOM_DEF.map((c) => ({ x: c[0], z: c[1] })),
     yf: () => 0,
     zf: () => 0,
   };
-  state.x0 = 500;
-  state.waterline = 150;
-  state.deckRake = 0;
+  model.x0 = 500;
+  model.waterline = 150;
+  model.deckRake = 0;
 }
 
 // ---------- deck rake (world frame) ----------
 // The hull is built deck-flat (deck = z = 0). The deck rake is a rigid rotation of the whole hull by
-// state.deckRake about the transverse (y) axis through the sheer origin (x=0, z=0). worldZ is the true
+// model.deckRake about the transverse (y) axis through the sheer origin (x=0, z=0). worldZ is the true
 // vertical height of a deck-frame point once floated at that rake; the waterline is the horizontal plane
 // at worldZ = −waterline, so immersion(x,z) > 0 means the point is submerged.
-export const worldZ = (x: number, z: number): number =>
-  x * Math.sin(state.deckRake) + z * Math.cos(state.deckRake);
-export const immersion = (x: number, z: number): number =>
-  -state.waterline - worldZ(x, z);
+export const worldZ = (model: Model, x: number, z: number): number =>
+  x * Math.sin(model.deckRake) + z * Math.cos(model.deckRake);
 
-export function prepare(): void {
-  const sheer = state.sheer;
+export const immersion = (model: Model, x: number, z: number): number =>
+  -model.waterline - worldZ(model, x, z);
+
+export function prepare(model: Model): void {
+  const sheer = model.sheer;
   // the plan half-breadth y(x): a clamped cubic B-spline over the plan control points — C² and
   // variation-diminishing, so it can't overshoot the control polygon (the plan points are handles, the curve
   // interpolating only the first and last). Evaluated directly as y(x), so the swept frame's heading is smooth.
@@ -242,11 +221,12 @@ export function prepare(): void {
   // profile sheer-trim z(x) ≤ 0: the same knuckle-aware fairing the templates use (interpolating, with
   // per-point knuckles), parameterized by x — so a hard sheer-line corner is possible, like a chine.
   sheer.zf = fairEval(
+    model,
     sheer.trim.map((p) => p.x),
     sheer.trim.map((p) => p.z),
     sheer.trim.map((p) => p.k),
   );
-  state.weightFn = buildWeightSampler(state.sheer.cp); // the blend path, read from the unified stations
+  model.weightFn = buildWeightSampler(model, model.sheer.cp); // the blend path, read from the unified stations
 }
 
 // ---------- the weight curve: a shape-preserving interpolation through the simplex ----------
@@ -270,6 +250,7 @@ function normSimplex(w: number[]): number[] {
 }
 
 export function buildWeightSampler(
+  model: Model,
   weights: WeightCP[],
 ): (x: number) => number[] {
   const cps = weights.length;
@@ -281,7 +262,7 @@ export function buildWeightSampler(
     xs = weights.map((c) => c.x),
     xLo = xs[0],
     xHi = xs[cps - 1];
-  if (state.fairing === "c2") {
+  if (model.fairing === "c2") {
     // C² path: interpolate the softmax pre-image (log-weights) with a natural cubic — overshoot there is
     // harmless — then softmax back, so the curve is curvature-continuous and always in the (open) simplex.
     // A pure-template control point (a 0 weight) is clamped to ε, so corners sit a hair inside the simplex.
@@ -322,13 +303,14 @@ export function buildWeightSampler(
 // points are a control polygon, not interpolated except at the ends). The c2 and bspline modes ignore the
 // knuckles; they are for comparing fairness, not for guaranteed validity.
 export function fairEval(
+  model: Model,
   ts: number[],
   fs: number[],
   ks: number[],
 ): (u: number) => number {
-  if (state.fairing === "bspline")
+  if (model.fairing === "bspline")
     return clampedBSplineSamplerX(ts.map((t, i) => [t, fs[i]]));
-  if (state.fairing === "c2") {
+  if (model.fairing === "c2") {
     const m = naturalCubicSlopes(ts, fs),
       t0 = ts[0],
       t1 = ts[ts.length - 1];
@@ -338,15 +320,15 @@ export function fairEval(
 }
 
 // the blend weights at station x, a point in the (K−1)-simplex
-export function weightsAt(x: number): number[] {
-  return state.weightFn(x);
+export function weightsAt(model: Model, x: number): number[] {
+  return model.weightFn(x);
 }
 
 // ---------- the constant-camber sweep ----------
 // Frame at station x: tangent T along the (flat) sheer; d (depth) = straight down; n (inboard) = d × T.
 // The station plane is vertical, rotating about z as the sheer heading turns, so stations fan out.
-export function frameAt(x: number): Frame {
-  const sheer = state.sheer;
+export function frameAt(model: Model, x: number): Frame {
+  const sheer = model.sheer;
   const p: Vec3 = [x, sheer.yf(x), 0];
   // The finite-difference span is floored at 0 but NOT capped at L: past the LOA the sheer is extrapolated
   // linearly (see prepare()), and the bow extension needs a real tangent there — capping at L would collapse
@@ -387,9 +369,9 @@ export function knuckleEval(
 
 // the blended keel (centerline) knuckle at station x: Σⱼ w[j]·keelK[j] — the per-template keel knuckle
 // faired along the hull just like the point knuckles, so a hard-V keel can fade to a smooth one.
-export function keelKAt(x: number): number {
-  const w = weightsAt(x),
-    kk = state.keelK;
+export function keelKAt(model: Model, x: number): number {
+  const w = weightsAt(model, x),
+    kk = model.keelK;
   let k = 0;
   for (let j = 0; j < w.length; j++) k += w[j] * (kk[j] ?? 0);
   return k;
@@ -423,20 +405,21 @@ const KEEL_FLAT_FLARE = 12 * (Math.PI / 180),
 // the plan flare would make a flat keel unfair (see KEEL_FLAT_FLARE/KEEL_V_FLARE). Returns null for an
 // open section (the curve never reaches the centerline) or a degenerate frame.
 function mirrorKeelStation(
+  model: Model,
   x: number,
   ns: number[],
   ds: number[],
   ks: number[],
   kc: number,
 ): Station | null {
-  const fr = frameAt(x),
+  const fr = frameAt(model, x),
     ny = fr.n[1],
     py = fr.p[1];
   if (Math.abs(ny) < 1e-6) return null; // station plane parallel to the centerline — no clean crossing
   const ncl = -py / ny; // inboard offset where world y = 0
   const ts = chordParam(ns, ds),
-    nf = fairEval(ts, ns, ks),
-    df = fairEval(ts, ds, ks),
+    nf = fairEval(model, ts, ns, ks),
+    df = fairEval(model, ts, ds, ks),
     tmax = ts[ts.length - 1];
   // The STARBOARD span between the section's two world-centerline crossings: uA (the up-crossing, where the
   // section first reaches y ≥ 0) and ustar (the down-crossing — the keel). For a normal hull the deck (u=0)
@@ -520,15 +503,19 @@ function mirrorKeelStation(
 // to soft as the weight curve hands off between a creased template and a smooth one. With mirrorKeel set
 // (the trimmed hull), the curve is reflected about the centerline so the keel knuckle applies — see
 // mirrorKeelStation; the parameter then runs sheer→keel→port-sheer and the keel sits at the midpoint.
-export function stationAt(x: number, mirrorKeel = false): Station {
+export function stationAt(
+  model: Model,
+  x: number,
+  mirrorKeel = false,
+): Station {
   // Past the LOA (the bow extension for a tumblehome bow) freeze the section SHAPE at x = L — the templates and
   // weight curve are only defined on [0, L] — but keep building it through mirrorKeelStation, which now handles
   // the sheer guide having crossed the centerline (it reflects the starboard span [uA, ustar]). So the bow
   // closes through the same keel-symmetric construction as the rest of the hull, swept along the extrapolated
   // sheer, with no special case.
   const xw = Math.min(x, L),
-    w = weightsAt(xw),
-    tpl = state.templates,
+    w = weightsAt(model, xw),
+    tpl = model.templates,
     K = tpl.length,
     m = tpl[0].length,
     ns: number[] = [],
@@ -554,7 +541,7 @@ export function stationAt(x: number, mirrorKeel = false): Station {
     // station so sweptSection reports `aft`. (Falling back to the raw, un-mirrored half-section instead would
     // resurrect the full deep section past the closure — the "wings".)
     return (
-      mirrorKeelStation(x, ns, ds, ks, keelKAt(xw)) ?? {
+      mirrorKeelStation(model, x, ns, ds, ks, keelKAt(model, xw)) ?? {
         tmax: 0,
         n: () => 0,
         d: () => 0,
@@ -565,16 +552,16 @@ export function stationAt(x: number, mirrorKeel = false): Station {
   const ts = chordParam(ns, ds);
   return {
     tmax: ts[m - 1],
-    n: fairEval(ts, ns, ks),
-    d: fairEval(ts, ds, ks),
+    n: fairEval(model, ts, ns, ks),
+    d: fairEval(model, ts, ds, ks),
     ts,
   };
 }
 
 // the transom plane in profile: longitudinal position x of the cut at height z (linear through the two
 // control points, full breadth). The hull keeps the forward side, x ≥ xTransom(z).
-export function xTransom(z: number): number {
-  const [a, b] = state.sheer.transom;
+export function xTransom(model: Model, z: number): number {
+  const [a, b] = model.sheer.transom;
   return a.x + (b.x - a.x) * ((z - a.z) / (b.z - a.z || 1));
 }
 
@@ -585,13 +572,14 @@ export function xTransom(z: number): number {
 // Because the flat sheer makes the station's d-axis point straight down, z = -d(u): the sheer trim at
 // z = z_s(x) is simply the station depth d = -z_s(x).
 export function sweptSection(
+  model: Model,
   x: number,
   M: number,
   trim: boolean,
   clipTransom = true,
 ): Section {
-  const fr = frameAt(x),
-    st = stationAt(x, trim); // trimmed hull: the keel-knuckle symmetric section; sheet: the raw half
+  const fr = frameAt(model, x),
+    st = stationAt(model, x, trim); // trimmed hull: the keel-knuckle symmetric section; sheet: the raw half
   const W = (u: number): Vec3 => {
     const nn = st.n(u),
       dd = st.d(u);
@@ -610,7 +598,7 @@ export function sweptSection(
     open = true,
     empty = false;
   if (trim) {
-    const dtrim = -state.sheer.zf(x), // depth of the sheer line below the deck
+    const dtrim = -model.sheer.zf(x), // depth of the sheer line below the deck
       FN = 160;
     if (dtrim > 0) {
       // sheer trim: first depth reaching dtrim — top of section.
@@ -655,7 +643,7 @@ export function sweptSection(
     const SN = 200,
       g = (u: number) => {
         const w = W(u);
-        return w[0] - xTransom(w[2]);
+        return w[0] - xTransom(model, w[2]);
       };
     let pg = g(umin),
       pu = umin,
@@ -704,16 +692,16 @@ export function sweptSection(
     trim && st.ts
       ? st.ts
           .map((_, i) => i)
-          .filter((i) => state.templates.some((t) => (t[i]?.k ?? 0) > 0))
+          .filter((i) => model.templates.some((t) => (t[i]?.k ?? 0) > 0))
       : [];
   if (pots.length) {
-    const w = weightsAt(x),
+    const w = weightsAt(model, x),
       margin = (ub - ua) * 0.04;
     const kn = pots
       .map((i) => ({
         u: clamp(st.ts![i], ua + margin, ub - margin), // clamp so the anchor count is constant along the hull
         k: clamp(
-          state.templates.reduce((s, t, j) => s + w[j] * (t[i]?.k ?? 0), 0),
+          model.templates.reduce((s, t, j) => s + w[j] * (t[i]?.k ?? 0), 0),
           0,
           1,
         ),
@@ -762,8 +750,8 @@ export function sweptSection(
   return { pts, open, aft, keel, creaseCols, creaseK };
 }
 
-export function clippedSection(x: number, M: number): Section {
-  return sweptSection(x, M, true);
+export function clippedSection(model: Model, x: number, M: number): Section {
+  return sweptSection(model, x, M, true);
 }
 
 // The forward limit of the hull: the largest x where a trimmed section still exists, but NEVER past the
@@ -771,9 +759,10 @@ export function clippedSection(x: number, M: number): Section {
 // the sections vanish (the forefoot rises above the sheer trim, or a tumblehome lens shrinks to nothing) if
 // that happens at or before the last cp; otherwise the hull ends at the last cp (a blunt bow, the cue to
 // extend the sheer plan further). Near the bow the forefoot rises above the trim, so sections go empty.
-export function forwardLimit(): number {
-  const exists = (x: number): boolean => !sweptSection(x, 4, true, false).aft;
-  const xEnd = state.sheer.cp[state.sheer.cp.length - 1].x; // the plan's last control point: the hard forward bound
+export function forwardLimit(model: Model): number {
+  const exists = (x: number): boolean =>
+    !sweptSection(model, x, 4, true, false).aft;
+  const xEnd = model.sheer.cp[model.sheer.cp.length - 1].x; // the plan's last control point: the hard forward bound
   if (exists(xEnd)) return xEnd; // still a section at the last cp — the hull ends there (blunt, or just closing)
   let lo = xEnd * 0.5,
     hi = xEnd;
@@ -788,17 +777,17 @@ export function forwardLimit(): number {
 
 // the transom face outline (starboard, top→bottom): walk down the transom plane and read the hull's
 // half-breadth at each depth, bounded above by the sheer trim and below by the centerline (keel).
-export function transomEdge(): Vec3[] {
+export function transomEdge(model: Model): Vec3[] {
   const out: Vec3[] = [],
     DN = 90;
   for (let i = 0; i <= DN; i++) {
     const d = (DMAX * i) / DN,
       z = -d,
-      x = xTransom(z);
+      x = xTransom(model, z);
     if (x < 0 || x > L) continue;
-    if (d < -state.sheer.zf(x)) continue; // above the sheer trim → not yet hull
-    const st = stationAt(x, true), // match the trimmed hull's keel-knuckle section
-      fr = frameAt(x);
+    if (d < -model.sheer.zf(x)) continue; // above the sheer trim → not yet hull
+    const st = stationAt(model, x, true), // match the trimmed hull's keel-knuckle section
+      fr = frameAt(model, x);
     if (d > st.tmax) break;
     let u = st.tmax;
     const K = 160; // invert st.d(u)=d
@@ -851,3 +840,152 @@ export function contour(
   if (run.length > 1) runs.push(run);
   return runs;
 }
+// ---------- design waterline (the horizontal world plane at worldZ = −model.waterline) ----------
+// immersion stats for a cut section: draft = deepest point below the WL, beam = breadth at the WL.
+
+export function waterlineStats(
+  model: Model,
+  sec: Section,
+): {
+  draft: number;
+  beam: number;
+  wet: boolean;
+} {
+  let draft = 0,
+    beam = 0,
+    wet = false;
+  for (let i = 0; i < sec.pts.length; i++) {
+    const p = sec.pts[i],
+      imm = immersion(model, p[0], p[2]);
+    if (imm > 0) wet = true;
+    if (imm > draft) draft = imm;
+    if (i > 0) {
+      const a = sec.pts[i - 1],
+        ai = immersion(model, a[0], a[2]);
+      if (ai < 0 !== imm < 0 && ai !== imm) {
+        const t = (0 - ai) / (imm - ai);
+        beam = Math.max(beam, 2 * Math.abs(lerp(a[1], p[1], t)));
+      }
+    }
+  }
+  return { draft, beam, wet };
+} // the design-waterline contour in plan (x,y): where each section crosses worldZ = −waterline
+export function dwlContour(
+  model: Model,
+  sections: Section[],
+): [number, number][][] {
+  const runs: [number, number][][] = [];
+  let run: [number, number][] = [];
+  for (const s of sections) {
+    if (s.aft) {
+      if (run.length > 1) runs.push(run);
+      run = [];
+      continue;
+    }
+    let f: [number, number] | null = null;
+    for (let j = 0; j < s.pts.length - 1; j++) {
+      const a = s.pts[j],
+        b = s.pts[j + 1],
+        ia = immersion(model, a[0], a[2]),
+        ib = immersion(model, b[0], b[2]);
+      if (ia < 0 !== ib < 0 && ia !== ib) {
+        const t = (0 - ia) / (ib - ia);
+        f = [lerp(a[0], b[0], t), lerp(a[1], b[1], t)];
+        break;
+      }
+    }
+    if (f) run.push(f);
+    else {
+      if (run.length > 1) runs.push(run);
+      run = [];
+    }
+  }
+  if (run.length > 1) runs.push(run);
+  return runs;
+} // a uniform sampling of x across the hull length, used by the plan/profile sweep curves. Runs to L+XFWD so
+// the sheer-trim curve (which may carry control points over the bow overhang) is drawn out there too.
+
+export function sampleX(): number[] {
+  const a: number[] = [],
+    N = 110;
+  for (let i = 0; i <= N; i++) a.push(((L + XFWD) * i) / N);
+  return a;
+} // The drag-move handlers (moveSheer / moveTrim / moveTransom / moveWeight) and the add-point helpers
+// (addStation / addSheerPoint / addTrimPoint / addWeightPoint) live in the editor layer
+// (editorInteraction.ts): they map an svg's inverse-view coordinates to model space, so they belong with
+// the editor's pointer wiring rather than the core.
+
+// ---------- remove stations / points ----------
+
+// removeStation / removeTrimPoint / removeStationPoint back deleteSelected below (a core selection action).
+function removeStation(model: Model, idx: number): void {
+  const cp = model.sheer.cp;
+  if (cp.length <= 3 || idx <= 0 || idx >= cp.length - 1) return; // keep both ends and a minimum of 3
+  cp.splice(idx, 1);
+}
+
+export const removeSheerPoint = removeStation;
+
+export function removeTrimPoint(model: Model, idx: number): void {
+  const cp = model.sheer.trim;
+  if (cp.length <= 3 || idx <= 0 || idx >= cp.length - 1) return; // keep both ends and a minimum of 3
+  cp.splice(idx, 1);
+}
+
+// add a section point: pick the segment of template `ti` nearest the click, insert there, and insert the
+// matching index into EVERY template (at the same param along its own segment) so they stay index-aligned.
+export function addTemplatePoint(
+  model: Model,
+  ti: number,
+  n: number,
+  d: number,
+): number {
+  const arr = model.templates[ti];
+  let best = 1,
+    bt = 0.5,
+    bd = Infinity;
+  for (let i = 0; i < arr.length - 1; i++) {
+    const ax = arr[i].n,
+      ay = arr[i].d,
+      vx = arr[i + 1].n - ax,
+      vy = arr[i + 1].d - ay,
+      L2 = vx * vx + vy * vy || 1;
+    const t = clamp(((n - ax) * vx + (d - ay) * vy) / L2, 0, 1),
+      px = ax + vx * t,
+      py = ay + vy * t,
+      dist = Math.hypot(n - px, d - py);
+    if (dist < bd) {
+      bd = dist;
+      best = i + 1;
+      bt = t;
+    }
+  }
+  model.templates.forEach((tpl, j) => {
+    const a = tpl[best - 1],
+      b = tpl[best];
+    if (j === ti) {
+      const dlo = Math.min(a.d, b.d),
+        dhi = Math.max(a.d, b.d);
+      tpl.splice(best, 0, {
+        n: clamp(n, NMIN, NMAX),
+        d: clamp(d, dlo, dhi),
+        k: 0,
+      });
+    } else {
+      tpl.splice(best, 0, {
+        n: lerp(a.n, b.n, bt),
+        d: lerp(a.d, b.d, bt),
+        k: lerp(a.k, b.k, bt),
+      });
+    }
+  });
+  return best;
+}
+
+export function removeStationPoint(model: Model, idx: number): void {
+  const len = model.templates[0].length;
+  if (len <= 3 || idx <= 0 || idx >= len - 1) return; // keep the sheer point and the deepest point
+  model.templates.forEach((t) => t.splice(idx, 1));
+}
+
+export const removeWeightPoint = removeStation;

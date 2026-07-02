@@ -14,7 +14,7 @@
 // needs promotion.
 
 import { type Vec2 } from "./math";
-import { fairEval, chordParam, buildWeightSampler } from "./model";
+import { type Model, fairEval, chordParam, buildWeightSampler } from "./model";
 import { clampedBSplineSamplerX } from "./bspline";
 import { type HullData } from "./json";
 
@@ -32,6 +32,7 @@ function findSpan(n: number, p: number, u: number, U: number[]): number {
   }
   return m;
 }
+
 function basisFuns(span: number, u: number, p: number, U: number[]): number[] {
   const N = new Array(p + 1).fill(0),
     left = new Array(p + 1).fill(0),
@@ -50,6 +51,7 @@ function basisFuns(span: number, u: number, p: number, U: number[]): number[] {
   }
   return N;
 }
+
 // clamped uniform knot vector for `count` control points of degree p
 function uniformKnots(count: number, p: number): number[] {
   const U: number[] = [];
@@ -59,6 +61,7 @@ function uniformKnots(count: number, p: number): number[] {
   for (let i = 0; i <= p; i++) U.push(1);
   return U;
 }
+
 // solve A x = b (square, small) by Gaussian elimination with partial pivoting and a tiny ridge for safety
 function gaussSolve(A: number[][], b: number[]): number[] {
   const n = A.length,
@@ -148,9 +151,9 @@ function promoteTemplates(data: HullData, K: number): void {
 }
 
 // refit the plan curve to N control points, resampling each station's blend weights along the new stations
-function promotePlan(data: HullData, N: number): void {
+function promotePlan(model: Model, data: HullData, N: number): void {
   if (data.cp.length >= N) return;
-  const wf = buildWeightSampler(data.cp); // the weight curve over the existing stations
+  const wf = buildWeightSampler(model, data.cp); // the weight curve over the existing stations
   const fit = bsplineRefit(
     data.cp.map((c): Vec2 => [c.x, c.y]),
     N,
@@ -159,9 +162,10 @@ function promotePlan(data: HullData, N: number): void {
 }
 
 // keep every original trim point + insert on-curve points (k = 0) at the widest x-gaps until there are T
-function promoteTrim(data: HullData, T: number): void {
+function promoteTrim(model: Model, data: HullData, T: number): void {
   if (data.trim.length >= T) return;
   const zf = fairEval(
+    model,
     data.trim.map((p) => p.x),
     data.trim.map((p) => p.z),
     data.trim.map((p) => p.k),
@@ -184,7 +188,7 @@ function promoteTrim(data: HullData, T: number): void {
 }
 
 // keep every original section point + insert on-curve points (k = 0) at the widest chord gaps until S, per template
-function promoteSection(data: HullData, S: number): void {
+function promoteSection(model: Model, data: HullData, S: number): void {
   if (data.templates[0].length >= S) return; // all templates share one section count
   data.templates = data.templates.map((tpl) => {
     const ts = chordParam(
@@ -192,11 +196,13 @@ function promoteSection(data: HullData, S: number): void {
         tpl.map((p) => p.d),
       ),
       nf = fairEval(
+        model,
         ts,
         tpl.map((p) => p.n),
         tpl.map((p) => p.k),
       ),
       df = fairEval(
+        model,
         ts,
         tpl.map((p) => p.d),
         tpl.map((p) => p.k),
@@ -220,7 +226,7 @@ function promoteSection(data: HullData, S: number): void {
 }
 
 // lift a whole family to the common (max) topology in place. Returns true if any hull was changed.
-export function promoteFamily(datas: HullData[]): boolean {
+export function promoteFamily(model: Model, datas: HullData[]): boolean {
   if (datas.length < 2) return false;
   const N = Math.max(...datas.map((d) => d.cp.length)),
     T = Math.max(...datas.map((d) => d.trim.length)),
@@ -236,9 +242,9 @@ export function promoteFamily(datas: HullData[]): boolean {
     )
       changed = true;
     promoteTemplates(d, K); // first — sets each station's weight vector to length K
-    promotePlan(d, N); // then refit the plan (weights resampled with the final K length)
-    promoteTrim(d, T);
-    promoteSection(d, S);
+    promotePlan(model, d, N); // then refit the plan (weights resampled with the final K length)
+    promoteTrim(model, d, T);
+    promoteSection(model, d, S);
   }
   return changed;
 }

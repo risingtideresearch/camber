@@ -5,7 +5,7 @@
 // triangulate the quad mesh. The stern is closed with a triangle fan over the transom edge; the deck stays
 // open (as in the STEP OPEN_SHELL). Output is ASCII STL in millimetres — the model's native units.
 
-import { prepare } from "./model";
+import { type Model, prepare } from "./model";
 import { trimmedHullGrid } from "./step";
 import { type Vec3 } from "./math";
 
@@ -32,10 +32,10 @@ function facet(a: Vec3, b: Vec3, c: Vec3): string {
 }
 
 // build an ASCII STL string for the current model (call after resetModel + loadJsonText, as STEP export does)
-export function buildStl(name = "camber"): string {
-  prepare(); // ensure the sheer samplers / faired sections are current
+export function buildStl(model: Model, name = "camber"): string {
+  prepare(model); // ensure the sheer samplers / faired sections are current
   const M = 24,
-    { grid: half } = trimmedHullGrid(80, M);
+    { grid: half } = trimmedHullGrid(model, 80, M);
   if (half.length < 4) throw new Error("hull has too few sections to export");
   // full-width grid: starboard sheer→keel (cols 0..M), then port keel→sheer as the y-mirror, dropping the
   // duplicate keel point — so the keel is one interior column rather than a mirrored seam.

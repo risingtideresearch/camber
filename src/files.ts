@@ -14,8 +14,12 @@ import {
 import { parseDocument, loadJsonText } from "./core/json";
 import { buildStep } from "./core/step";
 import { buildStl } from "./core/stl";
-import { resetModel } from "./core/model";
+import { createModel, resetModel } from "./core/model";
 import { buildPreviewSvg } from "./core/preview";
+
+// The design-library app owns its single model state; the export paths (STEP / STL / preview) load a
+// stored document into it and run the writers.
+const model = createModel();
 
 // Render a design's stored 3/4 wireframe (built in the editor at save time) as a card thumbnail. Using an
 // <img> with a data-URI keeps it self-contained and, crucially, script-disabled — so a preview string from
@@ -191,7 +195,7 @@ interface Topo {
 // from the document's arrays (and migrates legacy docs). Returns null if the document can't be parsed.
 function topoOf(row: DesignRow): Topo | null {
   try {
-    const p = parseDocument(JSON.stringify(row.document));
+    const p = parseDocument(model, JSON.stringify(row.document));
     return {
       length: p.length,
       plan: p.topology.sheerPlan,
@@ -345,12 +349,12 @@ exportStepBtn.addEventListener("click", () => {
   if (!row) return;
   exportStepBtn.disabled = true;
   try {
-    resetModel();
-    loadJsonText(JSON.stringify(row.document)); // load into the model singleton; buildStep fairs + samples it
+    resetModel(model);
+    loadJsonText(model, JSON.stringify(row.document)); // load into the model singleton; buildStep fairs + samples it
     const stamp = new Date().toISOString().replace(/\.\d+Z$/, "");
     downloadBlob(
       `${safeName(row.name)}.step`,
-      buildStep(stamp),
+      buildStep(model, stamp),
       "application/step",
     );
   } catch (e) {
@@ -367,11 +371,11 @@ exportStlBtn.addEventListener("click", () => {
   if (!row) return;
   exportStlBtn.disabled = true;
   try {
-    resetModel();
-    loadJsonText(JSON.stringify(row.document)); // load into the model singleton; buildStl fairs + meshes it
+    resetModel(model);
+    loadJsonText(model, JSON.stringify(row.document)); // load into the model singleton; buildStl fairs + meshes it
     downloadBlob(
       `${safeName(row.name)}.stl`,
-      buildStl(safeName(row.name)),
+      buildStl(model, safeName(row.name)),
       "model/stl",
     );
   } catch (e) {
@@ -407,7 +411,7 @@ importBtn.addEventListener("click", () => {
     reader.onload = async () => {
       const text = String(reader.result);
       try {
-        parseDocument(text); // validate before storing; throws on a malformed document
+        parseDocument(model, text); // validate before storing; throws on a malformed document
       } catch (e) {
         alert("Import failed: " + (e instanceof Error ? e.message : String(e)));
         return;
@@ -418,9 +422,9 @@ importBtn.addEventListener("click", () => {
       // build the wireframe preview from the imported document (same path the editor uses on save)
       let preview = "";
       try {
-        resetModel();
-        loadJsonText(text);
-        preview = buildPreviewSvg();
+        resetModel(model);
+        loadJsonText(model, text);
+        preview = buildPreviewSvg(model);
       } catch {
         /* leave preview empty; the card falls back to a placeholder */
       }

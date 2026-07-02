@@ -5,7 +5,7 @@
 // ever loading the model. Geometry reuses trimmedHullGrid (the same station×offset point grid the STEP export
 // samples); the projection reproduces the 3D canvas's orthographic camera (see render.ts VERT_SRC).
 
-import { state, prepare } from "./model";
+import { type Model, prepare } from "./model";
 import { trimmedHullGrid } from "./step";
 import type { Vec3 } from "./math";
 
@@ -13,19 +13,19 @@ import type { Vec3 } from "./math";
 const YAW = -0.62,
   PITCH = 0.42;
 
-export function buildPreviewSvg(): string {
-  prepare();
+export function buildPreviewSvg(model: Model): string {
+  prepare(model);
   const NS = 36,
     M = 10;
-  const { grid, creaseCols } = trimmedHullGrid(NS, M); // grid[i][j]: i station (transom→bow), j offset (sheer→keel)
+  const { grid, creaseCols } = trimmedHullGrid(model, NS, M); // grid[i][j]: i station (transom→bow), j offset (sheer→keel)
   if (grid.length < 4 || grid[0].length < 2) return "";
 
   const c1 = Math.cos(YAW),
     s1 = Math.sin(YAW),
     c2 = Math.cos(PITCH),
     s2 = Math.sin(PITCH),
-    cT = Math.cos(state.deckRake),
-    sT = Math.sin(state.deckRake);
+    cT = Math.cos(model.deckRake),
+    sT = Math.sin(model.deckRake);
   // world (x,y,z) → screen (sx, sy): deck-rake about y, then yaw about up (z), then pitch. SVG y points down,
   // so negate. Centering/scaling is handled afterward by fitting a viewBox to the projected bounds.
   const proj = ([x, y, z]: Vec3): [number, number] => {

@@ -4,7 +4,7 @@ import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
-  state,
+  createModel,
   L,
   resetModel,
   prepare,
@@ -14,12 +14,14 @@ import {
 import { loadJsonText } from "../../src/core/json";
 import { mapX, yPlan, LH, Lbase, PXpad, YMAX } from "../../src/core/view";
 
-resetModel();
-if (process.env.CAMBER_DOC)
-  loadJsonText(readFileSync(process.env.CAMBER_DOC, "utf8"));
-prepare();
+const model = createModel();
 
-const xFwd = forwardLimit();
+resetModel(model);
+if (process.env.CAMBER_DOC)
+  loadJsonText(model, readFileSync(process.env.CAMBER_DOC, "utf8"));
+prepare(model);
+
+const xFwd = forwardLimit(model);
 const poly = (pts: [number, number][]) =>
   pts
     .map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`)
@@ -34,11 +36,11 @@ body += `<line x1="${PXpad}" y1="${Lbase.toFixed(1)}" x2="${1000 - PXpad}" y2="$
 body += `<line x1="${mapX(L).toFixed(1)}" y1="6" x2="${mapX(L).toFixed(1)}" y2="${(LH - 6).toFixed(1)}" stroke="#94a3b8" stroke-width="0.8" stroke-dasharray="2 3"/>`;
 
 // sheer plan curve (orange) — only out to the last control point (no extrapolation)
-const xEndP = state.sheer.cp[state.sheer.cp.length - 1].x;
+const xEndP = model.sheer.cp[model.sheer.cp.length - 1].x;
 const xs: number[] = [];
 for (let i = 0; i <= 110; i++) xs.push((xEndP * i) / 110);
 body += path(
-  poly(xs.map((x) => [mapX(x), yPlan(state.sheer.yf(x))])),
+  poly(xs.map((x) => [mapX(x), yPlan(model.sheer.yf(x))])),
   "#dd6b20",
   2,
   'stroke-linejoin="round" opacity="0.8" stroke-dasharray="8 5"',
@@ -47,7 +49,7 @@ body += path(
 const beam: [number, number][] = [];
 for (let i = 0; i <= 200; i++) {
   const x = (xFwd * i) / 200,
-    s = sweptSection(x, 24, true, false);
+    s = sweptSection(model, x, 24, true, false);
   if (s.aft) continue;
   let my = -1e9;
   for (const p of s.pts) my = Math.max(my, p[1]);
@@ -55,7 +57,7 @@ for (let i = 0; i <= 200; i++) {
 }
 body += path(poly(beam), "#7c3aed", 2.4, 'stroke-linejoin="round"');
 // control points
-for (const cp of state.sheer.cp)
+for (const cp of model.sheer.cp)
   body += `<circle cx="${mapX(cp.x).toFixed(1)}" cy="${yPlan(cp.y).toFixed(1)}" r="4" fill="#dd6b20"/>`;
 
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 ${LH}" width="1400">${body}</svg>`;

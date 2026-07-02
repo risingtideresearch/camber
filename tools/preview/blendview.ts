@@ -3,14 +3,22 @@
 import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { state, L, resetModel, prepare, weightsAt } from "../../src/core/model";
+import {
+  createModel,
+  L,
+  resetModel,
+  prepare,
+  weightsAt,
+} from "../../src/core/model";
 import { loadJsonText } from "../../src/core/json";
 import { mapX, wY, WH } from "../../src/core/view";
 
-resetModel();
+const model = createModel();
+
+resetModel(model);
 if (process.env.CAMBER_DOC)
-  loadJsonText(readFileSync(process.env.CAMBER_DOC, "utf8"));
-prepare();
+  loadJsonText(model, readFileSync(process.env.CAMBER_DOC, "utf8"));
+prepare(model);
 
 const TPL = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c", "#0891b2"];
 const poly = (pts: [number, number][]) =>
@@ -18,10 +26,10 @@ const poly = (pts: [number, number][]) =>
     .map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`)
     .join(" ");
 
-const K = state.templates.length;
+const K = model.templates.length;
 const top = wY(1),
   bot = wY(0);
-const xEnd = state.sheer.cp[state.sheer.cp.length - 1].x;
+const xEnd = model.sheer.cp[model.sheer.cp.length - 1].x;
 const xL = mapX(0),
   xR = mapX(xEnd);
 
@@ -34,7 +42,7 @@ const NS = 120,
   cum: number[][] = [];
 for (let i = 0; i <= NS; i++) {
   const x = (xEnd * i) / NS,
-    w = weightsAt(x),
+    w = weightsAt(model, x),
     c = [0];
   let s = 0;
   for (let j = 0; j < K; j++) {
@@ -54,7 +62,7 @@ for (let j = 0; j < K; j++) {
     .reverse();
   body += `<path d="${poly(upper.concat(lower))}Z" fill="${TPL[j % TPL.length]}" opacity="0.5"/>`;
 }
-for (const cp of state.sheer.cp) {
+for (const cp of model.sheer.cp) {
   const x = mapX(cp.x);
   body += `<line x1="${x}" y1="${top}" x2="${x}" y2="${bot}" stroke="#fff" stroke-width="1" opacity="0.75"/>`;
   let s = 0;

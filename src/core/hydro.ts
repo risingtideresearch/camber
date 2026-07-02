@@ -13,7 +13,7 @@
 
 import { lerp, type Vec3 } from "./math";
 import {
-  state,
+  type Model,
   L,
   clippedSection,
   forwardLimit,
@@ -73,7 +73,10 @@ interface Strip {
 // immersed integrals for one section: area between the section curve and the centerline below the WL,
 // plus the wetted girth, the world-z area moment, and the waterline beam. Works on the starboard half;
 // the caller doubles to full width.
-function stripOf(sec: { pts: Vec3[] }): Omit<Strip, "x" | "draft" | "keel"> {
+function stripOf(
+  model: Model,
+  sec: { pts: Vec3[] },
+): Omit<Strip, "x" | "draft" | "keel"> {
   let areaH = 0,
     girthH = 0,
     zMomH = 0,
@@ -82,8 +85,8 @@ function stripOf(sec: { pts: Vec3[] }): Omit<Strip, "x" | "draft" | "keel"> {
   for (let i = 0; i < p.length - 1; i++) {
     let a = p[i],
       b = p[i + 1];
-    const ia = immersion(a[0], a[2]),
-      ib = immersion(b[0], b[2]);
+    const ia = immersion(model, a[0], a[2]),
+      ib = immersion(model, b[0], b[2]);
     // waterline beam: half-breadth at any sheer↔keel crossing of the WL (outermost wins)
     if (ia < 0 !== ib < 0 && ia !== ib) {
       const t = -ia / (ib - ia);
@@ -98,7 +101,7 @@ function stripOf(sec: { pts: Vec3[] }): Omit<Strip, "x" | "draft" | "keel"> {
       yb = b[1];
     areaH += ((ya + yb) / 2) * dz; // ∫ y dz
     girthH += Math.hypot(b[1] - a[1], b[2] - a[2]);
-    const zw = worldZ((a[0] + b[0]) / 2, (a[2] + b[2]) / 2);
+    const zw = worldZ(model, (a[0] + b[0]) / 2, (a[2] + b[2]) / 2);
     zMomH += ((ya + yb) / 2) * dz * zw;
   }
   return {
@@ -142,18 +145,23 @@ function deadriseAt(sec: { pts: Vec3[]; keel: boolean }): number {
   return Math.atan(Math.abs(dzdy)) * (180 / Math.PI); // deadrise = angle of the bottom from horizontal
 }
 
-export function hydrostatics(ns: number = NS, m: number = M): Hydro | null {
-  const xf = forwardLimit();
+export function hydrostatics(
+  model: Model,
+  ns: number = NS,
+  m: number = M,
+): Hydro | null {
+  const xf = forwardLimit(model);
   if (!(xf > 0)) return null;
   const strips: Strip[] = [];
   for (let k = 0; k <= ns; k++) {
     const x = (xf * k) / ns,
-      sec = clippedSection(x, m);
+      sec = clippedSection(model, x, m);
     if (sec.aft) continue;
     let dmax = 0;
-    for (const q of sec.pts) dmax = Math.max(dmax, immersion(q[0], q[2]));
+    for (const q of sec.pts)
+      dmax = Math.max(dmax, immersion(model, q[0], q[2]));
     if (dmax <= 0) continue; // dry section (above the waterline)
-    const s = stripOf(sec);
+    const s = stripOf(model, sec);
     if (s.area <= 0) continue;
     strips.push({ x, ...s, draft: dmax, keel: sec.keel });
   }
@@ -194,7 +202,7 @@ export function hydrostatics(ns: number = NS, m: number = M): Hydro | null {
   const lcb = vol > 0 ? lcbN / vol : amid,
     lcf = aw > 0 ? lcfN / aw : amid,
     // KB reported above the keel baseline (the deepest immersed point), not the deck datum
-    kb = (vol > 0 ? kbN / vol : 0) + state.waterline + draft;
+    kb = (vol > 0 ? kbN / vol : 0) + model.waterline + draft;
   // longitudinal waterplane inertia about the LCF
   let il = 0;
   for (let i = 0; i < strips.length - 1; i++) {
@@ -250,7 +258,7 @@ export function hydrostatics(ns: number = NS, m: number = M): Hydro | null {
     cm,
     cw,
     cvp,
-    deadrise: deadriseAt(clippedSection(amid, m)),
+    deadrise: deadriseAt(clippedSection(model, amid, m)),
     halfEntrance,
     xAft,
     xFwd,

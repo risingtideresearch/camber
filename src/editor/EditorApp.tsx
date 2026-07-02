@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { View3DMode } from "../core/model";
 // Type-only import: erased at compile time, so it does NOT pull the imperative core (and thus
 // `dom.ts`, which resolves element refs at module-eval) in before the DOM is mounted. The actual
 // module is loaded via dynamic import() in the boot effect below, after React commits the markup.
-import type { SaveView } from "./editorController";
+import type { SaveView } from "./controller";
 import { Toolbar } from "./Toolbar";
 import { SelectionInfo } from "./SelectionInfo";
 import { TrimControls } from "./TrimControls";
@@ -13,8 +12,9 @@ import { ViewStrips } from "./ViewStrips";
 import { SidePanel } from "./SidePanel";
 import { CutPanel } from "./CutPanel";
 import "./EditorApp.css";
+import { View3DMode } from "../core/draw3d";
 
-type Controller = typeof import("./editorController");
+type Controller = typeof import("./controller");
 
 const INITIAL_SAVE: SaveView = { buttonLabel: "Save", kind: "", text: "" };
 
@@ -46,7 +46,7 @@ export function EditorApp() {
     bootedRef.current = true;
     let cancelled = false;
     void (async () => {
-      const ctrl = await import("./editorController");
+      const ctrl = await import("./controller");
       if (cancelled) return;
       ctrlRef.current = ctrl;
       const r = await ctrl.boot();

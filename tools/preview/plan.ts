@@ -5,7 +5,7 @@ import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
-  state,
+  createModel,
   L,
   resetModel,
   prepare,
@@ -14,19 +14,21 @@ import {
 } from "../../src/core/model";
 import { loadJsonText } from "../../src/core/json";
 
-const doc = process.env.CAMBER_DOC;
-resetModel();
-if (doc) loadJsonText(readFileSync(doc, "utf8"));
-prepare();
+const model = createModel();
 
-const xFwd = forwardLimit();
+const doc = process.env.CAMBER_DOC;
+resetModel(model);
+if (doc) loadJsonText(model, readFileSync(doc, "utf8"));
+prepare(model);
+
+const xFwd = forwardLimit(model);
 const sheerPts: [number, number][] = []; // (x, yf) deck edge
 const maxBeam: [number, number][] = []; // (x, max y of the section)
 const N = 200;
 for (let i = 0; i <= N; i++) {
   const x = (xFwd * i) / N;
-  sheerPts.push([x, state.sheer.yf(x)]);
-  const s = sweptSection(x, 24, true, false);
+  sheerPts.push([x, model.sheer.yf(x)]);
+  const s = sweptSection(model, x, 24, true, false);
   if (s.aft) continue;
   let my = -1e9;
   for (const p of s.pts) my = Math.max(my, p[1]);
@@ -63,7 +65,7 @@ body += `<text x="${xs(L) + 3}" y="${H - padB - 4}" font-size="11" fill="#94a3b8
 body += path(poly(maxBeam), "#0f766e", 2.4); // widest-point longitudinal (teal)
 body += path(poly(sheerPts), "#dd6b20", 2.4); // sheer plan / deck edge (orange)
 // control points of the sheer plan
-for (const cp of state.sheer.cp)
+for (const cp of model.sheer.cp)
   body += `<circle cx="${xs(cp.x).toFixed(1)}" cy="${ysc(cp.y).toFixed(1)}" r="3.5" fill="#dd6b20"/>`;
 body += `<text x="${padL}" y="${H - 8}" font-size="12" fill="#dd6b20">sheer plan (deck edge)</text>`;
 body += `<text x="${padL + 200}" y="${H - 8}" font-size="12" fill="#0f766e">widest point (max beam)</text>`;

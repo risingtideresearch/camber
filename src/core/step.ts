@@ -12,7 +12,7 @@ import {
   L,
   sweptSection,
   xTransom,
-  state,
+  type Model,
   prepare,
   forwardLimit,
 } from "./model";
@@ -273,12 +273,13 @@ function compressKnots(U: number[]): { knots: number[]; mults: number[] } {
 // are full (sheer→keel, never renormalised to a clipped sliver), the surface stays fair right to the
 // stern, and row 0 lies on the transom plane so the hull and transom share an exact edge.
 export function trimmedHullGrid(
+  model: Model,
   NS: number,
   M: number,
 ): { grid: Vec3[][]; creaseCols: number[] } {
   const cols = M + 1,
-    gate = (p: Vec3): number => p[0] - xTransom(p[2]),
-    fair = (x: number): Vec3[] => sweptSection(x, M, true, false).pts;
+    gate = (p: Vec3): number => p[0] - xTransom(model, p[2]),
+    fair = (x: number): Vec3[] => sweptSection(model, x, M, true, false).pts;
   // per column, locate the aft crossing of the transom plane (first inside transition scanning forward)
   const SCAN = 240,
     xaf = new Array<number>(cols).fill(0),
@@ -298,7 +299,7 @@ export function trimmedHullGrid(
     }
     prev = cur;
   }
-  const xf = forwardLimit(); // the hull closes here, not necessarily at L (the fine bow trims away forward)
+  const xf = forwardLimit(model); // the hull closes here, not necessarily at L (the fine bow trims away forward)
   const grid: Vec3[][] = Array.from(
     { length: NS + 1 },
     () => new Array<Vec3>(cols),
@@ -313,7 +314,7 @@ export function trimmedHullGrid(
   // crease columns (knuckle lines + keel) — consistent along the hull; read from a representative closed section
   let creaseCols: number[] = [];
   for (let i = 2; i <= 7; i++) {
-    const s = sweptSection((L * i) / 10, M, true, false);
+    const s = sweptSection(model, (L * i) / 10, M, true, false);
     if (!s.aft && s.keel) {
       creaseCols = s.creaseCols;
       break;
@@ -427,6 +428,7 @@ function emitSurfaceFace(
 // keel → port-sheer (the keel is interior, on the centerline), and the face is closed at the top by a
 // straight line across the breadth between the two sheer ends.
 function emitTransomFace(
+  model: Model,
   d: StepDoc,
   net: Vec3[][],
   q: number,
@@ -452,7 +454,7 @@ function emitTransomFace(
     o2 = d.add(`ORIENTED_EDGE('',*,*,#${eTop},.T.)`);
   const loop = d.add(`EDGE_LOOP('',(#${o1},#${o2}))`),
     bound = d.add(`FACE_OUTER_BOUND('',#${loop},.T.)`);
-  const [ta, tb] = state.sheer.transom,
+  const [ta, tb] = model.sheer.transom,
     slope = (tb.x - ta.x) / (tb.z - ta.z || 1),
     place = d.add(
       `AXIS2_PLACEMENT_3D('',#${d.point(net[0][0])},#${d.dir(V.norm([1, 0, -slope]))},#${d.dir([0, 1, 0])})`,
@@ -463,11 +465,11 @@ function emitTransomFace(
 
 // ---------- public API ----------
 
-export function buildStep(date: string): string {
+export function buildStep(model: Model, date: string): string {
   DATE = date;
-  prepare(); // ensure the sheer samplers are current
+  prepare(model); // ensure the sheer samplers are current
   const M = 24,
-    { grid: half, creaseCols: halfCrease } = trimmedHullGrid(48, M);
+    { grid: half, creaseCols: halfCrease } = trimmedHullGrid(model, 48, M);
   if (half.length < 4) throw new Error("hull has too few sections to export");
   // full-width grid: starboard sheer→keel (cols 0..M), then port keel→sheer (cols M+1..2M) as the
   // y-mirror, dropping the duplicate keel point. The keel is therefore an INTERIOR column of one surface
@@ -496,7 +498,7 @@ export function buildStep(date: string): string {
   const faces: number[] = [];
   const hull = interpSurfaceCreased(grid, creaseCols);
   faces.push(emitSurfaceFace(d, hull.net, hull.p, hull.q, hull.U, hull.Vk));
-  const tf = emitTransomFace(d, hull.net, hull.q, hull.Vk);
+  const tf = emitTransomFace(model, d, hull.net, hull.q, hull.Vk);
   if (tf) faces.push(tf);
 
   const shell = d.add(
@@ -540,10 +542,10 @@ export function buildStep(date: string): string {
 }
 
 // build the STEP text for the current model and trigger a browser download
-export function downloadStep(): void {
+export function downloadStep(model: Model): void {
   const now = new Date(); // called from a user gesture, not module scope
   const stamp = now.toISOString().replace(/\.\d+Z$/, "");
-  const text = buildStep(stamp);
+  const text = buildStep(model, stamp);
   const blob = new Blob([text], { type: "application/step" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

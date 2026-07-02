@@ -17,7 +17,7 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { readFileSync } from "node:fs";
 import {
-  state,
+  createModel,
   L,
   resetModel,
   prepare,
@@ -31,6 +31,8 @@ import {
 import { trimmedHullGrid, buildStep } from "../../src/core/step";
 import { loadJsonText } from "../../src/core/json";
 import type { Vec3 } from "../../src/core/math";
+
+const model = createModel();
 
 type P2 = { x: number; y: number; d: number };
 
@@ -48,8 +50,8 @@ function projector(yaw: number, pitch: number) {
     s1 = Math.sin(yaw),
     c2 = Math.cos(pitch),
     s2 = Math.sin(pitch);
-  const cT = Math.cos(state.deckRake),
-    sT = Math.sin(state.deckRake);
+  const cT = Math.cos(model.deckRake),
+    sT = Math.sin(model.deckRake);
   // same transform as render.ts's WebGL vertex shader; SVG y is down so negate. d = toward-eye depth.
   return ([x, y, z]: Vec3): P2 => {
     const rx = x * cT - z * sT,
@@ -83,7 +85,7 @@ function renderLines(
   sel: number,
   kind: string,
 ): string {
-  const { grid, creaseCols } = trimmedHullGrid(80, 10);
+  const { grid, creaseCols } = trimmedHullGrid(model, 80, 10);
   const NS = grid.length - 1,
     M = grid[0].length - 1,
     crease = new Set(creaseCols);
@@ -102,7 +104,7 @@ function renderLines(
   for (const row of grid)
     for (const p of row) {
       ymax = Math.max(ymax, Math.abs(p[1]));
-      const wz = worldZ(p[0], p[2]);
+      const wz = worldZ(model, p[0], p[2]);
       zlo = Math.min(zlo, wz);
       zhi = Math.max(zhi, wz);
     }
@@ -182,10 +184,10 @@ function renderLines(
           }
         } else if (kind === "waterline") {
           const corn = [
-            { p: A, f: worldZ(wA[0], wA[2]) },
-            { p: B, f: worldZ(wB[0], wB[2]) },
-            { p: C, f: worldZ(wC[0], wC[2]) },
-            { p: D, f: worldZ(wD[0], wD[2]) },
+            { p: A, f: worldZ(model, wA[0], wA[2]) },
+            { p: B, f: worldZ(model, wB[0], wB[2]) },
+            { p: C, f: worldZ(model, wC[0], wC[2]) },
+            { p: D, f: worldZ(model, wD[0], wD[2]) },
           ];
           for (const lv of wlLevels) {
             const s = march(corn, lv);
@@ -196,12 +198,12 @@ function renderLines(
           if (i === NS - 1 && showStation(NS)) fam.push([D, C]);
         }
         const dc = [
-          { p: A, f: worldZ(wA[0], wA[2]) },
-          { p: B, f: worldZ(wB[0], wB[2]) },
-          { p: C, f: worldZ(wC[0], wC[2]) },
-          { p: D, f: worldZ(wD[0], wD[2]) },
+          { p: A, f: worldZ(model, wA[0], wA[2]) },
+          { p: B, f: worldZ(model, wB[0], wB[2]) },
+          { p: C, f: worldZ(model, wC[0], wC[2]) },
+          { p: D, f: worldZ(model, wD[0], wD[2]) },
         ];
-        const dwl = march(dc, -state.waterline);
+        const dwl = march(dc, -model.waterline);
         quads.push({
           poly: [A, B, C, D],
           depth: (A.d + B.d + C.d + D.d) / 4,
@@ -213,13 +215,13 @@ function renderLines(
   // selected template point → its longitudinal, interleaved into the painter's order so it occludes properly
   type Item = { depth: number; q?: (typeof quads)[number]; seg?: [P2, P2] };
   const items: Item[] = quads.map((q) => ({ depth: q.depth, q }));
-  if (sel >= 0 && sel < state.templates[0].length) {
+  if (sel >= 0 && sel < model.templates[0].length) {
     const c1 = Math.cos(yaw),
       s1 = Math.sin(yaw),
       c2 = Math.cos(pitch),
       s2 = Math.sin(pitch);
-    const cT = Math.cos(state.deckRake),
-      sT = Math.sin(state.deckRake);
+    const cT = Math.cos(model.deckRake),
+      sT = Math.sin(model.deckRake);
     let vx = -c2 * s1 * cT + s2 * sT,
       vy = -c2 * c1,
       vz = c2 * s1 * sT + s2 * cT;
@@ -228,27 +230,29 @@ function renderLines(
     vx /= vl;
     vy /= vl;
     vz /= vl;
-    const tpl = state.templates,
+    const tpl = model.templates,
       NP = 120,
       WP: Vec3[] = [],
       keep: boolean[] = [];
     for (let i = 0; i <= NP; i++) {
       const x = (L * i) / NP,
-        wt = weightsAt(x);
+        wt = weightsAt(model, x);
       let n = 0,
         d = 0;
       for (let t = 0; t < tpl.length; t++) {
         n += wt[t] * tpl[t][sel].n;
         d += wt[t] * tpl[t][sel].d;
       }
-      const fr = frameAt(x),
+      const fr = frameAt(model, x),
         w: Vec3 = [
           fr.p[0] + n * fr.n[0] + d * fr.d[0],
           fr.p[1] + n * fr.n[1] + d * fr.d[1],
           fr.p[2] + n * fr.n[2] + d * fr.d[2],
         ];
       WP.push(w);
-      keep.push(d >= -state.sheer.zf(x) && w[1] >= 0 && w[0] >= xTransom(w[2]));
+      keep.push(
+        d >= -model.sheer.zf(x) && w[1] >= 0 && w[0] >= xTransom(model, w[2]),
+      );
     }
     for (const sgn of [1, -1])
       for (let i = 0; i < NP; i++) {
@@ -302,11 +306,11 @@ function renderShaded(
 ): string {
   const Mh = 44,
     N = 200,
-    xf = forwardLimit();
+    xf = forwardLimit(model);
   const rows: Vec3[][] = [];
   for (let i = 0; i <= N; i++) {
     const x = xf * 0.5 * (1 - Math.cos((Math.PI * i) / N)); // cosine spacing, matches the real mesh
-    const s = sweptSection(x, Mh, true, false);
+    const s = sweptSection(model, x, Mh, true, false);
     if (s.aft) continue;
     const full = s.pts.slice();
     for (let j = Mh - 1; j >= 0; j--)
@@ -320,8 +324,8 @@ function renderShaded(
     s1 = Math.sin(yaw),
     c2 = Math.cos(pitch),
     s2 = Math.sin(pitch),
-    cT = Math.cos(state.deckRake),
-    sT = Math.sin(state.deckRake);
+    cT = Math.cos(model.deckRake),
+    sT = Math.sin(model.deckRake);
   let Vx = -c2 * s1 * cT + s2 * sT,
     Vy = -c2 * c1,
     Vz = c2 * s1 * sT + s2 * cT;
@@ -398,7 +402,7 @@ function renderShaded(
 
 // ---- stepnet: parse the exported STEP and draw its NURBS control net (STEP vs lines comparison) ----
 function renderStepNet(P: (p: Vec3) => P2): string {
-  const step = buildStep("2026-01-01T00:00:00");
+  const step = buildStep(model, "2026-01-01T00:00:00");
   const pts: Record<string, Vec3> = {};
   const pre =
     /#(\d+)=CARTESIAN_POINT\('',\(([-\d.eE]+),([-\d.eE]+),([-\d.eE]+)\)\)/g;
@@ -479,14 +483,14 @@ if (a2 in PRESETS) {
 }
 const out = outArg ?? `out/${mode}-${a2}.png`;
 
-resetModel();
+resetModel(model);
 // CAMBER_DOC=<path> loads a specific HullDocument JSON instead of the default boat; CAMBER_KEELK overrides
 // the keel knuckle on every template (handy for A/B-ing the keel-flat-vs-V pucker).
 if (process.env.CAMBER_DOC)
-  loadJsonText(readFileSync(process.env.CAMBER_DOC, "utf8"));
+  loadJsonText(model, readFileSync(process.env.CAMBER_DOC, "utf8"));
 if (process.env.CAMBER_KEELK)
-  state.keelK = state.keelK.map(() => parseFloat(process.env.CAMBER_KEELK!));
-prepare();
+  model.keelK = model.keelK.map(() => parseFloat(process.env.CAMBER_KEELK!));
+prepare(model);
 const P = projector(yaw, pitch);
 const sel = process.env.CAMBER_SEL ? parseInt(process.env.CAMBER_SEL, 10) : -1; // template point index to highlight
 // lines family: pass mode "body"|"buttocks"|"waterline" directly, or use mode "lines" + CAMBER_LINES env

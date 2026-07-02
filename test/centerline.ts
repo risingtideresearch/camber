@@ -20,12 +20,21 @@
 // Run with `npm run test:centerline` (tsx runs this directly under node). Non-zero exit on any
 // failure so it can gate CI alongside the keel-smoothness test.
 
-import { resetModel, prepare, L, sweptSection, stationAt } from "../src/model";
-import { parseDocument, loadHull } from "../src/json";
-import { type Vec3 } from "../src/math";
+import {
+  createModel,
+  resetModel,
+  prepare,
+  L,
+  sweptSection,
+  stationAt,
+} from "../src/core/model";
+import { parseDocument, loadHull } from "../src/core/json";
+import { type Vec3 } from "../src/core/math";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+
+const model = createModel();
 
 // the most the centerline may ride above the deepest keel point in a true transverse section before we call
 // it a pucker. The fair construction lands at ~0 (the centerline IS the deepest point); the old mirror bug
@@ -64,7 +73,7 @@ function fixturesDir(): string {
 function fullRows(): Vec3[][] {
   const rows: Vec3[][] = [];
   for (let i = 0; i <= NS; i++) {
-    const s = sweptSection((L * i) / NS, M, true, false);
+    const s = sweptSection(model, (L * i) / NS, M, true, false);
     if (s.aft) continue;
     const full: Vec3[] = s.pts.slice();
     for (let j = M - 1; j >= 0; j--)
@@ -130,7 +139,7 @@ function worstReversal(): { rev: number; x: number } {
   let worst = 0,
     at = 0;
   for (let x = 0.01 * L; x <= 0.99 * L; x += 2) {
-    const st = stationAt(x, true);
+    const st = stationAt(model, x, true);
     if (!st.tmax) continue;
     const us = st.tmax / 2,
       K = 80;
@@ -201,9 +210,13 @@ function worstKeelButtock(): { curv: number; x: number; y: number } {
 }
 
 function loadCase(path: string | null): void {
-  resetModel();
-  if (path) loadHull(parseDocument(readFileSync(path, "utf8")).variants[0]);
-  prepare();
+  resetModel(model);
+  if (path)
+    loadHull(
+      model,
+      parseDocument(model, readFileSync(path, "utf8")).variants[0],
+    );
+  prepare(model);
 }
 
 function listJson(dir: string): string[] {

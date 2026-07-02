@@ -14,7 +14,7 @@
 
 import { clamp } from "./math";
 import {
-  state,
+  type Model,
   L,
   buildWeightSampler,
   type SheerCP,
@@ -144,23 +144,23 @@ function decTransom(t: Transom): TransomCP[] {
 // One document = one hull. `length` is the unitless scale (the model's L) and doubles as a scale/version tag
 // for the importer (legacy multi-hull documents carry a `topology`/`variants` wrapper and length 4000).
 // Control-point counts are implied by the array lengths, so there is no separate topology block.
-export function buildJson(): string {
-  const s = state.sheer;
+export function buildJson(model: Model): string {
+  const s = model.sheer;
   const doc = {
     length: L,
-    waterline: state.waterline,
-    deckRakeDeg: (state.deckRake * 180) / Math.PI,
+    waterline: model.waterline,
+    deckRakeDeg: (model.deckRake * 180) / Math.PI,
     sheerPlan: encPlan(s.cp), // each plan point carries its blend weights w
     sheerTrim: encTrim(s.trim),
     transom: encTransom(s.transom),
-    templates: state.templates.map(encSection),
-    keelK: state.keelK.slice(),
+    templates: model.templates.map(encSection),
+    keelK: model.keelK.slice(),
   };
   return JSON.stringify(doc, null, 2);
 }
 
-export function downloadJson(): void {
-  const blob = new Blob([buildJson()], { type: "application/json" });
+export function downloadJson(model: Model): void {
+  const blob = new Blob([buildJson(model)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -229,6 +229,7 @@ function linearPath(k: number, length: number): WeightCP[] {
 // coordinates. Control-point counts are taken from the arrays themselves; `docLength` only places the
 // default blend handoff for legacy documents that lack per-station weights.
 function decodeVariant(
+  model: Model,
   v: Record<string, unknown>,
   c: string,
   docLength: number,
@@ -307,7 +308,7 @@ function decodeVariant(
             })),
           )
         : linearPath(nTpl, docLength);
-    const wf = buildWeightSampler(oldW);
+    const wf = buildWeightSampler(model, oldW);
     cp.forEach((p) => (p.w = wf(p.x)));
   }
 
@@ -343,7 +344,7 @@ function scaleHull(d: HullData, s: number): void {
 // `length` is its unitless scale — coordinates are rescaled to the model's L on import (so a legacy 4000-unit
 // document loads at the current scale). Throws on any structural problem; nothing is committed until it all
 // validates.
-export function parseDocument(text: string): ParsedDoc {
+export function parseDocument(model: Model, text: string): ParsedDoc {
   const doc = obj(JSON.parse(text), "document");
   const legacy = "variants" in doc; // legacy multi-hull documents wrap variants in a topology/variants block
   if (!legacy && !("sheerPlan" in doc))
@@ -371,7 +372,7 @@ export function parseDocument(text: string): ParsedDoc {
         })()
     : [doc];
   const variants = rawList.map((v, i) =>
-    decodeVariant(v, legacy ? `variants[${i}]` : "document", docLength),
+    decodeVariant(model, v, legacy ? `variants[${i}]` : "document", docLength),
   );
 
   // normalize to the model's length (decoded coordinates are in the document's units)
@@ -394,28 +395,27 @@ export function parseDocument(text: string): ParsedDoc {
 }
 
 // load a parsed variant into the live model
-export function loadHull(v: HullData): void {
-  state.sheer.cp = v.cp;
-  state.sheer.trim = v.trim;
-  state.sheer.transom = v.transom;
-  state.templates = v.templates;
-  state.keelK = v.keelK;
-  state.selected = null;
-  state.x0 = clamp(state.x0, 0, L);
+export function loadHull(model: Model, v: HullData): void {
+  model.sheer.cp = v.cp;
+  model.sheer.trim = v.trim;
+  model.sheer.transom = v.transom;
+  model.templates = v.templates;
+  model.keelK = v.keelK;
+  model.x0 = clamp(model.x0, 0, L);
 }
 
 // editor import: load the document's first variant; returns the document's variant count
-export function loadJsonText(text: string): number {
-  const parsed = parseDocument(text);
-  loadHull(parsed.variants[0]);
-  state.waterline = parsed.waterline;
-  state.deckRake = parsed.deckRake;
+export function loadJsonText(model: Model, text: string): number {
+  const parsed = parseDocument(model, text);
+  loadHull(model, parsed.variants[0]);
+  model.waterline = parsed.waterline;
+  model.deckRake = parsed.deckRake;
   return parsed.variants.length;
 }
 
 // open a file picker, read the chosen JSON, load it, then run `after` (a re-render). Errors are
 // reported to the user; the model is left as-is on failure.
-export function importJson(after: () => void): void {
+export function importJson(model: Model, after: () => void): void {
   const input = document.createElement("input");
   input.type = "file";
   input.accept = "application/json,.json";
@@ -425,7 +425,7 @@ export function importJson(after: () => void): void {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const n = loadJsonText(String(reader.result));
+        const n = loadJsonText(model, String(reader.result));
         after();
         if (n > 1)
           alert(

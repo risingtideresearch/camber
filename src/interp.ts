@@ -12,8 +12,20 @@
 // all loaded hulls must agree on point counts and length.
 
 import { clamp } from "./core/math";
-import { state, L, prepare, type Sheer, type StationCP } from "./core/model";
-import { draw3d } from "./core/render";
+import {
+  createModel,
+  L,
+  Model,
+  prepare,
+  type Sheer,
+  type StationCP,
+} from "./core/model";
+import {
+  draw3d,
+  Draw3dParams,
+  createDraw3dParams,
+  View3DMode,
+} from "./core/draw3d";
 import {
   buildJson,
   parseDocument,
@@ -24,6 +36,22 @@ import { promoteFamily } from "./core/promote";
 import { hydrostatics, type Hydro } from "./core/hydro";
 import { getDesign, insertDesign, updateDesign } from "./core/supabase";
 import { buildPreviewSvg } from "./core/preview";
+import { ModelSelection } from "./core/modelSelection";
+
+// This interpolation-viewer app owns its single model+view state (the blended hull is written into it),
+// threaded into every core call below.
+
+export interface InterpolateState {
+  model: Model;
+  draw3dParams: Draw3dParams;
+  selection: ModelSelection;
+}
+
+const state: InterpolateState = {
+  model: createModel(),
+  draw3dParams: createDraw3dParams(),
+  selection: null,
+};
 
 interface Hull {
   name: string;
@@ -87,16 +115,24 @@ function blend(): void {
       k: hulls.reduce((a, h, kk) => a + w[kk] * h.data.templates[j][i].k, 0),
     })),
   );
-  state.sheer = { cp: plan, trim, transom, yf: () => 0, zf: () => 0 } as Sheer;
-  state.templates = templates;
+  const model = state.model;
+  model.sheer = { cp: plan, trim, transom, yf: () => 0, zf: () => 0 } as Sheer;
+  model.templates = templates;
 }
 
 // ---------- redraw: blend (if any hulls) then draw the 3D hull ----------
+
+function redraw3d(rebuild?: boolean): void {
+  const cv3d = document.getElementById("cv3d") as HTMLCanvasElement;
+  if (!cv3d) return;
+  draw3d(cv3d, state.model, state.selection, state.draw3dParams, rebuild);
+}
+
 function refresh(): void {
   if (hulls.length === 0) return;
   blend();
-  prepare(); // rebuild the sheer samplers for the blended generators
-  draw3d(true); // rebuild + draw the mesh
+  prepare(state.model); // rebuild the sheer samplers for the blended generators
+  redraw3d(true); // rebuild + draw the mesh
   renderMetrics(); // live hydrostatics for the blended hull
 }
 
@@ -106,7 +142,7 @@ function refresh(): void {
 function renderMetrics(): void {
   const body = document.getElementById("metricsBody");
   if (!body) return;
-  const h = hulls.length ? hydrostatics() : null;
+  const h = hulls.length ? hydrostatics(state.model) : null;
   lastHydro = h; // also drives the scatter's current-blend marker
   updateScatterMark();
   if (!h) {
@@ -203,7 +239,7 @@ function renderMetrics(): void {
 // blank 3D view until something redraws. Draw once more next frame, when layout has settled.
 function drawAfterLayout(): void {
   requestAnimationFrame(() => {
-    if (hulls.length) draw3d(false);
+    if (hulls.length) redraw3d(false);
   });
 }
 
@@ -530,7 +566,7 @@ interface Sample {
 }
 const HEAT_G = 31; // pad grid resolution (cells per side) — ~3× the samples of an 18-grid (count ∝ G²)
 const SAMPLE_NS = 72, // hydrostatics resolution for the sampling pass (the live metrics panel uses full
-  SAMPLE_M = 20; //     resolution). The per-cell cost is dominated by blend()+prepare(), not this, so the
+  SAMPLE_M = 20; //     resolution). The per-cell cost is dominated by blend()+prepare(state), not this, so the
 //                       grid runs ~1 s (triangle) to ~3 s (pentagon) — done off the critical path below.
 let samples: Sample[] = [];
 let lastHydro: Hydro | null = null; // hydrostatics of the current (live) blend; set by renderMetrics
@@ -549,6 +585,7 @@ function computeSamples(): void {
   const n = hulls.length;
   if (n < 2) return;
   const saved = hulls.map((h) => h.weight); // restore the live blend after the pass
+  const model = state.model;
   if (n === 2) {
     const N = 120;
     for (let i = 0; i <= N; i++) {
@@ -556,13 +593,13 @@ function computeSamples(): void {
       hulls[0].weight = 1 - t;
       hulls[1].weight = t;
       blend();
-      prepare();
+      prepare(model);
       samples.push({
         gx: i,
         gy: 0,
         pos: { x: 0, y: 0 },
         t,
-        h: hydrostatics(SAMPLE_NS, SAMPLE_M),
+        h: hydrostatics(model, SAMPLE_NS, SAMPLE_M),
       });
     }
   } else {
@@ -576,19 +613,19 @@ function computeSamples(): void {
         const w = meanValue({ x: cx, y: cy }, V);
         hulls.forEach((h, i) => (h.weight = w[i]));
         blend();
-        prepare();
+        prepare(model);
         samples.push({
           gx,
           gy,
           pos: { x: cx, y: cy },
           t: 0,
-          h: hydrostatics(SAMPLE_NS, SAMPLE_M),
+          h: hydrostatics(model, SAMPLE_NS, SAMPLE_M),
         });
       }
   }
   hulls.forEach((h, i) => (h.weight = saved[i]));
   blend();
-  prepare();
+  prepare(model);
 }
 
 // sequential colour ramp 0..1 → blue → pale → red (reversed RdYlBu)
@@ -788,7 +825,7 @@ function updateStatus(): void {
 // exactly like the hull editor.
 let currentId: string | null = null; // the saved design's row id (null until first save)
 let savedName: string | null = null; // the name stored for currentId
-let savedSnapshot = ""; // buildJson() of the last save
+let savedSnapshot = ""; // buildJson(state) of the last save
 let savingNow = false;
 let flashUntil = 0;
 
@@ -811,9 +848,11 @@ function isDirty(): boolean {
   if (hulls.length === 0) return false;
   if (currentId == null) return true; // never saved → always unsaved work
   return (
-    buildJson() !== savedSnapshot || nameInput().value.trim() !== savedName
+    buildJson(state.model) !== savedSnapshot ||
+    nameInput().value.trim() !== savedName
   );
 }
+
 function refreshSaveUI(): void {
   saveBtnEl().textContent = willFork() ? "Save As…" : "Save";
   saveBtnEl().disabled = hulls.length < 1 || savingNow;
@@ -850,8 +889,9 @@ async function doSave(): Promise<void> {
   saveStateEl().className = "savestate";
   saveStateEl().textContent = "Saving…";
   try {
-    const json = buildJson(); // the blended hull is already in `state`
-    const preview = buildPreviewSvg();
+    const model = state.model;
+    const json = buildJson(model); // the blended hull is already in `model`
+    const preview = buildPreviewSvg(model);
     if (fork) currentId = await insertDesign(name, json, preview);
     else await updateDesign(currentId!, json, preview);
     savedName = name;
@@ -910,7 +950,7 @@ async function loadFiles(files: FileList | File[]): Promise<void> {
   for (const f of Array.from(files)) {
     try {
       addParsedDoc(
-        parseDocument(await f.text()),
+        parseDocument(state.model, await f.text()),
         f.name.replace(/\.json$/i, "") || "hull",
         errs,
       );
@@ -918,7 +958,10 @@ async function loadFiles(files: FileList | File[]): Promise<void> {
       errs.push(`${f.name}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  promoted = promoteFamily(hulls.map((h) => h.data)); // lift mixed topologies to a common one before blending
+  promoted = promoteFamily(
+    state.model,
+    hulls.map((h) => h.data),
+  ); // lift mixed topologies to a common one before blending
   resetBlend(); // a fresh family starts centred (equal blend)
   renderPanel();
   updateStatus();
@@ -934,12 +977,15 @@ async function loadByIds(ids: string[]): Promise<void> {
   for (const id of ids) {
     try {
       const { name, documentText } = await getDesign(id);
-      addParsedDoc(parseDocument(documentText), name, errs);
+      addParsedDoc(parseDocument(state.model, documentText), name, errs);
     } catch (e) {
       errs.push(`${id}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  promoted = promoteFamily(hulls.map((h) => h.data)); // lift mixed topologies to a common one before blending
+  promoted = promoteFamily(
+    state.model,
+    hulls.map((h) => h.data),
+  ); // lift mixed topologies to a common one before blending
   resetBlend(); // a fresh family starts centred (equal blend)
   renderPanel();
   updateStatus();
@@ -951,7 +997,8 @@ async function loadByIds(ids: string[]): Promise<void> {
 
 // ---------- wire up ----------
 function init(): void {
-  state.x0 = L / 2;
+  const model = state.model;
+  model.x0 = L / 2;
 
   // drag-and-drop onto the whole page (still works for loading JSON files, though there's no Load button)
   const stop = (e: Event) => {
@@ -1024,7 +1071,7 @@ function init(): void {
 
   // the 3D canvas fills a CSS box; redraw it when the box resizes (mesh is cached)
   window.addEventListener("resize", () => {
-    if (hulls.length) draw3d(false);
+    if (hulls.length) redraw3d(false);
   });
 
   // 3D display mode — a single mutually-exclusive choice (render / lines / zebra / sheet), like the editor
@@ -1034,11 +1081,11 @@ function init(): void {
       "button.vmode",
     );
     if (!b) return;
-    state.view3dMode = b.dataset.mode as typeof state.view3dMode;
+    state.draw3dParams.view3dMode = b.dataset.mode as View3DMode;
     view3dModes
       .querySelectorAll(".vmode")
       .forEach((x) => x.classList.toggle("on", x === b));
-    if (hulls.length) draw3d(true);
+    if (hulls.length) redraw3d(true);
   });
 
   // 3D rotation (view-only; no model is touched)
@@ -1048,20 +1095,20 @@ function init(): void {
     rot = {
       px: e.clientX,
       py: e.clientY,
-      yaw: state.rot.yaw,
-      pitch: state.rot.pitch,
+      yaw: state.draw3dParams.rot.yaw,
+      pitch: state.draw3dParams.rot.pitch,
     };
     e.preventDefault();
   });
   window.addEventListener("pointermove", (e) => {
     if (!rot || !hulls.length) return;
-    state.rot.yaw = rot.yaw + (e.clientX - rot.px) * 0.008;
-    state.rot.pitch = clamp(
+    state.draw3dParams.rot.yaw = rot.yaw + (e.clientX - rot.px) * 0.008;
+    state.draw3dParams.rot.pitch = clamp(
       rot.pitch + (e.clientY - rot.py) * 0.008,
       -1.45,
       1.45,
     );
-    draw3d(false);
+    redraw3d(false);
   });
   window.addEventListener("pointerup", () => (rot = null));
   // scroll-wheel zoom (the lines overlay is pointer-events:none so this still reaches the canvas)
@@ -1070,8 +1117,12 @@ function init(): void {
     (e) => {
       if (!hulls.length) return;
       e.preventDefault();
-      state.zoom = clamp(state.zoom * Math.exp(-e.deltaY * 0.0015), 0.3, 8);
-      draw3d(false);
+      state.draw3dParams.zoom = clamp(
+        state.draw3dParams.zoom * Math.exp(-e.deltaY * 0.0015),
+        0.3,
+        8,
+      );
+      redraw3d(false);
     },
     { passive: false },
   );
