@@ -1,6 +1,6 @@
 // ---------- view transforms: world coordinates → screen (SVG viewBox) coordinates ----------
 
-import { L, XFWD, NMIN, NMAX, DMAX } from "./model";
+import { L, XFWD, NMIN, NMAX, DMAX, YMIN, YMAX, ZTRIMMIN } from "./model";
 
 // shared longitudinal (x) mapping for plan + profile. SX (px per mm, set by fitting the length L — plus the
 // forward trim overhang XFWD — across the 1000-wide panel) is the SINGLE isometric scale: the plan's breadth
@@ -22,14 +22,12 @@ export const Ptop = 20,
   PZbase = PH - Pbot;
 export const zScreenP = (z: number): number => PZbase - (z - ZMIN) * SZ;
 export const invZp = (vy: number): number => ZMIN + (PZbase - vy) / SZ;
-export const ZTRIMMIN = -275; // sheer trim must stay below the deck: z in [ZTRIMMIN,0]
+// ZTRIMMIN (sheer trim min) lives with the other domain bounds in model.ts; re-exported below.
 
 // plan: a single half-breadth — breadth grows upward at the same px/mm as x (isometric). The centerline used
 // to sit on the BOTTOM edge; now the strip reserves a band BELOW it (down to YMIN < 0) so the sheer plan can
 // be drawn crossing the centerline at a tumblehome bow, where the deck edge tucks past y = 0.
-export const YMAX = 275,
-  YMIN = -55, // room below the centerline for the bow's centerline crossing
-  SYP = SX,
+export const SYP = SX,
   Ppad = 18,
   LH = (YMAX - YMIN) * SYP + 2 * Ppad, // height so [YMIN, YMAX] fits at the isometric scale
   Lbase = Ppad + YMAX * SYP; // screen y of the centerline (y = 0), now up from the bottom by |YMIN|·SYP
@@ -48,12 +46,12 @@ export const invD = (vy: number): number => (vy - STpad) / STsc;
 
 // blend control (horizontal): x runs left→right via the shared mapX, so its stations line up with the plan
 // and profile strips above/below it. Each template's share of the simplex stacks VERTICALLY — cumulative
-// weight 0 at the bottom, 1 at the top. The strip owns its own (wide, short) viewBox 1000×WH, set in
-// main.ts; wY maps a cumulative weight 0..1 to the vertical, leaving room for the band handles.
+// weight 0 at the bottom, 1 at the top. The strip owns its own (wide, short) viewBox 1000×WH, set by the
+// WeightsView component; wY maps a cumulative weight 0..1 to the vertical, leaving room for the band handles.
 export const WH = 150,
   Wpad = 16;
 export const wY = (c: number): number => WH - Wpad - c * (WH - 2 * Wpad); // cumulative weight → screen y (0 bottom)
 export const invWY = (vy: number): number => (WH - Wpad - vy) / (WH - 2 * Wpad);
 
 // re-export the domain bounds the views also use
-export { NMIN, NMAX, DMAX };
+export { NMIN, NMAX, DMAX, YMIN, YMAX, ZTRIMMIN };

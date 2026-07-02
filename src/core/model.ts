@@ -83,6 +83,12 @@ export const XFWD = 100;
 export const NMIN = -113,
   NMAX = 338,
   DMAX = 338;
+// plan / profile editable coordinate bounds — the ranges control points may be dragged within (the 2D editor
+// view transforms in view.ts mirror them). Kept here with the other domain bounds so the model-space edit
+// operations below can clamp to them without importing the view layer (which would be a circular dependency).
+export const YMAX = 275, // plan half-breadth upper bound
+  YMIN = -55, // room below the centerline for a tumblehome bow's centerline crossing
+  ZTRIMMIN = -275; // sheer trim must stay below the deck: z ∈ [ZTRIMMIN, 0]
 
 // ---------- defaults ----------
 const SHEER_DEF: [number, number][] = [
@@ -910,10 +916,196 @@ export function sampleX(): number[] {
     N = 110;
   for (let i = 0; i <= N; i++) a.push(((L + XFWD) * i) / N);
   return a;
-} // The drag-move handlers (moveSheer / moveTrim / moveTransom / moveWeight) and the add-point helpers
-// (addStation / addSheerPoint / addTrimPoint / addWeightPoint) live in the editor layer
-// (editorInteraction.ts): they map an svg's inverse-view coordinates to model space, so they belong with
-// the editor's pointer wiring rather than the core.
+}
+
+// ---------- edit operations (drag-move + add-point) ----------
+// These all take MODEL-space coordinates (the editor maps a pointer's inverse-view coordinates to model space
+// before calling them), so they depend only on the core and live here with the other model mutations. They
+// clamp to the editable domain bounds (YMIN/YMAX/ZTRIMMIN and the ±80 minimum station spacing).
+
+// ---------- add stations / points ---------- (add* return the inserted index)
+// Add a unified station at x: its plan y and its blend w are both read off the CURRENT curves there, so the
+// insert changes neither curve — it just adds a handle. (yGiven is the dragged y when adding in the plan
+// view; the blend strip passes the plan curve's own y so the station lands on the curve.)
+export function addStation(model: Model, x: number, yGiven: number): number {
+  const cp = model.sheer.cp,
+    n = cp.length;
+  // may land anywhere forward of the transom, including the bow overhang to L + XFWD, and below the centerline
+  x = clamp(x, cp[0].x + 80, L + XFWD);
+  let k = cp.findIndex((p) => p.x > x);
+  if (k < 0) k = n; // past every existing point → append at the bow end
+  cp.splice(k, 0, { x, y: clamp(yGiven, YMIN, YMAX), w: weightsAt(model, x) });
+  return k;
+}
+
+export const addSheerPoint = (model: Model, x: number, y: number): number =>
+  addStation(model, x, y);
+
+export function addTrimPoint(model: Model, x: number, z: number): number {
+  const cp = model.sheer.trim,
+    n = cp.length;
+  // a new trim point may land anywhere forward of the transom, including the bow overhang up to L + XFWD
+  x = clamp(x, cp[0].x + 80, L + XFWD);
+  let k = cp.findIndex((p) => p.x > x);
+  if (k < 0) k = n; // past every existing point → append at the bow end
+  cp.splice(k, 0, { x, z: clamp(z, ZTRIMMIN, 0), k: 0 });
+  return k;
+}
+
+// add a station from the blend strip: x as given, plan y read off the current plan curve so the station
+// lands on it (stations are unified, so this adds the plan handle too).
+export const addWeightPoint = (model: Model, x: number): number =>
+  addStation(model, x, model.sheer.yf(x));
+
+// ---------- drag-move handlers ---------- (mx / my / mz / mn / md are model-space coordinates)
+// Map a drag's model point to the selected control point and mutate it.
+export function moveSheer(
+  model: Model,
+  idx: number,
+  mx: number,
+  my: number,
+): void {
+  const cp = model.sheer.cp[idx],
+    n = model.sheer.cp.length;
+  // The first point is pinned at the transom (x = 0); every other point — including the LAST — is movable in
+  // x, the last running forward to L + XFWD so the plan can be drawn over the bow overhang. y may go below the
+  // centerline (down to YMIN) so the sheer plan can cross it to close a tumblehome bow.
+  if (idx > 0) {
+    const hiX = idx < n - 1 ? model.sheer.cp[idx + 1].x - 80 : L + XFWD;
+    const nx = clamp(mx, model.sheer.cp[idx - 1].x + 80, hiX);
+    // resample the station's blend onto the current curve at its new x, so moving the plan handle along x
+    // barely disturbs the blend (the point stays on the curve it helped define)
+    if (nx !== cp.x) cp.w = weightsAt(model, nx);
+    cp.x = nx;
+  }
+  cp.y = clamp(my, YMIN, YMAX);
+}
+
+export function moveTrim(
+  model: Model,
+  idx: number,
+  mx: number,
+  mz: number,
+): void {
+  const cp = model.sheer.trim[idx],
+    n = model.sheer.trim.length;
+  // The first point is pinned at the transom (x = 0); every other point — including the LAST — is movable in
+  // x. The last point may run forward to L + XFWD so the sheer trim can extend over the bow overhang.
+  if (idx > 0) {
+    const hiX = idx < n - 1 ? model.sheer.trim[idx + 1].x - 80 : L + XFWD;
+    cp.x = clamp(mx, model.sheer.trim[idx - 1].x + 80, hiX);
+  }
+  cp.z = clamp(mz, ZTRIMMIN, 0); // constrained at or below the flat deck (z ≤ 0)
+}
+
+export function moveTransom(
+  model: Model,
+  idx: number,
+  mx: number,
+  mz: number,
+): void {
+  const cp = model.sheer.transom[idx];
+  cp.x = clamp(mx, 0, L * 0.45); // transom stays in the aft region
+  cp.z = clamp(mz, ZTRIMMIN, 0);
+}
+
+// drag a template point: n across (clamped to the section bounds), d down (kept between its neighbors so the
+// section never curls back up). Negative n is outboard of the sheer (tumblehome).
+export function moveStationPoint(
+  model: Model,
+  ti: number,
+  idx: number,
+  mn: number,
+  md: number,
+): void {
+  const arr = model.templates[ti],
+    cp = arr[idx];
+  cp.n = clamp(mn, NMIN, NMAX);
+  const lo = arr[idx - 1].d,
+    hi = idx < arr.length - 1 ? arr[idx + 1].d : DMAX;
+  cp.d = clamp(md, lo, hi);
+}
+
+// drag a station's blend boundary in the weight strip (val ∈ [0,1]): only the simplex split (the band
+// boundary). x is shared with the plan curve and edited there, so the blend strip has no x-handle.
+export function moveWeightBoundary(
+  model: Model,
+  idx: number,
+  bnd: number,
+  val: number,
+): void {
+  setWeightBoundary(model.sheer.cp[idx], bnd, clamp(val, 0, 1));
+}
+
+// The weight CP carries a barycentric vector w ∈ Δ^{K−1}. We edit it through its cumulative boundaries
+// C[m] = Σ_{j≤m} w[j] (a stacked-band view): setting boundary b sets C[b], clamped to keep the order
+// 0 ≤ C[0] ≤ … ≤ C[K−2] ≤ 1, then w is recovered as consecutive differences — always back in the simplex.
+export function setWeightBoundary(cp: WeightCP, b: number, val: number): void {
+  const K = cp.w.length;
+  if (K < 2) return;
+  const C: number[] = [];
+  let s = 0;
+  for (let j = 0; j < K; j++) {
+    s += cp.w[j];
+    C.push(s);
+  }
+  const eps = 1e-3,
+    lo = b > 0 ? C[b - 1] : 0,
+    hi = b < K - 2 ? C[b + 1] : 1;
+  C[b] = clamp(val, lo + eps, hi - eps);
+  const w: number[] = [];
+  let prev = 0;
+  for (let j = 0; j < K - 1; j++) {
+    w.push(Math.max(0, C[j] - prev));
+    prev = C[j];
+  }
+  w.push(Math.max(0, 1 - prev));
+  let t = 0;
+  w.forEach((v) => (t += v));
+  cp.w = t > 0 ? w.map((v) => v / t) : w.map(() => 1 / K);
+}
+
+// the cut-station scrubber position (the red slider shared by the plan / profile / blend strips)
+export function setX0(model: Model, x: number): void {
+  model.x0 = x;
+}
+
+// the design waterline depth (mm below the sheer origin) and the deck rake (given in degrees)
+export function setWaterline(model: Model, mm: number): void {
+  model.waterline = mm;
+}
+export function setDeckRake(model: Model, deg: number): void {
+  model.deckRake = (deg * Math.PI) / 180;
+}
+
+// the keel (centerline) knuckle for one template — the active tab's keel slider drives this
+export function setKeelK(model: Model, ti: number, k: number): void {
+  if (ti < 0 || ti >= model.keelK.length) return;
+  model.keelK[ti] = clamp(k, 0, 1);
+}
+
+// ---------- add / remove whole templates ----------
+// a new template starts as a copy of the last and enters every weight CP at zero weight, so the hull is
+// unchanged on add; raise its weight in the blend editor to bring it into the mix.
+export function addTemplate(model: Model): void {
+  if (model.templates.length >= 7) return; // palette / UI cap
+  const last = model.templates[model.templates.length - 1];
+  model.templates.push(last.map((p) => ({ n: p.n, d: p.d, k: p.k })));
+  model.keelK.push(model.keelK[model.keelK.length - 1] ?? 0); // copy the last template's keel knuckle
+  model.sheer.cp.forEach((cp) => cp.w.push(0));
+}
+
+export function removeTemplate(model: Model, ti: number): void {
+  if (model.templates.length <= 1) return;
+  model.templates.splice(ti, 1);
+  model.keelK.splice(ti, 1);
+  model.sheer.cp.forEach((cp) => {
+    cp.w.splice(ti, 1);
+    let s = 0;
+    cp.w.forEach((v) => (s += v));
+    cp.w = s > 0 ? cp.w.map((v) => v / s) : cp.w.map(() => 1 / cp.w.length);
+  });
+}
 
 // ---------- remove stations / points ----------
 

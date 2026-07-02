@@ -1,13 +1,8 @@
 // Entry point for the React editor.
 //
-// We deliberately do NOT wrap <EditorApp/> in <StrictMode>: the editor boots the imperative core
-// exactly once (initInteraction() installs global pointer/keyboard listeners and boot() loads the
-// design), and StrictMode double-invokes effects in development, which would double-bind those
-// listeners and double-run boot(). The boot effect is additionally guarded by a ref.
-//
-// Note: this file imports only React + the component tree. The imperative core (and dom.ts, which
-// resolves its element references at module-eval time) is pulled in lazily by EditorApp's boot
-// effect, after React has committed the markup — so those references resolve against a live DOM.
+// We deliberately do NOT wrap <EditorApp/> in <StrictMode>: boot runs exactly once (it loads the URL
+// design and is guarded by a ref), and StrictMode's dev-only mount → unmount → remount would cancel that
+// first boot and then skip the retry via the guard, leaving the editor unbooted.
 import { createRoot } from "react-dom/client";
 import { EditorApp } from "./editor/EditorApp";
 

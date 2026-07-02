@@ -3,7 +3,7 @@ import "./DesignBar.css";
 // The right-aligned design actions: the editable name, the save-state text, and Save / Revert /
 // Close. React-owned. A single Save button does both roles — it reads "Save" while the title still
 // matches the saved design (overwrite) and flips to "Save As…" once the name is changed (insert a
-// new row); the label + status text come from the controller via the dirty poll.
+// new row); the label + status text come from EditorApp's save state (refreshed by the dirty poll).
 interface DesignBarProps {
   name: string;
   dirty: boolean; // amber edge on the name field while there are unsaved edits

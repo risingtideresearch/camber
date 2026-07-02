@@ -17,10 +17,7 @@
   width: 100%;
   aspect-ratio: 1;
 } /* a true square that fills the column width */
-.sidepanel > #templateCards {
-  position: absolute;
-  inset: 0;
-}
+/* the stacked per-template editor svgs (only the active one is shown) and the cut station svg */
 .sidepanel > svg {
   position: absolute;
   inset: 0;

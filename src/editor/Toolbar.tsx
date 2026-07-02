@@ -1,16 +1,20 @@
+import type { Tool } from "./types";
 import "./Toolbar.css";
 
-// The edit-tool toolbar (Select / Add). Rendered as static markup with the exact ids/classes the
-// imperative core expects: `interaction.ts`'s `initInteraction()` attaches the click handler to
-// `#toolbar` and `setTool()` toggles the `.active` class. React renders these buttons once with
-// constant props, so it never reconciles away those imperative class changes.
-export function Toolbar() {
+// The edit-tool toolbar (Select / Add). React-owned: the active tool comes from state and each click sets it.
+interface ToolbarProps {
+  tool: Tool;
+  onTool: (t: Tool) => void;
+}
+
+export function Toolbar({ tool, onTool }: ToolbarProps) {
   return (
     <div className="toolbar" id="toolbar">
       <button
-        className="tool active"
+        className={"tool" + (tool === "select" ? " active" : "")}
         data-tool="select"
         title="Select — click a point to select it, then drag to move, Delete to remove, or set its knuckle"
+        onClick={() => onTool("select")}
       >
         <svg viewBox="0 0 16 16" fill="currentColor">
           <path d="M3 1.4l9.6 5.3-4.3.9-1 4.4z" />
@@ -18,9 +22,10 @@ export function Toolbar() {
         Select
       </button>
       <button
-        className="tool"
+        className={"tool" + (tool === "add" ? " active" : "")}
         data-tool="add"
         title="Add — click empty space in an editor to add a control point there"
+        onClick={() => onTool("add")}
       >
         <svg
           viewBox="0 0 16 16"

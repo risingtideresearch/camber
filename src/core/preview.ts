@@ -3,7 +3,7 @@
 // Builds a small isometric wireframe of the current model as a self-contained SVG string. It's generated in
 // the editor at save time and stored on the design row, so the file view can show it as a plain <img> without
 // ever loading the model. Geometry reuses trimmedHullGrid (the same station×offset point grid the STEP export
-// samples); the projection reproduces the 3D canvas's orthographic camera (see render.ts VERT_SRC).
+// samples); the projection reproduces the 3D canvas's orthographic camera (see draw3d.ts VERT_SRC).
 
 import { type Model, prepare } from "./model";
 import { trimmedHullGrid } from "./step";

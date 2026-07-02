@@ -58,8 +58,8 @@ button.on:hover {
   flex-direction: column;
   gap: 10px;
 }
-/* right column: its width is the square's side (set by fitLayout in main.ts); the section editor sits on
-   top as a true square, the blend control fills the rest below it. */
+/* right column: its width is the square's side (set by the column-fitting effect in EditorApp); the section
+   editor sits on top as a true square, the blend control fills the rest below it. */
 .rightcol {
   flex: 0 0 auto;
   min-height: 0;

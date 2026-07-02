@@ -1,21 +1,22 @@
+import type { Model } from "../core/model";
 import "./TrimControls.css";
 
-// The design-waterline and deck-rake sliders. React-owned: the values are React state (mirroring
-// `state.waterline` / `state.deckRake`), and each change pushes to the controller, which mutates the
-// model and re-renders. These ids touch no imperative code, so React controls them fully.
+// The design-waterline and deck-rake sliders. React-owned: their values are read from the model (the single
+// source of truth) and each change pushes back to the model, which triggers a redraw everywhere.
 interface TrimControlsProps {
-  waterline: number; // mm below the sheer origin
-  rakeDeg: number; // deck rake in degrees
+  model: Model;
   onWaterline: (mm: number) => void;
   onRake: (deg: number) => void;
 }
 
 export function TrimControls({
-  waterline,
-  rakeDeg,
+  model,
   onWaterline,
   onRake,
 }: TrimControlsProps) {
+  const waterline = model.waterline; // mm below the sheer origin
+  const rakeDeg = (model.deckRake * 180) / Math.PI;
+
   return (
     <>
       <label
