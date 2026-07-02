@@ -1,3 +1,4 @@
+import { Button } from "../components/Button";
 import type { Tool } from "./types";
 import "./Toolbar.css";
 
@@ -10,9 +11,9 @@ interface ToolbarProps {
 export function Toolbar({ tool, onTool }: ToolbarProps) {
   return (
     <div className="toolbar" id="toolbar">
-      <button
-        className={"tool" + (tool === "select" ? " active" : "")}
-        data-tool="select"
+      <Button
+        className="tool"
+        active={tool === "select"}
         title="Select — click a point to select it, then drag to move, Delete to remove, or set its knuckle"
         onClick={() => onTool("select")}
       >
@@ -20,10 +21,10 @@ export function Toolbar({ tool, onTool }: ToolbarProps) {
           <path d="M3 1.4l9.6 5.3-4.3.9-1 4.4z" />
         </svg>
         Select
-      </button>
-      <button
-        className={"tool" + (tool === "add" ? " active" : "")}
-        data-tool="add"
+      </Button>
+      <Button
+        className="tool"
+        active={tool === "add"}
         title="Add — click empty space in an editor to add a control point there"
         onClick={() => onTool("add")}
       >
@@ -38,7 +39,7 @@ export function Toolbar({ tool, onTool }: ToolbarProps) {
           <path d="M8 3v10M3 8h10" />
         </svg>
         Add
-      </button>
+      </Button>
     </div>
   );
 }

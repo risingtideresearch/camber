@@ -1,33 +1,11 @@
-/* Editor-wide element primitives (buttons, svgs), the app shell layout, the top app bar, and a couple
-   of generic primitives (.card, .tabsep) shared by more than one component. Component-specific rules
-   live in the CSS file next to each component. */
+/* Editor-wide element primitives (svg), the app shell layout, the top app bar, and a couple of generic
+   primitives (.card, .tabsep) shared by more than one component. */
 
 svg {
   display: block;
   width: 100%;
   height: auto;
   touch-action: none;
-}
-
-button {
-  border: 1px solid var(--line);
-  background: #fff;
-  border-radius: 8px;
-  padding: 6px 12px;
-  font: inherit;
-  cursor: pointer;
-  color: #4a5568;
-}
-button:hover {
-  background: #f1f5f9;
-}
-button.on {
-  background: var(--ink);
-  color: #fff;
-  border-color: var(--ink);
-}
-button.on:hover {
-  background: var(--ink);
 }
 
 /* app shell: everything fits the window — a full-width toolbar across the very top, then two columns:

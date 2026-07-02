@@ -27,22 +27,20 @@
   color: var(--mut);
   pointer-events: none;
 }
-/* segmented control: joined buttons, one active */
-.view3dctl .vmode {
+/* segmented control: shared Buttons joined into one bar; the active one is inked by Button's `active` prop */
+.view3dctl .btn {
   border-radius: 0;
   margin-left: -1px;
 }
-.view3dctl .vmode:first-child {
+.view3dctl .btn:first-child {
   border-radius: 8px 0 0 8px;
   margin-left: 0;
 }
-.view3dctl .vmode:last-child {
+.view3dctl .btn:last-child {
   border-radius: 0 8px 8px 0;
 }
-.view3dctl .vmode.on {
-  background: var(--ink);
-  color: #fff;
-  border-color: var(--ink);
+/* lift the active button so its ink border sits above its neighbours' */
+.view3dctl .btn.active {
   position: relative;
   z-index: 1;
 }

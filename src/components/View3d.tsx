@@ -8,6 +8,7 @@ import {
 import type { Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import { clamp } from "../core/math";
+import { Button } from "./Button";
 import "./View3d.css";
 
 // The 3D viewport. It OWNS its draw3dParams (rotation / zoom / display mode) — nothing upstream needs them —
@@ -129,17 +130,16 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
       />
       <svg id="lines3d" className="lines3d" style={{ display: "none" }} />
       {title && <div className="view3dtitle">{title}</div>}
-      <div className="view3dctl" id="view3dModes">
+      <div className="view3dctl">
         {MODES.map((m) => (
-          <button
+          <Button
             key={m.mode}
-            className={"vmode" + (mode === m.mode ? " on" : "")}
-            data-mode={m.mode}
+            active={mode === m.mode}
             title={m.title}
             onClick={() => setMode(m.mode)}
           >
             {m.label}
-          </button>
+          </Button>
         ))}
       </div>
     </div>

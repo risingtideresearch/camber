@@ -1,9 +1,7 @@
 /* Styles for the hull interpolation blender app: the shell layout, shared card primitives, and all
-   component-level rules (blend control, scatter explorer, metrics panel). Global element resets for
-   buttons and inputs live here too so the app is self-contained alongside base.css. */
+   component-level rules (blend control, scatter explorer, metrics panel). */
 
 /* ---------- global element resets for this app ---------- */
-/* Buttons use the shared <Button> (src/components/Button); the name field uses the shared FilenameInput. */
 input[type="range"] {
   width: 100%;
   accent-color: var(--slider);

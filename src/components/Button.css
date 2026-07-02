@@ -1,6 +1,6 @@
-/* The shared action button (src/components/Button). Fully self-contained so any app can use it without a
-   global <button> reset. Class selectors here outrank the element-level button resets some apps still keep
-   for their specialized segmented / toggle controls. */
+/* The shared action button (src/components/Button). Fully self-contained — it carries its own base styling,
+   so no app needs a global <button> reset. The segmented groups (View3d modes, the edit toolbar) add their
+   joined-button layout on top of .btn and reuse the .active (ink) state below. */
 .btn {
   border: 1px solid var(--line);
   background: #fff;

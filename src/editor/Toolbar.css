@@ -22,10 +22,3 @@
   height: 14px;
   display: block;
 }
-.toolbar .tool.active {
-  background: var(--ink);
-  color: #fff;
-}
-.toolbar .tool.active:hover {
-  background: var(--ink);
-}
