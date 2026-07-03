@@ -36,6 +36,7 @@
     "vite": "^8.1.2"
   },
   "dependencies": {
+    "polymorph-ui": "github:risingtideresearch/polymorph-ui#82613716885cf605b8010eef1cdbbc38c15d2809",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   }
