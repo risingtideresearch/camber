@@ -1,6 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import { clamp } from "../core/math";
 import { svgPoint } from "./svgCoords";
+import {
+  refit,
+  useSvgViewSync,
+  type SvgMember,
+  type SvgViewSync,
+} from "./svgViewSync";
 import "./SvgView.css";
 
 // A pan / zoom-able <svg> shared by every 2D editor view. It fills its container (no fixed aspect ratio) and
@@ -13,6 +19,10 @@ import "./SvgView.css";
 //
 // The scale (sx, sy) is handed to `draw`, which passes it on to the draw2d routines so line widths, control
 // points, and the cut triangle can be rendered at a constant screen size regardless of the zoom level.
+//
+// Two or more views are kept aligned by sharing a controller from `useSvgViewSync()` via the `sync` prop:
+// they then share one horizontal scale and x-pan (and repaint together on zoom / pan) while each keeps its
+// own vertical offset. The plan and profile strips use this so they stay lined up on the longitudinal axis.
 export type SvgDraw = (g: SVGGElement, sx: number, sy: number) => void;
 
 interface SvgViewProps {
@@ -27,18 +37,9 @@ interface SvgViewProps {
   cursor?: string;
   // a genuine background click (a press that didn't pan), at content coordinates
   onBackgroundClick?: (cx: number, cy: number) => void;
+  // opt in to a shared horizontal scale / x-pan with the other views holding the same controller
+  sync?: RefObject<SvgViewSync>;
   className?: string;
-}
-
-interface ViewState {
-  sx: number;
-  sy: number;
-  tx: number;
-  ty: number;
-  w: number;
-  h: number;
-  fit: number; // the base fit scale, so wheel-zoom can clamp relative to it
-  fitted: boolean;
 }
 
 export function SvgView({
@@ -49,95 +50,111 @@ export function SvgView({
   padding = 6,
   cursor,
   onBackgroundClick,
+  sync,
   className,
 }: SvgViewProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const gRef = useRef<SVGGElement>(null);
-  const view = useRef<ViewState>({
-    sx: 1,
-    sy: 1,
-    tx: 0,
-    ty: 0,
-    w: 0,
-    h: 0,
-    fit: 1,
-    fitted: false,
-  });
+  // the shared (or, without `sync`, this view's private) horizontal transform. It's mutable state living
+  // outside render (a ref), so effects / handlers read and write `.current` freely; render never touches it.
+  const privateH = useSvgViewSync();
+  const hRef = sync ?? privateH;
+
   // keep the latest callbacks reachable from the effect-bound (wheel / resize) handlers without re-binding.
   // Synced in a layout effect (runs before the passive paint effect below, so paint sees the latest draw).
   const drawRef = useRef(draw);
   const clickRef = useRef(onBackgroundClick);
+  // this view's member of the controller (its vertical offset + repaint hooks). Created lazily in the first
+  // layout effect below and only ever touched from effects / handlers, so render never reads or mutates it.
+  const selfRef = useRef<SvgMember | null>(null);
+
   useLayoutEffect(() => {
     drawRef.current = draw;
     clickRef.current = onBackgroundClick;
+    const H = hRef.current;
+    let self = selfRef.current;
+    if (!self) {
+      self = {
+        cw: contentWidth,
+        ch: contentHeight,
+        pad: padding,
+        h: 0,
+        ty: 0,
+        apply() {
+          const g = gRef.current;
+          if (g)
+            g.setAttribute(
+              "transform",
+              `matrix(${H.sx} 0 0 ${H.sy} ${H.tx} ${self!.ty})`,
+            );
+        },
+        repaint() {
+          const g = gRef.current;
+          if (!g || !H.fitted || self!.h === 0) return;
+          self!.apply();
+          drawRef.current(g, H.sx, H.sy);
+        },
+      };
+      selfRef.current = self;
+    }
+    // keep the content box current if the props change
+    self.cw = contentWidth;
+    self.ch = contentHeight;
+    self.pad = padding;
   });
 
-  const applyTransform = useCallback(() => {
-    const g = gRef.current,
-      v = view.current;
-    if (g)
-      g.setAttribute(
-        "transform",
-        `matrix(${v.sx} 0 0 ${v.sy} ${v.tx} ${v.ty})`,
-      );
-  }, []);
-
-  const paint = useCallback(() => {
-    const g = gRef.current,
-      v = view.current;
-    if (!g || !v.fitted) return;
-    applyTransform();
-    drawRef.current(g, v.sx, v.sy);
-  }, [applyTransform]);
+  // register this view with the controller while it is mounted. A layout effect (not passive) so it runs
+  // before the measure / fit effect below: the fit iterates the members, so this view must already be one.
+  useLayoutEffect(() => {
+    const H = hRef.current,
+      self = selfRef.current;
+    if (!self) return;
+    H.members.add(self);
+    return () => {
+      H.members.delete(self);
+    };
+  }, [hRef]);
 
   // measure, fit, and keep fitting on resize
   useLayoutEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
-    const fitTo = (w: number, h: number) => {
-      const v = view.current;
-      if (mode === "fill") {
-        v.sx = w / contentWidth;
-        v.sy = h / contentHeight;
-        v.tx = 0;
-        v.ty = 0;
-        v.fit = v.sx;
-      } else {
-        const s = Math.max(
-          1e-6,
-          Math.min(
-            (w - 2 * padding) / contentWidth,
-            (h - 2 * padding) / contentHeight,
-          ),
-        );
-        v.sx = s;
-        v.sy = s;
-        v.fit = s;
-        v.tx = (w - s * contentWidth) / 2;
-        v.ty = (h - s * contentHeight) / 2;
-      }
-    };
+    const H = hRef.current,
+      self = selfRef.current!;
     const onResize = (w: number, h: number) => {
       if (w <= 0 || h <= 0) return; // hidden (e.g. an inactive template tab) — wait until it's shown
-      const v = view.current;
-      if (!v.fitted) {
-        fitTo(w, h);
-        v.w = w;
-        v.h = h;
-        v.fitted = true;
-        paint();
-      } else if (mode === "fill") {
-        fitTo(w, h); // the fill scale depends on the size, so re-fit and redraw at the new scale
-        v.w = w;
-        v.h = h;
-        paint();
+      if (mode === "fill") {
+        // stretch to fill (non-uniform); never shared, never zoomed / panned
+        self.h = h;
+        H.w = w;
+        H.sx = w / contentWidth;
+        H.sy = h / contentHeight;
+        H.tx = 0;
+        self.ty = 0;
+        H.fit = H.sx;
+        H.fitted = true;
+        self.repaint();
+        return;
+      }
+      const prevH = self.h;
+      self.h = h;
+      if (!H.userAdjusted) {
+        refit(H, w, contentWidth); // (re)fit every aligned view to the new size
+      } else if (prevH === 0) {
+        // a sibling (or an earlier interaction) already set the shared zoom — adopt it, just center this
+        // view vertically at the shared scale
+        self.ty = (h - H.sy * contentHeight) / 2;
+        self.repaint();
       } else {
-        // keep the user's zoom; just hold the same content point at the centre of the (resized) view
-        v.tx += (w - v.w) / 2;
-        v.ty += (h - v.h) / 2;
-        v.w = w;
-        v.h = h;
-        applyTransform();
+        // keep the user's zoom; hold the same content point centered as the view resizes. The x-shift is
+        // shared, so apply it once (the first aligned view to report the new width); the y-shift is per view.
+        if (w !== H.w) {
+          H.tx += (w - H.w) / 2;
+          H.w = w;
+        }
+        self.ty += (h - prevH) / 2;
+        // scale is unchanged, so every aligned view only needs its transform rewritten
+        for (const m of H.members) m.apply();
       }
     };
     const r = svg.getBoundingClientRect();
@@ -148,12 +165,12 @@ export function SvgView({
     });
     ro.observe(svg);
     return () => ro.disconnect();
-  }, [mode, contentWidth, contentHeight, padding, paint, applyTransform]);
+  }, [mode, contentWidth, contentHeight, padding, hRef]);
 
   // redraw when the draw fn (i.e. the model / selection it closes over) changes
   useEffect(() => {
-    paint();
-  }, [draw, paint]);
+    selfRef.current?.repaint();
+  }, [draw]);
 
   // wheel-zoom toward the cursor — a native non-passive listener so preventDefault() works (zoom mode only)
   useEffect(() => {
@@ -162,36 +179,39 @@ export function SvgView({
     if (!svg) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const v = view.current;
-      if (!v.fitted) return;
+      const H = hRef.current,
+        self = selfRef.current;
+      if (!self || !H.fitted) return;
       const r = svg.getBoundingClientRect();
       const mx = e.clientX - r.left,
         my = e.clientY - r.top,
-        cx = (mx - v.tx) / v.sx,
-        cy = (my - v.ty) / v.sy,
-        s = clamp(v.sx * Math.exp(-e.deltaY * 0.0015), v.fit * 0.2, v.fit * 40);
-      v.sx = s;
-      v.sy = s;
-      v.tx = mx - cx * s;
-      v.ty = my - cy * s;
-      paint();
+        cx = (mx - H.tx) / H.sx,
+        cy = (my - self.ty) / H.sy,
+        s = clamp(H.sx * Math.exp(-e.deltaY * 0.0015), H.fit * 0.2, H.fit * 40);
+      H.sx = s;
+      H.sy = s;
+      H.tx = mx - cx * s; // keep the content x under the cursor fixed (shared)
+      self.ty = my - cy * s; // keep the content y under the cursor fixed (this view only)
+      H.userAdjusted = true;
+      for (const m of H.members) m.repaint(); // scale changed → every aligned view redraws
     };
     svg.addEventListener("wheel", onWheel, { passive: false });
     return () => svg.removeEventListener("wheel", onWheel);
-  }, [mode, paint]);
+  }, [mode, hRef]);
 
   // a press on empty space: drag to pan (zoom mode); if it doesn't move, report a background click. Presses
   // on control points never reach here — their own listeners stopPropagation before this fires.
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button !== 0) return;
     const svg = svgRef.current,
-      g = gRef.current;
-    if (!svg || !g) return;
-    const v = view.current,
-      sx0 = e.clientX,
+      g = gRef.current,
+      self = selfRef.current,
+      H = hRef.current;
+    if (!svg || !g || !self) return;
+    const sx0 = e.clientX,
       sy0 = e.clientY,
-      tx0 = v.tx,
-      ty0 = v.ty;
+      tx0 = H.tx,
+      ty0 = self.ty;
     let moved = false;
     svg.setPointerCapture(e.pointerId);
     const move = (ev: PointerEvent) => {
@@ -199,9 +219,10 @@ export function SvgView({
         dy = ev.clientY - sy0;
       if (!moved && Math.hypot(dx, dy) > 3) moved = true;
       if (moved && mode === "zoom") {
-        v.tx = tx0 + dx;
-        v.ty = ty0 + dy;
-        applyTransform();
+        H.tx = tx0 + dx; // x-pan is shared across aligned views
+        self.ty = ty0 + dy; // y-pan is this view's own
+        H.userAdjusted = true;
+        for (const m of H.members) m.apply(); // scale unchanged → transform-only
       }
     };
     const up = (ev: PointerEvent) => {

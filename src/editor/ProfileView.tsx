@@ -3,7 +3,9 @@ import { addTrimPoint, type Model, type Section } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import { drawProfile } from "../core/draw2d";
 import { invX, invZp, PH } from "../core/view";
+import type { RefObject } from "react";
 import { SvgView } from "./SvgView";
+import type { SvgViewSync } from "./svgViewSync";
 import type { Tool } from "./types";
 import "./ViewStrip.css";
 
@@ -18,6 +20,7 @@ interface ProfileViewProps {
   onSelect: (sel: ModelSelection) => void;
   setTool: (t: Tool) => void;
   bumpModel: () => void;
+  sync?: RefObject<SvgViewSync>; // shared zoom / x-pan with the plan strip
 }
 
 export function ProfileView({
@@ -29,6 +32,7 @@ export function ProfileView({
   onSelect,
   setTool,
   bumpModel,
+  sync,
 }: ProfileViewProps) {
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
@@ -55,6 +59,7 @@ export function ProfileView({
         contentWidth={1000}
         contentHeight={PH}
         draw={draw}
+        sync={sync}
         cursor={tool === "add" ? "crosshair" : "default"}
         onBackgroundClick={onBackgroundClick}
       />

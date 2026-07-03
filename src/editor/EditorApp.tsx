@@ -43,6 +43,7 @@ import { View3d } from "../components/View3d";
 import { WeightsView } from "./WeightsView";
 import { PlanView } from "./PlanView";
 import { ProfileView } from "./ProfileView";
+import { useSvgViewSync } from "./svgViewSync";
 import { SidePanel } from "./SidePanel";
 import { CutStationView } from "./CutStationView";
 import { Area, AreaGroup, AreaSeparator } from "polymorph-ui";
@@ -63,6 +64,9 @@ export function EditorApp() {
   // the views are mounted only once boot has settled the model, so nothing draws the default hull before a
   // URL design (?id=) finishes loading — the columns are sized by flex/layout, so mounting causes no reflow.
   const [booted, setBooted] = useState(false);
+
+  // the plan and profile strips share one longitudinal zoom / x-pan so they stay lined up
+  const planProfileSync = useSvgViewSync();
 
   const [tool, setTool] = useState<Tool>("select");
   const [selection, setSelection] = useState<ModelSelection>(null);
@@ -357,6 +361,7 @@ export function EditorApp() {
                     onSelect={handleSelect}
                     setTool={setTool}
                     bumpModel={bumpModel}
+                    sync={planProfileSync}
                   />
                 </Area>
                 <AreaSeparator className="areasep" />
@@ -370,6 +375,7 @@ export function EditorApp() {
                     onSelect={handleSelect}
                     setTool={setTool}
                     bumpModel={bumpModel}
+                    sync={planProfileSync}
                   />
                 </Area>
               </AreaGroup>

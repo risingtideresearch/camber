@@ -3,7 +3,9 @@ import { addSheerPoint, type Model, type Section } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import { drawPlan } from "../core/draw2d";
 import { invX, invY, LH } from "../core/view";
+import type { RefObject } from "react";
 import { SvgView } from "./SvgView";
+import type { SvgViewSync } from "./svgViewSync";
 import type { Tool } from "./types";
 import "./ViewStrip.css";
 
@@ -19,6 +21,7 @@ interface PlanViewProps {
   onSelect: (sel: ModelSelection) => void;
   setTool: (t: Tool) => void;
   bumpModel: () => void;
+  sync?: RefObject<SvgViewSync>; // shared zoom / x-pan with the profile strip
 }
 
 export function PlanView({
@@ -30,6 +33,7 @@ export function PlanView({
   onSelect,
   setTool,
   bumpModel,
+  sync,
 }: PlanViewProps) {
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
@@ -56,6 +60,7 @@ export function PlanView({
         contentWidth={1000}
         contentHeight={LH}
         draw={draw}
+        sync={sync}
         cursor={tool === "add" ? "crosshair" : "default"}
         onBackgroundClick={onBackgroundClick}
       />
