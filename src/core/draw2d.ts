@@ -63,7 +63,48 @@ export function poly(pts: Vec2[]): string {
 export const byId = (id: string): SVGSVGElement =>
   document.getElementById(id) as unknown as SVGSVGElement;
 
-export function gridX(svg: SVGSVGElement, top: number, bot: number): void {
+// ---------- fixed-screen-size overlays ----------
+// Everything is drawn into the SvgView's content <g>, which the view scales (MSX, MSY) to zoom / fit. Strokes
+// stay a constant screen width via the non-scaling-stroke CSS in SvgView.css; but points, the cut triangle,
+// and text labels have an intrinsic size, so they're wrapped in a group that counter-scales by the inverse of
+// the current view scale. Shapes `build` draws around the local origin then render at a constant pixel size —
+// and circles stay circular even under the weights strip's non-uniform fill. Each draw* entry point sets the
+// current scale (setMarkerScale) before it draws.
+let MSX = 1,
+  MSY = 1;
+export function setMarkerScale(sx: number, sy: number): void {
+  MSX = sx || 1;
+  MSY = sy || 1;
+}
+function fixed(
+  parent: SVGGElement,
+  cx: number,
+  cy: number,
+  build: (g: SVGGElement) => void,
+): void {
+  const g = el("g", {
+    transform: `translate(${cx.toFixed(2)} ${cy.toFixed(2)}) scale(${(1 / MSX).toFixed(5)} ${(1 / MSY).toFixed(5)})`,
+  }) as SVGGElement;
+  build(g);
+  parent.append(g);
+}
+// a constant-size text label anchored at content point (x, y) — like placing a <text> there, but immune to
+// the view scale (so labels stay legible and undistorted at any zoom / fill)
+function fixedText(
+  parent: SVGGElement,
+  x: number,
+  y: number,
+  attrs: Record<string, string | number>,
+  text: string,
+): void {
+  fixed(parent, x, y, (g) => {
+    const t = el("text", { x: 0, y: 0, ...attrs });
+    t.textContent = text;
+    g.append(t);
+  });
+}
+
+export function gridX(svg: SVGGElement, top: number, bot: number): void {
   for (let q = 0; q <= 4; q++) {
     const x = mapX((L * q) / 4);
     svg.append(
@@ -83,7 +124,7 @@ export function gridX(svg: SVGSVGElement, top: number, bot: number): void {
 // the station's true-angle trace, drawn by the caller (drawPlan/drawProfile) from the swept section.
 export function stationLine(
   model: Model,
-  svg: SVGSVGElement,
+  svg: SVGGElement,
   top: number,
   bot: number,
   onSelect: OnModelSelect,
@@ -103,21 +144,24 @@ export function stationLine(
     startDrag({ kind: "slider" }, svg, e, onSelect),
   );
   svg.append(hit);
-  const tri = el("path", {
-    d: `M${x - 6} ${top} L${x + 6} ${top} L${x} ${top + 9} Z`,
-    fill: "var(--slider)",
-    style: "cursor:ew-resize",
+  // the cut indicator triangle — a constant screen size, apex pointing down at x0 along the top edge
+  fixed(svg, x, top, (g) => {
+    const tri = el("path", {
+      d: `M-6 0 L6 0 L0 9 Z`,
+      fill: "var(--slider)",
+      style: "cursor:ew-resize",
+    });
+    tri.addEventListener("pointerdown", (e) =>
+      startDrag({ kind: "slider" }, svg, e, onSelect),
+    );
+    g.append(tri);
   });
-  tri.addEventListener("pointerdown", (e) =>
-    startDrag({ kind: "slider" }, svg, e, onSelect),
-  );
-  svg.append(tri);
 }
 
 export type Proj = (p: Vec3) => [number, number];
 
 // the swept station at x0 projected into a 2D view → its true heading/rake (not a plain vertical cut)
-export function cutTrace(model: Model, svg: SVGSVGElement, proj: Proj): void {
+export function cutTrace(model: Model, svg: SVGGElement, proj: Proj): void {
   const cut = clippedSection(model, model.x0, 40);
   svg.append(
     el("path", {
@@ -199,13 +243,14 @@ export function cuspRuns(model: Model): CuspPt[][] {
 }
 
 export function drawPlan(
-  svg: SVGSVGElement, // = svgL;
+  svg: SVGGElement, // the SvgView content group
   model: Model,
   selection: ModelSelection,
   sections: Section[],
-  _zmin: number,
   onSelect: OnModelSelect,
+  sc: [number, number],
 ): void {
+  setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
   gridX(svg, 8, LH - 8);
   // (waterline contours other than the DWL footprint are shown in the 3D Waterline lines view, not here)
@@ -234,15 +279,13 @@ export function drawPlan(
       "stroke-dasharray": "4 4",
     }),
   );
-  const cl = el("text", {
-    x: PXpad - 4,
-    y: Lbase - 4,
-    "text-anchor": "end",
-    "font-size": 10,
-    fill: "var(--keel)",
-  });
-  cl.textContent = "CL";
-  svg.append(cl);
+  fixedText(
+    svg,
+    PXpad - 4,
+    Lbase - 4,
+    { "text-anchor": "end", "font-size": 10, fill: "var(--keel)" },
+    "CL",
+  );
   stationLine(model, svg, 8, LH - 8, onSelect);
   // the sheer plan curve (the deck-edge half-breadth) — drawn only out to the last control point; the plan is
   // not extrapolated past what the user drew (the hull ends at the last cp too, see forwardLimit)
@@ -346,15 +389,17 @@ export function drawPlan(
   }
   // cut station — true plan heading (the fan angle)
   cutTrace(model, svg, (p) => [mapX(p[0]), yPlan(p[1])]);
-  svg.append(
-    el("circle", {
-      cx: mapX(model.x0),
-      cy: yPlan(model.sheer.yf(model.x0)),
-      r: 3.2,
-      fill: "#fff",
-      stroke: COL.sheer,
-      "stroke-width": 1.5,
-    }),
+  fixed(svg, mapX(model.x0), yPlan(model.sheer.yf(model.x0)), (g) =>
+    g.append(
+      el("circle", {
+        cx: 0,
+        cy: 0,
+        r: 3.2,
+        fill: "#fff",
+        stroke: COL.sheer,
+        "stroke-width": 1.5,
+      }),
+    ),
   );
   model.sheer.cp.forEach((cp, idx) =>
     cpDot(selection, svg, idx, mapX(cp.x), yPlan(cp.y), onSelect),
@@ -362,13 +407,14 @@ export function drawPlan(
 }
 
 export function drawProfile(
-  svg: SVGSVGElement, // = svgP
+  svg: SVGGElement, // the SvgView content group
   model: Model,
   selection: ModelSelection,
   sections: Section[],
-  _zmin: number,
   onSelect: OnModelSelect,
+  sc: [number, number],
 ): void {
+  setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
   gridX(svg, Ptop - 4, PZbase);
   stationLine(model, svg, Ptop - 4, PZbase, onSelect);
@@ -385,15 +431,13 @@ export function drawProfile(
       "stroke-dasharray": "6 4",
     }),
   );
-  const dl = el("text", {
-    x: 1000 - PXpad,
-    y: zScreenP(0) - 5,
-    "text-anchor": "end",
-    "font-size": 10,
-    fill: COL.deck,
-  });
-  dl.textContent = "flat deck";
-  svg.append(dl);
+  fixedText(
+    svg,
+    1000 - PXpad,
+    zScreenP(0) - 5,
+    { "text-anchor": "end", "font-size": 10, fill: COL.deck },
+    "flat deck",
+  );
   // design waterline: horizontal in world ⇒ a raked line in this deck-frame profile (slope = the rake).
   // Runs all the way forward to the hull's closure (forwardLimit), past the LOA for a tumblehome bow.
   const xFwd = forwardLimit(model),
@@ -411,15 +455,13 @@ export function drawProfile(
       opacity: 0.9,
     }),
   );
-  const wll = el("text", {
-    x: mapX(xFwd) - 4,
-    y: zScreenP(zWL(xFwd)) - 5,
-    "text-anchor": "end",
-    "font-size": 10,
-    fill: COL.wl,
-  });
-  wll.textContent = "DWL";
-  svg.append(wll);
+  fixedText(
+    svg,
+    mapX(xFwd) - 4,
+    zScreenP(zWL(xFwd)) - 5,
+    { "text-anchor": "end", "font-size": 10, fill: COL.wl },
+    "DWL",
+  );
   // emergent keel + stem, drawn as one continuous outline from transom to bow so it MATCHES the 3D mesh:
   //  • aft: start at the transom's deepest point (where the transom outline reaches the centerline);
   //  • bottom: the keel/rocker — the deepest point of each closing section (s.pts[last]) — rising to the bow;
@@ -504,14 +546,13 @@ export function drawProfile(
         "stroke-linecap": "round",
       }),
     );
-  const ttl = el("text", {
-    x: mapX(ta.x) + 6,
-    y: zScreenP(ta.z) - 4,
-    "font-size": 10,
-    fill: "var(--transom)",
-  });
-  ttl.textContent = "transom";
-  svg.append(ttl);
+  fixedText(
+    svg,
+    mapX(ta.x) + 6,
+    zScreenP(ta.z) - 4,
+    { "font-size": 10, fill: "var(--transom)" },
+    "transom",
+  );
   // cusp marker: shade the folded depth band (offset = R down to the deepest swept point) at the cusping
   // stations, in red — the same folded region the plan view shades.
   for (const run of cuspRuns(model)) {
@@ -534,25 +575,33 @@ export function drawProfile(
   cutTrace(model, svg, (p) => [mapX(p[0]), zScreenP(p[2])]);
   const h = clippedSection(model, model.x0, 18);
   if (h.keel)
-    svg.append(
+    fixed(
+      svg,
+      mapX(h.pts[h.pts.length - 1][0]),
+      zScreenP(h.pts[h.pts.length - 1][2]),
+      (g) =>
+        g.append(
+          el("circle", {
+            cx: 0,
+            cy: 0,
+            r: 3.2,
+            fill: "#fff",
+            stroke: COL.keel,
+            "stroke-width": 1.5,
+          }),
+        ),
+    );
+  fixed(svg, mapX(model.x0), zScreenP(model.sheer.zf(model.x0)), (g) =>
+    g.append(
       el("circle", {
-        cx: mapX(h.pts[h.pts.length - 1][0]),
-        cy: zScreenP(h.pts[h.pts.length - 1][2]),
+        cx: 0,
+        cy: 0,
         r: 3.2,
         fill: "#fff",
-        stroke: COL.keel,
+        stroke: COL.sheer,
         "stroke-width": 1.5,
       }),
-    );
-  svg.append(
-    el("circle", {
-      cx: mapX(model.x0),
-      cy: zScreenP(model.sheer.zf(model.x0)),
-      r: 3.2,
-      fill: "#fff",
-      stroke: COL.sheer,
-      "stroke-width": 1.5,
-    }),
+    ),
   );
   model.sheer.trim.forEach((cp, idx) =>
     trimDot(selection, svg, idx, mapX(cp.x), zScreenP(cp.z), cp.k, onSelect),
@@ -567,7 +616,7 @@ export function drawProfile(
 
 export function stnCurve(
   model: Model,
-  svg: SVGSVGElement,
+  svg: SVGGElement,
   pts: StationCP[],
   c: string,
   op: number,
@@ -601,10 +650,12 @@ export function stnCurve(
 export function drawStation(
   model: Model,
   selection: ModelSelection,
-  svg: SVGSVGElement,
+  svg: SVGGElement,
   ti: number,
   onSelect: OnModelSelect,
+  sc: [number, number],
 ): void {
+  setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
   const col = tplColor(ti),
     arr = model.templates[ti];
@@ -629,14 +680,13 @@ export function drawStation(
       "stroke-width": 1.2,
     }),
   );
-  const sh = el("text", {
-    x: snX(0) + 6,
-    y: snY(0) - 6,
-    "font-size": 10,
-    fill: COL.mut || "#718096",
-  });
-  sh.textContent = "sheer";
-  svg.append(sh);
+  fixedText(
+    svg,
+    snX(0) + 6,
+    snY(0) - 6,
+    { "font-size": 10, fill: COL.mut || "#718096" },
+    "sheer",
+  );
   // faint ghosts of every other template, then this one solid
   model.templates.forEach((tpl, j) => {
     if (j !== ti) stnCurve(model, svg, tpl, tplColor(j), 0.16);
@@ -651,21 +701,23 @@ export function drawStation(
       k = knuck ? Math.min(Math.max(p.k, 0), 1) : 0,
       rad = (1 - k) * s,
       sel = isSelected(selection, "template", idx, ti); // the selected node is drawn solid red
-    const node = el("rect", {
-      x: snX(p.n) - s,
-      y: snY(p.d) - s,
-      width: 2 * s,
-      height: 2 * s,
-      rx: rad,
-      ry: rad,
-      fill: sel ? SEL : end ? "#fff" : col,
-      stroke: sel ? "#fff" : end ? col : "#fff",
-      "stroke-width": 1.8,
+    fixed(svg, snX(p.n), snY(p.d), (g) => {
+      const node = el("rect", {
+        x: -s,
+        y: -s,
+        width: 2 * s,
+        height: 2 * s,
+        rx: rad,
+        ry: rad,
+        fill: sel ? SEL : end ? "#fff" : col,
+        stroke: sel ? "#fff" : end ? col : "#fff",
+        "stroke-width": 1.8,
+      });
+      node.addEventListener("pointerdown", (e) =>
+        stnPointDown(ti, idx, end, svg, e, onSelect),
+      );
+      g.append(node);
     });
-    node.addEventListener("pointerdown", (e) =>
-      stnPointDown(ti, idx, end, svg, e, onSelect),
-    );
-    svg.append(node);
   });
   // when a template point is selected, mark the corresponding index on every OTHER template's ghost curve
   // with a small red ✕, so you can see where that control point lands on the other sections.
@@ -682,11 +734,13 @@ export function drawStation(
 // plan view (the station is shared). The red cut slider (shared stationLine) scrubs x here too.
 
 export function drawWeights(
-  svg: SVGSVGElement,
+  svg: SVGGElement,
   model: Model,
   selection: ModelSelection,
   onSelect: OnModelSelect,
+  sc: [number, number],
 ): void {
+  setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
   const K = model.templates.length,
     top = wY(1),
@@ -746,15 +800,13 @@ export function drawWeights(
     ["stern", xL, "start"],
     ["bow", xR, "end"],
   ] as const) {
-    const t = el("text", {
+    fixedText(
+      svg,
       x,
-      y: top - 4,
-      "font-size": 10,
-      fill: COL.mut,
-      "text-anchor": anchor,
-    });
-    t.textContent = txt;
-    svg.append(t);
+      top - 4,
+      { "font-size": 10, fill: COL.mut, "text-anchor": anchor },
+      txt,
+    );
   }
   stationLine(model, svg, top, bot, onSelect); // the red cut scrubber (vertical, shared with the plan/profile strips)
 
@@ -782,19 +834,21 @@ export function drawWeights(
     }
     for (let b = 0; b < K - 1; b++) {
       const hy = wY(C[b]);
-      const h = el("circle", {
-        cx: x,
-        cy: hy,
-        r: 5,
-        fill: sel ? SEL : "#fff", // selected blend point → red handles
-        stroke: sel ? "#fff" : tplColor(b),
-        "stroke-width": 2,
-        style: "cursor:ns-resize",
+      fixed(svg, x, hy, (g) => {
+        const h = el("circle", {
+          cx: 0,
+          cy: 0,
+          r: 5,
+          fill: sel ? SEL : "#fff", // selected blend point → red handles
+          stroke: sel ? "#fff" : tplColor(b),
+          "stroke-width": 2,
+          style: "cursor:ns-resize",
+        });
+        h.addEventListener("pointerdown", (e) =>
+          weightHandleDown(i, "bnd", b, svg, e as PointerEvent, onSelect),
+        );
+        g.append(h);
       });
-      h.addEventListener("pointerdown", (e) =>
-        weightHandleDown(i, "bnd", b, svg, e as PointerEvent, onSelect),
-      );
-      svg.append(h);
     }
   });
 }
@@ -804,10 +858,12 @@ export function drawWeights(
 // reaches the boat centerline y=0). The bold arc between them is what survives into the final shape.
 
 export function drawCutStation(
-  svg: SVGSVGElement,
+  svg: SVGGElement,
   model: Model,
   selection: ModelSelection,
+  sc: [number, number],
 ): void {
+  setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
   svg.append(
     el("line", {
@@ -829,14 +885,13 @@ export function drawCutStation(
       "stroke-width": 1.2,
     }),
   );
-  const sh = el("text", {
-    x: snX(0) + 6,
-    y: snY(0) - 6,
-    "font-size": 10,
-    fill: "#718096",
-  });
-  sh.textContent = "sheer";
-  svg.append(sh);
+  fixedText(
+    svg,
+    snX(0) + 6,
+    snY(0) - 6,
+    { "font-size": 10, fill: "#718096" },
+    "sheer",
+  );
 
   const st = stationAt(model, model.x0, true), // the keel-knuckle symmetric section — matches the trimmed hull
     fr = frameAt(model, model.x0);
@@ -919,9 +974,7 @@ export function drawCutStation(
     ["raw interpolated", "#c026d3", 16],
     ["mirrored + keel-round", COL.station, 30],
   ] as const) {
-    const t = el("text", { x: snX(NMIN) + 4, y, "font-size": 10, fill: col });
-    t.textContent = txt;
-    svg.append(t);
+    fixedText(svg, snX(NMIN) + 4, y, { "font-size": 10, fill: col }, txt);
   }
 
   // kept arc, bold — both sides: from the starboard sheer trim (umin) through the keel to the port sheer
@@ -960,24 +1013,25 @@ export function drawCutStation(
         "stroke-dasharray": "5 4",
       }),
     );
-    const tl = el("text", {
-      x: snX(NMIN) + 4,
-      y: snY(dtrim) - 4,
-      "font-size": 10,
-      fill: COL.sheer,
-    });
-    tl.textContent = "sheer trim";
-    svg.append(tl);
+    fixedText(
+      svg,
+      snX(NMIN) + 4,
+      snY(dtrim) - 4,
+      { "font-size": 10, fill: COL.sheer },
+      "sheer trim",
+    );
     if (!empty)
-      svg.append(
-        el("circle", {
-          cx: snX(st.n(umin)),
-          cy: snY(st.d(umin)),
-          r: 4,
-          fill: "#fff",
-          stroke: COL.sheer,
-          "stroke-width": 1.6,
-        }),
+      fixed(svg, snX(st.n(umin)), snY(st.d(umin)), (g) =>
+        g.append(
+          el("circle", {
+            cx: 0,
+            cy: 0,
+            r: 4,
+            fill: "#fff",
+            stroke: COL.sheer,
+            "stroke-width": 1.6,
+          }),
+        ),
       );
   }
   // centerline trim (vertical at n=ncl) + the keel point where the section closes
@@ -994,15 +1048,13 @@ export function drawCutStation(
       "stroke-dasharray": "5 4",
     }),
   );
-  const cl = el("text", {
-    x: snX(nclC) - 4,
-    y: snY(DMAX) - 6,
-    "text-anchor": "end",
-    "font-size": 10,
-    fill: COL.keel,
-  });
-  cl.textContent = "centerline";
-  svg.append(cl);
+  fixedText(
+    svg,
+    snX(nclC) - 4,
+    snY(DMAX) - 6,
+    { "text-anchor": "end", "font-size": 10, fill: COL.keel },
+    "centerline",
+  );
   // (no keel-point marker here — it would sit right on the seam and hide the very continuity being inspected;
   // the blended keel knuckle is shown by the keel slider)
   // design waterline at this station: the depth where worldZ = −waterline (combines sinkage + rake)
@@ -1022,15 +1074,13 @@ export function drawCutStation(
         "stroke-dasharray": "5 4",
       }),
     );
-    const wt = el("text", {
-      x: snX(NMAX) - 4,
-      y: snY(dWL) - 4,
-      "text-anchor": "end",
-      "font-size": 10,
-      fill: COL.wl,
-    });
-    wt.textContent = "WL";
-    svg.append(wt);
+    fixedText(
+      svg,
+      snX(NMAX) - 4,
+      snY(dWL) - 4,
+      { "text-anchor": "end", "font-size": 10, fill: COL.wl },
+      "WL",
+    );
   }
 
   // mark where the currently selected template point lands on this interpolated station (its blend by w(x0))
@@ -1049,82 +1099,88 @@ export function drawCutStation(
 
 // a small red ✕ marking the spot that corresponds (same index) to the selected point — drawn on the other
 // templates' ghost curves so you can see where that control point lands on the other sections
-export function redX(svg: SVGSVGElement, sx: number, sy: number): void {
+export function redX(svg: SVGGElement, sx: number, sy: number): void {
   const r = 4.5;
-  for (const [dx, dy] of [
-    [-1, -1],
-    [-1, 1],
-  ] as const)
-    svg.append(
-      el("line", {
-        x1: sx + dx * r,
-        y1: sy + dy * r,
-        x2: sx - dx * r,
-        y2: sy - dy * r,
-        stroke: SEL,
-        "stroke-width": 2,
-        "stroke-linecap": "round",
-      }),
-    );
+  fixed(svg, sx, sy, (g) => {
+    for (const [dx, dy] of [
+      [-1, -1],
+      [-1, 1],
+    ] as const)
+      g.append(
+        el("line", {
+          x1: dx * r,
+          y1: dy * r,
+          x2: -dx * r,
+          y2: -dy * r,
+          stroke: SEL,
+          "stroke-width": 2,
+          "stroke-linecap": "round",
+        }),
+      );
+  });
 }
 
 // mark the point that CORRESPONDS (same index) to the current selection on the interpolated cut station:
 // a dashed amber ring over a dot in `col`, reading as "linked", matching the amber 3D guide ribbon.
 export function linkDot(
-  svg: SVGSVGElement,
+  svg: SVGGElement,
   sx: number,
   sy: number,
   col: string,
 ): void {
-  svg.append(
-    el("circle", {
-      cx: sx,
-      cy: sy,
-      r: 8,
-      fill: "none",
-      stroke: HILITE,
-      "stroke-width": 2,
-      opacity: 0.9,
-      "stroke-dasharray": "3 3",
-    }),
-  );
-  svg.append(
-    el("circle", {
-      cx: sx,
-      cy: sy,
-      r: 3.5,
-      fill: col,
-      stroke: "#fff",
-      "stroke-width": 1.2,
-    }),
-  );
+  fixed(svg, sx, sy, (g) => {
+    g.append(
+      el("circle", {
+        cx: 0,
+        cy: 0,
+        r: 8,
+        fill: "none",
+        stroke: HILITE,
+        "stroke-width": 2,
+        opacity: 0.9,
+        "stroke-dasharray": "3 3",
+      }),
+    );
+    g.append(
+      el("circle", {
+        cx: 0,
+        cy: 0,
+        r: 3.5,
+        fill: col,
+        stroke: "#fff",
+        "stroke-width": 1.2,
+      }),
+    );
+  });
 }
 
 export function cpDot(
   selection: ModelSelection,
-  svg: SVGSVGElement,
+  svg: SVGGElement,
   idx: number,
   sx: number,
   sy: number,
   onSelect: OnModelSelect,
 ): void {
-  const c = el("circle", {
-    cx: sx,
-    cy: sy,
-    r: 5.5,
-    fill: isSelected(selection, "plan", idx) ? SELB : COL.sheer,
-    stroke: "#fff",
-    "stroke-width": 1.5,
+  fixed(svg, sx, sy, (g) => {
+    const c = el("circle", {
+      cx: 0,
+      cy: 0,
+      r: 5.5,
+      fill: isSelected(selection, "plan", idx) ? SELB : COL.sheer,
+      stroke: "#fff",
+      "stroke-width": 1.5,
+    });
+    c.addEventListener("pointerdown", (e) =>
+      sheerPointDown(idx, svg, e, onSelect),
+    );
+    g.append(c);
   });
-  c.addEventListener("pointerdown", (e) =>
-    sheerPointDown(idx, svg, e, onSelect),
-  );
-  svg.append(c);
 }
 
 export function trimDot(
   selection: ModelSelection,
-  svg: SVGSVGElement,
+  svg: SVGGElement,
   idx: number,
   sx: number,
   sy: number,
@@ -1134,43 +1190,47 @@ export function trimDot(
   // morph round (k=0, smooth) → square (k=1, hard corner) via corner radius, like the template nodes
   const s = 5.5,
     rad = (1 - Math.min(Math.max(k, 0), 1)) * s;
-  const c = el("rect", {
-    x: sx - s,
-    y: sy - s,
-    width: 2 * s,
-    height: 2 * s,
-    rx: rad,
-    ry: rad,
-    fill: isSelected(selection, "trim", idx) ? SELB : COL.sheer,
-    stroke: "#fff",
-    "stroke-width": 1.5,
+  fixed(svg, sx, sy, (g) => {
+    const c = el("rect", {
+      x: -s,
+      y: -s,
+      width: 2 * s,
+      height: 2 * s,
+      rx: rad,
+      ry: rad,
+      fill: isSelected(selection, "trim", idx) ? SELB : COL.sheer,
+      stroke: "#fff",
+      "stroke-width": 1.5,
+    });
+    c.addEventListener("pointerdown", (e) =>
+      trimPointDown(idx, svg, e, onSelect),
+    );
+    g.append(c);
   });
-  c.addEventListener("pointerdown", (e) =>
-    trimPointDown(idx, svg, e, onSelect),
-  );
-  svg.append(c);
 }
 
 export function transomDot(
   selection: ModelSelection,
-  svg: SVGSVGElement,
+  svg: SVGGElement,
   idx: number,
   sx: number,
   sy: number,
   onSelect: OnModelSelect,
 ): void {
-  const c = el("circle", {
-    cx: sx,
-    cy: sy,
-    r: 5.5,
-    fill: isSelected(selection, "transom", idx) ? SELB : "var(--transom)",
-    stroke: "#fff",
-    "stroke-width": 1.5,
+  fixed(svg, sx, sy, (g) => {
+    const c = el("circle", {
+      cx: 0,
+      cy: 0,
+      r: 5.5,
+      fill: isSelected(selection, "transom", idx) ? SELB : "var(--transom)",
+      stroke: "#fff",
+      "stroke-width": 1.5,
+    });
+    c.addEventListener("pointerdown", (e) =>
+      transomPointDown(idx, svg, e, onSelect),
+    );
+    g.append(c);
   });
-  c.addEventListener("pointerdown", (e) =>
-    transomPointDown(idx, svg, e, onSelect),
-  );
-  svg.append(c);
 }
 
 //------------- event callabacks attached to the SVG nodes in the above draw functions -------------
@@ -1182,7 +1242,7 @@ export function stnPointDown(
   ti: number,
   idx: number,
   end: boolean,
-  svg: SVGSVGElement,
+  svg: SVGGElement,
   e: PointerEvent,
   onSelect: OnModelSelect,
 ): void {
@@ -1196,7 +1256,7 @@ export function stnPointDown(
 
 export function sheerPointDown(
   idx: number,
-  svg: SVGSVGElement,
+  svg: SVGGElement,
   e: PointerEvent,
   onSelect: OnModelSelect,
 ): void {
@@ -1206,7 +1266,7 @@ export function sheerPointDown(
 
 export function trimPointDown(
   idx: number,
-  svg: SVGSVGElement,
+  svg: SVGGElement,
   e: PointerEvent,
   onSelect: OnModelSelect,
 ): void {
@@ -1216,7 +1276,7 @@ export function trimPointDown(
 
 export function transomPointDown(
   idx: number,
-  svg: SVGSVGElement,
+  svg: SVGGElement,
   e: PointerEvent,
   onSelect: OnModelSelect,
 ): void {
@@ -1230,7 +1290,7 @@ export function weightHandleDown(
   idx: number,
   part: "x" | "bnd",
   bnd: number,
-  svg: SVGSVGElement,
+  svg: SVGGElement,
   e: PointerEvent,
   onSelect: OnModelSelect,
 ): void {

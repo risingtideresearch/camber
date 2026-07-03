@@ -1,34 +1,20 @@
-/* the section-template editor card. The square-panel primitive below (.sidefit / .sidepanel) is also
-   reused by the cut panel, which is broken out of the tab strip into its own card. */
+/* the section-template editor card. */
 .sidecard {
   flex: 1 1 0; /* fill the resizable Area */
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
-/* the square-fit region takes the leftover height between the header and footer, centering the square.
-   It's a size container so the square below can be the largest square that fits (min of its w/h). */
-.sidefit {
+/* the editor region takes the leftover height between the header and footer; the per-template pan/zoom views
+   are stacked (absolutely) on top of each other, only the active one shown. */
+.sidebody {
   flex: 1 1 0;
   min-height: 0;
-  display: grid;
-  place-items: center;
-  container-type: size;
-}
-.sidepanel {
   position: relative;
-  width: min(100cqw, 100cqh);
-  height: min(100cqw, 100cqh);
-} /* the largest square that fits the region, centered */
-/* the stacked per-template editor svgs (only the active one is shown) and the cut station svg */
-.sidepanel > svg {
+}
+.stationlayer {
   position: absolute;
   inset: 0;
-}
-.sidepanel svg {
-  width: 100%;
-  height: 100%;
-  display: block;
 }
 
 /* keel-knuckle slider for the active template, pinned under the square */

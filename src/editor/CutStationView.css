@@ -1,5 +1,4 @@
-/* the live cut-station card; a sibling of the section editor that reuses its .sidefit / .sidepanel
-   square-panel primitive (see SidePanel.css). */
+/* the live cut-station card; a sibling of the section editor. */
 .cutcard {
   flex: 1 1 0; /* fill the resizable Area */
   min-height: 0;
@@ -8,6 +7,12 @@
 }
 .cutcard .cap {
   margin-bottom: 8px;
+}
+/* the pan/zoom cut view fills the leftover height under the caption */
+.cutbody {
+  flex: 1 1 0;
+  min-height: 0;
+  position: relative;
 }
 
 /* card caption: an uppercase label with an optional value / tag on the right */

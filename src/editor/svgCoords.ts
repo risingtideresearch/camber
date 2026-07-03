@@ -1,32 +1,22 @@
-// SVG pointer-coordinate helpers shared by the editor's strip views and the window-level drag handler.
+// SVG pointer-coordinate helpers shared by the editor's views and the window-level drag handler.
 
 import type { Drag } from "../core/drag";
 
-// map a client (screen) point to the svg's viewBox coordinates via its CTM — handles any CSS scaling and
-// preserveAspectRatio letterboxing (the editor svgs are fit-to-box, so their box ≠ their viewBox aspect)
+// map a client (screen) point to a graphics element's local coordinate system via its CTM. The element the
+// views draw into is the pan/zoom content <g>, so its CTM folds in the view transform: the result is the
+// fixed content coordinates the draw2d mappings (invX / invY / …) expect, at any zoom / pan.
 export function svgPoint(
-  svg: SVGSVGElement,
+  el: SVGGraphicsElement,
   clientX: number,
   clientY: number,
 ): [number, number] {
-  const m = svg.getScreenCTM();
+  const m = el.getScreenCTM();
   if (!m) return [0, 0];
-  const pt = svg.createSVGPoint();
-  pt.x = clientX;
-  pt.y = clientY;
-  const p = pt.matrixTransform(m.inverse());
+  const p = new DOMPoint(clientX, clientY).matrixTransform(m.inverse());
   return [p.x, p.y];
 }
 
-// a strip's viewBox coordinates for a pointer event on that strip
-export function vbCoords(
-  svg: SVGSVGElement,
-  e: PointerEvent,
-): [number, number] {
-  return svgPoint(svg, e.clientX, e.clientY);
-}
-
-// the viewBox coordinates for an in-progress drag (its originating svg is stored on the drag)
+// the content coordinates for an in-progress drag (its originating content group is stored on the drag)
 export function getVB(d: Drag, e: PointerEvent): [number, number] {
   return svgPoint(d.svg!, e.clientX, e.clientY);
 }

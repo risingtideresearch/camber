@@ -1,14 +1,14 @@
-import { useEffect, useRef } from "react";
+import { useCallback } from "react";
 import { addTrimPoint, type Model, type Section } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import { drawProfile } from "../core/draw2d";
 import { invX, invZp, PH } from "../core/view";
-import { vbCoords } from "./svgCoords";
+import { SvgView } from "./SvgView";
 import type { Tool } from "./types";
 import "./ViewStrip.css";
 
-// The profile strip (sheer trim, keel/stem, transom in side view). Owns its <svg>; redraws it via
-// drawProfile() on model / selection change. In "add" mode a click on empty space inserts a sheer-trim point.
+// The profile strip (sheer trim, keel/stem, transom in side view). Draws through a shared pan/zoom SvgView.
+// In "add" mode a click on empty space inserts a sheer-trim point.
 interface ProfileViewProps {
   model: Model;
   modelVersion: number;
@@ -30,18 +30,16 @@ export function ProfileView({
   setTool,
   bumpModel,
 }: ProfileViewProps) {
-  const ref = useRef<SVGSVGElement>(null);
+  const draw = useCallback(
+    (g: SVGGElement, sx: number, sy: number) => {
+      drawProfile(g, model, selection, sections, onSelect, [sx, sy]);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [model, modelVersion, selection, sections, onSelect],
+  );
 
-  useEffect(() => {
-    const svg = ref.current;
-    if (svg) drawProfile(svg, model, selection, sections, 0, onSelect);
-  }, [model, modelVersion, selection, sections, onSelect]);
-
-  const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    const svg = ref.current;
-    if (!svg) return;
+  const onBackgroundClick = (vx: number, vy: number) => {
     if (tool === "add") {
-      const [vx, vy] = vbCoords(svg, e.nativeEvent);
       const idx = addTrimPoint(model, invX(vx), invZp(vy));
       setTool("select");
       onSelect({ tgt: "trim", idx });
@@ -53,12 +51,12 @@ export function ProfileView({
 
   return (
     <div className="viewstrip">
-      <svg
-        ref={ref}
-        viewBox={`0 0 1000 ${PH}`}
-        preserveAspectRatio="xMidYMid meet"
-        style={{ cursor: tool === "add" ? "crosshair" : "default" }}
-        onPointerDown={onPointerDown}
+      <SvgView
+        contentWidth={1000}
+        contentHeight={PH}
+        draw={draw}
+        cursor={tool === "add" ? "crosshair" : "default"}
+        onBackgroundClick={onBackgroundClick}
       />
     </div>
   );

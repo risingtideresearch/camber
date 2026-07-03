@@ -1,15 +1,15 @@
-import { useEffect, useRef } from "react";
+import { useCallback } from "react";
 import { addTemplatePoint, type Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import { drawStation } from "../core/draw2d";
 import { invD, invN } from "../core/view";
-import { vbCoords } from "./svgCoords";
+import { SvgView } from "./SvgView";
 import type { Tool } from "./types";
 
-// One section-template editor (template `ti`), drawn via drawStation() into its own persistent <svg>. Only the
-// active template is shown; the others stay mounted (hidden) so switching tabs is instant and a drag started
-// on one stays bound to a live, measurable element. In "add" mode a click inserts a section point (into every
-// template, index-aligned); in "select" mode an empty click clears the selection.
+// One section-template editor (template `ti`), drawn through a shared pan/zoom SvgView. Only the active
+// template is shown; the others stay mounted (hidden) so switching tabs is instant and a drag started on one
+// stays bound to a live element. In "add" mode a click inserts a section point (into every template,
+// index-aligned); in "select" mode an empty click clears the selection.
 interface StationEditorProps {
   model: Model;
   modelVersion: number;
@@ -33,18 +33,16 @@ export function StationEditor({
   setTool,
   bumpModel,
 }: StationEditorProps) {
-  const ref = useRef<SVGSVGElement>(null);
+  const draw = useCallback(
+    (g: SVGGElement, sx: number, sy: number) => {
+      drawStation(model, selection, g, ti, onSelect, [sx, sy]);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [model, modelVersion, selection, ti, onSelect],
+  );
 
-  useEffect(() => {
-    const svg = ref.current;
-    if (svg) drawStation(model, selection, svg, ti, onSelect);
-  }, [model, modelVersion, selection, ti, onSelect]);
-
-  const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    const svg = ref.current;
-    if (!svg) return;
+  const onBackgroundClick = (vx: number, vy: number) => {
     if (tool === "add") {
-      const [vx, vy] = vbCoords(svg, e.nativeEvent);
       const idx = addTemplatePoint(model, ti, invN(vx), invD(vy));
       setTool("select");
       onSelect({ tgt: "template", idx, ti });
@@ -55,14 +53,14 @@ export function StationEditor({
   };
 
   return (
-    <svg
-      ref={ref}
-      viewBox="0 0 360 360"
-      style={{
-        display: active ? "" : "none",
-        cursor: tool === "add" ? "crosshair" : "default",
-      }}
-      onPointerDown={onPointerDown}
-    />
+    <div className="stationlayer" style={{ display: active ? "" : "none" }}>
+      <SvgView
+        contentWidth={360}
+        contentHeight={360}
+        draw={draw}
+        cursor={tool === "add" ? "crosshair" : "default"}
+        onBackgroundClick={onBackgroundClick}
+      />
+    </div>
   );
 }

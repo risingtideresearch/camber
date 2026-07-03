@@ -1,15 +1,16 @@
-import { useEffect, useRef } from "react";
+import { useCallback } from "react";
 import { addWeightPoint, type Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import { drawWeights } from "../core/draw2d";
 import { invX, WH } from "../core/view";
-import { vbCoords } from "./svgCoords";
+import { SvgView } from "./SvgView";
 import type { Tool } from "./types";
 import "./ViewStrip.css";
 
-// The blend (weights) strip: each template's share of the simplex stacked vertically along the hull. Owns its
-// <svg>; redraws it via drawWeights() on model / selection change. In "add" mode a click adds a station at the
-// clicked x (its plan y read off the current curve); the band-boundary handles are drawn by drawWeights.
+// The blend (weights) strip: each template's share of the simplex stacked vertically along the hull. Unlike
+// the other 2D views it does not zoom / pan — the graph always fills the whole area (SvgView "fill" mode). In
+// "add" mode a click adds a station at the clicked x (its plan y read off the current curve); the
+// band-boundary handles are drawn by drawWeights.
 interface WeightsViewProps {
   model: Model;
   modelVersion: number;
@@ -29,18 +30,16 @@ export function WeightsView({
   setTool,
   bumpModel,
 }: WeightsViewProps) {
-  const ref = useRef<SVGSVGElement>(null);
+  const draw = useCallback(
+    (g: SVGGElement, sx: number, sy: number) => {
+      drawWeights(g, model, selection, onSelect, [sx, sy]);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [model, modelVersion, selection, onSelect],
+  );
 
-  useEffect(() => {
-    const svg = ref.current;
-    if (svg) drawWeights(svg, model, selection, onSelect);
-  }, [model, modelVersion, selection, onSelect]);
-
-  const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    const svg = ref.current;
-    if (!svg) return;
+  const onBackgroundClick = (vx: number) => {
     if (tool === "add") {
-      const [vx] = vbCoords(svg, e.nativeEvent);
       const idx = addWeightPoint(model, invX(vx));
       setTool("select");
       onSelect({ tgt: "weight", idx });
@@ -52,12 +51,13 @@ export function WeightsView({
 
   return (
     <div className="viewstrip">
-      <svg
-        ref={ref}
-        viewBox={`0 0 1000 ${WH}`}
-        preserveAspectRatio="xMidYMid meet"
-        style={{ cursor: tool === "add" ? "crosshair" : "default" }}
-        onPointerDown={onPointerDown}
+      <SvgView
+        contentWidth={1000}
+        contentHeight={WH}
+        mode="fill"
+        draw={draw}
+        cursor={tool === "add" ? "crosshair" : "default"}
+        onBackgroundClick={onBackgroundClick}
       />
     </div>
   );

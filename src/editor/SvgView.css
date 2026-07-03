@@ -1,0 +1,12 @@
+/* the shared pan/zoom svg (see SvgView.tsx) fills its container; the content <g> carries the view transform */
+.svgview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+/* every drawn stroke keeps a constant screen width regardless of the view transform (points / labels / the
+   cut triangle keep a constant size via a counter-scaling wrapper in draw2d — see fixed()/fixedText()) */
+.svgview :where(path, line, rect, circle, ellipse, polyline, polygon) {
+  vector-effect: non-scaling-stroke;
+}

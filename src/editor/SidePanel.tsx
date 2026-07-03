@@ -67,23 +67,21 @@ export function SidePanel({
         onAddTemplate={onAddTemplate}
         onRemoveTemplate={onRemoveTemplate}
       />
-      <div className="sidefit">
-        <div className="sidepanel">
-          {model.templates.map((_, ti) => (
-            <StationEditor
-              key={ti}
-              model={model}
-              modelVersion={modelVersion}
-              selection={selection}
-              ti={ti}
-              active={ti === active}
-              tool={tool}
-              onSelect={onSelect}
-              setTool={setTool}
-              bumpModel={bumpModel}
-            />
-          ))}
-        </div>
+      <div className="sidebody">
+        {model.templates.map((_, ti) => (
+          <StationEditor
+            key={ti}
+            model={model}
+            modelVersion={modelVersion}
+            selection={selection}
+            ti={ti}
+            active={ti === active}
+            tool={tool}
+            onSelect={onSelect}
+            setTool={setTool}
+            bumpModel={bumpModel}
+          />
+        ))}
       </div>
       <div className="keelrow">
         <label

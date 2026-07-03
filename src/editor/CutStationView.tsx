@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useMemo } from "react";
 import { clippedSection, waterlineStats, type Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import { drawCutStation } from "../core/draw2d";
+import { SvgView } from "./SvgView";
 import "./CutStationView.css";
 
 // The live cut-station panel: the interpolated section at the red cut x0, plus a draft / WL-beam readout.
@@ -17,12 +18,13 @@ export function CutStationView({
   modelVersion,
   selection,
 }: CutStationViewProps) {
-  const ref = useRef<SVGSVGElement>(null);
-
-  useEffect(() => {
-    const svg = ref.current;
-    if (svg) drawCutStation(svg, model, selection);
-  }, [model, modelVersion, selection]);
+  const draw = useCallback(
+    (g: SVGGElement, sx: number, sy: number) => {
+      drawCutStation(g, model, selection, [sx, sy]);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [model, modelVersion, selection],
+  );
 
   // the draft / WL-beam readout for the live cut, measured against the design waterline
   const label = useMemo(() => {
@@ -40,10 +42,8 @@ export function CutStationView({
       <div className="cap">
         Cut <span className="val">{label}</span>
       </div>
-      <div className="sidefit">
-        <div className="sidepanel">
-          <svg ref={ref} id="svgCut" viewBox="0 0 360 360" />
-        </div>
+      <div className="cutbody">
+        <SvgView contentWidth={360} contentHeight={360} draw={draw} />
       </div>
     </div>
   );

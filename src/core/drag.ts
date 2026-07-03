@@ -5,7 +5,7 @@ import { OnModelSelect } from "./modelSelection";
 
 export interface Drag {
   kind: "slider" | "sheer" | "trim" | "transom" | "stn" | "weight" | "rot";
-  svg?: SVGSVGElement;
+  svg?: SVGGraphicsElement; // the pan/zoom content <g> the drag started in (its CTM maps pointer → content)
   idx?: number;
   ti?: number; // template index, for a "stn" drag
   wpart?: "x" | "bnd"; // which part of a weight control point is being dragged
@@ -36,7 +36,7 @@ type DragSpec = {
 
 export function startDrag(
   d: DragSpec,
-  svg: SVGSVGElement,
+  svg: SVGGraphicsElement,
   e: PointerEvent,
   onSelect: OnModelSelect,
 ): void {
