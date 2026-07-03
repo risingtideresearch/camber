@@ -183,6 +183,7 @@ export function SvgView({
         self = selfRef.current;
       if (!self || !H.fitted) return;
       const r = svg.getBoundingClientRect();
+      const sPrev = H.sx;
       const mx = e.clientX - r.left,
         my = e.clientY - r.top,
         cx = (mx - H.tx) / H.sx,
@@ -193,7 +194,15 @@ export function SvgView({
       H.tx = mx - cx * s; // keep the content x under the cursor fixed (shared)
       self.ty = my - cy * s; // keep the content y under the cursor fixed (this view only)
       H.userAdjusted = true;
-      for (const m of H.members) m.repaint(); // scale changed → every aligned view redraws
+      // scale changed → every aligned view redraws. The view under the cursor anchors on the cursor (above);
+      // the others zoom about their own vertical center, so their current vertical framing is preserved.
+      for (const m of H.members) {
+        if (m !== self) {
+          const half = m.h / 2;
+          m.ty = half - (s / sPrev) * (half - m.ty);
+        }
+        m.repaint();
+      }
     };
     svg.addEventListener("wheel", onWheel, { passive: false });
     return () => svg.removeEventListener("wheel", onWheel);
