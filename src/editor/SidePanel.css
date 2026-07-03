@@ -1,22 +1,25 @@
 /* the section-template editor card. The square-panel primitive below (.sidefit / .sidepanel) is also
    reused by the cut panel, which is broken out of the tab strip into its own card. */
 .sidecard {
-  flex: 0 0 auto;
+  flex: 1 1 0; /* fill the resizable Area */
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
+/* the square-fit region takes the leftover height between the header and footer, centering the square.
+   It's a size container so the square below can be the largest square that fits (min of its w/h). */
 .sidefit {
-  flex: 0 0 auto;
+  flex: 1 1 0;
   min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
+  container-type: size;
 }
 .sidepanel {
   position: relative;
-  width: 100%;
-  aspect-ratio: 1;
-} /* a true square that fills the column width */
+  width: min(100cqw, 100cqh);
+  height: min(100cqw, 100cqh);
+} /* the largest square that fits the region, centered */
 /* the stacked per-template editor svgs (only the active one is shown) and the cut station svg */
 .sidepanel > svg {
   position: absolute;

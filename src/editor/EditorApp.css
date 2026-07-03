@@ -8,9 +8,9 @@ svg {
   touch-action: none;
 }
 
-/* app shell: everything fits the window — a full-width toolbar across the very top, then two columns:
-   the LEFT column stacks the 3D view, the plan, and the profile; the RIGHT column stacks the tabbed
-   section editor (a true square) and the vertical blend control. No page scroll. */
+/* app shell: everything fits the window — a full-width toolbar across the very top, then a resizable grid
+   of views (polymorph-ui Area / AreaGroup): an outer horizontal split (left views | right editors), each
+   column an inner vertical split. Drag the separators to resize any view. No page scroll. */
 .app {
   display: flex;
   flex-direction: column;
@@ -21,29 +21,52 @@ svg {
 } /* drawing tool: don't select text while dragging */
 .main {
   display: flex;
-  gap: 14px;
   flex: 1 1 0;
   min-height: 0;
   padding: 14px 24px;
-  justify-content: center;
 }
-/* left column: 3D (flexes to fill) above the plan and profile strips (sized by their isometric aspect) */
-.leftcol {
-  flex: 1 1 0;
+
+/* AreaGroup fills its slot; its child Areas are flex columns so each view fills its area. */
+.areagroup {
   min-width: 0;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
-/* right column: its width is the square's side (set by the column-fitting effect in EditorApp); the section
-   editor sits on top as a true square, the blend control fills the rest below it. */
-.rightcol {
-  flex: 0 0 auto;
-  min-height: 0;
+.area {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* resize handle: a thin line centered in a comfortable hit area, highlighted on hover / while dragging.
+   A vertical bar splits the horizontal group (aria-orientation="vertical"); a horizontal bar the columns. */
+.areasep {
+  flex: 0 0 auto;
+  position: relative;
+  background: transparent;
+}
+.areasep::after {
+  content: "";
+  position: absolute;
+  background: transparent;
+  border-radius: 3px;
+  transition: background 0.15s;
+}
+.areasep[aria-orientation="vertical"] {
+  width: 12px;
+}
+.areasep[aria-orientation="vertical"]::after {
+  inset: 0 5px;
+}
+.areasep[aria-orientation="horizontal"] {
+  height: 12px;
+}
+.areasep[aria-orientation="horizontal"]::after {
+  inset: 5px 0;
+}
+.areasep:hover::after,
+.areasep[data-separator="drag"]::after {
+  background: var(--accent);
 }
 
 /* the toolbar: a single full-width row across the very top of the app, so the section editor below can

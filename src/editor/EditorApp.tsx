@@ -21,7 +21,7 @@ import type { ModelSelection } from "../core/modelSelection";
 import { buildJson } from "../core/json";
 import { clamp } from "../core/math";
 import { getDrag, setDrag } from "../core/drag";
-import { invD, invN, invWY, invX, invY, invZp, LH, PH, WH } from "../core/view";
+import { invD, invN, invWY, invX, invY, invZp } from "../core/view";
 import { getVB } from "./svgCoords";
 import { deleteSelected, setKnuckle } from "./selection";
 import {
@@ -45,16 +45,10 @@ import { PlanView } from "./PlanView";
 import { ProfileView } from "./ProfileView";
 import { SidePanel } from "./SidePanel";
 import { CutStationView } from "./CutStationView";
+import { Area, AreaGroup, AreaSeparator } from "polymorph-ui";
 import "./EditorApp.css";
 
 const INITIAL_SAVE: SaveView = { buttonLabel: "Save", kind: "", text: "" };
-
-// column fitting. The right column's width IS each panel's side: both the section editor and the cut station
-// are squares that fill it, stacked. Pick a width that is a sensible fraction of the main area but never
-// taller (as a square) than ~0.42 of its height, nor wider than MAX_SIDE.
-const MIN_SIDE = 200,
-  MAX_SIDE = 420,
-  LEFT_GAP = 30; // the gaps between the stacked left-column items (3D + the three strips)
 
 export function EditorApp() {
   // The one hull model: a stable, mutable object (many core functions mutate it in place). It is never
@@ -281,37 +275,6 @@ export function EditorApp() {
     document.title = `${name || "Untitled"} — Camber`;
   }, [name]);
 
-  // ---------- column fitting: measure .main and size the two columns ----------
-  const mainRef = useRef<HTMLDivElement>(null);
-  const [layout, setLayout] = useState<{
-    side: number;
-    leftMax: number;
-  } | null>(null);
-  useEffect(() => {
-    const main = mainRef.current;
-    if (!main) return;
-    const compute = () => {
-      const w = main.clientWidth,
-        h = main.clientHeight;
-      if (!w || !h) return;
-      const side = Math.max(
-        MIN_SIDE,
-        Math.min(MAX_SIDE, Math.min(w * 0.34, h * 0.42)),
-      );
-      const stripAspect = (WH + LH + PH) / 1000;
-      const leftMax = Math.max(360, (h - side - LEFT_GAP) / stripAspect);
-      setLayout((prev) =>
-        prev && prev.side === side && prev.leftMax === leftMax
-          ? prev
-          : { side, leftMax },
-      );
-    };
-    const ro = new ResizeObserver(compute);
-    ro.observe(main);
-    compute();
-    return () => ro.disconnect();
-  }, []);
-
   // ---------- handlers ----------
   const onWaterline = (mm: number) => {
     setWaterline(model, mm);
@@ -376,68 +339,90 @@ export function EditorApp() {
           onClose={onClose}
         />
       </div>
-      <div className="main" ref={mainRef}>
+      <div className="main">
         {booted && (
-          <>
-            <div
-              className="leftcol"
-              style={layout ? { maxWidth: `${layout.leftMax}px` } : undefined}
-            >
-              <View3d
-                model={model}
-                modelVersion={modelVersion}
-                selection={selection}
-              />
-              <WeightsView
-                model={model}
-                modelVersion={modelVersion}
-                selection={selection}
-                tool={tool}
-                onSelect={handleSelect}
-                setTool={setTool}
-                bumpModel={bumpModel}
-              />
-              <PlanView
-                model={model}
-                modelVersion={modelVersion}
-                selection={selection}
-                sections={sections}
-                tool={tool}
-                onSelect={handleSelect}
-                setTool={setTool}
-                bumpModel={bumpModel}
-              />
-              <ProfileView
-                model={model}
-                modelVersion={modelVersion}
-                selection={selection}
-                sections={sections}
-                tool={tool}
-                onSelect={handleSelect}
-                setTool={setTool}
-                bumpModel={bumpModel}
-              />
-            </div>
-            <div
-              className="rightcol"
-              style={layout ? { width: `${layout.side}px` } : undefined}
-            >
-              <SidePanel
-                model={model}
-                modelVersion={modelVersion}
-                selection={selection}
-                tool={tool}
-                onSelect={handleSelect}
-                setTool={setTool}
-                bumpModel={bumpModel}
-              />
-              <CutStationView
-                model={model}
-                modelVersion={modelVersion}
-                selection={selection}
-              />
-            </div>
-          </>
+          // Resizable layout: three independent columns, each a vertical split of two stacked views —
+          // plan / profile, section editor / blend strip, and 3D view / live cut station. Drag any
+          // separator to resize. (Replaces the old measured column-fitting layout.)
+          <AreaGroup className="areagroup" orientation="horizontal">
+            <Area className="area" defaultSize="50%">
+              <AreaGroup className="areagroup" orientation="vertical">
+                <Area className="area" defaultSize="50%">
+                  <PlanView
+                    model={model}
+                    modelVersion={modelVersion}
+                    selection={selection}
+                    sections={sections}
+                    tool={tool}
+                    onSelect={handleSelect}
+                    setTool={setTool}
+                    bumpModel={bumpModel}
+                  />
+                </Area>
+                <AreaSeparator className="areasep" />
+                <Area className="area" defaultSize="50%">
+                  <ProfileView
+                    model={model}
+                    modelVersion={modelVersion}
+                    selection={selection}
+                    sections={sections}
+                    tool={tool}
+                    onSelect={handleSelect}
+                    setTool={setTool}
+                    bumpModel={bumpModel}
+                  />
+                </Area>
+              </AreaGroup>
+            </Area>
+            <AreaSeparator className="areasep" />
+            <Area className="area" defaultSize="25%" minSize="200px">
+              <AreaGroup className="areagroup" orientation="vertical">
+                <Area className="area" defaultSize="50%">
+                  <SidePanel
+                    model={model}
+                    modelVersion={modelVersion}
+                    selection={selection}
+                    tool={tool}
+                    onSelect={handleSelect}
+                    setTool={setTool}
+                    bumpModel={bumpModel}
+                  />
+                </Area>
+                <AreaSeparator className="areasep" />
+                <Area className="area" defaultSize="50%">
+                  <WeightsView
+                    model={model}
+                    modelVersion={modelVersion}
+                    selection={selection}
+                    tool={tool}
+                    onSelect={handleSelect}
+                    setTool={setTool}
+                    bumpModel={bumpModel}
+                  />
+                </Area>
+              </AreaGroup>
+            </Area>
+            <AreaSeparator className="areasep" />
+            <Area className="area" defaultSize="25%" minSize="200px">
+              <AreaGroup className="areagroup" orientation="vertical">
+                <Area className="area" defaultSize="50%">
+                  <View3d
+                    model={model}
+                    modelVersion={modelVersion}
+                    selection={selection}
+                  />
+                </Area>
+                <AreaSeparator className="areasep" />
+                <Area className="area" defaultSize="50%">
+                  <CutStationView
+                    model={model}
+                    modelVersion={modelVersion}
+                    selection={selection}
+                  />
+                </Area>
+              </AreaGroup>
+            </Area>
+          </AreaGroup>
         )}
       </div>
     </div>

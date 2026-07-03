@@ -1,7 +1,8 @@
 /* the live cut-station card; a sibling of the section editor that reuses its .sidefit / .sidepanel
    square-panel primitive (see SidePanel.css). */
 .cutcard {
-  flex: 0 0 auto;
+  flex: 1 1 0; /* fill the resizable Area */
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }

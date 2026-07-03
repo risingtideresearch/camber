@@ -1,5 +1,7 @@
+/* fills its resizable Area; the svg letterboxes to fit (preserveAspectRatio keeps the strip's aspect). */
 .viewstrip {
-  flex: 0 0 auto;
+  flex: 1 1 0;
+  min-height: 0;
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -9,5 +11,5 @@
 .viewstrip svg {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
 }
