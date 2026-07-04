@@ -1,0 +1,335 @@
+/* Styles for the hull interpolation blender app: the shell layout, shared card primitives, and all
+   component-level rules (blend control, scatter explorer, metrics panel). */
+
+/* ---------- global element resets for this app ---------- */
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--slider);
+}
+
+/* ---------- app shell ---------- */
+header {
+  padding: 16px 24px 0;
+}
+header h1 {
+  margin: 0;
+  font-size: 18px;
+}
+header p {
+  margin: 4px 0 0;
+  color: var(--mut);
+  font-size: 13px;
+  max-width: 820px;
+}
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 24px 32px;
+  max-width: 1500px;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+.row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.row .main {
+  flex: 1 1 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.row .side {
+  flex: 0 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ---------- toolbar row ---------- */
+.barrow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.savestate {
+  font-size: 12px;
+  min-width: 74px;
+  color: var(--mut);
+}
+.savestate.dirty {
+  color: #b7791f;
+}
+.savestate.saved {
+  color: #2f855a;
+}
+
+/* ---------- 3D view wrapper: gives the View3d component a measured height via aspect-ratio ---------- */
+.view3dwrap {
+  display: flex;
+  flex-direction: column;
+  aspect-ratio: 1000 / 460;
+}
+
+/* ---------- shared card primitives ---------- */
+.cap {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+  margin: 0 0 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.ctl {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.hint {
+  font-size: 12px;
+  color: var(--mut);
+}
+
+/* ---------- blend control: hull family list + pad/slider ---------- */
+.padwrap {
+  display: flex;
+  justify-content: center;
+  padding: 2px 0;
+}
+#blendPad {
+  width: 100%;
+  max-width: 260px;
+  height: auto;
+  touch-action: none;
+  cursor: pointer;
+  user-select: none;
+}
+#blendPad .puck {
+  cursor: grab;
+}
+#blendPad .puck:active {
+  cursor: grabbing;
+}
+.padlegend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.legrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.legrow .dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.legrow .nm {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.legrow .pct {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--ink);
+}
+/* single slider (exactly 2 hulls) */
+.twoslider {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.twoends {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.twoends .e {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.twoends .e.r {
+  flex-direction: row-reverse;
+  text-align: right;
+}
+.twoends .nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+.twoends .dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.twopct {
+  display: flex;
+  justify-content: space-between;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink);
+}
+/* metric heatmap selector + legend */
+.heatrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.heatrow label {
+  color: var(--mut);
+}
+.heatrow select {
+  flex: 1 1 auto;
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+  background: #fff;
+}
+#heatLegend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--mut);
+  min-height: 16px;
+}
+#heatLegend .hl-k {
+  flex: 1 1 auto;
+  color: var(--ink);
+  font-weight: 600;
+}
+#heatLegend .hl-bar {
+  width: 64px;
+  height: 9px;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  background: linear-gradient(
+    90deg,
+    rgb(44, 123, 182),
+    rgb(255, 255, 191),
+    rgb(215, 25, 28)
+  );
+}
+#heatLegend .hl-lo,
+#heatLegend .hl-hi {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- scatter explorer ---------- */
+.scataxes {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.scataxes label {
+  color: var(--mut);
+  font-size: 12px;
+}
+.scataxes select {
+  font: inherit;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 5px;
+  background: #fff;
+}
+#scatter {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+#scatter .spt {
+  cursor: pointer;
+}
+#scatter .spt:hover {
+  fill-opacity: 1;
+}
+
+/* ---------- metrics panel ---------- */
+.scalerow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--mut);
+}
+.scalerow label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+}
+.scalerow input {
+  width: 72px;
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+.scalerow select {
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+  background: #fff;
+}
+.metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.msec {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mut);
+  margin: 8px 0 2px;
+}
+.mrow {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  padding: 1px 0;
+}
+.mrow .mk {
+  color: var(--mut);
+}
+.mrow .mv {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.mnote {
+  font-size: 12px;
+  color: #b7791f;
+  margin: 4px 0;
+}

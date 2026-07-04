@@ -1,0 +1,38 @@
+/* the live cut-station card; a sibling of the section editor that reuses its .sidefit / .sidepanel
+   square-panel primitive (see SidePanel.css). */
+.cutcard {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+.cutcard .cap {
+  margin-bottom: 8px;
+}
+
+/* card caption: an uppercase label with an optional value / tag on the right */
+.cap {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+  margin: 0 0 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.cap .val {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 13px;
+}
+.cap .tag {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  color: #fff;
+}

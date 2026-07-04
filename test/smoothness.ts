@@ -10,14 +10,22 @@
 // stations — i.e. if the swept keel is no longer smooth. It runs at keel knuckle 0 (flat), 0.5, and 1 (V),
 // since the failure mode lives in the flattening path.
 //
-// Run with `npm run test:smooth` (esbuild bundles this to dist/ and runs it under node). Exit code is
+// Run with `npm run test:smooth` (tsx runs this directly under node). Exit code is
 // non-zero on any failure so it can gate CI.
 
-import { resetModel, prepare, state, L, sweptSection } from "../src/model.js";
-import { parseDocument, loadHull } from "../src/json.js";
+import {
+  createModel,
+  resetModel,
+  prepare,
+  L,
+  sweptSection,
+} from "../src/core/model";
+import { parseDocument, loadHull } from "../src/core/json";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+
+const model = createModel();
 
 // the largest jump in keel deadrise (degrees) between adjacent stations we accept as "smooth". The fixed
 // reflected-keel construction lands around 0.3–0.9°; the old stepped one spiked above 20°. 1.5° is a wide
@@ -41,7 +49,7 @@ function examplesDir(): string {
 // least-squares slope of the lowest 70 mm of the (half-breadth, depth) points. NaN where there is no keel
 // (open section / above the trim).
 function deadriseDeg(x: number): number {
-  const s = sweptSection(x, 200, true);
+  const s = sweptSection(model, x, 200, true);
   if (!s.keel) return NaN;
   const p = s.pts,
     keel = p[p.length - 1],
@@ -87,24 +95,34 @@ function worstStep(): { jump: number; x: number } {
 }
 
 function setKeel(k: number): void {
-  for (let i = 0; i < state.keelK.length; i++) state.keelK[i] = k;
-  prepare();
+  for (let i = 0; i < model.keelK.length; i++) model.keelK[i] = k;
+  prepare(model);
 }
 
 // load a named case into the live model; "default" is the built-in reset model
 function loadCase(name: string): void {
-  resetModel();
+  resetModel(model);
   if (name !== "default") {
-    const doc = parseDocument(readFileSync(join(examplesDir(), name), "utf8"));
-    loadHull(doc.variants[0]);
+    const doc = parseDocument(
+      model,
+      readFileSync(join(examplesDir(), name), "utf8"),
+    );
+    loadHull(model, doc.variants[0]);
   }
-  prepare();
+  prepare(model);
 }
 
 function main(): number {
-  const cases = ["default", ...readdirSync(examplesDir()).filter((f) => f.endsWith(".json")).sort()];
+  const cases = [
+    "default",
+    ...readdirSync(examplesDir())
+      .filter((f) => f.endsWith(".json"))
+      .sort(),
+  ];
   let failures = 0;
-  console.log(`Keel smoothness — worst adjacent-station deadrise jump (threshold ${THRESHOLD_DEG}°)\n`);
+  console.log(
+    `Keel smoothness — worst adjacent-station deadrise jump (threshold ${THRESHOLD_DEG}°)\n`,
+  );
   for (const name of cases) {
     const cells: string[] = [];
     let caseFailed = false;
@@ -114,12 +132,18 @@ function main(): number {
       const { jump, x } = worstStep();
       const bad = jump > THRESHOLD_DEG;
       if (bad) caseFailed = true;
-      cells.push(`k=${k}: ${jump.toFixed(2)}°@${Math.round(x)}${bad ? " ✗" : ""}`);
+      cells.push(
+        `k=${k}: ${jump.toFixed(2)}°@${Math.round(x)}${bad ? " ✗" : ""}`,
+      );
     }
     if (caseFailed) failures++;
-    console.log(`  ${caseFailed ? "FAIL" : "ok  "}  ${name.padEnd(26)} ${cells.join("   ")}`);
+    console.log(
+      `  ${caseFailed ? "FAIL" : "ok  "}  ${name.padEnd(26)} ${cells.join("   ")}`,
+    );
   }
-  console.log(`\n${failures === 0 ? "PASS" : "FAIL"} — ${cases.length - failures}/${cases.length} cases smooth`);
+  console.log(
+    `\n${failures === 0 ? "PASS" : "FAIL"} — ${cases.length - failures}/${cases.length} cases smooth`,
+  );
   return failures === 0 ? 0 : 1;
 }
 

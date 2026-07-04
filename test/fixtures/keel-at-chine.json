@@ -1,18 +1,37 @@
 {
   "length": 4000,
-  "topology": { "section": 5, "sheerPlan": 5, "sheerTrim": 4, "weightPoints": 2, "templateCount": 1 },
+  "topology": {
+    "section": 5,
+    "sheerPlan": 5,
+    "sheerTrim": 4,
+    "weightPoints": 2,
+    "templateCount": 1
+  },
   "variants": [
     {
       "keelK": [0],
-      "transom": { "x": 150, "depthTop": 55, "dDepthBot": 665, "transomRake": -0.3458646616541353 },
-      "weights": [ { "w": [1], "dx": 0 }, { "w": [1], "dx": 4000 } ],
+      "transom": {
+        "x": 150,
+        "depthTop": 55,
+        "dDepthBot": 665,
+        "transomRake": -0.3458646616541353
+      },
+      "weights": [
+        { "w": [1], "dx": 0 },
+        { "w": [1], "dx": 4000 }
+      ],
       "sheerPlan": [
-        { "y": 820, "dx": 0 }, { "y": 900, "dx": 1000 }, { "y": 880, "dx": 1000 },
-        { "y": 640, "dx": 1000 }, { "y": 0, "dx": 1000 }
+        { "y": 820, "dx": 0 },
+        { "y": 900, "dx": 1000 },
+        { "y": 880, "dx": 1000 },
+        { "y": 640, "dx": 1000 },
+        { "y": 0, "dx": 1000 }
       ],
       "sheerTrim": [
-        { "k": 0, "dx": 0, "depth": 60 }, { "k": 0, "dx": 1333, "depth": 280 },
-        { "k": 0, "dx": 1334, "depth": 260 }, { "k": 0, "dx": 1333, "depth": 40 }
+        { "k": 0, "dx": 0, "depth": 60 },
+        { "k": 0, "dx": 1333, "depth": 280 },
+        { "k": 0, "dx": 1334, "depth": 260 },
+        { "k": 0, "dx": 1333, "depth": 40 }
       ],
       "templates": [
         [

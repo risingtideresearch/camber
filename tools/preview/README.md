@@ -1,6 +1,6 @@
 # Offline 3D render harness
 
-Renders the hull geometry **headlessly** (no browser) so you can *see* the mesh/lines/STEP while
+Renders the hull geometry **headlessly** (no browser) so you can _see_ the mesh/lines/STEP while
 debugging — it builds the model from `src/*`, draws an SVG, and rasterizes it to PNG with
 [`@resvg/resvg-js`](https://github.com/yisibl/resvg-js). Built for diagnosing bow/keel/transom geometry
 issues where you need to look at the actual surface, not just numbers.

@@ -1,0 +1,55 @@
+/* The design-library shell: a full-height column of the brand bar, a selection / blend sub-toolbar (both
+   shared TopBars), and the scrolling grid of design cards. Button and card styling live in their own
+   component CSS (src/components/Button, src/library/DesignCard). */
+.fileapp {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* brand title in the top bar */
+.brand {
+  font-size: 18px;
+  font-weight: 700;
+}
+.brand span {
+  font-weight: 400;
+  color: var(--mut);
+  font-size: 14px;
+  margin-left: 8px;
+}
+
+/* the selection / blend sub-toolbar: a TopBar variant whose only extra is the design-name label */
+.seltoolbar .selname {
+  font-weight: 600;
+  color: var(--ink);
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.seltoolbar .selname.none {
+  font-weight: 400;
+  color: var(--mut);
+}
+
+/* the scrolling grid of designs */
+.gridwrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+.empty {
+  color: var(--mut);
+  padding: 40px 0;
+  text-align: center;
+}
+.empty.err {
+  color: var(--danger);
+}

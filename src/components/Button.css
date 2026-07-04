@@ -1,0 +1,54 @@
+/* The shared action button (src/components/Button). Fully self-contained — it carries its own base styling,
+   so no app needs a global <button> reset. The segmented groups (View3d modes, the edit toolbar) add their
+   joined-button layout on top of .btn and reuse the .active (ink) state below. */
+.btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+  color: #4a5568;
+}
+.btn:hover {
+  background: #f1f5f9;
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn:disabled:hover {
+  background: #fff;
+}
+
+/* primary: the accent-blue call-to-action */
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn.primary:hover {
+  background: #255792;
+}
+.btn.primary:disabled:hover {
+  background: var(--accent);
+}
+
+/* danger: a destructive action */
+.btn.danger {
+  color: var(--danger);
+  border-color: #f1c4bd;
+}
+.btn.danger:hover {
+  background: #fdecea;
+}
+
+/* active: the pressed / selected state for toggles (ink fill) */
+.btn.active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+}
+.btn.active:hover {
+  background: var(--ink);
+}

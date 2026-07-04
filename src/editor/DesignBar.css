@@ -1,0 +1,21 @@
+.toolacts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+} /* right-align actions; wraps only if it can't fit */
+
+/* the editable design name uses the shared FilenameInput (src/components/FilenameInput) */
+
+/* save status text next to the Save button */
+.savestate {
+  font-size: 12px;
+  min-width: 90px;
+  color: var(--mut);
+}
+.savestate.dirty {
+  color: #b7791f;
+}
+.savestate.saved {
+  color: #2f855a;
+}

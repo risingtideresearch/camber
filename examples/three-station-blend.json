@@ -1,6 +1,12 @@
 {
   "length": 4000,
-  "topology": { "sheerPlan": 5, "sheerTrim": 4, "section": 5, "templateCount": 3, "weightPoints": 3 },
+  "topology": {
+    "sheerPlan": 5,
+    "sheerTrim": 4,
+    "section": 5,
+    "templateCount": 3,
+    "weightPoints": 3
+  },
   "variants": [
     {
       "name": "three-station-blend",
@@ -17,7 +23,12 @@
         { "dx": 1334, "depth": 260 },
         { "dx": 1333, "depth": 40 }
       ],
-      "transom": { "x": 150, "depthTop": 55, "dDepthBot": 665, "transomRake": -0.3459 },
+      "transom": {
+        "x": 150,
+        "depthTop": 55,
+        "dDepthBot": 665,
+        "transomRake": -0.3459
+      },
       "templates": [
         [
           { "dd": 0, "n": 0, "k": 0 },
