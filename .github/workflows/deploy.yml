@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta] # a push to either branch deploys both
   workflow_dispatch:
 
 permissions:
@@ -18,12 +18,39 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+
+      # --- build main site (…/camber/) ---
+      - uses: actions/checkout@v5
+        with:
+          ref: main
       - run: npm ci || npm install
       - run: npm run build
+
+      # --- build beta site (…/camber/beta/) ---
+      # On a `main` push (or manual run from main), a broken beta is non-fatal: its
+      # checkout/install/build may fail and main still deploys. On a `beta` push,
+      # continue-on-error is false, so a broken beta fails the run.
+      - uses: actions/checkout@v5
+        continue-on-error: ${{ github.ref_name == 'main' }}
+        with:
+          ref: beta
+          path: beta
+      - run: npm ci || npm install
+        continue-on-error: ${{ github.ref_name == 'main' }}
+        working-directory: beta
+      - id: beta_build
+        run: npm run build
+        continue-on-error: ${{ github.ref_name == 'main' }}
+        working-directory: beta
+
+      # Combine the main `dist/` and the beta `dist/` folders into a single folder
+      - if: steps.beta_build.outcome == 'success'
+        run: mkdir -p dist/beta && cp -r beta/dist/. dist/beta/
+
+      # Upload the combined dist folder as an artifact for the deploy job
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
