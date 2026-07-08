@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { addSheerPoint, type Model, type Section } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
+import type { CurvatureSettings } from "../core/comb";
 import { drawPlan } from "../core/draw2d";
 import { invX, invY, LH } from "../core/view";
 import type { RefObject } from "react";
@@ -22,6 +23,7 @@ interface PlanViewProps {
   setTool: (t: Tool) => void;
   bumpModel: () => void;
   sync?: RefObject<SvgViewSync>; // shared zoom / x-pan with the profile strip
+  curvature: CurvatureSettings;
 }
 
 export function PlanView({
@@ -34,13 +36,14 @@ export function PlanView({
   setTool,
   bumpModel,
   sync,
+  curvature,
 }: PlanViewProps) {
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
-      drawPlan(g, model, selection, sections, onSelect, [sx, sy]);
+      drawPlan(g, model, selection, sections, onSelect, [sx, sy], curvature);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [model, modelVersion, selection, sections, onSelect],
+    [model, modelVersion, selection, sections, onSelect, curvature],
   );
 
   const onBackgroundClick = (vx: number, vy: number) => {

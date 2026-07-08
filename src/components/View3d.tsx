@@ -10,9 +10,15 @@ import {
 import type { Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import type { StlState } from "../core/stlImport";
+import { defaultCurvature, type CurvatureSettings } from "../core/comb";
 import { clamp } from "../core/math";
 import { Button } from "./Button";
+import { Dropdown } from "./Dropdown";
 import "./View3d.css";
+
+// a stable "all off" default for hosts (e.g. the interpolation app) that don't drive the curvature overlay —
+// a module constant so it keeps the same identity across renders and never triggers a needless rebuild
+const CURVATURE_OFF = defaultCurvature();
 
 // The 3D viewport. It OWNS its draw3dParams (rotation / zoom / display mode) — nothing upstream needs them —
 // and drives the WebGL canvas + the lines-plan SVG overlay imperatively via draw3d(), reacting to `model` /
@@ -40,6 +46,9 @@ interface View3dProps {
   modelVersion: number;
   selection: ModelSelection;
   stl?: StlState | null; // optional imported reference mesh, drawn translucent over the hull
+  // the editor-wide curvature-comb overlay (owned by EditorApp's Curvature control); omitted by hosts that
+  // don't drive it (the interpolation app), where it defaults to all-off
+  curvature?: CurvatureSettings;
   title?: string; // optional label overlaid top-left of the canvas (e.g. "Blended Hull")
 }
 
@@ -47,6 +56,7 @@ export function View3d({
   model,
   modelVersion,
   selection,
+  curvature = CURVATURE_OFF,
   stl,
   title,
 }: View3dProps) {
@@ -62,7 +72,6 @@ export function View3d({
   const [meshM, setMeshM] = useState(MESH_M_DEFAULT); // longitudinals per half-section (girth res.)
   const [meshN, setMeshN] = useState(MESH_N_DEFAULT); // sections along the length (station res.)
   const [meshMenu, setMeshMenu] = useState(false); // the mesh-resolution dropdown open state
-  const meshGroupRef = useRef<HTMLDivElement>(null); // wraps the Mesh button + dropdown, for outside-click close
 
   // latest selection / STL for the ref-reading redraws (rotate / zoom / resize) so they need not re-subscribe
   const selRef = useRef(selection);
@@ -91,23 +100,17 @@ export function View3d({
 
   // rebuild + redraw whenever the model, the selection, the display mode, the Mesh overlay, the mesh
   // resolution (M/N), or the STL changes
+  // rebuild + redraw whenever the model, the selection, the display mode, or the sheer toggle changes
   useEffect(() => {
-    paramsRef.current.view3dMode = mode;
-    paramsRef.current.showMesh = showMesh;
-    paramsRef.current.meshQuads = meshQuads;
-    paramsRef.current.meshM = meshM;
-    paramsRef.current.meshN = meshN;
+    const p = paramsRef.current;
+    p.view3dMode = mode;
+    p.showMesh = showMesh;
+    p.meshQuads = meshQuads;
+    p.meshM = meshM;
+    p.meshN = meshN;
+    p.curvature = curvature;
     const cv = canvasRef.current;
-    if (cv)
-      draw3d(
-        cv,
-        svgRef.current,
-        model,
-        selection,
-        paramsRef.current,
-        true,
-        stl,
-      );
+    if (cv) draw3d(cv, svgRef.current, model, selection, p, true, stl);
   }, [
     model,
     modelVersion,
@@ -118,17 +121,8 @@ export function View3d({
     meshM,
     meshN,
     stl,
+    curvature,
   ]);
-
-  // close the mesh-resolution dropdown on any pointer-down outside its group
-  useEffect(() => {
-    if (!meshMenu) return;
-    const onDown = (e: PointerEvent) => {
-      if (!meshGroupRef.current?.contains(e.target as Node)) setMeshMenu(false);
-    };
-    document.addEventListener("pointerdown", onDown);
-    return () => document.removeEventListener("pointerdown", onDown);
-  }, [meshMenu]);
 
   // scroll-wheel zoom — a native non-passive listener so preventDefault() works (React's onWheel is passive)
   useEffect(() => {
@@ -196,70 +190,57 @@ export function View3d({
       <svg ref={svgRef} className="lines3d" style={{ display: "none" }} />
       {title && <div className="view3dtitle">{title}</div>}
       <div className="view3dctl">
-        <div className="meshgroup" ref={meshGroupRef}>
-          <Button
-            active={showMesh}
-            title="Overlay the hull's quad grid as a wireframe (works in Render, Zebra, and Sheet)"
-            onClick={() => setShowMesh((v) => !v)}
+        <Dropdown
+          label="Mesh"
+          active={showMesh}
+          onToggle={() => setShowMesh((v) => !v)}
+          open={meshMenu}
+          onOpenChange={setMeshMenu}
+          title="Overlay the hull's quad grid as a wireframe (works in Render, Zebra, and Sheet)"
+          menuLabel="Mesh resolution"
+        >
+          <label
+            className="dd-row dd-check"
+            title="Wireframe as the hull's quad grid; unchecked shows the raw triangles the shaded hull renders"
           >
-            Mesh
-          </Button>
-          <Button
-            className="meshcaret"
-            active={meshMenu}
-            title="Mesh resolution"
-            aria-label="Mesh resolution"
-            aria-expanded={meshMenu}
-            onClick={() => setMeshMenu((v) => !v)}
+            <input
+              type="checkbox"
+              checked={meshQuads}
+              onChange={(e) => setMeshQuads(e.target.checked)}
+            />
+            <span className="dd-name">As quads</span>
+          </label>
+          <label
+            className="dd-row"
+            title="Number of longitudinal lines per half-section (girth resolution)"
           >
-            ▾
-          </Button>
-          {meshMenu && (
-            <div className="meshpanel">
-              <label
-                className="meshrow meshcheck"
-                title="Wireframe as the hull's quad grid; unchecked shows the raw triangles the shaded hull renders"
-              >
-                <input
-                  type="checkbox"
-                  checked={meshQuads}
-                  onChange={(e) => setMeshQuads(e.target.checked)}
-                />
-                <span className="meshname">As quads</span>
-              </label>
-              <label
-                className="meshrow"
-                title="Number of longitudinal lines per half-section (girth resolution)"
-              >
-                <span className="meshname">Num longitudinals</span>
-                <input
-                  type="range"
-                  min={4}
-                  max={128}
-                  step={4}
-                  value={meshM}
-                  onChange={(e) => setMeshM(+e.target.value)}
-                />
-                <span className="meshval">{meshM}</span>
-              </label>
-              <label
-                className="meshrow"
-                title="Number of sampled sections along the length (station resolution)"
-              >
-                <span className="meshname">Num sections</span>
-                <input
-                  type="range"
-                  min={8}
-                  max={512}
-                  step={8}
-                  value={meshN}
-                  onChange={(e) => setMeshN(+e.target.value)}
-                />
-                <span className="meshval">{meshN}</span>
-              </label>
-            </div>
-          )}
-        </div>
+            <span className="dd-name">Num longitudinals</span>
+            <input
+              type="range"
+              min={4}
+              max={128}
+              step={4}
+              value={meshM}
+              onChange={(e) => setMeshM(+e.target.value)}
+            />
+            <span className="dd-val">{meshM}</span>
+          </label>
+          <label
+            className="dd-row"
+            title="Number of sampled sections along the length (station resolution)"
+          >
+            <span className="dd-name">Num sections</span>
+            <input
+              type="range"
+              min={8}
+              max={512}
+              step={8}
+              value={meshN}
+              onChange={(e) => setMeshN(+e.target.value)}
+            />
+            <span className="dd-val">{meshN}</span>
+          </label>
+        </Dropdown>
         <div className="view3dmodes">
           {MODES.map((m) => (
             <Button

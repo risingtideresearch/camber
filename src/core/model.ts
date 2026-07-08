@@ -359,6 +359,26 @@ export function chordParam(ns: number[], ds: number[]): number[] {
   return ts;
 }
 
+// Refine a bracketed sign change of g on [a,b] by bisection (ga = g(a); the root stays bracketed with
+// g(a) on ga's side). The coarse scans below detect a crossing between two samples and used to place it
+// with ONE linear-interpolation step — fine for a drawn line, but the O(h²) placement error (~1e-2 world
+// units) is pure NOISE to anything that differentiates the result: the sheer curvature comb second-
+// differences these points, and jittered visibly. 40 halvings converge the crossing to ~1e-12·span, so
+// the swept geometry is smooth in x down to float precision.
+function bisectRoot(
+  g: (u: number) => number,
+  a: number,
+  b: number,
+  ga: number,
+): number {
+  for (let i = 0; i < 40; i++) {
+    const m = 0.5 * (a + b);
+    if (g(m) < 0 === ga < 0) a = m;
+    else b = m;
+  }
+  return 0.5 * (a + b);
+}
+
 // knuckle-aware monotone-Hermite evaluator: one continuous Hermite chain with per-point left/right
 // tangents blended toward the secants by k. k=0 is plain (smooth) PCHIP; an isolated k=1 is a knuckle; two
 // adjacent k=1 points bound a perfectly straight segment. Replaces the old run-splitting corner model.
@@ -432,18 +452,19 @@ function mirrorKeelStation(
   // is already to starboard, so uA = 0 and this is the whole half-section. For a tumblehome bow past the LOA
   // the sheer guide is to PORT (py < 0), so uA > 0 and we drop the deck→centerline part — which lets this same
   // keel-symmetric construction close the bow, no special lens case.
+  const yAt = (u: number) => py + nf(u) * ny;
   let pu = 0,
-    py0 = py + nf(0) * ny,
+    py0 = yAt(0),
     uA = py0 >= 0 ? 0 : -1,
     ustar = -1;
   const FN = 240;
   for (let i = 1; i <= FN; i++) {
     const u = (tmax * i) / FN,
-      y = py + nf(u) * ny;
+      y = yAt(u);
     if (uA < 0) {
-      if (py0 < 0 && y >= 0) uA = pu + (u - pu) * (-py0 / (y - py0)); // up-crossing into starboard
+      if (py0 < 0 && y >= 0) uA = bisectRoot(yAt, pu, u, py0); // up-crossing into starboard
     } else if (py0 >= 0 && y < 0) {
-      ustar = pu + (u - pu) * (py0 / (py0 - y)); // down-crossing: the keel
+      ustar = bisectRoot(yAt, pu, u, py0); // down-crossing: the keel
       break;
     }
     pu = u;
@@ -779,6 +800,198 @@ export function forwardLimit(model: Model): number {
     else hi = m;
   }
   return lo; // the last x with a (vanishingly small) section ⇒ the bow closes here
+}
+
+// The trimmed-sheer point at x — the hull's 3D top edge: the top point (the sheer-trim depth) of the
+// keel-mirrored station, the same construction sweptSection builds its first row from, but with the trim
+// and centerline crossings CONVERGED by bisection instead of read off the coarse scan with one linear-
+// interpolation step. This makes the evaluator smooth in x to ~1e-9 world units, so the curvature comb can
+// finite-difference it directly (sheerCombSamples) — differencing the coarse-scanned polyline instead put
+// the scan's O(h²) placement noise straight into κ and the comb was visibly unstable. No transom clip
+// here (trimmedSheerCurve applies that plane), so the point is smooth ACROSS the transom crossing and the
+// aft endpoint's curvature stencil can reach behind it. Returns null where the trimmed hull has no
+// section (aft of the bow closure, an open section, or a section entirely above the sheer trim).
+export function sheerPointAt(model: Model, x: number): Vec3 | null {
+  const fr = frameAt(model, x),
+    st = stationAt(model, x, true);
+  if (st.tmax <= 0) return null; // no keel-mirrored section here
+  const dtrim = -model.sheer.zf(x), // depth of the sheer line below the deck
+    FN = 160;
+  let umin = 0;
+  if (dtrim > 0 && st.d(0) < dtrim) {
+    // sheer trim: first depth reaching dtrim, scanning the WHOLE station (not stopped by the keel below).
+    // (A bow lens whose top already sits below the trim keeps umin = 0, as sweptSection's clamp does.)
+    umin = -1;
+    let pu = 0,
+      pd = st.d(0) - dtrim;
+    for (let i = 1; i <= FN; i++) {
+      const u = (st.tmax * i) / FN,
+        d = st.d(u) - dtrim;
+      if (d >= 0) {
+        umin = bisectRoot((v) => st.d(v) - dtrim, pu, u, pd);
+        break;
+      }
+      pu = u;
+      pd = d;
+    }
+    if (umin < 0) return null; // the whole station is above the sheer trim ⇒ no hull at this x
+  }
+  // The centerline (keel) crossing bounds the kept span below — needed only to reject an empty section
+  // (trim crossing at or below the keel), matching sweptSection's `empty` test. No scan needed: the
+  // keel-mirrored station puts the keel exactly at the parameter MIDPOINT (mirrorKeelStation reflects the
+  // starboard span about its converged centerline crossing), with y > 0 strictly inside it.
+  if (umin >= st.tmax / 2 - 1e-6) return null; // the section is entirely above the trim ⇒ no hull here
+  const nn = st.n(umin),
+    dd = st.d(umin);
+  return [
+    fr.p[0] + nn * fr.n[0] + dd * fr.d[0],
+    fr.p[1] + nn * fr.n[1] + dd * fr.d[1],
+    fr.p[2] + nn * fr.n[2] + dd * fr.d[2],
+  ];
+}
+
+// ---------- the trimmed sheer curve + its curvature comb ----------
+export interface SheerCombSample {
+  p: Vec3; // point on the trimmed sheer (the hair's root)
+  kappa: number; // curvature magnitude |P′×P″| / |P′|³
+  nrm: Vec3; // unit principal normal (toward the centre of curvature); [0,0,0] where κ ≈ 0
+}
+
+// Σ cᵢ·qᵢ — the finite-difference stencils below, applied componentwise
+function stencil(cs: number[], qs: Vec3[]): Vec3 {
+  const r: Vec3 = [0, 0, 0];
+  for (let i = 0; i < cs.length; i++)
+    for (let j = 0; j < 3; j++) r[j] += cs[i] * qs[i][j];
+  return r;
+}
+
+// a comb sample from the parametric derivatives: κ = |P′×P″|/|P′|³, and the principal normal is the
+// component of P″ perpendicular to P′ (P is regular here — |P′| ≥ 1 since P_x ≈ x — so this is exact)
+function combSample(p: Vec3, d1: Vec3, d2: Vec3): SheerCombSample {
+  const v = Math.hypot(d1[0], d1[1], d1[2]);
+  if (v < 1e-9) return { p, kappa: 0, nrm: [0, 0, 0] };
+  const cr = V.cross(d1, d2),
+    kappa = Math.hypot(cr[0], cr[1], cr[2]) / (v * v * v),
+    t = V.scale(d1, 1 / v),
+    perp = V.sub(d2, V.scale(t, V.dot(d2, t))),
+    pl = Math.hypot(perp[0], perp[1], perp[2]);
+  return { p, kappa, nrm: pl > 1e-12 ? V.scale(perp, 1 / pl) : [0, 0, 0] };
+}
+
+// central differences at parameter step h: qs = [P(x−h), P(x), P(x+h)]
+function combCentral(qs: [Vec3, Vec3, Vec3], h: number): SheerCombSample {
+  return combSample(
+    qs[1],
+    stencil([-1 / (2 * h), 1 / (2 * h)], [qs[0], qs[2]]),
+    stencil([1 / (h * h), -2 / (h * h), 1 / (h * h)], qs),
+  );
+}
+
+// one-sided 4-point stencils (O(h³) for P′, O(h²) for P″) for the sheer's ENDPOINTS, where only one side
+// exists: qs = [P(x), P(x+s·h), P(x+2s·h), P(x+3s·h)], s = +1 sampling forward / −1 backward
+function combOneSided(
+  qs: [Vec3, Vec3, Vec3, Vec3],
+  h: number,
+  s: number,
+): SheerCombSample {
+  const c1 = s / (6 * h),
+    c2 = 1 / (h * h);
+  return combSample(
+    qs[0],
+    stencil([-11 * c1, 18 * c1, -9 * c1, 2 * c1], qs),
+    stencil([2 * c2, -5 * c2, 4 * c2, -1 * c2], qs),
+  );
+}
+
+// The trimmed SHEER curve (starboard) — the hull's 3D top edge: the locus where the sheer-trim line meets
+// the swept surface, forward of the transom plane — PLUS its curvature comb, from ONE shared pass of
+// converged samples (sheerPointAt is the expensive call; the comb's differencing is free on top of it).
+//
+// The curve: each sample is sheerPointAt (no transom clip in the point; that plane is applied here), so
+// it rides on the hull's actual sheer edge and stops at the bow closure (forwardLimit). Where consecutive
+// samples straddle the transom plane the exact crossing is inserted, so the curve starts cleanly at the
+// transom's top corner.
+//
+// The comb: κ and the principal normal at every combEvery-th sample, by central differences of the
+// sample's uniform neighbours. A closed-form κ was considered and rejected: P(x) composes the B-spline
+// sweep frame, the weight-blended knuckle-Hermite station (whose chord parameterization and Hermite
+// slopes are themselves x-dependent), the keel mirror's root-found crossings, and an IMPLICIT root (the
+// trim crossing st.d(u) = −z_s(x)) — hand derivatives of all of that would be enormous and fragile.
+// Differencing the CONVERGED evaluator at h = xMax/N ≈ 4 gives κ to ~1e-5 relative — far below anything
+// the comb can show — where the old comb, differencing the coarse-scanned polyline, put the scans' O(h²)
+// placement noise straight into κ and flickered. The comb also carries a hair AT each endpoint: the
+// transom corner by the same central stencil (the unclipped evaluator is smooth ACROSS the plane, so
+// straddling it is legitimate — both one-sided κ limits agree there), and the bow closure by a one-sided
+// backward stencil. Returns empty arrays if the hull has no sections.
+export function trimmedSheerViz(
+  model: Model,
+  N = 240,
+  combEvery = 4,
+): { curve: Vec3[]; comb: SheerCombSample[] } {
+  const xMax = forwardLimit(model),
+    h = xMax / N,
+    curve: Vec3[] = [],
+    comb: SheerCombSample[] = [];
+  if (!(h > 0)) return { curve, comb };
+  const pts: (Vec3 | null)[] = [];
+  for (let i = 0; i <= N; i++) pts.push(sheerPointAt(model, i * h));
+  const gates = pts.map((p) => (p ? p[0] - xTransom(model, p[2]) : NaN)); // ≥ 0 ⇒ forward of the transom plane
+  // the drawn curve: the kept (gate ≥ 0) samples, with the exact corner crossing inserted on entry
+  let prevPt: Vec3 | null = null,
+    prevIn = false,
+    xCorner = -1; // x of the transom-plane crossing (the curve's aft corner), for the comb's aft hair
+  for (let i = 0; i <= N; i++) {
+    const p = pts[i];
+    if (!p) {
+      prevPt = null; // no hull here — break the run so it can't bridge a gap
+      prevIn = false;
+      continue;
+    }
+    const inside = gates[i] >= 0;
+    // entering the kept span across the transom plane: begin the curve exactly at the crossing (clean corner)
+    if (inside && !prevIn && prevPt && gates[i - 1] < 0) {
+      const t = gates[i - 1] / (gates[i - 1] - gates[i]);
+      curve.push([
+        prevPt[0] + (p[0] - prevPt[0]) * t,
+        prevPt[1] + (p[1] - prevPt[1]) * t,
+        prevPt[2] + (p[2] - prevPt[2]) * t,
+      ]);
+      xCorner = (i - 1 + t) * h;
+    }
+    if (inside) curve.push(p);
+    prevPt = p;
+    prevIn = inside;
+  }
+  if (curve.length < 2) return { curve, comb };
+  // the comb's forward endpoint: the last existing sample (the bow closure), one-sided backward
+  let m = N;
+  while (m > 0 && !pts[m]) m--;
+  // the comb's aft endpoint: the transom corner if the curve starts there, else its first drawn sample
+  const iFirst = gates.findIndex((g) => g >= 0);
+  if (xCorner >= 0) {
+    const q0 = xCorner - h >= 0 ? sheerPointAt(model, xCorner - h) : null,
+      q1 = sheerPointAt(model, xCorner),
+      q2 = sheerPointAt(model, xCorner + h);
+    if (q0 && q1 && q2) comb.push(combCentral([q0, q1, q2], h));
+  } else if (iFirst === 0 && pts[0] && pts[1] && pts[2] && pts[3]) {
+    comb.push(combOneSided([pts[0], pts[1], pts[2], pts[3]], h, 1));
+  }
+  // interior hairs: every combEvery-th sample strictly between the endpoint hairs
+  for (let i = 1; i < m; i++) {
+    if (i % combEvery !== 0 || !(gates[i] >= 0) || i * h <= xCorner) continue;
+    const a = pts[i - 1],
+      p = pts[i],
+      b = pts[i + 1];
+    if (a && p && b) comb.push(combCentral([a, p, b], h));
+  }
+  if (m >= 3) {
+    const q0 = pts[m],
+      q1 = pts[m - 1],
+      q2 = pts[m - 2],
+      q3 = pts[m - 3];
+    if (q0 && q1 && q2 && q3) comb.push(combOneSided([q0, q1, q2, q3], h, -1));
+  }
+  return { curve, comb };
 }
 
 // the transom face outline (starboard, top→bottom): walk down the transom plane and read the hull's

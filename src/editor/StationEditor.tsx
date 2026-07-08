@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { addTemplatePoint, type Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
+import type { CurvatureSettings } from "../core/comb";
 import { drawStation } from "../core/draw2d";
 import { invD, invN } from "../core/view";
 import { SvgView } from "./SvgView";
@@ -20,6 +21,7 @@ interface StationEditorProps {
   onSelect: (sel: ModelSelection) => void;
   setTool: (t: Tool) => void;
   bumpModel: () => void;
+  curvature: CurvatureSettings;
 }
 
 export function StationEditor({
@@ -32,13 +34,14 @@ export function StationEditor({
   onSelect,
   setTool,
   bumpModel,
+  curvature,
 }: StationEditorProps) {
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
-      drawStation(model, selection, g, ti, onSelect, [sx, sy]);
+      drawStation(model, selection, g, ti, onSelect, [sx, sy], curvature);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [model, modelVersion, selection, ti, onSelect],
+    [model, modelVersion, selection, ti, onSelect, curvature],
   );
 
   const onBackgroundClick = (vx: number, vy: number) => {

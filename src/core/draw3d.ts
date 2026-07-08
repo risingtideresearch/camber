@@ -9,10 +9,16 @@ import {
   xTransom,
   forwardLimit,
   sweptSection,
+  trimmedSheerViz,
   worldZ,
 } from "./model";
 import { ModelSelection, selStationIdx } from "./modelSelection";
 import { trimmedHullGrid } from "./step";
+import {
+  defaultCurvature,
+  polylineComb3,
+  type CurvatureSettings,
+} from "./comb";
 import { ZMIN, ZMAX } from "./view";
 import { type StlState, transformStl } from "./stlImport";
 
@@ -37,6 +43,8 @@ export interface Draw3dParams {
   meshQuads: boolean; // wireframe as quads (true) or as the raw triangles the shaded hull renders (false)
   meshM: number; // longitudinals per half-section — the M fed to bilgeRows/sweptSection (girth resolution)
   meshN: number; // sampled sections along the length — the N fed to bilgeRows (station resolution)
+  curvature: CurvatureSettings; // the editor-wide curvature-comb overlay (which 3D combs, and how dense) —
+  // a curvature-analysis overlay independent of the mode; only its d3* / count fields are read here
 }
 
 export const MESH_M_DEFAULT = 64; // default longitudinals per half-section (girth resolution)
@@ -51,6 +59,7 @@ export function createDraw3dParams(): Draw3dParams {
     meshQuads: true, // wireframe shows quads by default
     meshM: MESH_M_DEFAULT,
     meshN: MESH_N_DEFAULT,
+    curvature: defaultCurvature(),
   };
 }
 
@@ -77,6 +86,11 @@ interface Mesh {
   nrm: Float32Array;
   count: number;
 }
+const emptyMesh = (): Mesh => ({
+  pos: new Float32Array(0),
+  nrm: new Float32Array(0),
+  count: 0,
+});
 const VERT_SRC = `
 attribute vec3 aPos; attribute vec3 aNormal;
 uniform float uc1,us1,uc2,us2,uKX,uKY,uCX,uCY,ucxm,uczm,uDepth,uRakeC,uRakeS;
@@ -99,9 +113,9 @@ void main(){
 const FRAG_SRC = `
 precision highp float;
 varying vec3 vN; varying vec3 vW; varying float vWZ;
-uniform vec3 uLight,uView,uBase; uniform float uStripes,uAlpha,uWaterZ,uPaint,uFlat; uniform int uZebra;
+uniform vec3 uLight,uView,uBase; uniform float uStripes,uAlpha,uWaterZ,uPaint; uniform int uZebra,uFlat;
 void main(){
-  if(uFlat>0.5){ gl_FragColor=vec4(uBase,uAlpha); return; } // flat unshaded fill (STL wireframe edges)
+  if(uFlat==1){ gl_FragColor=vec4(uBase,uAlpha); return; } // unshaded flat colour (guide-line overlays)
   vec3 N=normalize(vN), V=normalize(uView);
   if(dot(N,V)<0.0) N=-N;                      // two-sided
   vec3 Lc=normalize(uLight);
@@ -200,12 +214,8 @@ function initGL(cv3d: HTMLCanvasElement): void {
 // proud of the surface without z-fighting.
 function buildLongitudinalMesh(model: Model, idx: number, view: Vec3): Mesh {
   const tpl = model.templates;
-  if (idx < 0 || idx >= tpl[0].length)
-    return { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 };
-  const N = 160,
-    HW = 1.25, // ribbon half-width (units) — a thin guide line
-    BIAS = 6, // shift toward the eye (units) so the line floats just above the hull it lies on
-    off = V.scale(view, BIAS);
+  if (idx < 0 || idx >= tpl[0].length) return emptyMesh();
+  const N = 160;
   const W: Vec3[] = [],
     keep: boolean[] = []; // each sample trimmed the same way the hull surface is
   for (let i = 0; i <= N; i++) {
@@ -230,18 +240,59 @@ function buildLongitudinalMesh(model: Model, idx: number, view: Vec3): Mesh {
       d >= -model.sheer.zf(x) && w[1] >= 0 && w[0] >= xTransom(model, w[2]),
     );
   }
-  const P: number[] = [],
+  // starboard plus its port mirror, each broken across trimmed-away spans, as thin camera-facing ribbons
+  const runs: Vec3[][] = [];
+  for (const sgn of [1, -1])
+    for (const run of keptRuns(
+      W.map((p): Vec3 => [p[0], sgn * p[1], p[2]]),
+      keep,
+    ))
+      runs.push(run);
+  return ribbonMesh(runs, view, 1.25, 6); // half-width 1.25, bias 6 toward the eye (floats above the hull)
+}
+
+// split a sampled polyline into maximal runs of consecutive KEPT points (a trimmed-away span breaks the run)
+function keptRuns(pts: Vec3[], keep: boolean[]): Vec3[][] {
+  const runs: Vec3[][] = [];
+  let cur: Vec3[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    if (keep[i]) cur.push(pts[i]);
+    else {
+      if (cur.length > 1) runs.push(cur);
+      cur = [];
+    }
+  }
+  if (cur.length > 1) runs.push(cur);
+  return runs;
+}
+
+// Build a camera-facing ribbon mesh (a thin flat tube) tracing each polyline, so 3D guide curves render at a
+// reliable width (WebGL clamps lineWidth to 1 on most browsers) and float just proud of the surface (BIAS
+// toward the eye, so they don't z-fight). Each polyline becomes one connected ribbon; a 2-point polyline is a
+// single segment (used for the curvature-comb hairs). Normals are set to `view` — the shader is two-sided and
+// these are flat guides, so a flat toward-eye normal reads as a clean unshaded line.
+function ribbonMesh(
+  polylines: Vec3[][],
+  view: Vec3,
+  HW: number,
+  BIAS: number,
+): Mesh {
+  const off = V.scale(view, BIAS),
+    P: number[] = [],
     Nn: number[] = [];
-  const emitSide = (sgn: number) => {
-    const M = W.map((p): Vec3 => [p[0], sgn * p[1], p[2]]); // sgn = -1 mirrors to port
+  for (const line of polylines) {
+    const m = line.length;
+    if (m < 2) continue;
     const Ls: Vec3[] = [],
       Rs: Vec3[] = [];
-    for (let i = 0; i <= N; i++) {
-      const t = V.norm(V.sub(M[Math.min(i + 1, N)], M[Math.max(i - 1, 0)]));
+    for (let i = 0; i < m; i++) {
+      const t = V.norm(
+        V.sub(line[Math.min(i + 1, m - 1)], line[Math.max(i - 1, 0)]),
+      );
       let w = V.cross(t, view); // ribbon width axis ⟂ tangent and the eye ⇒ always faces the camera
       if (V.dot(w, w) < 1e-9) w = V.cross(t, [0, 0, 1]);
       const wn = V.scale(V.norm(w), HW),
-        c = M[i];
+        c = line[i];
       Ls.push([
         c[0] + wn[0] + off[0],
         c[1] + wn[1] + off[1],
@@ -253,19 +304,138 @@ function buildLongitudinalMesh(model: Model, idx: number, view: Vec3): Mesh {
         c[2] - wn[2] + off[2],
       ]);
     }
-    for (let i = 0; i < N; i++) {
-      if (!keep[i] || !keep[i + 1]) continue; // break the ribbon across trimmed-away spans
+    for (let i = 0; i < m - 1; i++) {
       pushTri(P, Nn, Ls[i], view, Rs[i], view, Rs[i + 1], view);
       pushTri(P, Nn, Ls[i], view, Rs[i + 1], view, Ls[i + 1], view);
     }
-  };
-  emitSide(1);
-  emitSide(-1);
+  }
   return {
     pos: new Float32Array(P),
     nrm: new Float32Array(Nn),
     count: P.length / 3,
   };
+}
+
+// ---------- 3D curvature combs (curvature-analysis overlay) ----------
+// A curvature "comb" (graph hairs): at sample points along a hull curve a hair is drawn perpendicular to it
+// on the OUTSIDE of the bend (away from the centre of curvature), its length ∝ the curvature κ; joining the
+// hair tips gives the envelope, whose kinks reveal curvature (G2) discontinuities. The CurvatureControls
+// overlay draws four families of these on the 3D hull — the sheer edge, the keel/centerline, a fan of
+// fore-aft longitudinals, and a fan of transverse sections — each self-scaled so its sharpest hair is
+// COMB_LEN world units. The comb geometry comes from the shared polylineComb3 (core/comb); this file only
+// samples the curves and renders them (GL ribbons + the SVG lines-plan overlay).
+const COMB_LEN = 90; // world-units length of the sharpest curvature hair (each comb auto-scales to this)
+// the sheer accent (matches --sheer in the 2D lines views); its comb shares the hue, reading as one overlay
+const SHEER_RGB = [0.867, 0.42, 0.125]; // for the GL ribbons (the SVG path uses COL.sheer, the same hue)
+// on-screen (CSS-px) half-widths of the GL curve / comb ribbons. A fixed WORLD half-width would grow and
+// shrink with the zoom / framing; instead the world half-width is derived from the pixel scale each draw
+// (HW = px · dpr / pxScale, as pxScale is in device pixels), so the ribbons stay a constant on-screen size —
+// like the SVG overlay's non-scaling strokes. Matches the SVG stroke weights (curve 2.2, comb ~1.2 full).
+const SHEER_HALF_PX = 1.1,
+  COMB_HALF_PX = 0.6;
+
+// per-family colours — GL (linear-ish RGB) and the matching CSS hue for the SVG lines-plan overlay
+const CURV_RGB: Record<string, number[]> = {
+  sheer: SHEER_RGB, // orange
+  keel: [0.059, 0.463, 0.376], // teal (--keel)
+  long: [0.486, 0.227, 0.929], // violet (--fore)
+  sect: [0.28, 0.34, 0.42], // slate
+};
+const CURV_CSS: Record<string, string> = {
+  sheer: COL.sheer,
+  keel: COL.keel,
+  long: COL.fore,
+  sect: "#475569",
+};
+
+// one curve of the overlay: the base curve plus its curvature comb, in world space. `mirror` = also draw the
+// port y-reflection (sheer / longitudinals are one-sided starboard curves; the keel sits on the centerline
+// and the sections are already full-width, so those carry mirror = false).
+interface CurvCurve3 {
+  curve: Vec3[];
+  hairs: [Vec3, Vec3][];
+  env: Vec3[];
+  rgb: number[];
+  css: string;
+  mirror: boolean;
+}
+
+// build the enabled 3D curvature curves + combs for the current settings. World-space and rotation-
+// independent, so draw3d caches this and only rebuilds it when the model / settings change (rotation reuses
+// the cache). The section / longitudinal counts pick how many curves of each fan get a comb; the hair counts
+// set each comb's density (shared with the 2D combs via CurvatureSettings).
+function buildCurvature3(model: Model, s: CurvatureSettings): CurvCurve3[] {
+  const out: CurvCurve3[] = [],
+    xFwd = forwardLimit(model);
+  const add = (
+    curve: Vec3[],
+    nHairs: number,
+    key: string,
+    mirror: boolean,
+  ): void => {
+    if (curve.length < 3) return;
+    const c = polylineComb3(curve, nHairs, COMB_LEN);
+    out.push({
+      curve,
+      hairs: c.hairs,
+      env: c.env,
+      rgb: CURV_RGB[key],
+      css: CURV_CSS[key],
+      mirror,
+    });
+  };
+
+  // the trimmed sheer edge (the hull's 3D top edge) — the converged evaluator gives a smooth, dense curve
+  if (s.d3Sheer)
+    add(trimmedSheerViz(model, 600).curve, s.nLongHairs, "sheer", true);
+
+  // the keel/centerline and the longitudinal fan both ride the fair hull grid (columns = longitudinals,
+  // column 0 the sheer, column M the keel), so build it once if either is on.
+  if (s.d3Centerline || (s.d3Longitudinals && s.nLongCombs > 0)) {
+    const M = 40,
+      { grid } = trimmedHullGrid(model, 140, M);
+    if (s.d3Centerline)
+      add(
+        grid.map((row) => row[M]),
+        s.nLongHairs,
+        "keel",
+        false,
+      );
+    if (s.d3Longitudinals && s.nLongCombs > 0) {
+      const n = Math.min(s.nLongCombs, M - 1);
+      for (let k = 0; k < n; k++) {
+        // spread the combed columns across the interior girth (skip col 0 = sheer and col M = keel)
+        const j =
+          n === 1 ? Math.round(M / 2) : Math.round(1 + ((M - 2) * k) / (n - 1));
+        add(
+          grid.map((row) => row[j]),
+          s.nLongHairs,
+          "long",
+          true,
+        );
+      }
+    }
+  }
+
+  // the transverse section fan: true constant-x sections, full-width where they close across the keel
+  if (s.d3Sections && s.nSectCombs > 0) {
+    const M = 40,
+      n = s.nSectCombs;
+    for (let k = 0; k < n; k++) {
+      const x = xFwd * (n === 1 ? 0.5 : (k + 0.5) / n),
+        sec = sweptSection(model, x, M, true);
+      if (sec.aft || sec.pts.length < 3) continue;
+      let curve = sec.pts;
+      if (sec.keel) {
+        // mirror the starboard half to port through the shared keel point (dropped once), one smooth section
+        curve = sec.pts.slice();
+        for (let j = sec.pts.length - 2; j >= 0; j--)
+          curve.push([sec.pts[j][0], -sec.pts[j][1], sec.pts[j][2]]);
+      }
+      add(curve, s.nSectHairs, "sect", false);
+    }
+  }
+  return out;
 }
 
 // A fair section grid sampled uniformly in x and WITHOUT the transom cut (clipQuad does that below, so
@@ -618,6 +788,9 @@ let meshHull: Mesh | null = null,
   meshTrans: Mesh | null = null,
   meshWire: Mesh | null = null, // the Mesh overlay's quad-grid wireframe; null when the overlay is off
   meshBBox: number[] | null = null; // [x0,y0,z0, x1,y1,z1] world bounds of the hull mesh, for fit-to-box
+// the curvature-comb overlay geometry (world-space, rotation-independent): rebuilt only when the model /
+// settings change, reused across rotations. null when the overlay is off.
+let curvCache: CurvCurve3[] | null = null;
 
 function computeBBox(pos: Float32Array): number[] | null {
   if (!pos.length) return null;
@@ -685,17 +858,17 @@ function drawStlOverlay(gl: WebGLRenderingContext, stl: StlState): void {
   gl.uniform1f(loc.uPaint, 0.0);
   gl.uniform1i(loc.uZebra, 0);
   if (s.shaded) {
-    gl.uniform1f(loc.uFlat, 0.0);
+    gl.uniform1i(loc.uFlat, 0);
     bind(stlPosBuf, stlNrmBuf);
     gl.drawArrays(gl.TRIANGLES, 0, stlTriVerts);
   }
   if (s.wireframe) {
-    gl.uniform1f(loc.uFlat, 1.0); // flat magenta edges, no lighting
+    gl.uniform1i(loc.uFlat, 1); // flat magenta edges, no lighting
     bind(stlLineBuf, stlLineBuf);
     gl.drawArrays(gl.LINES, 0, stlLineVerts);
   }
   // restore the opaque-pass GL state for the next frame
-  gl.uniform1f(loc.uFlat, 0.0);
+  gl.uniform1i(loc.uFlat, 0);
   gl.uniform1f(loc.uAlpha, 1.0);
   gl.uniform1f(loc.uPaint, 1.0);
   gl.depthMask(true);
@@ -807,6 +980,7 @@ function drawLines(
   params: Draw3dParams,
   svg: SVGSVGElement,
   rebuild: boolean,
+  curv: CurvCurve3[] | null,
 ): void {
   if (rebuild || !linesGrid)
     linesGrid = trimmedHullGrid(model, LINES_NS, LINES_M);
@@ -1009,19 +1183,26 @@ function drawLines(
   // its segments are mixed INTO the painter's order, each at its own depth, biased a hair toward the eye so it
   // sits just proud of its own facet (no z-fight) but is hidden behind any nearer surface. Built and trimmed
   // exactly like buildLongitudinalMesh. Amber, matching the shaded view's guide.
-  type Item = { depth: number; q?: LineQuad; seg?: [ProjPt, ProjPt] };
+  type Item = {
+    depth: number;
+    q?: LineQuad;
+    seg?: [ProjPt, ProjPt];
+    color?: string; // for a seg item: its stroke (defaults to the amber guide colour)
+    width?: number;
+  };
   const items: Item[] = quads.map((q) => ({ depth: q.depth, q }));
+  // world-space toward-eye direction (gradient of the projected depth): overlay segments are biased along it
+  // so they clear the coarse flat-facet chords (they ride facet interiors, not edges) without z-fighting.
+  let vx = -c2 * s1 * cT + s2 * sT,
+    vy = -c2 * c1,
+    vz = c2 * s1 * sT + s2 * cT;
+  const vl = Math.hypot(vx, vy, vz) || 1,
+    EYE_BIAS = 15;
+  vx /= vl;
+  vy /= vl;
+  vz /= vl;
   const li = selStationIdx(model, selection);
   if (li !== null) {
-    // world-space toward-eye direction (gradient of the projected depth), for the small proud-of-surface bias
-    let vx = -c2 * s1 * cT + s2 * sT,
-      vy = -c2 * c1,
-      vz = c2 * s1 * sT + s2 * cT;
-    const vl = Math.hypot(vx, vy, vz) || 1,
-      BIAS = 15; // clear the coarse flat-facet chords (the guide rides facet interiors, not edges)
-    vx /= vl;
-    vy /= vl;
-    vz /= vl;
     const tpl = model.templates,
       NP = 120,
       WP: Vec3[] = [],
@@ -1050,23 +1231,57 @@ function drawLines(
       for (let i = 0; i < NP; i++) {
         if (!keep[i] || !keep[i + 1]) continue;
         const a = proj([
-            WP[i][0] + vx * BIAS,
-            sgn * WP[i][1] + vy * BIAS,
-            WP[i][2] + vz * BIAS,
+            WP[i][0] + vx * EYE_BIAS,
+            sgn * WP[i][1] + vy * EYE_BIAS,
+            WP[i][2] + vz * EYE_BIAS,
           ]),
           b = proj([
-            WP[i + 1][0] + vx * BIAS,
-            sgn * WP[i + 1][1] + vy * BIAS,
-            WP[i + 1][2] + vz * BIAS,
+            WP[i + 1][0] + vx * EYE_BIAS,
+            sgn * WP[i + 1][1] + vy * EYE_BIAS,
+            WP[i + 1][2] + vz * EYE_BIAS,
           ]);
         items.push({ depth: (a.d + b.d) / 2, seg: [a, b] });
       }
   }
-  items.sort((a, b) => a.depth - b.depth); // far → near, facets and guide segments together
+  // the curvature-comb overlay (each enabled curve + its comb), projected and mixed into the painter order
+  // like the selected guide. A one-sided curve (sheer / longitudinals) draws both y-signs; a full-width or
+  // on-centerline curve (sections / keel) draws once.
+  if (curv)
+    for (const cc of curv) {
+      if (cc.curve.length < 2) continue;
+      const projB = (p: Vec3, sgn: number): ProjPt =>
+        proj([
+          p[0] + vx * EYE_BIAS,
+          sgn * p[1] + vy * EYE_BIAS,
+          p[2] + vz * EYE_BIAS,
+        ]);
+      const signs = cc.mirror ? [1, -1] : [1];
+      const addSeg = (a: Vec3, b: Vec3, width: number): void => {
+        for (const sgn of signs) {
+          const pa = projB(a, sgn),
+            pb = projB(b, sgn);
+          items.push({
+            depth: (pa.d + pb.d) / 2,
+            seg: [pa, pb],
+            color: cc.css,
+            width,
+          });
+        }
+      };
+      for (let i = 0; i + 1 < cc.curve.length; i++)
+        addSeg(cc.curve[i], cc.curve[i + 1], 2.2);
+      for (const [a, b] of cc.hairs) addSeg(a, b, 1);
+      for (let i = 0; i + 1 < cc.env.length; i++)
+        addSeg(cc.env[i], cc.env[i + 1], 1.2);
+    }
+  items.sort((a, b) => a.depth - b.depth); // far → near, facets and overlay segments together
 
   for (const it of items) {
     if (it.seg) {
-      svg.append(line(it.seg[0], it.seg[1], 1.8, HILITE)); // selected longitudinal (amber), occluded
+      // the selected longitudinal (amber) by default; sheer/comb segments carry their own colour + width
+      svg.append(
+        line(it.seg[0], it.seg[1], it.width ?? 1.8, it.color ?? HILITE),
+      );
       continue;
     }
     const q = it.q!;
@@ -1095,10 +1310,16 @@ export function draw3d(
   rebuild?: boolean,
   stl?: StlState | null,
 ): void {
+  // the curvature-comb overlay geometry is world-space (rotation-independent), so rebuild it only when the
+  // model / settings change (rebuild !== false) and reuse the cache on rotate / zoom / resize (rebuild false).
+  if (rebuild !== false)
+    curvCache = params.curvature.on
+      ? buildCurvature3(model, params.curvature)
+      : null;
   // lines-plan style: draw the SVG overlay and skip the WebGL surface entirely
   if (LINES_MODES.includes(params.view3dMode) && lines) {
     lines.style.display = "";
-    drawLines(model, selection, params, lines, rebuild !== false);
+    drawLines(model, selection, params, lines, rebuild !== false, curvCache);
     return;
   }
   if (lines) lines.style.display = "none";
@@ -1169,7 +1390,7 @@ export function draw3d(
   gl.uniform1f(loc.uRakeC, Math.cos(model.deckRake)); // deck rake floats the hull at its trim
   gl.uniform1f(loc.uRakeS, Math.sin(model.deckRake));
   gl.uniform1f(loc.uAlpha, 1.0);
-  gl.uniform1f(loc.uFlat, 0.0); // shaded (never flat) for the hull passes; the STL overlay toggles it
+  gl.uniform1i(loc.uFlat, 0); // shaded (never flat) for the hull passes; the STL overlay toggles it
   const view = V.norm([-c2 * s1, -c2 * c1, s2]); // surface→eye direction (orthographic)
   gl.uniform3fv(loc.uView, view);
   // key light at the lower-left of the screen, off the view axis so 3/4 views read as form rather than flat
@@ -1191,6 +1412,7 @@ export function draw3d(
   );
   gl.uniform1f(loc.uStripes, 11.0);
   gl.uniform1i(loc.uZebra, params.view3dMode === "zebra" ? 1 : 0);
+  gl.uniform1i(loc.uFlat, 0); // the hull / transom are lit; only the guide-line overlays go flat (below)
   gl.uniform1f(loc.uWaterZ, -model.waterline); // boot-top height in world z; below it the hull is bottom-painted
   gl.uniform1f(loc.uPaint, 1.0); // hull + transom take bottom paint
   // with the wireframe overlay on, push the shaded FILL back by a polygon-offset (the classic wireframe-
@@ -1221,4 +1443,33 @@ export function draw3d(
 
   // imported reference STL, translucent, over everything (GL modes only — the lines-plan modes returned early)
   if (stl) drawStlOverlay(gl, stl);
+
+  // curvature-comb overlay: each enabled curve (its port mirror too, where one-sided) and its comb, built
+  // into camera-facing ribbons here each draw (view-dependent), from the cached world-space geometry.
+  if (curvCache && curvCache.length) {
+    const mir = (p: Vec3): Vec3 => [p[0], -p[1], p[2]];
+    gl.uniform1i(loc.uZebra, 0);
+    gl.uniform1i(loc.uFlat, 1); // flat, unshaded colour — matches the lines-plan overlay (no lighting/view shift)
+    gl.uniform1f(loc.uPaint, 0.0); // the overlay keeps its colour above and below the waterline
+    // fixed on-screen widths: divide the CSS-px half-width by the pixel scale (× dpr) to get world units, so
+    // the ribbons don't scale with the zoom / framing (BIAS stays world-space — it only nudges depth, not size)
+    const hwCurve = (SHEER_HALF_PX * dpr) / pxScale,
+      hwComb = (COMB_HALF_PX * dpr) / pxScale;
+    for (const cc of curvCache) {
+      if (cc.curve.length < 2) continue;
+      const curves: Vec3[][] = [cc.curve];
+      if (cc.mirror) curves.push(cc.curve.map(mir));
+      drawMesh(gl, ribbonMesh(curves, view, hwCurve, 9), cc.rgb);
+      if (cc.hairs.length) {
+        const comb: Vec3[][] = [cc.env];
+        if (cc.mirror) comb.push(cc.env.map(mir));
+        for (const [a, b] of cc.hairs) {
+          comb.push([a, b]);
+          if (cc.mirror) comb.push([mir(a), mir(b)]);
+        }
+        drawMesh(gl, ribbonMesh(comb, view, hwComb, 9), cc.rgb); // same colour as the base curve
+      }
+    }
+    gl.uniform1i(loc.uFlat, 0); // restore lit shading for the next frame's hull draw
+  }
 }

@@ -79,6 +79,9 @@ svg {
   padding: 10px 20px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
+  /* own a stacking context above the views so app-bar dropdown panels overlay the 3D canvas / SVG strips */
+  position: relative;
+  z-index: 20;
 }
 .appbar button {
   padding: 6px 10px;

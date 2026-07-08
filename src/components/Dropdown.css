@@ -1,0 +1,95 @@
+/* The shared split-button + popover dropdown (src/components/Dropdown). The main button and the caret are
+   joined into one control; the panel hangs below it. Reused by the 3D view's Mesh control and the editor's
+   Curvature control, so both read as one component and share the row primitives below. */
+.dropdown {
+  position: relative;
+  display: flex;
+  gap: 0;
+}
+.dropdown > .btn:first-child {
+  border-radius: 8px 0 0 8px;
+}
+.dropdown > .btn.dropdown-caret {
+  border-radius: 0 8px 8px 0;
+  margin-left: -1px;
+  padding: 6px 7px;
+  line-height: 1;
+}
+.dropdown > .btn.active {
+  position: relative; /* lift the ink border above the neighbour's */
+  z-index: 1;
+}
+
+/* the popover panel, anchored under the split button. A max-height keeps a long panel (the Curvature
+   control's many groups) from running off the bottom of the window — it scrolls instead. */
+.dropdown-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(17, 24, 31, 0.16);
+  max-height: min(72vh, 560px);
+  overflow-y: auto;
+}
+.dropdown-panel--left {
+  left: 0;
+}
+.dropdown-panel--right {
+  right: 0;
+}
+
+/* a group of related rows (a header + its checkboxes), tucked tighter than the panel's own row gap */
+.dd-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* a section header inside the panel (e.g. "Plan View") */
+.dd-group {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+  margin-top: 4px;
+}
+.dd-group:first-child {
+  margin-top: 0;
+}
+
+/* one labeled row inside the panel: name · control · live value */
+.dd-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--mut);
+  white-space: nowrap;
+}
+.dd-row .dd-name {
+  min-width: 150px;
+}
+.dd-row input[type="range"] {
+  width: 120px;
+}
+.dd-row .dd-val {
+  min-width: 30px;
+  text-align: right;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* a whole-row checkbox: box then label, pointer cursor over the whole row */
+.dd-check {
+  cursor: pointer;
+}
+.dd-check .dd-name {
+  min-width: 0;
+}

@@ -6,6 +6,7 @@ import {
   type Model,
 } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
+import type { CurvatureSettings } from "../core/comb";
 import type { Tool } from "./types";
 import { SideTabs } from "./SideTabs";
 import { StationEditor } from "./StationEditor";
@@ -22,6 +23,7 @@ interface SidePanelProps {
   onSelect: (sel: ModelSelection) => void;
   setTool: (t: Tool) => void;
   bumpModel: () => void;
+  curvature: CurvatureSettings;
 }
 
 export function SidePanel({
@@ -32,6 +34,7 @@ export function SidePanel({
   onSelect,
   setTool,
   bumpModel,
+  curvature,
 }: SidePanelProps) {
   const [activeTab, setActiveTab] = useState(0);
   const K = model.templates.length;
@@ -80,6 +83,7 @@ export function SidePanel({
             onSelect={onSelect}
             setTool={setTool}
             bumpModel={bumpModel}
+            curvature={curvature}
           />
         ))}
       </div>

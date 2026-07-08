@@ -27,6 +27,7 @@ import {
   OnModelSelect,
   selStationIdx,
 } from "./modelSelection";
+import { polylineComb2, type Comb2, type CurvatureSettings } from "./comb";
 import {
   Lbase,
   LH,
@@ -62,6 +63,50 @@ export function poly(pts: Vec2[]): string {
 
 export const byId = (id: string): SVGSVGElement =>
   document.getElementById(id) as unknown as SVGSVGElement;
+
+// ---------- curvature-comb overlay (2D) ----------
+// The sharpest hair's length, in CONTENT-space units. The 2D editors draw in an ISOTROPIC content space (the
+// view transforms in view.ts share one px/mm), so a comb built in content space renders with visually
+// perpendicular hairs; it then scales with the zoom like every other drawn curve (only strokes stay a
+// constant screen width, via non-scaling-stroke). Two sizes: the wide plan/profile strips vs the square
+// station / cut editors.
+const COMB_LEN_STRIP = 45,
+  COMB_LEN_STN = 42;
+
+// draw one comb (hairs + envelope) into `svg`, in the curve's colour, with constant-screen-width strokes
+function drawComb2(
+  svg: SVGGElement,
+  comb: Comb2,
+  color: string,
+  opacity = 0.9,
+): void {
+  for (const [a, b] of comb.hairs)
+    svg.append(
+      el("line", {
+        x1: a[0].toFixed(2),
+        y1: a[1].toFixed(2),
+        x2: b[0].toFixed(2),
+        y2: b[1].toFixed(2),
+        stroke: color,
+        "stroke-width": 1,
+        opacity,
+        "vector-effect": "non-scaling-stroke",
+      }),
+    );
+  if (comb.env.length > 1)
+    svg.append(
+      el("path", {
+        d: poly(comb.env),
+        fill: "none",
+        stroke: color,
+        "stroke-width": 1.3,
+        opacity,
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round",
+        "vector-effect": "non-scaling-stroke",
+      }),
+    );
+}
 
 // ---------- fixed-screen-size overlays ----------
 // Everything is drawn into the SvgView's content <g>, which the view scales (MSX, MSY) to zoom / fit. Strokes
@@ -249,6 +294,7 @@ export function drawPlan(
   sections: Section[],
   onSelect: OnModelSelect,
   sc: [number, number],
+  curv?: CurvatureSettings,
 ): void {
   setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
@@ -387,6 +433,30 @@ export function drawPlan(
       }),
     );
   }
+  // curvature combs: the sheer plan (deck-edge half-breadth) and the design-waterline footprint. Both are
+  // fore-aft (longitudinal) curves, so they share the longitudinal hair count.
+  if (curv?.on) {
+    if (curv.planSheer) {
+      const pts = xs.map((x): [number, number] => [
+        mapX(x),
+        yPlan(model.sheer.yf(x)),
+      ]);
+      drawComb2(
+        svg,
+        polylineComb2(pts, curv.nLongHairs, COMB_LEN_STRIP),
+        COL.sheer,
+      );
+    }
+    if (curv.planWaterline)
+      for (const run of dwlContour(model, sections)) {
+        const pts = run.map((p): [number, number] => [mapX(p[0]), yPlan(p[1])]);
+        drawComb2(
+          svg,
+          polylineComb2(pts, curv.nLongHairs, COMB_LEN_STRIP),
+          COL.wl,
+        );
+      }
+  }
   // cut station — true plan heading (the fan angle)
   cutTrace(model, svg, (p) => [mapX(p[0]), yPlan(p[1])]);
   fixed(svg, mapX(model.x0), yPlan(model.sheer.yf(model.x0)), (g) =>
@@ -413,6 +483,7 @@ export function drawProfile(
   sections: Section[],
   onSelect: OnModelSelect,
   sc: [number, number],
+  curv?: CurvatureSettings,
 ): void {
   setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
@@ -571,6 +642,44 @@ export function drawProfile(
       }),
     );
   }
+  // curvature combs: the sheer-trim curve and the keel / centerline outline (both fore-aft, so the
+  // longitudinal hair count), and the live cut station's profile trace (transverse, so the section count).
+  if (curv?.on) {
+    if (curv.profSheer) {
+      const pts = xs.map((x): [number, number] => [
+        mapX(x),
+        zScreenP(model.sheer.zf(x)),
+      ]);
+      drawComb2(
+        svg,
+        polylineComb2(pts, curv.nLongHairs, COMB_LEN_STRIP),
+        COL.sheer,
+      );
+    }
+    if (curv.profCenterline && keel.length > 2) {
+      const pts = keel.map((p): [number, number] => [
+        mapX(p[0]),
+        zScreenP(p[2]),
+      ]);
+      drawComb2(
+        svg,
+        polylineComb2(pts, curv.nLongHairs, COMB_LEN_STRIP),
+        COL.keel,
+      );
+    }
+    if (curv.profCut) {
+      const cut = clippedSection(model, model.x0, 40);
+      const pts = cut.pts.map((p): [number, number] => [
+        mapX(p[0]),
+        zScreenP(p[2]),
+      ]);
+      drawComb2(
+        svg,
+        polylineComb2(pts, curv.nSectHairs, COMB_LEN_STRIP),
+        "var(--slider)",
+      );
+    }
+  }
   // cut station — true profile rake (the fan shifts x as the section runs inboard to the keel)
   cutTrace(model, svg, (p) => [mapX(p[0]), zScreenP(p[2])]);
   const h = clippedSection(model, model.x0, 18);
@@ -620,7 +729,7 @@ export function stnCurve(
   pts: StationCP[],
   c: string,
   op: number,
-): void {
+): [number, number][] {
   const ns = pts.map((p) => p.n),
     ds = pts.map((p) => p.d),
     ks = pts.map((p) => p.k),
@@ -645,6 +754,7 @@ export function stnCurve(
       "stroke-linecap": "round",
     }),
   );
+  return out; // the sampled content-space polyline, so a caller can build a curvature comb on it
 }
 
 export function drawStation(
@@ -654,6 +764,7 @@ export function drawStation(
   ti: number,
   onSelect: OnModelSelect,
   sc: [number, number],
+  curv?: CurvatureSettings,
 ): void {
   setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
@@ -688,10 +799,30 @@ export function drawStation(
     "sheer",
   );
   // faint ghosts of every other template, then this one solid
+  const ghosts: { j: number; pts: [number, number][] }[] = [];
   model.templates.forEach((tpl, j) => {
-    if (j !== ti) stnCurve(model, svg, tpl, tplColor(j), 0.16);
+    if (j !== ti)
+      ghosts.push({ j, pts: stnCurve(model, svg, tpl, tplColor(j), 0.16) });
   });
-  stnCurve(model, svg, arr, col, 1);
+  const activePts = stnCurve(model, svg, arr, col, 1);
+  // curvature combs on the template section curves (transverse ⇒ the section hair count)
+  if (curv?.on) {
+    if (curv.tplUnselected)
+      for (const g of ghosts)
+        drawComb2(
+          svg,
+          polylineComb2(g.pts, curv.nSectHairs, COMB_LEN_STN),
+          tplColor(g.j),
+          0.5,
+        );
+    if (curv.tplSelected)
+      drawComb2(
+        svg,
+        polylineComb2(activePts, curv.nSectHairs, COMB_LEN_STN),
+        col,
+        0.95,
+      );
+  }
   arr.forEach((p, idx) => {
     const end = idx === 0,
       s = end ? 4 : 6,
@@ -862,6 +993,7 @@ export function drawCutStation(
   model: Model,
   selection: ModelSelection,
   sc: [number, number],
+  curv?: CurvatureSettings,
 ): void {
   setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
@@ -975,6 +1107,23 @@ export function drawCutStation(
     ["mirrored + keel-round", COL.station, 30],
   ] as const) {
     fixedText(svg, snX(NMIN) + 4, y, { "font-size": 10, fill: col }, txt);
+  }
+
+  // curvature combs on the two section curves (transverse ⇒ the section hair count): the raw interpolated
+  // half-section and the mirrored + keel-rounded full section.
+  if (curv?.on) {
+    if (curv.cutRaw)
+      drawComb2(
+        svg,
+        polylineComb2(rawPts, curv.nSectHairs, COMB_LEN_STN),
+        "#c026d3",
+      );
+    if (curv.cutMirrored)
+      drawComb2(
+        svg,
+        polylineComb2(full, curv.nSectHairs, COMB_LEN_STN),
+        COL.station,
+      );
   }
 
   // kept arc, bold — both sides: from the starboard sheer trim (umin) through the keel to the port sheer

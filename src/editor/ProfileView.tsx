@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { addTrimPoint, type Model, type Section } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
+import type { CurvatureSettings } from "../core/comb";
 import { drawProfile } from "../core/draw2d";
 import { invX, invZp, PH } from "../core/view";
 import type { RefObject } from "react";
@@ -21,6 +22,7 @@ interface ProfileViewProps {
   setTool: (t: Tool) => void;
   bumpModel: () => void;
   sync?: RefObject<SvgViewSync>; // shared zoom / x-pan with the plan strip
+  curvature: CurvatureSettings;
 }
 
 export function ProfileView({
@@ -33,13 +35,14 @@ export function ProfileView({
   setTool,
   bumpModel,
   sync,
+  curvature,
 }: ProfileViewProps) {
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
-      drawProfile(g, model, selection, sections, onSelect, [sx, sy]);
+      drawProfile(g, model, selection, sections, onSelect, [sx, sy], curvature);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [model, modelVersion, selection, sections, onSelect],
+    [model, modelVersion, selection, sections, onSelect, curvature],
   );
 
   const onBackgroundClick = (vx: number, vy: number) => {

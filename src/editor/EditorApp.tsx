@@ -45,6 +45,8 @@ import type { Tool } from "./types";
 import { Toolbar } from "./Toolbar";
 import { SelectionInfo } from "./SelectionInfo";
 import { TrimControls } from "./TrimControls";
+import { CurvatureControls } from "./CurvatureControls";
+import { defaultCurvature } from "../core/comb";
 import { DesignBar } from "./DesignBar";
 import { View3d } from "../components/View3d";
 import { WeightsView } from "./WeightsView";
@@ -77,6 +79,7 @@ export function EditorApp() {
   const planProfileSync = useSvgViewSync();
 
   const [tool, setTool] = useState<Tool>("select");
+  const [curvature, setCurvature] = useState(defaultCurvature);
   const [selection, setSelection] = useState<ModelSelection>(null);
   const handleSelect = useCallback(
     (sel: ModelSelection) => setSelection(sel),
@@ -361,6 +364,7 @@ export function EditorApp() {
         />
         <span className="tabsep" />
         <TrimControls model={model} onWaterline={onWaterline} onRake={onRake} />
+        <CurvatureControls value={curvature} onChange={setCurvature} />
         <DesignBar
           name={name}
           dirty={save.kind === "dirty"}
@@ -401,6 +405,7 @@ export function EditorApp() {
                     setTool={setTool}
                     bumpModel={bumpModel}
                     sync={planProfileSync}
+                    curvature={curvature}
                   />
                 </Area>
                 <AreaSeparator className="areasep" />
@@ -415,6 +420,7 @@ export function EditorApp() {
                     setTool={setTool}
                     bumpModel={bumpModel}
                     sync={planProfileSync}
+                    curvature={curvature}
                   />
                 </Area>
               </AreaGroup>
@@ -431,6 +437,7 @@ export function EditorApp() {
                     onSelect={handleSelect}
                     setTool={setTool}
                     bumpModel={bumpModel}
+                    curvature={curvature}
                   />
                 </Area>
                 <AreaSeparator className="areasep" />
@@ -456,6 +463,7 @@ export function EditorApp() {
                     modelVersion={modelVersion}
                     selection={selection}
                     stl={stl}
+                    curvature={curvature}
                   />
                 </Area>
                 <AreaSeparator className="areasep" />
@@ -464,6 +472,7 @@ export function EditorApp() {
                     model={model}
                     modelVersion={modelVersion}
                     selection={selection}
+                    curvature={curvature}
                   />
                 </Area>
               </AreaGroup>

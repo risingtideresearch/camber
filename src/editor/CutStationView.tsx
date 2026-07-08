@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { clippedSection, waterlineStats, type Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
+import type { CurvatureSettings } from "../core/comb";
 import { drawCutStation } from "../core/draw2d";
 import { SvgView } from "./SvgView";
 import "./CutStationView.css";
@@ -11,19 +12,21 @@ interface CutStationViewProps {
   model: Model;
   modelVersion: number;
   selection: ModelSelection;
+  curvature: CurvatureSettings;
 }
 
 export function CutStationView({
   model,
   modelVersion,
   selection,
+  curvature,
 }: CutStationViewProps) {
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
-      drawCutStation(g, model, selection, [sx, sy]);
+      drawCutStation(g, model, selection, [sx, sy], curvature);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [model, modelVersion, selection],
+    [model, modelVersion, selection, curvature],
   );
 
   // the draft / WL-beam readout for the live cut, measured against the design waterline
