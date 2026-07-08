@@ -53,7 +53,7 @@
   background: #ebeef2;
   pointer-events: none;
 }
-#cv3d {
+.cv3d {
   position: absolute;
   inset: 0;
   width: 100%;

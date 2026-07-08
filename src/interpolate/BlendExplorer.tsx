@@ -214,14 +214,13 @@ export function BlendExplorer({
         </span>
       </div>
       <svg
-        id="scatter"
+        className="scatter"
         viewBox="0 0 480 270"
         preserveAspectRatio="xMidYMid meet"
       >
         {plot.body}
         {marker && (
           <circle
-            id="scatterMark"
             cx={marker.cx}
             cy={marker.cy}
             r="6"

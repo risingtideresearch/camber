@@ -26,16 +26,13 @@ export function TrimControls({
         WL
         <input
           type="range"
-          id="wlRange"
           min="0"
           max="1400"
           step="10"
           value={waterline}
           onChange={(e) => onWaterline(parseFloat(e.target.value))}
         />
-        <span className="ctlval" id="wlVal">
-          {Math.round(waterline)}
-        </span>
+        <span className="ctlval">{Math.round(waterline)}</span>
       </label>
       <label
         className="ctl"
@@ -44,16 +41,13 @@ export function TrimControls({
         Rake
         <input
           type="range"
-          id="rakeRange"
           min="-12"
           max="12"
           step="0.5"
           value={rakeDeg}
           onChange={(e) => onRake(parseFloat(e.target.value))}
         />
-        <span className="ctlval" id="rakeVal">
-          {rakeDeg.toFixed(1)}°
-        </span>
+        <span className="ctlval">{rakeDeg.toFixed(1)}°</span>
       </label>
     </>
   );

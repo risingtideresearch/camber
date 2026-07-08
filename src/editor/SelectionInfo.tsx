@@ -26,15 +26,14 @@ export function SelectionInfo({
   const deletable = !!selection && canDelete(model, selection);
 
   return (
-    <div className="selinfo" id="selinfo">
-      <span className={"sel-label" + (selection ? "" : " muted")} id="selLabel">
+    <div className="selinfo">
+      <span className={"sel-label" + (selection ? "" : " muted")}>
         {selection ? labelFor(selection) : "No point selected"}
       </span>
-      <label className="sel-knuckle" id="selKnuckleWrap">
+      <label className="sel-knuckle">
         Knuckle
         <input
           type="range"
-          id="selKnuckle"
           min="0"
           max="1"
           step="0.01"
@@ -45,7 +44,7 @@ export function SelectionInfo({
         />
       </label>
       <Button
-        id="selDelete"
+        className="sel-delete"
         title="Delete the selected point (Delete / Backspace)"
         disabled={!deletable}
         onClick={onDelete}

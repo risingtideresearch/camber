@@ -20,7 +20,7 @@ export function SideTabs({
 }: SideTabsProps) {
   const K = model.templates.length;
   return (
-    <div className="tabstrip" id="sideTabs">
+    <div className="tabstrip">
       {model.templates.map((_, j) => {
         const active = activeTab === j;
         return (

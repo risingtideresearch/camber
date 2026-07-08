@@ -106,7 +106,7 @@ header p {
   justify-content: center;
   padding: 2px 0;
 }
-#blendPad {
+.blendpad {
   width: 100%;
   max-width: 260px;
   height: auto;
@@ -114,10 +114,10 @@ header p {
   cursor: pointer;
   user-select: none;
 }
-#blendPad .puck {
+.blendpad .puck {
   cursor: grab;
 }
-#blendPad .puck:active {
+.blendpad .puck:active {
   cursor: grabbing;
 }
 .padlegend {
@@ -210,7 +210,7 @@ header p {
   padding: 3px 6px;
   background: #fff;
 }
-#heatLegend {
+.heatlegend {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -218,12 +218,12 @@ header p {
   color: var(--mut);
   min-height: 16px;
 }
-#heatLegend .hl-k {
+.heatlegend .hl-k {
   flex: 1 1 auto;
   color: var(--ink);
   font-weight: 600;
 }
-#heatLegend .hl-bar {
+.heatlegend .hl-bar {
   width: 64px;
   height: 9px;
   border-radius: 3px;
@@ -235,8 +235,8 @@ header p {
     rgb(215, 25, 28)
   );
 }
-#heatLegend .hl-lo,
-#heatLegend .hl-hi {
+.heatlegend .hl-lo,
+.heatlegend .hl-hi {
   font-variant-numeric: tabular-nums;
 }
 
@@ -260,15 +260,15 @@ header p {
   padding: 2px 5px;
   background: #fff;
 }
-#scatter {
+.scatter {
   display: block;
   width: 100%;
   height: auto;
 }
-#scatter .spt {
+.scatter .spt {
   cursor: pointer;
 }
-#scatter .spt:hover {
+.scatter .spt:hover {
   fill-opacity: 1;
 }
 

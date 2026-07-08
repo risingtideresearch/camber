@@ -27,11 +27,11 @@
 .selinfo .sel-knuckle:has(input:disabled) {
   opacity: 0.45;
 }
-#selDelete {
+.selinfo .sel-delete {
   align-self: flex-start;
 }
-#selDelete:disabled,
-#selKnuckle:disabled {
+.selinfo .sel-delete:disabled,
+.selinfo .sel-knuckle input:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }

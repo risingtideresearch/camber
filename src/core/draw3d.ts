@@ -920,13 +920,13 @@ function drawLines(
 
 export function draw3d(
   cv3d: HTMLCanvasElement,
+  lines: SVGSVGElement | null,
   model: Model,
   selection: ModelSelection,
   params: Draw3dParams,
   rebuild?: boolean,
 ): void {
   // lines-plan style: draw the SVG overlay and skip the WebGL surface entirely
-  const lines = document.getElementById("lines3d") as SVGSVGElement | null;
   if (LINES_MODES.includes(params.view3dMode) && lines) {
     lines.style.display = "";
     drawLines(model, selection, params, lines, rebuild !== false);

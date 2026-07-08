@@ -41,6 +41,7 @@ interface View3dProps {
 
 export function View3d({ model, modelVersion, selection, title }: View3dProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null); // the lines-plan overlay, owned by this instance (no global id lookup)
   const paramsRef = useRef<Draw3dParams>(createDraw3dParams());
   // the display mode is React-owned; the rebuild effect copies it into paramsRef before each draw, so
   // paramsRef's own view3dMode is always overwritten and its initial value is irrelevant.
@@ -55,14 +56,23 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
   // redraw the GL only (no mesh rebuild) — for rotation, zoom, and resize
   const redrawGL = useCallback(() => {
     const cv = canvasRef.current;
-    if (cv) draw3d(cv, model, selRef.current, paramsRef.current, false);
+    if (cv)
+      draw3d(
+        cv,
+        svgRef.current,
+        model,
+        selRef.current,
+        paramsRef.current,
+        false,
+      );
   }, [model]);
 
   // rebuild + redraw whenever the model, the selection, or the display mode changes
   useEffect(() => {
     paramsRef.current.view3dMode = mode;
     const cv = canvasRef.current;
-    if (cv) draw3d(cv, model, selection, paramsRef.current, true);
+    if (cv)
+      draw3d(cv, svgRef.current, model, selection, paramsRef.current, true);
   }, [model, modelVersion, selection, mode]);
 
   // scroll-wheel zoom — a native non-passive listener so preventDefault() works (React's onWheel is passive)
@@ -122,13 +132,13 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
   return (
     <div className="top3d">
       <canvas
-        id="cv3d"
+        className="cv3d"
         ref={canvasRef}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
       />
-      <svg id="lines3d" className="lines3d" style={{ display: "none" }} />
+      <svg ref={svgRef} className="lines3d" style={{ display: "none" }} />
       {title && <div className="view3dtitle">{title}</div>}
       <div className="view3dctl">
         {MODES.map((m) => (

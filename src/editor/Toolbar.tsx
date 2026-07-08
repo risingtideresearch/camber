@@ -10,7 +10,7 @@ interface ToolbarProps {
 
 export function Toolbar({ tool, onTool }: ToolbarProps) {
   return (
-    <div className="toolbar" id="toolbar">
+    <div className="toolbar">
       <Button
         className="tool"
         active={tool === "select"}

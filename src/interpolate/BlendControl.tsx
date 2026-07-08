@@ -1,4 +1,4 @@
-import { useMemo, useRef, type ReactNode } from "react";
+import { useId, useMemo, useRef, type ReactNode } from "react";
 import {
   clampPoly,
   padVerts,
@@ -106,6 +106,11 @@ export function BlendControl({
     return { rects, legend: { label: def.label, lo, hi } };
   }, [samples, heatMetric, n]);
 
+  // unique IDs needed for a label's `htmlFor` and an SVG group's `clipPath`
+  const uid = useId();
+  const clipId = `${uid}clip`;
+  const metricId = `${uid}metric`;
+
   // drag the puck (or press anywhere in the pad to jump it there)
   const svgRef = useRef<SVGSVGElement>(null);
   const draggingRef = useRef(false);
@@ -138,8 +143,8 @@ export function BlendControl({
         <span>Hull family &amp; blend weights</span>
       </div>
       <div className="ctl">
-        <div id="status">{statusText(n, promoted)}</div>
-        <div id="hullList">
+        <div>{statusText(n, promoted)}</div>
+        <div>
           {n === 2 && (
             <div className="twoslider">
               <div className="twoends">
@@ -175,7 +180,7 @@ export function BlendControl({
               <div className="padwrap">
                 <svg
                   ref={svgRef}
-                  id="blendPad"
+                  className="blendpad"
                   viewBox={`0 0 ${PAD} ${PAD}`}
                   preserveAspectRatio="xMidYMid meet"
                   onPointerDown={onPadDown}
@@ -184,14 +189,12 @@ export function BlendControl({
                   onPointerCancel={onPadUp}
                 >
                   <defs>
-                    <clipPath id="padClip">
+                    <clipPath id={clipId}>
                       <path d={polyD} />
                     </clipPath>
                   </defs>
                   <path d={polyD} fill="#f8fafc" stroke="none" />
-                  <g id="heat" clipPath="url(#padClip)">
-                    {heat.rects}
-                  </g>
+                  <g clipPath={`url(#${clipId})`}>{heat.rects}</g>
                   <path
                     d={polyD}
                     fill="none"
@@ -251,9 +254,9 @@ export function BlendControl({
           )}
         </div>
         <div className="heatrow">
-          <label htmlFor="metricSel">Colour by</label>
+          <label htmlFor={metricId}>Colour by</label>
           <select
-            id="metricSel"
+            id={metricId}
             title="Colour the pad by a metric's value across the blend space"
             value={heatMetric}
             onChange={(e) => onHeatMetric(e.target.value)}
@@ -267,7 +270,7 @@ export function BlendControl({
           </select>
         </div>
         {heat.legend && (
-          <div id="heatLegend">
+          <div className="heatlegend">
             <span className="hl-k">{heat.legend.label}</span>
             <span className="hl-lo">{fmtMetric(heat.legend.lo)}</span>
             <span className="hl-bar" />
