@@ -1,10 +1,72 @@
 // ---------- monotone cubic Hermite (PCHIP) — interpolates without overshoot (used for the stations) ----------
 
+// We implement two flavors of Piecewise Cubic Hermite Interpolating Polynomial
+// (PCHIP), both of them providing monotone cubic interpolation.
+//
+// 1. "Fritsch–Carlson" is the classic monotone cubic interpolation approach:
+//
+//     https://en.wikipedia.org/wiki/Monotone_cubic_interpolation
+//
+//     The output is a series of per-knot slopes, whose hermite evaluation gives
+//     a function y(x) which is C¹ as a function of x.
+//
+//     However, the Fritsch–Carlson algorithm itself is a function from its knot
+//     values [..., [xi, yi], ...] to the slopes [..., mi, ...], and this
+//     function is only C⁰ due to the hard branch switches, e.g.:
+//
+//       if (a * b <= 0) m[i] = 0   (=> in the domain where a * b <= 0, the
+//                                      algorithm's gradient is null as a
+//                                      function of the input knots)
+//
+//       else { ... }               (=> in the domain where a * b > 0, the
+//                                      algorithm's gradient is non-null)
+//
+//    This means that if you generate a curve C(u) by first blending together
+//    multiple sets of knots, then evaluating at a fixed x the Fritsch–Carlson
+//    interpolation of the blended knots [..., [xi(u), yi(u)], ...] , the
+//    resulting curve C(u) will only be C⁰. This is what would happen to
+//    longitudinal lines (and therefore also the sheer line) of our hull model
+//    with blended stations.
+//
+// 2. "C2-Fritsch–Carlson" is a new variant which is C² as a function of its
+//    knot values. This is achieved by adding a smooth quintic ramp to ease out
+//    the "else cases" into m[i] = 0, and still preserving the monotonicity
+//    guarantee.
+//
+type PchipVariant = "Fritsch-Carlson" | "C2-Fritsch-Carlson";
+const PCHIP_VARIANT: PchipVariant = "C2-Fritsch-Carlson";
+
+/**
+ * An ease-in function from 0 to 1 with:
+ *
+ * y(0) = 0, y'(0) = 0, y''(0) = 0
+ * y(1) = 1, y'(1) = 1, y''(1) = 0
+ */
+export function c2EaseIn(q: number): number {
+  return q * q * q * (6 + q * (3 * q - 8));
+}
+
+/**
+ * An ease-in ease-out function from 0 to 1 with:
+ *
+ * y(0) = 0, y'(0) = 0, y''(0) = 0
+ * y(1) = 1, y'(1) = 0, y''(1) = 0
+ */
+export function c2EaseInOut(q: number): number {
+  return q * q * q * (10 + q * (6 * q - 15));
+}
+
+// Fraction of the secant RATIO over which an interior slope is faded to zero (see pchipSlopes): once the
+// smaller adjacent secant drops under MID_EASE× the larger, the harmonic mean is scaled by a C² fade so
+// it reaches the zeroed opposite-sign branch with matching value, slope and curvature. Must stay < 1 (the
+// fade's clamp then also hides the min/max switch at equal secants inside the identity region).
+const MID_EASE = 0.25;
+
 export function pchipSlopes(xs: number[], ys: number[]): number[] {
-  const n = xs.length,
-    h = Array(n - 1),
-    d = Array(n - 1),
-    m = Array(n);
+  const n = xs.length;
+  const h = Array(n - 1);
+  const d = Array(n - 1);
+  const m = Array(n);
   for (let i = 0; i < n - 1; i++) {
     h[i] = xs[i + 1] - xs[i];
     d[i] = (ys[i + 1] - ys[i]) / h[i];
@@ -12,11 +74,43 @@ export function pchipSlopes(xs: number[], ys: number[]): number[] {
   if (n === 1) return [0];
   if (n === 2) return [d[0], d[0]];
   for (let i = 1; i < n - 1; i++) {
-    if (d[i - 1] * d[i] <= 0) m[i] = 0;
-    else {
-      const w1 = 2 * h[i] + h[i - 1],
-        w2 = h[i] + 2 * h[i - 1];
-      m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i]);
+    const a = d[i - 1];
+    const b = d[i];
+    if (a * b <= 0) {
+      // Case 1: opposite-sign secants. The slope must be zero to avoid
+      // overshoot.
+      m[i] = 0;
+    } else {
+      // Case 2: same-sign secants. We compute the slope as a weighted harmonic
+      // mean of the two secants, which is guaranteed to be monotone-safe.
+      const w1 = 2 * h[i] + h[i - 1];
+      const w2 = h[i] + 2 * h[i - 1];
+      let mi = (w1 + w2) / (w1 / a + w2 / b); // weighted harmonic mean (Fritsch–Carlson)
+      if (PCHIP_VARIANT === "C2-Fritsch-Carlson") {
+        // The weighted harmonic mean converges to 0 as either secant converges
+        // to 0, but it arrives with a nonzero slope while the opposite-sign
+        // branch (Case 1) sits at exactly 0, so as is there would be a C¹
+        // discontinuity when a*b crosses the sign boundary. We make it C² by
+        // applying an easing function to smoothly transition between the two
+        // branches:
+        // - For balanced secants (r >= MID_EASE), we leave `mi` as is
+        // - For unbalanced secants, we ease `mi` down to 0 as the smaller
+        //   secant approaches 0, with C² contact at r = 0 and r = MID_EASE
+        //
+        // If both secants approach 0 together with their ratio not approaching
+        // zero, then there is still a C² discontinuity. This one is unavoidable
+        // given our desiderata (zero slope if any of the secants is zero, and
+        // secant slope if both secants are equal), and is unlikely to happen by
+        // chance while blending knots.
+        const r =
+          Math.min(Math.abs(a), Math.abs(b)) /
+          Math.max(Math.abs(a), Math.abs(b));
+        if (r < MID_EASE) {
+          const q = r / MID_EASE;
+          mi *= c2EaseInOut(q);
+        }
+      }
+      m[i] = mi;
     }
   }
   m[0] = pchipEnd(h[0], h[1], d[0], d[1]);
@@ -61,11 +155,29 @@ export function naturalCubicSlopes(xs: number[], ys: number[]): number[] {
   return m;
 }
 
+// Fraction of the monotone-safe box eased at each bound by pchipEnd (must stay
+// ≤ 1/3: the zones must not overlap, and the untouched middle must cover
+// everything reachable with same-sign secants, m/d0 < 2).
+const END_EASE = 0.25;
+
+// The three-point end slope, saturated into the monotone-safe box [0, 3·d0]
+// (sign-mirrored for d0 < 0). The original Fritsch–Carlson does this as a hard
+// clamp: zero the slope on a sign mismatch with the first secant, cut it at
+// 3·d0. The C2 variant keeps the same box (identity in the middle, exactly 0 /
+// 3·d0 outside it) but apply a C² ease across the END_EASE-wide zone inside
+// each bound.
 function pchipEnd(h0: number, h1: number, d0: number, d1: number): number {
-  let m = ((2 * h0 + h1) * d0 - h0 * d1) / (h0 + h1);
-  if (Math.sign(m) !== Math.sign(d0)) m = 0;
-  else if (Math.sign(d0) !== Math.sign(d1) && Math.abs(m) > 3 * Math.abs(d0))
-    m = 3 * d0;
+  const m = ((2 * h0 + h1) * d0 - h0 * d1) / (h0 + h1),
+    s = 3 * d0;
+  if (s === 0) return 0;
+  const t = m / s; // position in the monotone-safe box, normalized to [0, 1]
+  if (t <= 0) return 0;
+  if (t >= 1) return s;
+  if (PCHIP_VARIANT === "C2-Fritsch-Carlson") {
+    if (t < END_EASE) return s * END_EASE * c2EaseIn(t / END_EASE);
+    if (t > 1 - END_EASE)
+      return s * (1 - END_EASE * c2EaseIn((1 - t) / END_EASE));
+  }
   return m;
 }
 
