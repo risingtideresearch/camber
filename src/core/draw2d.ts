@@ -55,7 +55,7 @@ export function el(
 export function poly(pts: Vec2[]): string {
   let d = "";
   pts.forEach((p, i) => {
-    d += (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1) + " ";
+    d += (i ? "L" : "M") + p[0].toFixed(6) + " " + p[1].toFixed(6) + " ";
   });
   return d;
 }
@@ -629,7 +629,7 @@ export function stnCurve(
     df = fairEval(model, ts, ds, ks),
     tm = ts[ts.length - 1],
     out: [number, number][] = [],
-    N = 120;
+    N = 1000;
   for (let i = 0; i <= N; i++) {
     const u = (tm * i) / N;
     out.push([snX(nf(u)), snY(df(u))]);
