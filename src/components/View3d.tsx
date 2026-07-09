@@ -17,6 +17,7 @@ import "./View3d.css";
 // cached mesh is reused); a model change rebuilds the mesh.
 const MODES: { mode: View3DMode; label: string; title: string }[] = [
   { mode: "render", label: "Render", title: "Shaded hull" },
+  { mode: "mesh", label: "Mesh", title: "Shaded hull with its quad grid wireframed on top" },
   { mode: "body", label: "Body", title: "Lines plan — body (stations)" },
   {
     mode: "buttocks",

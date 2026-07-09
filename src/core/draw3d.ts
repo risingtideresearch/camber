@@ -17,13 +17,14 @@ import { ZMIN, ZMAX } from "./view";
 
 // the 3D view's mutually-exclusive display mode: "render" = shaded trimmed hull; "body" / "buttocks" /
 // "waterline" = the lines plan (SVG overlay) with that non-chine family; "zebra" = zebra-striped trimmed hull
-// (fairness check); "sheet" = the untrimmed shaded sweep (one side, no trims/mirror).
+// (fairness check); "sheet" = the untrimmed shaded sweep (one side, no trims/mirror); "mesh" = the shaded
+// trimmed hull (like "render") with its quad grid wireframed on top, to inspect the mesh itself.
 // "body" / "buttocks" / "waterline" are the three lines-plan modes: same drawing, differing only in which
-// non-chine line family is drawn (stations / constant-y cuts / constant-z cuts). render / zebra / sheet are
-// the shaded GL modes.
+// non-chine line family is drawn (stations / constant-y cuts / constant-z cuts). render / zebra / sheet / mesh
+// are the shaded GL modes.
 
 export type View3DMode =
-  "render" | "body" | "buttocks" | "waterline" | "zebra" | "sheet";
+  "render" | "body" | "buttocks" | "waterline" | "zebra" | "sheet" | "mesh";
 
 export const LINES_MODES: View3DMode[] = ["body", "buttocks", "waterline"];
 
@@ -380,6 +381,63 @@ function clipQuad(
   };
 }
 
+// clip a single segment against transomGate ≥ 0 (the open-polyline analogue of clipQuad's edge clip): drop
+// it if fully aft, keep it whole if fully forward, else trim the aft end down to the cut point.
+function clipSegment(model: Model, a: Vec3, b: Vec3): [Vec3, Vec3] | null {
+  const ga = transomGate(model, a),
+    gb = transomGate(model, b);
+  if (ga < 0 && gb < 0) return null;
+  if (ga >= 0 && gb >= 0) return [a, b];
+  const ip = lerpV(a, b, ga / (ga - gb));
+  return ga >= 0 ? [a, ip] : [ip, b];
+}
+
+// the hull's quad grid as a GL_LINES segment soup, for the "mesh" mode wireframe overlay: girth (row) edges
+// and station (column) edges, each nudged along the local surface normal so it floats just proud of the
+// shaded skin (no z-fighting) — a fixed world-space offset, not view-facing, so it's built once at rebuild
+// and reused across rotate/zoom like the hull mesh itself (unlike the ribbon overlays, which rebuild every
+// frame to stay camera-facing — overkill here given the grid's segment count).
+// Mirrors buildHullMesh's own trims: transom-clipped segment by segment when trimmed, and the same open-
+// section centre-column skip so the wireframe never bridges a gap the surface itself doesn't bridge.
+const WIRE_OFFSET = -2, // world units, just enough to clear z-fighting at any zoom
+  WIRE_RGB = [0.04, 0.05, 0.07]; // near-black grid lines, for contrast against the lit hull
+function buildWireMesh(
+  model: Model,
+  rows: Vec3[][],
+  open: boolean[],
+  M: number,
+  trimmed: boolean,
+): Mesh {
+  const R = rows.length,
+    C = rows[0]?.length ?? 0,
+    P: number[] = [],
+    off = (i: number, j: number): Vec3 => {
+      const n = gridNormal(rows, i, j);
+      return [
+        rows[i][j][0] + n[0] * WIRE_OFFSET,
+        rows[i][j][1] + n[1] * WIRE_OFFSET,
+        rows[i][j][2] + n[2] * WIRE_OFFSET,
+      ];
+    },
+    push = (a: Vec3, b: Vec3): void => {
+      const seg = trimmed ? clipSegment(model, a, b) : [a, b];
+      if (!seg) return;
+      P.push(seg[0][0], seg[0][1], seg[0][2], seg[1][0], seg[1][1], seg[1][2]);
+    };
+  for (let i = 0; i < R; i++)
+    for (let j = 0; j < C - 1; j++) push(off(i, j), off(i, j + 1)); // girth edges
+  for (let j = 0; j < C; j++)
+    for (let i = 0; i < R - 1; i++) {
+      if (trimmed && j === M && (open[i] || open[i + 1])) continue; // no bridge over an open gap
+      push(off(i, j), off(i + 1, j)); // station edges
+    }
+  return {
+    pos: new Float32Array(P),
+    nrm: new Float32Array(P.length),
+    count: P.length / 3,
+  };
+}
+
 // build the hull triangle soup by clipping the fair grid against the transom plane; also collect the cut
 // segments so the transom panel can be built from the very same edge.
 // trimmed ⇒ the rows are FULL-WIDTH (port-sheer → keel → starboard-sheer, no mirror): clip each quad
@@ -388,9 +446,10 @@ function clipQuad(
 function buildHullMesh(
   model: Model,
   trimmed: boolean,
-): { hull: Mesh; cuts: [Vec3, Vec3][] } {
-  const M = 44,
-    { rows, open, creaseS } = bilgeRows(model, 180, M, trimmed),
+  wantWire: boolean,
+): { hull: Mesh; cuts: [Vec3, Vec3][]; wire: Mesh | null } {
+  const M = 64,
+    { rows, open, creaseS } = bilgeRows(model, 256, M, trimmed),
     R = rows.length,
     C = rows[0]?.length ?? 0,
     P: number[] = [],
@@ -400,6 +459,7 @@ function buildHullMesh(
     return {
       hull: { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 },
       cuts,
+      wire: null,
     };
   const nrmC = rows.map((_, i) =>
     rows[i].map((_, j) => gridNormal(rows, i, j)),
@@ -444,6 +504,7 @@ function buildHullMesh(
       count: P.length / 3,
     },
     cuts,
+    wire: wantWire ? buildWireMesh(model, rows, open, M, trimmed) : null,
   };
 }
 
@@ -494,7 +555,12 @@ function buildTransomMesh(model: Model, cuts: [Vec3, Vec3][]): Mesh {
   };
 }
 
-function drawMesh(gl: WebGLRenderingContext, mesh: Mesh, base: number[]): void {
+function drawMesh(
+  gl: WebGLRenderingContext,
+  mesh: Mesh,
+  base: number[],
+  primitive: number = gl.TRIANGLES,
+): void {
   if (!mesh.count) return;
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
   gl.bufferData(gl.ARRAY_BUFFER, mesh.pos, gl.DYNAMIC_DRAW);
@@ -505,11 +571,12 @@ function drawMesh(gl: WebGLRenderingContext, mesh: Mesh, base: number[]): void {
   gl.enableVertexAttribArray(attr.aNormal);
   gl.vertexAttribPointer(attr.aNormal, 3, gl.FLOAT, false, 0, 0);
   gl.uniform3fv(loc.uBase, base);
-  gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
+  gl.drawArrays(primitive, 0, mesh.count);
 }
 
 let meshHull: Mesh | null = null,
   meshTrans: Mesh | null = null,
+  meshWire: Mesh | null = null, // "mesh" mode's quad-grid wireframe overlay; null outside that mode
   meshBBox: number[] | null = null; // [x0,y0,z0, x1,y1,z1] world bounds of the hull mesh, for fit-to-box
 
 function computeBBox(pos: Float32Array): number[] | null {
@@ -936,10 +1003,11 @@ export function draw3d(
   if (!GL) initGL(cv3d);
   const trimmed = params.view3dMode !== "sheet";
   if (rebuild !== false || !meshHull) {
-    const built = buildHullMesh(model, trimmed);
+    const built = buildHullMesh(model, trimmed, params.view3dMode === "mesh");
     meshHull = built.hull;
     meshTrans = trimmed ? buildTransomMesh(model, built.cuts) : null;
     meshBBox = computeBBox(meshHull.pos);
+    meshWire = built.wire;
   }
   const gl = GL!,
     cv = gl.canvas as HTMLCanvasElement,
@@ -1020,6 +1088,11 @@ export function draw3d(
     gl.uniform1i(loc.uZebra, 0);
     drawMesh(gl, meshTrans, [0.74, 0.55, 0.37]);
   } // transom always solid
+  if (meshWire) {
+    gl.uniform1i(loc.uFlat, 1); // flat, unshaded lines — the grid itself, not lit geometry
+    drawMesh(gl, meshWire, WIRE_RGB, gl.LINES);
+    gl.uniform1i(loc.uFlat, 0); // restore lit shading for the guide overlays below
+  }
 
   // selected station point → draw its longitudinal (swept locus along x) on top of the hull, in amber
   const li = selStationIdx(model, selection);
