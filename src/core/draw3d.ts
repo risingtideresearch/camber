@@ -401,15 +401,15 @@ function clipSegment(model: Model, a: Vec3, b: Vec3): [Vec3, Vec3] | null {
   return ga >= 0 ? [a, ip] : [ip, b];
 }
 
-// the hull's quad grid as a GL_LINES segment soup, for the Mesh wireframe overlay: girth (row) edges
-// and station (column) edges, each nudged along the local surface normal so it floats just proud of the
-// shaded skin (no z-fighting) — a fixed world-space offset, not view-facing, so it's built once at rebuild
-// and reused across rotate/zoom like the hull mesh itself (unlike the ribbon overlays, which rebuild every
-// frame to stay camera-facing — overkill here given the grid's segment count).
+// the hull's quad grid as a GL_LINES segment soup, for the Mesh wireframe overlay: girth (row) edges and
+// station (column) edges, at the EXACT hull-grid positions (no geometric offset). It is built once at
+// rebuild and reused across rotate/zoom like the hull mesh itself. Staying superimposed on the shaded skin
+// is handled at draw time by a polygon-offset on the FILL (the classic wireframe-over-solid trick) rather
+// than a world-space nudge, so there is no visible gap between hull and wire and the grid reads from both
+// sides of the surface (a back-face section shows its wire too).
 // Mirrors buildHullMesh's own trims: transom-clipped segment by segment when trimmed, and the same open-
 // section centre-column skip so the wireframe never bridges a gap the surface itself doesn't bridge.
-const WIRE_OFFSET = -2, // world units, just enough to clear z-fighting at any zoom
-  WIRE_RGB = [0.04, 0.05, 0.07]; // near-black grid lines, for contrast against the lit hull
+const WIRE_RGB = [0.04, 0.05, 0.07]; // near-black grid lines, for contrast against the lit hull
 function buildWireMesh(
   model: Model,
   rows: Vec3[][],
@@ -420,25 +420,17 @@ function buildWireMesh(
   const R = rows.length,
     C = rows[0]?.length ?? 0,
     P: number[] = [],
-    off = (i: number, j: number): Vec3 => {
-      const n = gridNormal(rows, i, j);
-      return [
-        rows[i][j][0] + n[0] * WIRE_OFFSET,
-        rows[i][j][1] + n[1] * WIRE_OFFSET,
-        rows[i][j][2] + n[2] * WIRE_OFFSET,
-      ];
-    },
     push = (a: Vec3, b: Vec3): void => {
       const seg = trimmed ? clipSegment(model, a, b) : [a, b];
       if (!seg) return;
       P.push(seg[0][0], seg[0][1], seg[0][2], seg[1][0], seg[1][1], seg[1][2]);
     };
   for (let i = 0; i < R; i++)
-    for (let j = 0; j < C - 1; j++) push(off(i, j), off(i, j + 1)); // girth edges
+    for (let j = 0; j < C - 1; j++) push(rows[i][j], rows[i][j + 1]); // girth edges
   for (let j = 0; j < C; j++)
     for (let i = 0; i < R - 1; i++) {
       if (trimmed && j === M && (open[i] || open[i + 1])) continue; // no bridge over an open gap
-      push(off(i, j), off(i + 1, j)); // station edges
+      push(rows[i][j], rows[i + 1][j]); // station edges
     }
   return {
     pos: new Float32Array(P),
@@ -1099,15 +1091,22 @@ export function draw3d(
   gl.uniform1i(loc.uZebra, params.view3dMode === "zebra" ? 1 : 0);
   gl.uniform1f(loc.uWaterZ, -model.waterline); // boot-top height in world z; below it the hull is bottom-painted
   gl.uniform1f(loc.uPaint, 1.0); // hull + transom take bottom paint
+  // with the wireframe overlay on, push the shaded FILL back by a polygon-offset (the classic wireframe-
+  // over-solid trick) so the wire — drawn just below at the IDENTICAL hull-grid positions — stays crisply
+  // superimposed on the skin from either side, with no z-fighting and no visible geometric gap. Lines are
+  // unaffected by POLYGON_OFFSET_FILL, so only the fill is nudged.
+  if (meshWire) {
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(1.0, 1.0);
+  }
   drawMesh(gl, meshHull, [0.3, 0.5, 0.72]);
   if (meshTrans) {
     gl.uniform1i(loc.uZebra, 0);
     drawMesh(gl, meshTrans, [0.74, 0.55, 0.37]);
   } // transom always solid
   if (meshWire) {
-    gl.uniform1i(loc.uFlat, 1); // flat, unshaded lines — the grid itself, not lit geometry
+    gl.disable(gl.POLYGON_OFFSET_FILL);
     drawMesh(gl, meshWire, WIRE_RGB, gl.LINES);
-    gl.uniform1i(loc.uFlat, 0); // restore lit shading for the guide overlays below
   }
 
   // selected station point → draw its longitudinal (swept locus along x) on top of the hull, in amber
