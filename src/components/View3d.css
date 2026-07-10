@@ -12,8 +12,13 @@
   top: 10px;
   right: 14px;
   display: flex;
-  gap: 0;
+  gap: 8px; /* separate the standalone Mesh toggle from the mode bar */
   z-index: 1;
+}
+/* the mode buttons form one joined segmented bar; the Mesh toggle stays a standalone rounded button */
+.view3dmodes {
+  display: flex;
+  gap: 0;
 }
 /* optional label overlaid at the top-left of the canvas (e.g. "Blended Hull") */
 .view3dtitle {
@@ -28,19 +33,19 @@
   pointer-events: none;
 }
 /* segmented control: shared Buttons joined into one bar; the active one is inked by Button's `active` prop */
-.view3dctl .btn {
+.view3dmodes .btn {
   border-radius: 0;
   margin-left: -1px;
 }
-.view3dctl .btn:first-child {
+.view3dmodes .btn:first-child {
   border-radius: 8px 0 0 8px;
   margin-left: 0;
 }
-.view3dctl .btn:last-child {
+.view3dmodes .btn:last-child {
   border-radius: 0 8px 8px 0;
 }
 /* lift the active button so its ink border sits above its neighbours' */
-.view3dctl .btn.active {
+.view3dmodes .btn.active {
   position: relative;
   z-index: 1;
 }

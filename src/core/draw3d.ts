@@ -17,14 +17,14 @@ import { ZMIN, ZMAX } from "./view";
 
 // the 3D view's mutually-exclusive display mode: "render" = shaded trimmed hull; "body" / "buttocks" /
 // "waterline" = the lines plan (SVG overlay) with that non-chine family; "zebra" = zebra-striped trimmed hull
-// (fairness check); "sheet" = the untrimmed shaded sweep (one side, no trims/mirror); "mesh" = the shaded
-// trimmed hull (like "render") with its quad grid wireframed on top, to inspect the mesh itself.
+// (fairness check); "sheet" = the untrimmed shaded sweep (one side, no trims/mirror).
 // "body" / "buttocks" / "waterline" are the three lines-plan modes: same drawing, differing only in which
-// non-chine line family is drawn (stations / constant-y cuts / constant-z cuts). render / zebra / sheet / mesh
-// are the shaded GL modes.
+// non-chine line family is drawn (stations / constant-y cuts / constant-z cuts). render / zebra / sheet are
+// the shaded GL modes. Independently of the mode, `showMesh` overlays the hull's quad grid as a wireframe on
+// any shaded GL mode, to inspect the mesh itself.
 
 export type View3DMode =
-  "render" | "body" | "buttocks" | "waterline" | "zebra" | "sheet" | "mesh";
+  "render" | "body" | "buttocks" | "waterline" | "zebra" | "sheet";
 
 export const LINES_MODES: View3DMode[] = ["body", "buttocks", "waterline"];
 
@@ -32,6 +32,7 @@ export interface Draw3dParams {
   rot: { yaw: number; pitch: number };
   zoom: number; // 3D view zoom multiplier on the fixed framing (1 = default; scroll wheel adjusts)
   view3dMode: View3DMode; // mutually-exclusive 3D display mode (render / body / buttocks / waterline / zebra / sheet)
+  showMesh: boolean; // overlay the hull's quad-grid wireframe on the shaded GL modes (render / zebra / sheet)
 }
 
 export function createDraw3dParams(): Draw3dParams {
@@ -39,6 +40,7 @@ export function createDraw3dParams(): Draw3dParams {
     rot: { yaw: -0.62, pitch: 0.42 },
     zoom: 1,
     view3dMode: "render", // shaded trimmed hull by default
+    showMesh: false, // wireframe overlay off by default
   };
 }
 
@@ -392,7 +394,7 @@ function clipSegment(model: Model, a: Vec3, b: Vec3): [Vec3, Vec3] | null {
   return ga >= 0 ? [a, ip] : [ip, b];
 }
 
-// the hull's quad grid as a GL_LINES segment soup, for the "mesh" mode wireframe overlay: girth (row) edges
+// the hull's quad grid as a GL_LINES segment soup, for the Mesh wireframe overlay: girth (row) edges
 // and station (column) edges, each nudged along the local surface normal so it floats just proud of the
 // shaded skin (no z-fighting) — a fixed world-space offset, not view-facing, so it's built once at rebuild
 // and reused across rotate/zoom like the hull mesh itself (unlike the ribbon overlays, which rebuild every
@@ -576,7 +578,7 @@ function drawMesh(
 
 let meshHull: Mesh | null = null,
   meshTrans: Mesh | null = null,
-  meshWire: Mesh | null = null, // "mesh" mode's quad-grid wireframe overlay; null outside that mode
+  meshWire: Mesh | null = null, // the Mesh overlay's quad-grid wireframe; null when the overlay is off
   meshBBox: number[] | null = null; // [x0,y0,z0, x1,y1,z1] world bounds of the hull mesh, for fit-to-box
 
 function computeBBox(pos: Float32Array): number[] | null {
@@ -1003,7 +1005,7 @@ export function draw3d(
   if (!GL) initGL(cv3d);
   const trimmed = params.view3dMode !== "sheet";
   if (rebuild !== false || !meshHull) {
-    const built = buildHullMesh(model, trimmed, params.view3dMode === "mesh");
+    const built = buildHullMesh(model, trimmed, params.showMesh);
     meshHull = built.hull;
     meshTrans = trimmed ? buildTransomMesh(model, built.cuts) : null;
     meshBBox = computeBBox(meshHull.pos);

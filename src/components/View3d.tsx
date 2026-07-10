@@ -17,7 +17,6 @@ import "./View3d.css";
 // cached mesh is reused); a model change rebuilds the mesh.
 const MODES: { mode: View3DMode; label: string; title: string }[] = [
   { mode: "render", label: "Render", title: "Shaded hull" },
-  { mode: "mesh", label: "Mesh", title: "Shaded hull with its quad grid wireframed on top" },
   { mode: "body", label: "Body", title: "Lines plan — body (stations)" },
   {
     mode: "buttocks",
@@ -44,9 +43,11 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const svgRef = useRef<SVGSVGElement>(null); // the lines-plan overlay, owned by this instance (no global id lookup)
   const paramsRef = useRef<Draw3dParams>(createDraw3dParams());
-  // the display mode is React-owned; the rebuild effect copies it into paramsRef before each draw, so
-  // paramsRef's own view3dMode is always overwritten and its initial value is irrelevant.
+  // the display mode and the Mesh-overlay toggle are React-owned; the rebuild effect copies them into
+  // paramsRef before each draw, so paramsRef's own view3dMode / showMesh are always overwritten and their
+  // initial values are irrelevant.
   const [mode, setMode] = useState<View3DMode>("render");
+  const [showMesh, setShowMesh] = useState(false); // overlay the quad-grid wireframe on the shaded GL modes
 
   // latest selection for the ref-reading redraws (rotate / zoom / resize) so they need not re-subscribe
   const selRef = useRef(selection);
@@ -68,13 +69,14 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
       );
   }, [model]);
 
-  // rebuild + redraw whenever the model, the selection, or the display mode changes
+  // rebuild + redraw whenever the model, the selection, the display mode, or the Mesh overlay changes
   useEffect(() => {
     paramsRef.current.view3dMode = mode;
+    paramsRef.current.showMesh = showMesh;
     const cv = canvasRef.current;
     if (cv)
       draw3d(cv, svgRef.current, model, selection, paramsRef.current, true);
-  }, [model, modelVersion, selection, mode]);
+  }, [model, modelVersion, selection, mode, showMesh]);
 
   // scroll-wheel zoom — a native non-passive listener so preventDefault() works (React's onWheel is passive)
   useEffect(() => {
@@ -142,16 +144,25 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
       <svg ref={svgRef} className="lines3d" style={{ display: "none" }} />
       {title && <div className="view3dtitle">{title}</div>}
       <div className="view3dctl">
-        {MODES.map((m) => (
-          <Button
-            key={m.mode}
-            active={mode === m.mode}
-            title={m.title}
-            onClick={() => setMode(m.mode)}
-          >
-            {m.label}
-          </Button>
-        ))}
+        <Button
+          active={showMesh}
+          title="Overlay the hull's quad grid as a wireframe (works in Render, Zebra, and Sheet)"
+          onClick={() => setShowMesh((v) => !v)}
+        >
+          Mesh
+        </Button>
+        <div className="view3dmodes">
+          {MODES.map((m) => (
+            <Button
+              key={m.mode}
+              active={mode === m.mode}
+              title={m.title}
+              onClick={() => setMode(m.mode)}
+            >
+              {m.label}
+            </Button>
+          ))}
+        </div>
       </div>
     </div>
   );
