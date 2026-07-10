@@ -45,11 +45,12 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const svgRef = useRef<SVGSVGElement>(null); // the lines-plan overlay, owned by this instance (no global id lookup)
   const paramsRef = useRef<Draw3dParams>(createDraw3dParams());
-  // the display mode, the Mesh-overlay toggle, and the mesh resolution (M/N) are React-owned; the rebuild
-  // effect copies them into paramsRef before each draw, so paramsRef's own view3dMode / showMesh / meshM /
-  // meshN are always overwritten and their initial values are irrelevant.
+  // the display mode, the Mesh-overlay toggle, the quads/triangles wire choice, and the mesh resolution (M/N)
+  // are React-owned; the rebuild effect copies them into paramsRef before each draw, so paramsRef's own
+  // view3dMode / showMesh / meshQuads / meshM / meshN are always overwritten and their initial values are irrelevant.
   const [mode, setMode] = useState<View3DMode>("render");
   const [showMesh, setShowMesh] = useState(false); // overlay the quad-grid wireframe on the shaded GL modes
+  const [meshQuads, setMeshQuads] = useState(true); // wire as quads (default) or the raw shaded triangles
   const [meshM, setMeshM] = useState(MESH_M_DEFAULT); // longitudinals per half-section (girth res.)
   const [meshN, setMeshN] = useState(MESH_N_DEFAULT); // sections along the length (station res.)
   const [meshMenu, setMeshMenu] = useState(false); // the mesh-resolution dropdown open state
@@ -80,12 +81,13 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
   useEffect(() => {
     paramsRef.current.view3dMode = mode;
     paramsRef.current.showMesh = showMesh;
+    paramsRef.current.meshQuads = meshQuads;
     paramsRef.current.meshM = meshM;
     paramsRef.current.meshN = meshN;
     const cv = canvasRef.current;
     if (cv)
       draw3d(cv, svgRef.current, model, selection, paramsRef.current, true);
-  }, [model, modelVersion, selection, mode, showMesh, meshM, meshN]);
+  }, [model, modelVersion, selection, mode, showMesh, meshQuads, meshM, meshN]);
 
   // close the mesh-resolution dropdown on any pointer-down outside its group
   useEffect(() => {
@@ -184,10 +186,21 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
           {meshMenu && (
             <div className="meshpanel">
               <label
+                className="meshrow meshcheck"
+                title="Wireframe as the hull's quad grid; unchecked shows the raw triangles the shaded hull renders"
+              >
+                <input
+                  type="checkbox"
+                  checked={meshQuads}
+                  onChange={(e) => setMeshQuads(e.target.checked)}
+                />
+                <span className="meshname">As quads</span>
+              </label>
+              <label
                 className="meshrow"
                 title="Number of longitudinal lines per half-section (girth resolution)"
               >
-                <span className="meshname">num longitudinals</span>
+                <span className="meshname">Num longitudinals</span>
                 <input
                   type="range"
                   min={4}
@@ -202,7 +215,7 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
                 className="meshrow"
                 title="Number of sampled sections along the length (station resolution)"
               >
-                <span className="meshname">num sections</span>
+                <span className="meshname">Num sections</span>
                 <input
                   type="range"
                   min={8}

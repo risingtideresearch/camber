@@ -66,6 +66,13 @@
 .meshrow .meshname {
   min-width: 96px;
 }
+/* the checkbox row: box then label, no fixed-width name column and a pointer cursor over the whole row */
+.meshrow.meshcheck {
+  cursor: pointer;
+}
+.meshrow.meshcheck .meshname {
+  min-width: 0;
+}
 .meshrow input[type="range"] {
   width: 120px;
 }

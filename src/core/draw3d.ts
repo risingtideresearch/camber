@@ -33,6 +33,7 @@ export interface Draw3dParams {
   zoom: number; // 3D view zoom multiplier on the fixed framing (1 = default; scroll wheel adjusts)
   view3dMode: View3DMode; // mutually-exclusive 3D display mode (render / body / buttocks / waterline / zebra / sheet)
   showMesh: boolean; // overlay the hull's quad-grid wireframe on the shaded GL modes (render / zebra / sheet)
+  meshQuads: boolean; // wireframe as quads (true) or as the raw triangles the shaded hull renders (false)
   meshM: number; // longitudinals per half-section — the M fed to bilgeRows/sweptSection (girth resolution)
   meshN: number; // sampled sections along the length — the N fed to bilgeRows (station resolution)
 }
@@ -46,6 +47,7 @@ export function createDraw3dParams(): Draw3dParams {
     zoom: 1,
     view3dMode: "render", // shaded trimmed hull by default
     showMesh: false, // wireframe overlay off by default
+    meshQuads: true, // wireframe shows quads by default
     meshM: MESH_M_DEFAULT,
     meshN: MESH_N_DEFAULT,
   };
@@ -409,6 +411,7 @@ function clipSegment(model: Model, a: Vec3, b: Vec3): [Vec3, Vec3] | null {
 // sides of the surface (a back-face section shows its wire too).
 // Mirrors buildHullMesh's own trims: transom-clipped segment by segment when trimmed, and the same open-
 // section centre-column skip so the wireframe never bridges a gap the surface itself doesn't bridge.
+// This is the quad-grid wire; the raw-triangle wire is captured from the emitted triangle soup in buildHullMesh.
 const WIRE_RGB = [0.04, 0.05, 0.07]; // near-black grid lines, for contrast against the lit hull
 function buildWireMesh(
   model: Model,
@@ -448,6 +451,7 @@ function buildHullMesh(
   model: Model,
   trimmed: boolean,
   wantWire: boolean,
+  wireQuads: boolean, // wire as quads (true) or the raw shaded triangles (false); ignored unless wantWire
   M: number, // longitudinals per half-section (girth resolution)
   N: number, // sampled sections along the length (station resolution)
 ): { hull: Mesh; cuts: [Vec3, Vec3][]; wire: Mesh | null } {
@@ -475,8 +479,21 @@ function buildHullMesh(
     if (s <= 1e-6) return nrmC[i][j];
     return V.norm(lerpV(nrmC[i][j], gridNormal(rows, i, j, dir), s));
   };
-  const emit = (a: PN, b: PN, c: PN): void =>
+  // for the raw-triangle wire, capture the three edges of every emitted triangle (the transom-clipped fan
+  // included) as a GL_LINES soup, so the overlay is byte-for-byte the shaded surface's own triangulation.
+  const wantTriWire = wantWire && !wireQuads;
+  const wireP: number[] = [];
+  const wireEdge = (p: Vec3, q: Vec3): void => {
+    wireP.push(p[0], p[1], p[2], q[0], q[1], q[2]);
+  };
+  const emit = (a: PN, b: PN, c: PN): void => {
     pushTri(P, Nn, a.p, a.n, b.p, b.n, c.p, c.n);
+    if (wantTriWire) {
+      wireEdge(a.p, b.p);
+      wireEdge(b.p, c.p);
+      wireEdge(c.p, a.p);
+    }
+  };
   for (let i = 0; i < R - 1; i++)
     for (let j = 0; j < C - 1; j++) {
       // the keel sits at column M of a full-width row; where the section is open there is no surface
@@ -506,7 +523,15 @@ function buildHullMesh(
       count: P.length / 3,
     },
     cuts,
-    wire: wantWire ? buildWireMesh(model, rows, open, M, trimmed) : null,
+    wire: !wantWire
+      ? null
+      : wireQuads
+        ? buildWireMesh(model, rows, open, M, trimmed)
+        : {
+            pos: new Float32Array(wireP),
+            nrm: new Float32Array(wireP.length),
+            count: wireP.length / 3,
+          },
   };
 }
 
@@ -1009,6 +1034,7 @@ export function draw3d(
       model,
       trimmed,
       params.showMesh,
+      params.meshQuads,
       params.meshM,
       params.meshN,
     );
