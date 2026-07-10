@@ -33,7 +33,12 @@ export interface Draw3dParams {
   zoom: number; // 3D view zoom multiplier on the fixed framing (1 = default; scroll wheel adjusts)
   view3dMode: View3DMode; // mutually-exclusive 3D display mode (render / body / buttocks / waterline / zebra / sheet)
   showMesh: boolean; // overlay the hull's quad-grid wireframe on the shaded GL modes (render / zebra / sheet)
+  meshM: number; // longitudinals per half-section — the M fed to bilgeRows/sweptSection (girth resolution)
+  meshN: number; // sampled sections along the length — the N fed to bilgeRows (station resolution)
 }
+
+export const MESH_M_DEFAULT = 64; // default longitudinals per half-section (girth resolution)
+export const MESH_N_DEFAULT = 256; // default sections along the length (station resolution)
 
 export function createDraw3dParams(): Draw3dParams {
   return {
@@ -41,6 +46,8 @@ export function createDraw3dParams(): Draw3dParams {
     zoom: 1,
     view3dMode: "render", // shaded trimmed hull by default
     showMesh: false, // wireframe overlay off by default
+    meshM: MESH_M_DEFAULT,
+    meshN: MESH_N_DEFAULT,
   };
 }
 
@@ -449,9 +456,10 @@ function buildHullMesh(
   model: Model,
   trimmed: boolean,
   wantWire: boolean,
+  M: number, // longitudinals per half-section (girth resolution)
+  N: number, // sampled sections along the length (station resolution)
 ): { hull: Mesh; cuts: [Vec3, Vec3][]; wire: Mesh | null } {
-  const M = 64,
-    { rows, open, creaseS } = bilgeRows(model, 256, M, trimmed),
+  const { rows, open, creaseS } = bilgeRows(model, N, M, trimmed),
     R = rows.length,
     C = rows[0]?.length ?? 0,
     P: number[] = [],
@@ -1005,7 +1013,13 @@ export function draw3d(
   if (!GL) initGL(cv3d);
   const trimmed = params.view3dMode !== "sheet";
   if (rebuild !== false || !meshHull) {
-    const built = buildHullMesh(model, trimmed, params.showMesh);
+    const built = buildHullMesh(
+      model,
+      trimmed,
+      params.showMesh,
+      params.meshM,
+      params.meshN,
+    );
     meshHull = built.hull;
     meshTrans = trimmed ? buildTransomMesh(model, built.cuts) : null;
     meshBBox = computeBBox(meshHull.pos);

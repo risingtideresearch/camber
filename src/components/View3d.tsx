@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createDraw3dParams,
   draw3d,
+  MESH_M_DEFAULT,
+  MESH_N_DEFAULT,
   type Draw3dParams,
   type View3DMode,
 } from "../core/draw3d";
@@ -43,11 +45,15 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const svgRef = useRef<SVGSVGElement>(null); // the lines-plan overlay, owned by this instance (no global id lookup)
   const paramsRef = useRef<Draw3dParams>(createDraw3dParams());
-  // the display mode and the Mesh-overlay toggle are React-owned; the rebuild effect copies them into
-  // paramsRef before each draw, so paramsRef's own view3dMode / showMesh are always overwritten and their
-  // initial values are irrelevant.
+  // the display mode, the Mesh-overlay toggle, and the mesh resolution (M/N) are React-owned; the rebuild
+  // effect copies them into paramsRef before each draw, so paramsRef's own view3dMode / showMesh / meshM /
+  // meshN are always overwritten and their initial values are irrelevant.
   const [mode, setMode] = useState<View3DMode>("render");
   const [showMesh, setShowMesh] = useState(false); // overlay the quad-grid wireframe on the shaded GL modes
+  const [meshM, setMeshM] = useState(MESH_M_DEFAULT); // longitudinals per half-section (girth res.)
+  const [meshN, setMeshN] = useState(MESH_N_DEFAULT); // sections along the length (station res.)
+  const [meshMenu, setMeshMenu] = useState(false); // the mesh-resolution dropdown open state
+  const meshGroupRef = useRef<HTMLDivElement>(null); // wraps the Mesh button + dropdown, for outside-click close
 
   // latest selection for the ref-reading redraws (rotate / zoom / resize) so they need not re-subscribe
   const selRef = useRef(selection);
@@ -69,14 +75,27 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
       );
   }, [model]);
 
-  // rebuild + redraw whenever the model, the selection, the display mode, or the Mesh overlay changes
+  // rebuild + redraw whenever the model, the selection, the display mode, the Mesh overlay, or the mesh
+  // resolution (M/N) changes
   useEffect(() => {
     paramsRef.current.view3dMode = mode;
     paramsRef.current.showMesh = showMesh;
+    paramsRef.current.meshM = meshM;
+    paramsRef.current.meshN = meshN;
     const cv = canvasRef.current;
     if (cv)
       draw3d(cv, svgRef.current, model, selection, paramsRef.current, true);
-  }, [model, modelVersion, selection, mode, showMesh]);
+  }, [model, modelVersion, selection, mode, showMesh, meshM, meshN]);
+
+  // close the mesh-resolution dropdown on any pointer-down outside its group
+  useEffect(() => {
+    if (!meshMenu) return;
+    const onDown = (e: PointerEvent) => {
+      if (!meshGroupRef.current?.contains(e.target as Node)) setMeshMenu(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [meshMenu]);
 
   // scroll-wheel zoom — a native non-passive listener so preventDefault() works (React's onWheel is passive)
   useEffect(() => {
@@ -144,13 +163,59 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
       <svg ref={svgRef} className="lines3d" style={{ display: "none" }} />
       {title && <div className="view3dtitle">{title}</div>}
       <div className="view3dctl">
-        <Button
-          active={showMesh}
-          title="Overlay the hull's quad grid as a wireframe (works in Render, Zebra, and Sheet)"
-          onClick={() => setShowMesh((v) => !v)}
-        >
-          Mesh
-        </Button>
+        <div className="meshgroup" ref={meshGroupRef}>
+          <Button
+            active={showMesh}
+            title="Overlay the hull's quad grid as a wireframe (works in Render, Zebra, and Sheet)"
+            onClick={() => setShowMesh((v) => !v)}
+          >
+            Mesh
+          </Button>
+          <Button
+            className="meshcaret"
+            active={meshMenu}
+            title="Mesh resolution"
+            aria-label="Mesh resolution"
+            aria-expanded={meshMenu}
+            onClick={() => setMeshMenu((v) => !v)}
+          >
+            ▾
+          </Button>
+          {meshMenu && (
+            <div className="meshpanel">
+              <label
+                className="meshrow"
+                title="Number of longitudinal lines per half-section (girth resolution)"
+              >
+                <span className="meshname">num longitudinals</span>
+                <input
+                  type="range"
+                  min={4}
+                  max={128}
+                  step={4}
+                  value={meshM}
+                  onChange={(e) => setMeshM(+e.target.value)}
+                />
+                <span className="meshval">{meshM}</span>
+              </label>
+              <label
+                className="meshrow"
+                title="Number of sampled sections along the length (station resolution)"
+              >
+                <span className="meshname">num sections</span>
+                <input
+                  type="range"
+                  min={8}
+                  max={512}
+                  step={8}
+                  value={meshN}
+                  onChange={(e) => setMeshN(+e.target.value)}
+                />
+                <span className="meshval">{meshN}</span>
+              </label>
+            </div>
+          )}
+        </div>
         <div className="view3dmodes">
           {MODES.map((m) => (
             <Button

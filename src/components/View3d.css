@@ -20,6 +20,61 @@
   display: flex;
   gap: 0;
 }
+/* the Mesh toggle + its resolution-dropdown caret, joined into one split button; anchors the popover panel */
+.meshgroup {
+  position: relative;
+  display: flex;
+  gap: 0;
+}
+.meshgroup .btn:first-child {
+  border-radius: 8px 0 0 8px;
+}
+.meshgroup .btn.meshcaret {
+  border-radius: 0 8px 8px 0;
+  margin-left: -1px;
+  padding: 6px 7px;
+  line-height: 1;
+}
+.meshgroup .btn.active {
+  position: relative; /* lift the ink border above the neighbour's */
+  z-index: 1;
+}
+/* the mesh-resolution dropdown, anchored under the split button (opens leftward, panel's right edge aligned) */
+.meshpanel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(17, 24, 31, 0.16);
+}
+/* one labeled slider row inside the panel: name · slider · live value */
+.meshrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--mut);
+  white-space: nowrap;
+}
+.meshrow .meshname {
+  min-width: 96px;
+}
+.meshrow input[type="range"] {
+  width: 120px;
+}
+.meshrow .meshval {
+  min-width: 30px;
+  text-align: right;
+  font-weight: 600;
+  color: var(--ink);
+}
 /* optional label overlaid at the top-left of the canvas (e.g. "Blended Hull") */
 .view3dtitle {
   position: absolute;
