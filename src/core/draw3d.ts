@@ -14,6 +14,7 @@ import {
 import { ModelSelection, selStationIdx } from "./modelSelection";
 import { trimmedHullGrid } from "./step";
 import { ZMIN, ZMAX } from "./view";
+import { type StlState, transformStl } from "./stlImport";
 
 // the 3D view's mutually-exclusive display mode: "render" = shaded trimmed hull; "body" / "buttocks" /
 // "waterline" = the lines plan (SVG overlay) with that non-chine family; "zebra" = zebra-striped trimmed hull
@@ -63,7 +64,14 @@ let GL: WebGLRenderingContext | null = null,
   attr: Record<string, number> = {}, // vertex attribute locations (GLint)
   loc: Record<string, WebGLUniformLocation | null> = {}, // uniform locations
   posBuf: WebGLBuffer | null = null,
-  nrmBuf: WebGLBuffer | null = null;
+  nrmBuf: WebGLBuffer | null = null,
+  // imported-STL overlay buffers (static: rebuilt only when a new file / axis map / scale changes)
+  stlPosBuf: WebGLBuffer | null = null,
+  stlNrmBuf: WebGLBuffer | null = null,
+  stlLineBuf: WebGLBuffer | null = null;
+let stlTriVerts = 0, // vertex counts of the currently uploaded STL buffers
+  stlLineVerts = 0,
+  stlSig = ""; // cache key of the uploaded transform (geometry id + axis map + scale + design box)
 interface Mesh {
   pos: Float32Array;
   nrm: Float32Array;
@@ -91,8 +99,9 @@ void main(){
 const FRAG_SRC = `
 precision highp float;
 varying vec3 vN; varying vec3 vW; varying float vWZ;
-uniform vec3 uLight,uView,uBase; uniform float uStripes,uAlpha,uWaterZ,uPaint; uniform int uZebra;
+uniform vec3 uLight,uView,uBase; uniform float uStripes,uAlpha,uWaterZ,uPaint,uFlat; uniform int uZebra;
 void main(){
+  if(uFlat>0.5){ gl_FragColor=vec4(uBase,uAlpha); return; } // flat unshaded fill (STL wireframe edges)
   vec3 N=normalize(vN), V=normalize(uView);
   if(dot(N,V)<0.0) N=-N;                      // two-sided
   vec3 Lc=normalize(uLight);
@@ -169,9 +178,13 @@ function initGL(cv3d: HTMLCanvasElement): void {
     "uZebra",
     "uWaterZ",
     "uPaint",
+    "uFlat",
   ].forEach((n) => (loc[n] = gl.getUniformLocation(prog!, n)));
   posBuf = gl.createBuffer();
   nrmBuf = gl.createBuffer();
+  stlPosBuf = gl.createBuffer();
+  stlNrmBuf = gl.createBuffer();
+  stlLineBuf = gl.createBuffer();
   gl.enable(gl.DEPTH_TEST);
   gl.clearColor(0, 0, 0, 0);
 }
@@ -628,6 +641,67 @@ function computeBBox(pos: Float32Array): number[] | null {
   return [x0, y0, z0, x1, y1, z1];
 }
 
+// the world bounding box of the current hull mesh (for fitting an imported STL to the design space). Falls
+// back to the nominal hull box when no mesh has been built yet (e.g. the view is in a lines-plan mode).
+export function getHullBBox(): number[] {
+  return (meshBBox ?? NOMINAL).slice();
+}
+
+// draw the imported STL as a translucent overlay over the shaded hull: shaded surface and/or wireframe edges,
+// in a magenta clearly distinct from the blue hull. Depth-TESTED against the opaque hull (so hidden parts are
+// occluded) but not depth-WRITING (so the translucent surface reads evenly without self-occlusion artifacts).
+const STL_COLOR = [0.85, 0.24, 0.6]; // magenta — distinct from the blue hull and amber transom
+function drawStlOverlay(gl: WebGLRenderingContext, stl: StlState): void {
+  const s = stl.settings;
+  if (!s.visible || (!s.shaded && !s.wireframe)) return;
+  const sig = `${stl.geom.id}|${s.axisX}|${s.axisY}|${s.axisZ}|${s.scale}|${stl.designBox.join(",")}`;
+  if (sig !== stlSig || stlTriVerts === 0) {
+    const world = transformStl(stl);
+    gl.bindBuffer(gl.ARRAY_BUFFER, stlPosBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, world.pos, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, stlNrmBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, world.nrm, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, stlLineBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, world.lines, gl.STATIC_DRAW);
+    stlTriVerts = world.pos.length / 3;
+    stlLineVerts = world.lines.length / 3;
+    stlSig = sig;
+  }
+  // point aPos / aNormal at the given buffers (aNormal is fed a valid buffer even when unused, so the flat
+  // wireframe pass can reuse the line buffer for both attributes)
+  const bind = (posB: WebGLBuffer | null, nrmB: WebGLBuffer | null): void => {
+    gl.bindBuffer(gl.ARRAY_BUFFER, posB);
+    gl.enableVertexAttribArray(attr.aPos);
+    gl.vertexAttribPointer(attr.aPos, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, nrmB);
+    gl.enableVertexAttribArray(attr.aNormal);
+    gl.vertexAttribPointer(attr.aNormal, 3, gl.FLOAT, false, 0, 0);
+  };
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.depthMask(false);
+  gl.uniform3fv(loc.uBase, STL_COLOR);
+  gl.uniform1f(loc.uAlpha, s.opacity);
+  gl.uniform1f(loc.uPaint, 0.0);
+  gl.uniform1i(loc.uZebra, 0);
+  if (s.shaded) {
+    gl.uniform1f(loc.uFlat, 0.0);
+    bind(stlPosBuf, stlNrmBuf);
+    gl.drawArrays(gl.TRIANGLES, 0, stlTriVerts);
+  }
+  if (s.wireframe) {
+    gl.uniform1f(loc.uFlat, 1.0); // flat magenta edges, no lighting
+    bind(stlLineBuf, stlLineBuf);
+    gl.drawArrays(gl.LINES, 0, stlLineVerts);
+  }
+  // restore the opaque-pass GL state for the next frame
+  gl.uniform1f(loc.uFlat, 0.0);
+  gl.uniform1f(loc.uAlpha, 1.0);
+  gl.uniform1f(loc.uPaint, 1.0);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+}
+
 // project a world point to screen space (world units), boat-centered — mirrors the vertex shader so the
 // CPU can frame the camera to the mesh bounding box
 function screenXY(
@@ -1019,6 +1093,7 @@ export function draw3d(
   selection: ModelSelection,
   params: Draw3dParams,
   rebuild?: boolean,
+  stl?: StlState | null,
 ): void {
   // lines-plan style: draw the SVG overlay and skip the WebGL surface entirely
   if (LINES_MODES.includes(params.view3dMode) && lines) {
@@ -1094,6 +1169,7 @@ export function draw3d(
   gl.uniform1f(loc.uRakeC, Math.cos(model.deckRake)); // deck rake floats the hull at its trim
   gl.uniform1f(loc.uRakeS, Math.sin(model.deckRake));
   gl.uniform1f(loc.uAlpha, 1.0);
+  gl.uniform1f(loc.uFlat, 0.0); // shaded (never flat) for the hull passes; the STL overlay toggles it
   const view = V.norm([-c2 * s1, -c2 * c1, s2]); // surface→eye direction (orthographic)
   gl.uniform3fv(loc.uView, view);
   // key light at the lower-left of the screen, off the view axis so 3/4 views read as form rather than flat
@@ -1142,4 +1218,7 @@ export function draw3d(
     gl.uniform1f(loc.uPaint, 0.0); // guide ribbon keeps its amber above and below the waterline
     drawMesh(gl, buildLongitudinalMesh(model, li, view), [0.96, 0.62, 0.04]); // matches the 2D link-marker amber
   }
+
+  // imported reference STL, translucent, over everything (GL modes only — the lines-plan modes returned early)
+  if (stl) drawStlOverlay(gl, stl);
 }

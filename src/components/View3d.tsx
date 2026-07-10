@@ -9,6 +9,7 @@ import {
 } from "../core/draw3d";
 import type { Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
+import type { StlState } from "../core/stlImport";
 import { clamp } from "../core/math";
 import { Button } from "./Button";
 import "./View3d.css";
@@ -38,10 +39,17 @@ interface View3dProps {
   model: Model;
   modelVersion: number;
   selection: ModelSelection;
+  stl?: StlState | null; // optional imported reference mesh, drawn translucent over the hull
   title?: string; // optional label overlaid top-left of the canvas (e.g. "Blended Hull")
 }
 
-export function View3d({ model, modelVersion, selection, title }: View3dProps) {
+export function View3d({
+  model,
+  modelVersion,
+  selection,
+  stl,
+  title,
+}: View3dProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const svgRef = useRef<SVGSVGElement>(null); // the lines-plan overlay, owned by this instance (no global id lookup)
   const paramsRef = useRef<Draw3dParams>(createDraw3dParams());
@@ -56,11 +64,15 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
   const [meshMenu, setMeshMenu] = useState(false); // the mesh-resolution dropdown open state
   const meshGroupRef = useRef<HTMLDivElement>(null); // wraps the Mesh button + dropdown, for outside-click close
 
-  // latest selection for the ref-reading redraws (rotate / zoom / resize) so they need not re-subscribe
+  // latest selection / STL for the ref-reading redraws (rotate / zoom / resize) so they need not re-subscribe
   const selRef = useRef(selection);
   useEffect(() => {
     selRef.current = selection;
   }, [selection]);
+  const stlRef = useRef(stl);
+  useEffect(() => {
+    stlRef.current = stl;
+  }, [stl]);
 
   // redraw the GL only (no mesh rebuild) — for rotation, zoom, and resize
   const redrawGL = useCallback(() => {
@@ -73,11 +85,12 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
         selRef.current,
         paramsRef.current,
         false,
+        stlRef.current,
       );
   }, [model]);
 
-  // rebuild + redraw whenever the model, the selection, the display mode, the Mesh overlay, or the mesh
-  // resolution (M/N) changes
+  // rebuild + redraw whenever the model, the selection, the display mode, the Mesh overlay, the mesh
+  // resolution (M/N), or the STL changes
   useEffect(() => {
     paramsRef.current.view3dMode = mode;
     paramsRef.current.showMesh = showMesh;
@@ -86,8 +99,26 @@ export function View3d({ model, modelVersion, selection, title }: View3dProps) {
     paramsRef.current.meshN = meshN;
     const cv = canvasRef.current;
     if (cv)
-      draw3d(cv, svgRef.current, model, selection, paramsRef.current, true);
-  }, [model, modelVersion, selection, mode, showMesh, meshQuads, meshM, meshN]);
+      draw3d(
+        cv,
+        svgRef.current,
+        model,
+        selection,
+        paramsRef.current,
+        true,
+        stl,
+      );
+  }, [
+    model,
+    modelVersion,
+    selection,
+    mode,
+    showMesh,
+    meshQuads,
+    meshM,
+    meshN,
+    stl,
+  ]);
 
   // close the mesh-resolution dropdown on any pointer-down outside its group
   useEffect(() => {

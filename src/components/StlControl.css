@@ -1,0 +1,105 @@
+/* The appbar STL import control (src/components/StlControl): the import button / show-toggle split button and
+   its settings dropdown. */
+.stlctl {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* split button: the "Show STL" toggle joined to the ▾ dropdown caret (same seam styling as the View3d modes) */
+.stlsplit {
+  display: flex;
+}
+.stlsplit .btn.stltoggle {
+  border-radius: 8px 0 0 8px;
+}
+.stlsplit .btn.stlcaret {
+  border-radius: 0 8px 8px 0;
+  margin-left: -1px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.stlsplit .btn.active {
+  position: relative;
+  z-index: 1;
+}
+
+/* the settings dropdown, anchored under the split button, right-aligned so it never overflows the window */
+.stlpanel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  width: 232px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: default;
+}
+.stlrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.stlrow-head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+  margin-bottom: -2px;
+}
+.stlrow > span:first-child {
+  color: var(--mut);
+}
+.stlrow select,
+.stlrow input[type="number"] {
+  font: inherit;
+  font-size: 13px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+}
+.stlrow select {
+  width: 84px;
+}
+.stlrow input[type="number"] {
+  width: 84px;
+}
+.stlrow input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.stlnum {
+  min-width: 34px;
+  text-align: right;
+  color: var(--mut);
+  font-variant-numeric: tabular-nums;
+}
+.stlrow-checks {
+  justify-content: flex-start;
+  gap: 18px;
+  padding-top: 2px;
+}
+.stlrow-checks label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.stlrow-foot {
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  margin-top: 2px;
+}

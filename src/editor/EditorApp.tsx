@@ -18,6 +18,13 @@ import {
   type Section,
 } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
+import {
+  defaultStlSettings,
+  parseStl,
+  type StlSettings,
+  type StlState,
+} from "../core/stlImport";
+import { getHullBBox } from "../core/draw3d";
 import { buildJson } from "../core/json";
 import { clamp } from "../core/math";
 import { getDrag, setDrag } from "../core/drag";
@@ -46,6 +53,7 @@ import { ProfileView } from "./ProfileView";
 import { useSvgViewSync } from "./svgViewSync";
 import { SidePanel } from "./SidePanel";
 import { CutStationView } from "./CutStationView";
+import { StlControl } from "../components/StlControl";
 import { Area, AreaGroup, AreaSeparator } from "polymorph-ui";
 import "./EditorApp.css";
 
@@ -78,6 +86,30 @@ export function EditorApp() {
   const [name, setName] = useState("");
   const [save, setSave] = useState<SaveView>(INITIAL_SAVE);
   const [saving, setSaving] = useState(false);
+
+  // imported reference STL — session only, never saved. Drawn translucent over the hull in the 3D view.
+  const [stl, setStl] = useState<StlState | null>(null);
+  const onImportStl = useCallback(async (file: File) => {
+    try {
+      const geom = parseStl(await file.arrayBuffer());
+      const designBox = getHullBBox(); // freeze the current hull bounds; the fit scale is relative to them
+      setStl({
+        geom,
+        designBox,
+        settings: defaultStlSettings(geom, designBox),
+      });
+    } catch (e) {
+      alert(
+        "Couldn't import STL: " + (e instanceof Error ? e.message : String(e)),
+      );
+    }
+  }, []);
+  const onChangeStl = useCallback(
+    (patch: Partial<StlSettings>) =>
+      setStl((s) => (s ? { ...s, settings: { ...s.settings, ...patch } } : s)),
+    [],
+  );
+  const onRemoveStl = useCallback(() => setStl(null), []);
 
   // The design identity (which row is open, its saved name, the last-saved JSON) and a few values the
   // window-level listeners / the poll read at their latest — kept in refs so those one-time effects and async
@@ -342,6 +374,13 @@ export function EditorApp() {
           onRevert={onRevert}
           onClose={onClose}
         />
+        <span className="tabsep" />
+        <StlControl
+          stl={stl}
+          onImport={(f) => void onImportStl(f)}
+          onChange={onChangeStl}
+          onRemove={onRemoveStl}
+        />
       </div>
       <div className="main">
         {booted && (
@@ -416,6 +455,7 @@ export function EditorApp() {
                     model={model}
                     modelVersion={modelVersion}
                     selection={selection}
+                    stl={stl}
                   />
                 </Area>
                 <AreaSeparator className="areasep" />
