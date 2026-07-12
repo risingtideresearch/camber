@@ -50,6 +50,7 @@ export function PlanView({
     if (tool === "add") {
       const idx = addSheerPoint(model, invX(vx), invY(vy));
       setTool("select");
+      if (idx < 0) return; // no room at the minimum station spacing — nothing was inserted
       onSelect({ tgt: "plan", idx });
       bumpModel();
     } else {

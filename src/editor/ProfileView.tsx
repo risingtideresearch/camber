@@ -49,6 +49,7 @@ export function ProfileView({
     if (tool === "add") {
       const idx = addTrimPoint(model, invX(vx), invZp(vy));
       setTool("select");
+      if (idx < 0) return; // no room at the minimum point spacing — nothing was inserted
       onSelect({ tgt: "trim", idx });
       bumpModel();
     } else {
