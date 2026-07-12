@@ -199,49 +199,62 @@ export function InterpolateApp() {
     [model],
   );
 
+  // overlapping loads (a file dropped while the boot ?ids= fetch is in flight) are serialized through this
+  // chain, so each load snapshots hullsRef.current only after the previous one has finished — the last
+  // finishLoad no longer silently discards the other's hulls
+  const loadChainRef = useRef<Promise<void>>(Promise.resolve());
+  const enqueueLoad = useCallback((work: () => Promise<void>) => {
+    loadChainRef.current = loadChainRef.current.then(work);
+    return loadChainRef.current;
+  }, []);
+
   const loadFiles = useCallback(
-    async (files: FileList | File[]) => {
-      const errs: string[] = [];
-      const next = [...hullsRef.current];
-      for (const f of Array.from(files)) {
-        try {
-          addParsedDoc(
-            parseDocument(model, await f.text()),
-            f.name.replace(/\.json$/i, "") || "hull",
-            next,
-            famLengthRef,
-            errs,
-          );
-        } catch (e) {
-          errs.push(`${f.name}: ${msg(e)}`);
+    (files: FileList | File[]) => {
+      const list = Array.from(files); // snapshot now — a DataTransfer list may be gone by the time we run
+      return enqueueLoad(async () => {
+        const errs: string[] = [];
+        const next = [...hullsRef.current];
+        for (const f of list) {
+          try {
+            addParsedDoc(
+              parseDocument(model, await f.text()),
+              f.name.replace(/\.json$/i, "") || "hull",
+              next,
+              famLengthRef,
+              errs,
+            );
+          } catch (e) {
+            errs.push(`${f.name}: ${msg(e)}`);
+          }
         }
-      }
-      finishLoad(next, errs, "Some files could not be loaded");
+        finishLoad(next, errs, "Some files could not be loaded");
+      });
     },
-    [model, finishLoad],
+    [model, finishLoad, enqueueLoad],
   );
 
   const loadByIds = useCallback(
-    async (ids: string[]) => {
-      const errs: string[] = [];
-      const next = [...hullsRef.current];
-      for (const id of ids) {
-        try {
-          const { name: nm, documentText } = await getDesign(id);
-          addParsedDoc(
-            parseDocument(model, documentText),
-            nm,
-            next,
-            famLengthRef,
-            errs,
-          );
-        } catch (e) {
-          errs.push(`${id}: ${msg(e)}`);
+    (ids: string[]) =>
+      enqueueLoad(async () => {
+        const errs: string[] = [];
+        const next = [...hullsRef.current];
+        for (const id of ids) {
+          try {
+            const { name: nm, documentText } = await getDesign(id);
+            addParsedDoc(
+              parseDocument(model, documentText),
+              nm,
+              next,
+              famLengthRef,
+              errs,
+            );
+          } catch (e) {
+            errs.push(`${id}: ${msg(e)}`);
+          }
         }
-      }
-      finishLoad(next, errs, "Some designs could not be loaded");
-    },
-    [model, finishLoad],
+        finishLoad(next, errs, "Some designs could not be loaded");
+      }),
+    [model, finishLoad, enqueueLoad],
   );
 
   // ---------- boot: drag-and-drop onto the page, and the ?ids= library selection ----------

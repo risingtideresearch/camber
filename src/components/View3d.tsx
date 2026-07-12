@@ -186,6 +186,7 @@ export function View3d({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
       />
       <svg ref={svgRef} className="lines3d" style={{ display: "none" }} />
       {title && <div className="view3dtitle">{title}</div>}

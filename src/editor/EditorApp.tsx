@@ -171,9 +171,11 @@ export function EditorApp() {
     const onUp = () => setDrag(null); // selection persists after a drag, so the point stays editable
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
     return () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
   }, [model, bumpModel]);
 
@@ -213,6 +215,7 @@ export function EditorApp() {
           setName(nm);
           nameRef.current = nm;
         } catch (e) {
+          if (cancelled) return; // a cleaned-up run must not clobber a newer run's load
           console.error("open design failed:", e);
           alert(
             "Couldn't open that design: " +

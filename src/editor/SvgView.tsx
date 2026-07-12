@@ -237,18 +237,20 @@ export function SvgView({
     const up = (ev: PointerEvent) => {
       svg.removeEventListener("pointermove", move);
       svg.removeEventListener("pointerup", up);
+      svg.removeEventListener("pointercancel", up);
       try {
         svg.releasePointerCapture(e.pointerId);
       } catch {
         /* pointer already released */
       }
-      if (!moved) {
+      if (!moved && ev.type !== "pointercancel") {
         const [cx, cy] = svgPoint(g, ev.clientX, ev.clientY);
         clickRef.current?.(cx, cy);
       }
     };
     svg.addEventListener("pointermove", move);
     svg.addEventListener("pointerup", up);
+    svg.addEventListener("pointercancel", up);
   };
 
   return (
