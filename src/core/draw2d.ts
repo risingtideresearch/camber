@@ -202,9 +202,15 @@ export function stationLine(
 
 export type Proj = (p: Vec3) => [number, number];
 
-// the swept station at x0 projected into a 2D view → its true heading/rake (not a plain vertical cut)
-export function cutTrace(model: Model, svg: SVGGElement, proj: Proj): void {
-  const cut = clippedSection(model, model.x0, 40);
+// the swept station at x0 projected into a 2D view → its true heading/rake (not a plain vertical cut).
+// A caller that already has the clipped section at x0 (40 samples) can pass it in to avoid recomputing.
+export function cutTrace(
+  model: Model,
+  svg: SVGGElement,
+  proj: Proj,
+  section?: Section,
+): void {
+  const cut = section ?? clippedSection(model, model.x0, 40);
   svg.append(
     el("path", {
       d: poly(cut.pts.map(proj)),
@@ -639,6 +645,8 @@ export function drawProfile(
       }),
     );
   }
+  // the cut station's clipped section, computed once and shared by the comb, the trace, and the keel dot
+  const cut = clippedSection(model, model.x0, 40);
   // curvature combs: the sheer-trim curve and the keel / centerline outline (both fore-aft, so the
   // longitudinal hair count), and the live cut station's profile trace (transverse, so the section count).
   if (curv?.on) {
@@ -665,7 +673,6 @@ export function drawProfile(
       );
     }
     if (curv.profCut) {
-      const cut = clippedSection(model, model.x0, 40);
       const pts = cut.pts.map((p): [number, number] => [
         mapX(p[0]),
         zScreenP(p[2]),
@@ -678,13 +685,14 @@ export function drawProfile(
     }
   }
   // cut station — true profile rake (the fan shifts x as the section runs inboard to the keel)
-  cutTrace(model, svg, (p) => [mapX(p[0]), zScreenP(p[2])]);
-  const h = clippedSection(model, model.x0, 18);
-  if (h.keel)
+  cutTrace(model, svg, (p) => [mapX(p[0]), zScreenP(p[2])], cut);
+  // keel dot at the section's deepest point — the keel flag and the last point (u = ub, y snapped to 0)
+  // come from fixed-resolution scans in sweptSection, so they are sample-count independent
+  if (cut.keel)
     fixed(
       svg,
-      mapX(h.pts[h.pts.length - 1][0]),
-      zScreenP(h.pts[h.pts.length - 1][2]),
+      mapX(cut.pts[cut.pts.length - 1][0]),
+      zScreenP(cut.pts[cut.pts.length - 1][2]),
       (g) =>
         g.append(
           el("circle", {

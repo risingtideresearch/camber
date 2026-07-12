@@ -73,7 +73,12 @@ export function View3d({
   const [meshN, setMeshN] = useState(MESH_N_DEFAULT); // sections along the length (station res.)
   const [meshMenu, setMeshMenu] = useState(false); // the mesh-resolution dropdown open state
 
-  // latest selection / STL for the ref-reading redraws (rotate / zoom / resize) so they need not re-subscribe
+  // latest model / selection / STL for the ref-reading redraws (rotate / zoom / resize / selection) so they
+  // need not re-subscribe
+  const modelRef = useRef(model);
+  useEffect(() => {
+    modelRef.current = model;
+  }, [model]);
   const selRef = useRef(selection);
   useEffect(() => {
     selRef.current = selection;
@@ -98,8 +103,8 @@ export function View3d({
       );
   }, [model]);
 
-  // rebuild + redraw whenever the model, the selection, the display mode, the Mesh overlay, the mesh
-  // resolution (M/N), or the STL changes
+  // rebuild + redraw whenever the model, the display mode, the Mesh overlay, the mesh resolution (M/N),
+  // the curvature overlay, or the STL changes — everything the cached hull tessellation depends on
   useEffect(() => {
     const p = paramsRef.current;
     p.view3dMode = mode;
@@ -109,11 +114,10 @@ export function View3d({
     p.meshN = meshN;
     p.curvature = curvature;
     const cv = canvasRef.current;
-    if (cv) draw3d(cv, svgRef.current, model, selection, p, true, stl);
+    if (cv) draw3d(cv, svgRef.current, model, selRef.current, p, true, stl);
   }, [
     model,
     modelVersion,
-    selection,
     mode,
     showMesh,
     meshQuads,
@@ -122,6 +126,22 @@ export function View3d({
     stl,
     curvature,
   ]);
+
+  // a selection change only moves the amber guide overlay, which is re-derived on every draw — redraw the
+  // cached mesh (rebuild=false) instead of re-tessellating the hull
+  useEffect(() => {
+    const cv = canvasRef.current;
+    if (cv)
+      draw3d(
+        cv,
+        svgRef.current,
+        modelRef.current,
+        selection,
+        paramsRef.current,
+        false,
+        stlRef.current,
+      );
+  }, [selection]);
 
   // scroll-wheel zoom — a native non-passive listener so preventDefault() works (React's onWheel is passive)
   useEffect(() => {

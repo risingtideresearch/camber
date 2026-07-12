@@ -199,6 +199,11 @@ function initGL(cv3d: HTMLCanvasElement): void {
   stlPosBuf = gl.createBuffer();
   stlNrmBuf = gl.createBuffer();
   stlLineBuf = gl.createBuffer();
+  // the freshly created STL buffers are empty: void the upload cache so the overlay re-uploads into them
+  // (on a re-init the old signature would otherwise match and the draw would read the dead context's data)
+  stlSig = "";
+  stlTriVerts = 0;
+  stlLineVerts = 0;
   gl.enable(gl.DEPTH_TEST);
   gl.clearColor(0, 0, 0, 0);
 }
@@ -1090,6 +1095,13 @@ function drawLines(
         if (j + 1 === M || crease.has(j + 1)) bold.push([B, C]); // keel / chine longitudinal
         if (i === 0) bold.push([A, B]); // transom trim line — bold in every mode (it is a hull edge)
 
+        // the facet's worldZ corner field — shared by the waterline family and the DWL crossing below
+        const dc = [
+          { p: A, f: worldZ(model, wA[0], wA[2]) },
+          { p: B, f: worldZ(model, wB[0], wB[2]) },
+          { p: C, f: worldZ(model, wC[0], wC[2]) },
+          { p: D, f: worldZ(model, wD[0], wD[2]) },
+        ];
         // the mode's non-chine family
         const fam: [ProjPt, ProjPt][] = [];
         if (params.view3dMode === "body") {
@@ -1107,24 +1119,12 @@ function drawLines(
             if (s) fam.push(s);
           }
         } else {
-          const corn = [
-            { p: A, f: worldZ(model, wA[0], wA[2]) },
-            { p: B, f: worldZ(model, wB[0], wB[2]) },
-            { p: C, f: worldZ(model, wC[0], wC[2]) },
-            { p: D, f: worldZ(model, wD[0], wD[2]) },
-          ];
           for (const lv of wlLevels) {
-            const s = march(corn, lv);
+            const s = march(dc, lv);
             if (s) fam.push(s);
           }
         }
         // design waterline (blue, all modes): worldZ crosses −waterline
-        const dc = [
-          { p: A, f: worldZ(model, wA[0], wA[2]) },
-          { p: B, f: worldZ(model, wB[0], wB[2]) },
-          { p: C, f: worldZ(model, wC[0], wC[2]) },
-          { p: D, f: worldZ(model, wD[0], wD[2]) },
-        ];
         const dwl = march(dc, -model.waterline);
         quads.push({
           poly: [A, B, C, D],
@@ -1323,7 +1323,11 @@ export function draw3d(
     return;
   }
   if (lines) lines.style.display = "none";
-  if (!GL) initGL(cv3d);
+  // (re-)initialize when first called, when the caller's canvas is not the one the context is bound to (the
+  // 3D view unmounted and remounted with a fresh canvas — drawing to the detached old one leaves the new one
+  // blank), or when the context was lost. initGL recreates the program / uniform locations / buffers on the
+  // new context; the cached meshes are CPU-side arrays re-uploaded every drawMesh, so they stay valid.
+  if (!GL || GL.canvas !== cv3d || GL.isContextLost()) initGL(cv3d);
   const trimmed = params.view3dMode !== "sheet";
   if (rebuild !== false || !meshHull) {
     const built = buildHullMesh(
@@ -1430,7 +1434,11 @@ export function draw3d(
   } // transom always solid
   if (meshWire) {
     gl.disable(gl.POLYGON_OFFSET_FILL);
+    // flat, unlit wire colour: the wire meshes (quad-grid and raw-triangle alike) carry all-zero normals,
+    // which the lit path would normalize — undefined behaviour in GLSL (the near-black came from GPU luck)
+    gl.uniform1i(loc.uFlat, 1);
     drawMesh(gl, meshWire, WIRE_RGB, gl.LINES);
+    gl.uniform1i(loc.uFlat, 0); // restore lit shading for the guide / overlay passes below
   }
 
   // selected station point → draw its longitudinal (swept locus along x) on top of the hull, in amber
