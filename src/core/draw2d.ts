@@ -462,18 +462,7 @@ export function drawPlan(
   }
   // cut station — true plan heading (the fan angle)
   cutTrace(model, svg, (p) => [mapX(p[0]), yPlan(p[1])]);
-  fixed(svg, mapX(model.x0), yPlan(model.sheer.yf(model.x0)), (g) =>
-    g.append(
-      el("circle", {
-        cx: 0,
-        cy: 0,
-        r: 3.2,
-        fill: "#fff",
-        stroke: COL.sheer,
-        "stroke-width": 1.5,
-      }),
-    ),
-  );
+  ringDot(svg, mapX(model.x0), yPlan(model.sheer.yf(model.x0)), COL.sheer);
   model.sheer.cp.forEach((cp, idx) =>
     cpDot(selection, svg, idx, mapX(cp.x), yPlan(cp.y), onSelect),
   );
@@ -689,34 +678,13 @@ export function drawProfile(
   // keel dot at the section's deepest point — the keel flag and the last point (u = ub, y snapped to 0)
   // come from fixed-resolution scans in sweptSection, so they are sample-count independent
   if (cut.keel)
-    fixed(
+    ringDot(
       svg,
       mapX(cut.pts[cut.pts.length - 1][0]),
       zScreenP(cut.pts[cut.pts.length - 1][2]),
-      (g) =>
-        g.append(
-          el("circle", {
-            cx: 0,
-            cy: 0,
-            r: 3.2,
-            fill: "#fff",
-            stroke: COL.keel,
-            "stroke-width": 1.5,
-          }),
-        ),
+      COL.keel,
     );
-  fixed(svg, mapX(model.x0), zScreenP(model.sheer.zf(model.x0)), (g) =>
-    g.append(
-      el("circle", {
-        cx: 0,
-        cy: 0,
-        r: 3.2,
-        fill: "#fff",
-        stroke: COL.sheer,
-        "stroke-width": 1.5,
-      }),
-    ),
-  );
+  ringDot(svg, mapX(model.x0), zScreenP(model.sheer.zf(model.x0)), COL.sheer);
   model.sheer.trim.forEach((cp, idx) =>
     trimDot(selection, svg, idx, mapX(cp.x), zScreenP(cp.z), cp.k, onSelect),
   );
@@ -762,20 +730,9 @@ export function stnCurve(
   return out; // the sampled content-space polyline, so a caller can build a curvature comb on it
 }
 
-export function drawStation(
-  model: Model,
-  selection: ModelSelection,
-  svg: SVGGElement,
-  ti: number,
-  onSelect: OnModelSelect,
-  sc: [number, number],
-  curv?: CurvatureSettings,
-): void {
-  setMarkerScale(sc[0], sc[1]);
-  svg.replaceChildren();
-  const col = tplColor(ti),
-    arr = model.templates[ti];
-  // axes: sheer point at origin (top-left), n inboard →, d down ↓
+// axes shared by the template editor and the cut station: sheer point at origin (top-left),
+// n inboard →, d down ↓, the "sheer" label at the origin
+function stnAxes(svg: SVGGElement): void {
   svg.append(
     el("line", {
       x1: snX(NMIN),
@@ -803,6 +760,22 @@ export function drawStation(
     { "font-size": 10, fill: COL.mut || "#718096" },
     "sheer",
   );
+}
+
+export function drawStation(
+  model: Model,
+  selection: ModelSelection,
+  svg: SVGGElement,
+  ti: number,
+  onSelect: OnModelSelect,
+  sc: [number, number],
+  curv?: CurvatureSettings,
+): void {
+  setMarkerScale(sc[0], sc[1]);
+  svg.replaceChildren();
+  const col = tplColor(ti),
+    arr = model.templates[ti];
+  stnAxes(svg);
   // faint ghosts of every other template, then this one solid
   const ghosts: { j: number; pts: [number, number][] }[] = [];
   model.templates.forEach((tpl, j) => {
@@ -1002,33 +975,7 @@ export function drawCutStation(
 ): void {
   setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
-  svg.append(
-    el("line", {
-      x1: snX(NMIN),
-      y1: snY(0),
-      x2: snX(NMAX),
-      y2: snY(0),
-      stroke: "#edf2f7",
-      "stroke-width": 1,
-    }),
-  );
-  svg.append(
-    el("line", {
-      x1: snX(0),
-      y1: snY(0),
-      x2: snX(0),
-      y2: snY(DMAX),
-      stroke: "#e2e8f0",
-      "stroke-width": 1.2,
-    }),
-  );
-  fixedText(
-    svg,
-    snX(0) + 6,
-    snY(0) - 6,
-    { "font-size": 10, fill: "#718096" },
-    "sheer",
-  );
+  stnAxes(svg);
 
   const st = stationAt(model, model.x0, true), // the keel-knuckle symmetric section — matches the trimmed hull
     fr = frameAt(model, model.x0);
@@ -1175,18 +1122,7 @@ export function drawCutStation(
       "sheer trim",
     );
     if (!empty)
-      fixed(svg, snX(st.n(umin)), snY(st.d(umin)), (g) =>
-        g.append(
-          el("circle", {
-            cx: 0,
-            cy: 0,
-            r: 4,
-            fill: "#fff",
-            stroke: COL.sheer,
-            "stroke-width": 1.6,
-          }),
-        ),
-      );
+      ringDot(svg, snX(st.n(umin)), snY(st.d(umin)), COL.sheer, 4, 1.6);
   }
   // centerline trim (vertical at n=ncl) + the keel point where the section closes
   const nclC = Math.max(NMIN, Math.min(ncl, NMAX));
@@ -1249,6 +1185,30 @@ export function drawCutStation(
     });
     linkDot(svg, snX(bn), snY(bd), COL.station);
   }
+}
+
+// a fixed-size white dot with a colored ring: the non-draggable "computed point" markers (the cut-x
+// sheer / keel dots and the cut station's sheer-trim start point)
+function ringDot(
+  svg: SVGGElement,
+  sx: number,
+  sy: number,
+  stroke: string,
+  r = 3.2,
+  sw = 1.5,
+): void {
+  fixed(svg, sx, sy, (g) =>
+    g.append(
+      el("circle", {
+        cx: 0,
+        cy: 0,
+        r,
+        fill: "#fff",
+        stroke,
+        "stroke-width": sw,
+      }),
+    ),
+  );
 }
 
 // a small red ✕ marking the spot that corresponds (same index) to the selected point — drawn on the other

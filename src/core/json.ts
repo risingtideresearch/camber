@@ -17,6 +17,8 @@ import {
   type Model,
   L,
   buildWeightSampler,
+  linearPath,
+  normSimplex,
   type SheerCP,
   type TrimCP,
   type TransomCP,
@@ -87,7 +89,7 @@ const encTrim = (trim: TrimCP[]): TrimPoint[] =>
     depth: -p.z,
     k: p.k,
   }));
-const encSection = (pts: StationCP[]): SectionPoint[] =>
+export const encSection = (pts: StationCP[]): SectionPoint[] =>
   pts.map((p, i) => ({ dd: i === 0 ? 0 : p.d - pts[i - 1].d, n: p.n, k: p.k }));
 function encTransom(t: TransomCP[]): Transom {
   const [top, bot] = t; // [0] = top edge (near sheer), [1] = bottom edge (near keel)
@@ -125,13 +127,7 @@ function decWeights(pts: WeightPoint[]): WeightCP[] {
   let x = 0;
   return pts.map((p, i) => {
     x = i === 0 ? p.dx : x + p.dx;
-    let s = 0;
-    const w = p.w.map((v) => {
-      const c = v > 0 ? v : 0;
-      s += c;
-      return c;
-    });
-    return { x, w: s > 0 ? w.map((v) => v / s) : w.map(() => 1 / w.length) };
+    return { x, w: normSimplex(p.w) };
   });
 }
 function decTransom(t: Transom): TransomCP[] {
@@ -209,26 +205,6 @@ function weightVec(v: unknown, ctx: string, k: number): number[] {
     );
   return v.map((x, i) => num(x, `${ctx}[${i}]`));
 }
-// project a weight vector onto the simplex (clamp float noise away, renormalize to Σ = 1)
-function normW(w: number[]): number[] {
-  let s = 0;
-  const c = w.map((v) => {
-    const x = v > 0 ? v : 0;
-    s += x;
-    return x;
-  });
-  return s > 0 ? c.map((v) => v / s) : c.map(() => 1 / c.length);
-}
-// the default straight blend path: full weight on template 0 at the stern, handing off to the last
-// template at the bow — the multi-template analog of the old linear x/L tween (an edge of the simplex)
-function linearPath(k: number, length: number): WeightCP[] {
-  const e = (j: number) =>
-    Array.from({ length: k }, (_, i) => (i === j ? 1 : 0));
-  return [
-    { x: 0, w: e(0) },
-    { x: length, w: e(k - 1) },
-  ];
-}
 
 // decode one hull — a flat document, or one entry of a legacy `variants` array — to absolute model
 // coordinates. Control-point counts are taken from the arrays themselves; `docLength` only places the
@@ -300,7 +276,7 @@ function decodeVariant(
   // blend weights: unified (already on each station) or MIGRATE a legacy document — a separate `weights`
   // path, or none (→ the default linear handoff) — by sampling that path at each station's x.
   if (cp.every((p) => p.w.length === nTpl)) {
-    cp.forEach((p) => (p.w = normW(p.w)));
+    cp.forEach((p) => (p.w = normSimplex(p.w)));
   } else {
     const oldW =
       "weights" in v && Array.isArray(v.weights)

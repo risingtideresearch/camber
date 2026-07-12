@@ -88,9 +88,8 @@
 //   Past the end of θ the coordinate source returns 0 (the backbone value), so a short or empty θ
 //   simply yields the canonical hull — which is exactly how `meanDoc()` works.
 
-import { type Model, L, NMIN, NMAX, DMAX } from "./model";
-import { YMAX, ZTRIMMIN } from "./view";
-import { loadJsonText } from "./json";
+import { type Model, L, NMIN, NMAX, DMAX, YMAX, ZTRIMMIN } from "./model";
+import { encSection, loadJsonText } from "./json";
 
 const clamp = (v: number, lo: number, hi: number): number =>
   v < lo ? lo : v > hi ? hi : v;
@@ -184,10 +183,6 @@ function buildSection(
   }
   return pts;
 }
-
-// encode an absolute (n,d,k) template into the on-disk increment form (dd = step in depth)
-const encSection = (pts: { n: number; d: number; k: number }[]) =>
-  pts.map((p, i) => ({ dd: i === 0 ? 0 : p.d - pts[i - 1].d, n: p.n, k: p.k }));
 
 // A source of θ-coordinates, consumed in decode order. `() => 0` gives the canonical hull (θ = 0);
 // `() => adventure·randn()` samples around it. The sequence of next() calls IS the traversal of θ.

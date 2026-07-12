@@ -7,17 +7,10 @@
 
 import { type Model, prepare } from "./model";
 import { trimmedHullGrid } from "./step";
-import { type Vec3 } from "./math";
-
-const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const cross = (a: Vec3, b: Vec3): Vec3 => [
-  a[1] * b[2] - a[2] * b[1],
-  a[2] * b[0] - a[0] * b[2],
-  a[0] * b[1] - a[1] * b[0],
-];
+import { mirrorRow, V, type Vec3 } from "./math";
 
 function facet(a: Vec3, b: Vec3, c: Vec3): string {
-  const n = cross(sub(b, a), sub(c, a));
+  const n = V.cross(V.sub(b, a), V.sub(c, a));
   const len = Math.hypot(n[0], n[1], n[2]) || 1;
   const f = (v: number): string => v.toFixed(4);
   return (
@@ -39,12 +32,7 @@ export function buildStl(model: Model, name = "camber"): string {
   if (half.length < 4) throw new Error("hull has too few sections to export");
   // full-width grid: starboard sheer→keel (cols 0..M), then port keel→sheer as the y-mirror, dropping the
   // duplicate keel point — so the keel is one interior column rather than a mirrored seam.
-  const grid: Vec3[][] = half.map((row) => {
-    const full = row.slice();
-    for (let j = M - 1; j >= 0; j--)
-      full.push([row[j][0], -row[j][1], row[j][2]]);
-    return full;
-  });
+  const grid: Vec3[][] = half.map(mirrorRow);
   const NS = grid.length - 1,
     COLS = grid[0].length;
 

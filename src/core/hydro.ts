@@ -11,7 +11,7 @@
 // waterline is a clean horizontal cut in every section; at a small rake it is the usual station-plane
 // approximation (exact in the limit).
 
-import { lerp, type Vec3 } from "./math";
+import { lerp, V, type Vec3 } from "./math";
 import {
   type Model,
   L,
@@ -94,8 +94,8 @@ function stripOf(
     }
     if (ia <= 0 && ib <= 0) continue; // dry segment
     // clip the segment to its submerged part (immersion ≥ 0)
-    if (ia < 0) a = lerp3(a, b, -ia / (ib - ia));
-    else if (ib < 0) b = lerp3(a, b, ia / (ia - ib));
+    if (ia < 0) a = V.lerp(a, b, -ia / (ib - ia));
+    else if (ib < 0) b = V.lerp(a, b, ia / (ia - ib));
     const dz = Math.abs(a[2] - b[2]),
       ya = a[1],
       yb = b[1];
@@ -111,11 +111,6 @@ function stripOf(
     zMom: 2 * zMomH,
   };
 }
-const lerp3 = (a: Vec3, b: Vec3, t: number): Vec3 => [
-  lerp(a[0], b[0], t),
-  lerp(a[1], b[1], t),
-  lerp(a[2], b[2], t),
-];
 
 // deadrise (deg) of a section near the keel: least-squares slope of (half-breadth, depth) over the lowest
 // ~7% of the model depth, as an angle from horizontal

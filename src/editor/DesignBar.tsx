@@ -8,7 +8,6 @@ import "./DesignBar.css";
 // new row); the label + status text come from EditorApp's save state (refreshed by the dirty poll).
 interface DesignBarProps {
   name: string;
-  dirty: boolean; // amber edge on the name field while there are unsaved edits
   saveKind: "" | "dirty" | "saved";
   saveText: string;
   saveLabel: string; // "Save" | "Save As…"
@@ -22,7 +21,6 @@ interface DesignBarProps {
 
 export function DesignBar({
   name,
-  dirty,
   saveKind,
   saveText,
   saveLabel,
@@ -39,7 +37,7 @@ export function DesignBar({
         value={name}
         placeholder="Untitled"
         title="Design name — edit to rename"
-        dirty={dirty}
+        dirty={saveKind === "dirty"} // amber edge on the name field while there are unsaved edits
         onChange={onName}
         onBlur={onNameBlur}
       />

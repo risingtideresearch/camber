@@ -136,14 +136,14 @@ const TEMPLATE_DEFS: [number, number, number][][] = [
     [255, 305, 0],
   ], // deeper / finer (bow), round bilge
 ];
-// the default weight curve: full weight on template 0 at the transom, handing off linearly to the last
-// template at the bow — i.e. exactly the old linear aft→fore tween (a straight edge of the simplex).
-function defaultWeights(k: number): WeightCP[] {
+// the default straight blend path: full weight on template 0 at the transom, handing off linearly to the
+// last template at the bow — i.e. exactly the old linear aft→fore tween (a straight edge of the simplex).
+export function linearPath(k: number, length: number): WeightCP[] {
   const e = (j: number) =>
     Array.from({ length: k }, (_, i) => (i === j ? 1 : 0));
   return [
     { x: 0, w: e(0) },
-    { x: L, w: e(k - 1) },
+    { x: length, w: e(k - 1) },
   ];
 }
 
@@ -189,7 +189,7 @@ export function resetModel(model: Model): void {
   );
   model.keelK = model.templates.map(() => 0); // keels default to C¹-smooth across the centerline
   // each station carries its blend w, sampled here from the default linear aft→fore handoff
-  const wf0 = buildWeightSampler(model, defaultWeights(model.templates.length));
+  const wf0 = buildWeightSampler(model, linearPath(model.templates.length, L));
   model.sheer = {
     cp: SHEER_DEF.map((c) => ({ x: c[0], y: c[1], w: wf0(c[0]) })),
     trim: SHEER_TRIM_DEF.map((c) => ({ x: c[0], z: c[1], k: 0 })),
@@ -247,7 +247,7 @@ export function prepare(model: Model): void {
 // unlike an approximating B-spline that would smooth past the interior ones.
 
 // project a vector onto the simplex the cheap way: clamp negatives (float noise) away, renormalize to Σ=1
-function normSimplex(w: number[]): number[] {
+export function normSimplex(w: number[]): number[] {
   let s = 0;
   const c = w.map((v) => {
     const x = v > 0 ? v : 0;
@@ -1253,9 +1253,7 @@ export function setWeightBoundary(cp: WeightCP, b: number, val: number): void {
     prev = C[j];
   }
   w.push(Math.max(0, 1 - prev));
-  let t = 0;
-  w.forEach((v) => (t += v));
-  cp.w = t > 0 ? w.map((v) => v / t) : w.map(() => 1 / K);
+  cp.w = normSimplex(w);
 }
 
 // the cut-station scrubber position (the red slider shared by the plan / profile / blend strips)
@@ -1294,9 +1292,7 @@ export function removeTemplate(model: Model, ti: number): void {
   model.keelK.splice(ti, 1);
   model.sheer.cp.forEach((cp) => {
     cp.w.splice(ti, 1);
-    let s = 0;
-    cp.w.forEach((v) => (s += v));
-    cp.w = s > 0 ? cp.w.map((v) => v / s) : cp.w.map(() => 1 / cp.w.length);
+    cp.w = normSimplex(cp.w);
   });
 }
 

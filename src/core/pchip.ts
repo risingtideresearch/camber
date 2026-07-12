@@ -233,21 +233,12 @@ export function hermiteEvalLR(
   return h00 * ys[i] + h10 * h * R[i] + h01 * ys[i + 1] + h11 * h * L[i + 1];
 }
 
+// Hermite eval with one tangent per point: the LR eval with L = R = m.
 export function hermiteEval(
   xs: number[],
   ys: number[],
   m: number[],
   tt: number,
 ): number {
-  let i = 0;
-  while (i < xs.length - 2 && tt > xs[i + 1]) i++;
-  const h = xs[i + 1] - xs[i],
-    t = (tt - xs[i]) / h,
-    t2 = t * t,
-    t3 = t2 * t;
-  const h00 = 2 * t3 - 3 * t2 + 1,
-    h10 = t3 - 2 * t2 + t,
-    h01 = -2 * t3 + 3 * t2,
-    h11 = t3 - t2;
-  return h00 * ys[i] + h10 * h * m[i] + h01 * ys[i + 1] + h11 * h * m[i + 1];
+  return hermiteEvalLR(xs, ys, m, m, tt);
 }

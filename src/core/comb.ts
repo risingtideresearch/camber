@@ -118,7 +118,6 @@ function build(
       H === 1
         ? Math.round((lo + hi) / 2)
         : Math.round(lo + ((hi - lo) * h) / (H - 1));
-    if (nrm[i].length === 0) continue;
     const len = Math.min(kap[i] / kref, 1) * combLen,
       tip = Q[i].map((v, d) => v - nrm[i][d] * len);
     hairs.push([Q[i], tip]);
