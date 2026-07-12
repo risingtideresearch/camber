@@ -3,6 +3,7 @@ import { clippedSection, waterlineStats, type Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import type { CurvatureSettings } from "../core/comb";
 import { drawCutStation } from "../core/draw2d";
+import { STW, STH } from "../core/view";
 import { SvgView } from "./SvgView";
 import "./CutStationView.css";
 
@@ -46,7 +47,7 @@ export function CutStationView({
         Cut <span className="val">{label}</span>
       </div>
       <div className="cutbody">
-        <SvgView contentWidth={360} contentHeight={360} draw={draw} />
+        <SvgView contentWidth={STW} contentHeight={STH} draw={draw} />
       </div>
     </div>
   );

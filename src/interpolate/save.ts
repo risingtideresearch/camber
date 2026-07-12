@@ -31,7 +31,7 @@ export const newBlendId = (): BlendId => ({
 });
 
 // would saving create a new row? (never saved, or the name was changed away from the saved design)
-export function willFork(id: BlendId, name: string): boolean {
+function willFork(id: BlendId, name: string): boolean {
   const n = name.trim();
   return id.currentId == null || (n !== "" && n !== id.savedName);
 }

@@ -3,7 +3,7 @@ import { addTemplatePoint, type Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import type { CurvatureSettings } from "../core/comb";
 import { drawStation } from "../core/draw2d";
-import { invD, invN } from "../core/view";
+import { invD, invN, STW, STH } from "../core/view";
 import { SvgView } from "./SvgView";
 import type { Tool } from "./types";
 
@@ -58,8 +58,8 @@ export function StationEditor({
   return (
     <div className="stationlayer" style={{ display: active ? "" : "none" }}>
       <SvgView
-        contentWidth={360}
-        contentHeight={360}
+        contentWidth={STW}
+        contentHeight={STH}
         draw={draw}
         cursor={tool === "add" ? "crosshair" : "default"}
         onBackgroundClick={onBackgroundClick}

@@ -4,16 +4,11 @@
 import { OnModelSelect } from "./modelSelection";
 
 export interface Drag {
-  kind: "slider" | "sheer" | "trim" | "transom" | "stn" | "weight" | "rot";
+  kind: "slider" | "sheer" | "trim" | "transom" | "stn" | "weight";
   svg?: SVGGraphicsElement; // the pan/zoom content <g> the drag started in (its CTM maps pointer → content)
   idx?: number;
   ti?: number; // template index, for a "stn" drag
-  wpart?: "x" | "bnd"; // which part of a weight control point is being dragged
-  bnd?: number; // boundary index, for a "weight" / "bnd" drag
-  px0?: number;
-  py0?: number;
-  yaw0?: number;
-  pitch0?: number;
+  bnd?: number; // boundary index, for a "weight" drag
 }
 
 let CURRENT_DRAG: Drag | null = null;
@@ -30,7 +25,6 @@ type DragSpec = {
   kind: Drag["kind"];
   idx?: number;
   ti?: number;
-  wpart?: "x" | "bnd";
   bnd?: number;
 };
 
@@ -40,8 +34,8 @@ export function startDrag(
   e: PointerEvent,
   onSelect: OnModelSelect,
 ): void {
-  setDrag({ ...d, svg, px0: e.clientX });
-  // a drag on a control point selects it (persistently); the x-cut slider / rotation leave the selection
+  setDrag({ ...d, svg });
+  // a drag on a control point selects it (persistently); the x-cut slider leaves the selection
   if (d.kind === "sheer") onSelect({ tgt: "plan", idx: d.idx! });
   else if (d.kind === "trim") onSelect({ tgt: "trim", idx: d.idx! });
   else if (d.kind === "transom") onSelect({ tgt: "transom", idx: d.idx! });

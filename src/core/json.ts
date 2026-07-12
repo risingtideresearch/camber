@@ -159,18 +159,6 @@ export function buildJson(model: Model): string {
   return JSON.stringify(doc, null, 2);
 }
 
-export function downloadJson(model: Model): void {
-  const blob = new Blob([buildJson(model)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "camber-hull.json";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
 // ---------- import / parse ----------
 // structural validators that throw a clear message rather than loading a broken model
 function num(v: unknown, ctx: string): number {
@@ -411,34 +399,4 @@ export function loadJsonText(model: Model, text: string): number {
   model.waterline = parsed.waterline;
   model.deckRake = parsed.deckRake;
   return parsed.variants.length;
-}
-
-// open a file picker, read the chosen JSON, load it, then run `after` (a re-render). Errors are
-// reported to the user; the model is left as-is on failure.
-export function importJson(model: Model, after: () => void): void {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = "application/json,.json";
-  input.addEventListener("change", () => {
-    const file = input.files && input.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const n = loadJsonText(model, String(reader.result));
-        after();
-        if (n > 1)
-          alert(
-            `This document has ${n} variants; the editor loaded the first. ` +
-              `Open the interpolation viewer to blend all ${n}.`,
-          );
-      } catch (e) {
-        alert(
-          "JSON import failed: " + (e instanceof Error ? e.message : String(e)),
-        );
-      }
-    };
-    reader.readAsText(file);
-  });
-  input.click();
 }

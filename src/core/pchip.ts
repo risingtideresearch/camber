@@ -42,7 +42,7 @@ const PCHIP_VARIANT: PchipVariant = "C2-Fritsch-Carlson";
  * y(0) = 0, y'(0) = 0, y''(0) = 0
  * y(1) = 1, y'(1) = 1, y''(1) = 0
  */
-export function c2EaseIn(q: number): number {
+function c2EaseIn(q: number): number {
   return q * q * q * (6 + q * (3 * q - 8));
 }
 
@@ -52,7 +52,7 @@ export function c2EaseIn(q: number): number {
  * y(0) = 0, y'(0) = 0, y''(0) = 0
  * y(1) = 1, y'(1) = 0, y''(1) = 0
  */
-export function c2EaseInOut(q: number): number {
+function c2EaseInOut(q: number): number {
   return q * q * q * (10 + q * (6 * q - 15));
 }
 

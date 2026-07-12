@@ -61,9 +61,6 @@ export function poly(pts: Vec2[]): string {
   return d;
 }
 
-export const byId = (id: string): SVGSVGElement =>
-  document.getElementById(id) as unknown as SVGSVGElement;
-
 // ---------- curvature-comb overlay (2D) ----------
 // The sharpest hair's length, in CONTENT-space units. The 2D editors draw in an ISOTROPIC content space (the
 // view transforms in view.ts share one px/mm), so a comb built in content space renders with visually
@@ -976,7 +973,7 @@ export function drawWeights(
           style: "cursor:ns-resize",
         });
         h.addEventListener("pointerdown", (e) =>
-          weightHandleDown(i, "bnd", b, svg, e as PointerEvent, onSelect),
+          weightHandleDown(i, b, svg, e as PointerEvent, onSelect),
         );
         g.append(h);
       });
@@ -1433,16 +1430,14 @@ export function transomPointDown(
   startDrag({ kind: "transom", idx }, svg, e, onSelect);
 }
 
-// a weight-curve handle: `part` is "x" (drag the control point along the hull) or "bnd" (drag band
-// boundary `bnd`, editing the simplex split at that control point).
+// a weight-curve handle: drag band boundary `bnd`, editing the simplex split at that control point.
 export function weightHandleDown(
   idx: number,
-  part: "x" | "bnd",
   bnd: number,
   svg: SVGGElement,
   e: PointerEvent,
   onSelect: OnModelSelect,
 ): void {
   e.stopPropagation();
-  startDrag({ kind: "weight", idx, wpart: part, bnd }, svg, e, onSelect);
+  startDrag({ kind: "weight", idx, bnd }, svg, e, onSelect);
 }
