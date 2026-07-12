@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
   pull_request:
   workflow_dispatch:
 
@@ -14,10 +14,11 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - run: npm ci || npm install
+          cache: "npm"
+      - run: npm ci
       # The offline render harness is an isolated package with its own deps.
       # typecheck runs `tsc -p tools/preview`, so it needs those installed too.
-      # Lockfile is gitignored, hence `install` not `ci`.
+      # Its lockfile is gitignored, hence `install` not `ci`.
       - run: npm install --prefix tools/preview
       - run: npm run typecheck
       - run: npm run lint

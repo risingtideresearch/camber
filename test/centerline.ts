@@ -30,8 +30,8 @@ import {
 } from "../src/core/model";
 import { parseDocument, loadHull } from "../src/core/json";
 import { type Vec3 } from "../src/core/math";
+import { examplesDir } from "./paths";
 import { readFileSync, readdirSync, existsSync } from "fs";
-import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
 const model = createModel();
@@ -53,15 +53,6 @@ const M = 44; // section columns per half — matches the 3D mesh (buildHullMesh
 const NS = 180; // station sweep resolution — matches the 3D mesh
 const BAND_MM = 23; // half-breadth window (units) around the centerline within which we judge the keel shape
 
-function examplesDir(): string {
-  let d = dirname(fileURLToPath(import.meta.url));
-  for (let up = 0; up < 4; up++) {
-    const cand = join(d, "examples");
-    if (existsSync(cand)) return cand;
-    d = dirname(d);
-  }
-  return join(process.cwd(), "examples");
-}
 // torture-test hulls kept out of examples/ (they may not meet every fairness bar everywhere) but exercised
 // here as regression fixtures — e.g. keel-at-chine, which guards the keel-rounding chine-fade fix.
 function fixturesDir(): string {

@@ -21,9 +21,9 @@ import {
   sweptSection,
 } from "../src/core/model";
 import { parseDocument, loadHull } from "../src/core/json";
-import { readFileSync, readdirSync, existsSync } from "fs";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { examplesDir } from "./paths";
+import { readFileSync, readdirSync } from "fs";
+import { join } from "path";
 
 const model = createModel();
 
@@ -33,17 +33,6 @@ const model = createModel();
 const THRESHOLD_DEG = 1.5; // deadrise is an ANGLE — scale-invariant, unchanged by the unitless rescale
 const DX = 1; // station spacing (units) for the sweep — fine enough to resolve a step as a single jump
 const KEEL_KS = [0, 0.5, 1]; // keel-knuckle settings to exercise (flat → V)
-
-// the example hulls live alongside the repo; resolve from this file so the cwd does not matter
-function examplesDir(): string {
-  let d = dirname(fileURLToPath(import.meta.url));
-  for (let up = 0; up < 4; up++) {
-    const cand = join(d, "examples");
-    if (existsSync(cand)) return cand;
-    d = dirname(d);
-  }
-  return join(process.cwd(), "examples");
-}
 
 // keel deadrise at station x: the body-plan angle from horizontal of the section near the keel, as the
 // least-squares slope of the lowest 70 mm of the (half-breadth, depth) points. NaN where there is no keel
