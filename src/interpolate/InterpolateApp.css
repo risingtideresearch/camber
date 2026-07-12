@@ -333,3 +333,22 @@ header p {
   color: #b7791f;
   margin: 4px 0;
 }
+
+/* ---------- wave-resistance panel ---------- */
+.wavechart {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: none;
+}
+.wavebusy {
+  text-transform: none;
+  letter-spacing: normal;
+}
+.wavereadout {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  min-height: 16px;
+  white-space: nowrap;
+}

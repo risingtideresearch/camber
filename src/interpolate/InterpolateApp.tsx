@@ -27,6 +27,7 @@ import {
 import { BlendControl } from "./BlendControl";
 import { BlendExplorer } from "./BlendExplorer";
 import { MetricsPanel, type Unit, type Water } from "./MetricsPanel";
+import { WavePanel } from "./WavePanel";
 import "./InterpolateApp.css";
 
 // The interpolation viewer. It loads 2–5 exported hulls, forms a convex blend of
@@ -464,6 +465,14 @@ export function InterpolateApp() {
               onLoa={setLoa}
               onUnit={setUnit}
               onWater={setWater}
+            />
+            <WavePanel
+              model={model}
+              modelVersion={modelVersion}
+              active={n >= 1 && !!liveHydro?.validWaterplane}
+              loa={loa}
+              unit={unit}
+              water={water}
             />
           </div>
         </div>
