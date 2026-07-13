@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Model } from "../core/model";
 import { L } from "../core/model";
 import { michellCurve, type MichellCurve } from "../core/michell";
-import type { Unit, Water } from "./MetricsPanel";
+import type { Unit, Water } from "../components/MetricsPanel";
 
 // ---------- wave resistance (Michell's integral), live from the blended hull ----------
 // The C_w(Fn) curve — C_w = R_w/(½ρU²S) by thin-ship theory — recomputed on a short debounce after each

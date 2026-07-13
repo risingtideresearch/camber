@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
 import type { Hydro } from "../core/hydro";
 import { L } from "../core/model";
+import "./MetricsPanel.css";
 
-// ---------- naval-architecture metrics, live from the blended hull ----------
+// ---------- naval-architecture metrics, live from the current hull ----------
 // Unitless coefficients always show; dimensional metrics use the length scale from the LOA input (the real
 // length that the model's x = L maps to). Stability is geometry only — KMt, not GM (GM needs a weight/KG).
 

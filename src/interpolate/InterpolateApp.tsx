@@ -26,7 +26,11 @@ import {
 } from "./save";
 import { BlendControl } from "./BlendControl";
 import { BlendExplorer } from "./BlendExplorer";
-import { MetricsPanel, type Unit, type Water } from "./MetricsPanel";
+import {
+  MetricsPanel,
+  type Unit,
+  type Water,
+} from "../components/MetricsPanel";
 import { WavePanel } from "./WavePanel";
 import "./InterpolateApp.css";
 

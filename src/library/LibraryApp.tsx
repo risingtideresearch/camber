@@ -146,6 +146,9 @@ export function LibraryApp() {
   const openInEditor = (id: string) => {
     window.location.href = `editor.html?id=${encodeURIComponent(id)}`;
   };
+  const openPerformance = (id: string) => {
+    window.location.href = `performance.html?id=${encodeURIComponent(id)}`;
+  };
 
   // ---------- exports (reuse the editor's writers via the scratch model) ----------
   const exportJson = () => {
@@ -291,6 +294,13 @@ export function LibraryApp() {
             onClick={() => selectedRow && openInEditor(selectedRow.id)}
           >
             Open
+          </Button>
+          <Button
+            disabled={!selectedRow}
+            title="Open the selected design in the performance viewer — displacement and speed/power at a chosen waterline and scale"
+            onClick={() => selectedRow && openPerformance(selectedRow.id)}
+          >
+            Performance
           </Button>
           <Button
             disabled={!selectedRow}
