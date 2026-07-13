@@ -1,0 +1,10 @@
+{
+  // Standalone config so the tsx-run test scripts are typechecked (tsx strips types without checking):
+  // `npm run typecheck` runs `tsc -p test` with the app's real compiler options plus node types.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["*.ts"]
+}

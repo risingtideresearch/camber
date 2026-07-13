@@ -18,15 +18,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-
       # --- build main site (…/camber/) ---
       - uses: actions/checkout@v5
         with:
           ref: main
-      - run: npm ci || npm install
+      # setup-node comes after checkout so `cache: "npm"` can hash the committed lockfile
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: "npm"
+      - run: npm ci
       - run: npm run build
 
       # --- build beta site (…/camber/beta/) ---
@@ -38,7 +39,7 @@ jobs:
         with:
           ref: beta
           path: beta
-      - run: npm ci || npm install
+      - run: npm ci
         continue-on-error: ${{ github.ref_name == 'main' }}
         working-directory: beta
       - id: beta_build

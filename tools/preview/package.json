@@ -4,6 +4,7 @@
   "type": "module",
   "description": "Offline render harness for debugging the 3D hull geometry headlessly",
   "dependencies": {
-    "@resvg/resvg-js": "^2.6.0"
+    "@resvg/resvg-js": "^2.6.0",
+    "esbuild": "^0.28.1"
   }
 }
