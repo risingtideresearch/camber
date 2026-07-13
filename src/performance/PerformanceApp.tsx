@@ -22,7 +22,7 @@ import "./PerformanceApp.css";
 
 // The performance viewer: open any camber design (from the library via ?id=, a dropped JSON file, or the
 // file picker), set the waterline / trim and the real-world scale, and read the result — displacement and
-// the other hydrostatics, plus the effective speed/power curve. Analysis only: nothing here edits the
+// the other hydrostatics, plus the estimated brake speed/power curve. Analysis only: nothing here edits the
 // design or saves anything. Like the other apps it owns one stable, mutable model; the version counter
 // drives reactivity.
 
@@ -139,7 +139,8 @@ export function PerformanceApp() {
           Open any camber design — from the library, or drop its JSON here —
           then set the waterline and the real length it will be built to. The
           panels show the displacement and hydrostatics at that trim and the
-          effective power needed to drive the hull through its speed range.
+          estimated brake power needed to drive the hull through its speed
+          range.
         </p>
       </header>
       <div className="wrap">
@@ -178,6 +179,7 @@ export function PerformanceApp() {
               model={model}
               modelVersion={version}
               active={!!hydro?.validWaterplane}
+              hydro={hydro}
               loa={loa}
               unit={unit}
               water={water}

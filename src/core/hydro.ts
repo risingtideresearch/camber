@@ -266,3 +266,42 @@ export function hydrostatics(
     validWaterplane: wpOk,
   };
 }
+
+// ---------- Holtrop-Mennen form factor (1+k) ----------
+// The viscous-pressure allowance on top of flat-plate skin friction: Holtrop & Mennen (1982), the
+// (1+k1) hull form factor, from the same waterline dimensions and prismatic coefficient hydrostatics
+// already reports. It rises with beam and fullness, which is exactly the beam-driven drag that
+// thin-ship (Michell) wave resistance and a bare ITTC-57 friction line both miss — so a beamy hull no
+// longer reads implausibly slippery. Assumes a normal stern (Cstern = 0, so c13 = 1). Returns 1.0 (no
+// allowance) when the waterplane is degenerate or the inputs are out of the regression's range, and is
+// clamped to a sane band so a pathological section can't blow up the power curve. Dimensionless and
+// scale-free: it depends only on ratios, so it is computed once per hull/trim, not per speed or LOA.
+export function formFactor(h: Hydro): number {
+  const { lwl: L, bwl: B, draft: T, cp, xAft, xFwd } = h;
+  if (
+    !h.validWaterplane ||
+    !(L > 0 && B > 0 && T > 0) ||
+    !(cp > 0 && cp < 0.95)
+  )
+    return 1;
+  // LCB as a percentage of L forward of amidships (Holtrop's `lcb` convention)
+  const amid = (xAft + xFwd) / 2,
+    lcb = (100 * (h.lcb - amid)) / L;
+  const tl = T / L,
+    c12 =
+      tl > 0.05
+        ? tl ** 0.2228446
+        : tl > 0.02
+          ? 48.2 * (tl - 0.02) ** 2.078 + 0.479948
+          : 0.479948,
+    // length of run
+    lr = L * (1 - cp + (0.06 * cp * lcb) / (4 * cp - 1));
+  if (!(lr > 0)) return 1;
+  const oneK =
+    0.93 +
+    c12 *
+      (B / lr) ** 0.92497 *
+      (0.95 - cp) ** -0.521448 *
+      (1 - cp + 0.0225 * lcb) ** 0.6906;
+  return Number.isFinite(oneK) ? Math.min(1.6, Math.max(1, oneK)) : 1;
+}

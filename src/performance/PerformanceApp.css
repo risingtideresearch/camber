@@ -139,6 +139,23 @@ header p {
   border-top-style: dashed;
   border-color: #a0aec0;
 }
+.powerlegend .lgholtrop::before {
+  border-top-style: dashed;
+  border-color: #2f855a;
+}
+.holtroptoggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 11px;
+  color: var(--mut);
+  cursor: pointer;
+}
+.holtroptoggle input {
+  accent-color: #2f855a;
+}
 .powerreadout {
   font-size: 12px;
   font-variant-numeric: tabular-nums;

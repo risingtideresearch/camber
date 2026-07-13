@@ -17,7 +17,8 @@
     "test:smooth": "tsx test/smoothness.ts",
     "test:centerline": "tsx test/centerline.ts",
     "test:michell": "tsx test/michell.ts",
-    "test": "npm run test:smooth && npm run test:centerline && npm run test:michell"
+    "test:holtrop": "tsx test/holtrop.ts",
+    "test": "npm run test:smooth && npm run test:centerline && npm run test:michell && npm run test:holtrop"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
