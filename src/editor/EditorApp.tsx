@@ -81,10 +81,6 @@ export function EditorApp() {
   const [tool, setTool] = useState<Tool>("select");
   const [curvature, setCurvature] = useState(defaultCurvature);
   const [selection, setSelection] = useState<ModelSelection>(null);
-  const handleSelect = useCallback(
-    (sel: ModelSelection) => setSelection(sel),
-    [],
-  );
 
   const [name, setName] = useState("");
   const [save, setSave] = useState<SaveView>(INITIAL_SAVE);
@@ -369,7 +365,6 @@ export function EditorApp() {
         <CurvatureControls value={curvature} onChange={setCurvature} />
         <DesignBar
           name={name}
-          dirty={save.kind === "dirty"}
           saveKind={save.kind}
           saveText={save.text}
           saveLabel={save.buttonLabel}
@@ -403,7 +398,7 @@ export function EditorApp() {
                     selection={selection}
                     sections={sections}
                     tool={tool}
-                    onSelect={handleSelect}
+                    onSelect={setSelection}
                     setTool={setTool}
                     bumpModel={bumpModel}
                     sync={planProfileSync}
@@ -418,7 +413,7 @@ export function EditorApp() {
                     selection={selection}
                     sections={sections}
                     tool={tool}
-                    onSelect={handleSelect}
+                    onSelect={setSelection}
                     setTool={setTool}
                     bumpModel={bumpModel}
                     sync={planProfileSync}
@@ -436,7 +431,7 @@ export function EditorApp() {
                     modelVersion={modelVersion}
                     selection={selection}
                     tool={tool}
-                    onSelect={handleSelect}
+                    onSelect={setSelection}
                     setTool={setTool}
                     bumpModel={bumpModel}
                     curvature={curvature}
@@ -449,7 +444,7 @@ export function EditorApp() {
                     modelVersion={modelVersion}
                     selection={selection}
                     tool={tool}
-                    onSelect={handleSelect}
+                    onSelect={setSelection}
                     setTool={setTool}
                     bumpModel={bumpModel}
                   />

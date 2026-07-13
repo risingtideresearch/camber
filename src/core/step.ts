@@ -7,7 +7,7 @@
 // centerline, with no mirror seam to fold into a welt. The transom is a single planar face sharing the
 // hull's aft edge. Both live in one OPEN_SHELL (the hull is open along the deck/sheer edge).
 
-import { V, type Vec3 } from "./math";
+import { mirrorRow, V, type Vec3 } from "./math";
 import {
   L,
   sweptSection,
@@ -477,12 +477,7 @@ export function buildStep(model: Model, date: string): string {
   // y-mirror, dropping the duplicate keel point. The keel is therefore an INTERIOR column of one surface
   // — C² smooth across the centerline — instead of two half-surfaces mirrored at a seam (which only join
   // smoothly when the keel approach is exactly horizontal, and otherwise fold into a welt: the "pucker").
-  const grid: Vec3[][] = half.map((row) => {
-    const full = row.slice();
-    for (let j = M - 1; j >= 0; j--)
-      full.push([row[j][0], -row[j][1], row[j][2]] as Vec3);
-    return full;
-  });
+  const grid: Vec3[][] = half.map(mirrorRow);
 
   // full-width crease columns: a chine knuckle at half-col c sits at full-cols c and 2M−c; the keel (half
   // col M) is the centre col M. Mult-q v-knots there let the one surface carry those creases.

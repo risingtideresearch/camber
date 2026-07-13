@@ -30,7 +30,7 @@ import {
 } from "../../src/core/model";
 import { trimmedHullGrid, buildStep } from "../../src/core/step";
 import { loadJsonText } from "../../src/core/json";
-import type { Vec3 } from "../../src/core/math";
+import { mirrorRow, type Vec3 } from "../../src/core/math";
 
 const model = createModel();
 
@@ -312,10 +312,7 @@ function renderShaded(
     const x = xf * 0.5 * (1 - Math.cos((Math.PI * i) / N)); // cosine spacing, matches the real mesh
     const s = sweptSection(model, x, Mh, true, false);
     if (s.aft) continue;
-    const full = s.pts.slice();
-    for (let j = Mh - 1; j >= 0; j--)
-      full.push([s.pts[j][0], -s.pts[j][1], s.pts[j][2]]);
-    rows.push(full);
+    rows.push(mirrorRow(s.pts));
   }
   const Lt = [0.4, -0.5, 0.76],
     nl = Math.hypot(Lt[0], Lt[1], Lt[2]);

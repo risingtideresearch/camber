@@ -1,6 +1,6 @@
 import { HILITE, COL } from "./colors";
 import { el } from "./draw2d";
-import { type Vec3, V } from "./math";
+import { mirrorRow, type Vec3, V } from "./math";
 import {
   type Model,
   L,
@@ -483,10 +483,7 @@ function bilgeRows(
     }
     // full width: starboard sheer→keel (cols 0..M), then port keel→sheer (cols M+1..2M) as the y-mirror,
     // dropping the duplicate keel point so a closed section reads as one smooth curve through y=0.
-    const full: Vec3[] = s.pts.slice();
-    for (let j = M - 1; j >= 0; j--)
-      full.push([s.pts[j][0], -s.pts[j][1], s.pts[j][2]]);
-    rows.push(full);
+    rows.push(mirrorRow(s.pts));
     open.push(s.open);
     // map the half-section crease columns to the full row: a chine at half-col c sits at c and 2M−c; the
     // keel (half-col M) is the centre col M. Strength = the blended knuckle / keel-V from the section.
@@ -541,12 +538,6 @@ function pushTri(
 const transomGate = (model: Model, p: Vec3): number =>
   p[0] - xTransom(model, p[2]);
 
-const lerpV = (a: Vec3, b: Vec3, t: number): Vec3 => [
-  a[0] + (b[0] - a[0]) * t,
-  a[1] + (b[1] - a[1]) * t,
-  a[2] + (b[2] - a[2]) * t,
-];
-
 interface PN {
   p: Vec3;
   n: Vec3;
@@ -568,8 +559,8 @@ function clipQuad(
     if (ga >= 0) out.push(a);
     if (ga >= 0 !== gb >= 0) {
       const t = ga / (ga - gb),
-        ip = lerpV(a.p, b.p, t),
-        inrm = V.norm(lerpV(a.n, b.n, t));
+        ip = V.lerp(a.p, b.p, t),
+        inrm = V.norm(V.lerp(a.n, b.n, t));
       out.push({ p: ip, n: inrm });
       cutPts.push(ip);
     }
@@ -587,7 +578,7 @@ function clipSegment(model: Model, a: Vec3, b: Vec3): [Vec3, Vec3] | null {
     gb = transomGate(model, b);
   if (ga < 0 && gb < 0) return null;
   if (ga >= 0 && gb >= 0) return [a, b];
-  const ip = lerpV(a, b, ga / (ga - gb));
+  const ip = V.lerp(a, b, ga / (ga - gb));
   return ga >= 0 ? [a, ip] : [ip, b];
 }
 
@@ -665,7 +656,7 @@ function buildHullMesh(
   const vN = (i: number, j: number, dir: number): Vec3 => {
     const s = creaseS[i]?.[j] ?? 0;
     if (s <= 1e-6) return nrmC[i][j];
-    return V.norm(lerpV(nrmC[i][j], gridNormal(rows, i, j, dir), s));
+    return V.norm(V.lerp(nrmC[i][j], gridNormal(rows, i, j, dir), s));
   };
   // for the raw-triangle wire, capture the three edges of every emitted triangle (the transom-clipped fan
   // included) as a GL_LINES soup, so the overlay is byte-for-byte the shaded surface's own triangulation.

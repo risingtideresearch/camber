@@ -29,7 +29,7 @@ import {
   stationAt,
 } from "../src/core/model";
 import { parseDocument, loadHull } from "../src/core/json";
-import { type Vec3 } from "../src/core/math";
+import { mirrorRow, type Vec3 } from "../src/core/math";
 import { examplesDir } from "./paths";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { dirname, join } from "path";
@@ -66,10 +66,7 @@ function fullRows(): Vec3[][] {
   for (let i = 0; i <= NS; i++) {
     const s = sweptSection(model, (L * i) / NS, M, true, false);
     if (s.aft) continue;
-    const full: Vec3[] = s.pts.slice();
-    for (let j = M - 1; j >= 0; j--)
-      full.push([s.pts[j][0], -s.pts[j][1], s.pts[j][2]]);
-    rows.push(full);
+    rows.push(mirrorRow(s.pts));
   }
   return rows;
 }
