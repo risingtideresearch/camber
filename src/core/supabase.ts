@@ -92,13 +92,16 @@ export async function updateDesign(
   documentJson: string,
   preview: string,
 ): Promise<void> {
-  await ok(
+  const res = await ok(
     await fetch(`${REST}?id=eq.${encodeURIComponent(id)}`, {
       method: "PATCH",
-      headers,
+      headers: { ...headers, Prefer: "return=representation" },
       body: JSON.stringify({ document: JSON.parse(documentJson), preview }),
     }),
   );
+  // a filter matching zero rows (design deleted elsewhere) still returns 2xx — detect it via the returned rows
+  const rows = (await res.json()) as { id: string }[];
+  if (!rows.length) throw new Error("design no longer exists");
 }
 
 // delete a design by id

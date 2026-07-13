@@ -213,39 +213,36 @@ export function LibraryApp() {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "application/json,.json";
-    input.addEventListener("change", () => {
+    input.addEventListener("change", async () => {
       const file = input.files?.[0];
       if (!file) return;
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const text = String(reader.result);
-        try {
-          parseDocument(model, text); // validate before storing; throws on a malformed document
-        } catch (e) {
-          alert("Import failed: " + msg(e));
-          return;
-        }
-        const base = file.name.replace(/\.json$/i, "");
-        const name = (prompt("Save imported design as:", base) ?? "").trim();
-        if (!name) return;
-        // build the wireframe preview from the imported document (same path the editor uses on save)
-        let preview = "";
-        try {
-          resetModel(model);
-          loadJsonText(model, text);
-          preview = buildPreviewSvg(model);
-        } catch {
-          /* leave preview empty; the card falls back to a placeholder */
-        }
-        try {
-          const id = await insertDesign(name, text, preview);
-          setSelectedId(id);
-          await refresh();
-        } catch (e) {
-          alert("Import failed: " + msg(e));
-        }
-      };
-      reader.readAsText(file);
+      let text: string;
+      try {
+        text = await file.text();
+        parseDocument(model, text); // validate before storing; throws on a malformed document
+      } catch (e) {
+        alert("Import failed: " + msg(e));
+        return;
+      }
+      const base = file.name.replace(/\.json$/i, "");
+      const name = (prompt("Save imported design as:", base) ?? "").trim();
+      if (!name) return;
+      // build the wireframe preview from the imported document (same path the editor uses on save)
+      let preview = "";
+      try {
+        resetModel(model);
+        loadJsonText(model, text);
+        preview = buildPreviewSvg(model);
+      } catch {
+        /* leave preview empty; the card falls back to a placeholder */
+      }
+      try {
+        const id = await insertDesign(name, text, preview);
+        setSelectedId(id);
+        await refresh();
+      } catch (e) {
+        alert("Import failed: " + msg(e));
+      }
     });
     input.click();
   };
