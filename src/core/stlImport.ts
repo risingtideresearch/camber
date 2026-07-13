@@ -42,12 +42,18 @@ let nextStlId = 1;
 
 // ---------- parsing ----------
 
-// Parse either a binary or an ASCII STL. Binary is detected by the exact size relation (84-byte header +
-// 50 bytes/triangle) rather than the leading "solid" keyword, since some binary files also begin with it.
+// Parse either a binary or an ASCII STL. Binary is detected by the size relation (84-byte header +
+// 50 bytes/triangle, allowing trailing bytes some exporters emit) whenever the header does not begin with
+// "solid"; a file that does begin with "solid" is still binary if the size relation holds exactly, since
+// some binary files also begin with it.
 export function parseStl(buffer: ArrayBuffer): StlGeometry {
   if (buffer.byteLength >= 84) {
-    const tri = new DataView(buffer).getUint32(80, true);
-    if (84 + tri * 50 === buffer.byteLength) return parseBinary(buffer, tri);
+    const tri = new DataView(buffer).getUint32(80, true),
+      size = 84 + tri * 50;
+    const solid =
+      new TextDecoder().decode(new Uint8Array(buffer, 0, 5)) === "solid";
+    if (size === buffer.byteLength || (size <= buffer.byteLength && !solid))
+      return parseBinary(buffer, tri);
   }
   return parseAscii(new TextDecoder().decode(new Uint8Array(buffer)));
 }

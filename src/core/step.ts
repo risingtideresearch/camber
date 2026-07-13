@@ -327,7 +327,9 @@ export function trimmedHullGrid(
 
 function fmt(x: number): string {
   const v = Math.abs(x) < 1e-9 ? 0 : x;
-  return String(+v.toFixed(6));
+  const s = String(+v.toFixed(6));
+  // ISO 10303-21 REAL literals must contain a decimal point (a trailing point is permitted)
+  return s.includes(".") || s.includes("e") ? s : s + ".";
 }
 
 class StepDoc {

@@ -71,6 +71,7 @@ export function buildStl(model: Model, name = "camber"): string {
   }
   const ctr: Vec3 = [cx / aft.length, cy / aft.length, cz / aft.length];
   for (let j = 0; j < COLS - 1; j++) out += facet(aft[j], aft[j + 1], ctr);
+  out += facet(aft[COLS - 1], aft[0], ctr); // close the ring across the transom top (sheer to sheer)
 
   out += `endsolid ${name}\n`;
   return out;
