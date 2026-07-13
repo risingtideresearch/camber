@@ -100,7 +100,6 @@ export function View3d({
 
   // rebuild + redraw whenever the model, the selection, the display mode, the Mesh overlay, the mesh
   // resolution (M/N), or the STL changes
-  // rebuild + redraw whenever the model, the selection, the display mode, or the sheer toggle changes
   useEffect(() => {
     const p = paramsRef.current;
     p.view3dMode = mode;

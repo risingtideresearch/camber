@@ -1026,39 +1026,6 @@ export function transomEdge(model: Model): Vec3[] {
   return out;
 }
 
-// trace a contour where component `comp` (1=y, 2=z) equals `val` across a set of sections → runs of pts
-export function contour(
-  sections: Section[],
-  val: number,
-  comp: number,
-): Vec3[][] {
-  const runs: Vec3[][] = [];
-  let run: Vec3[] = [];
-  for (const s of sections) {
-    if (s.aft) {
-      if (run.length > 1) runs.push(run);
-      run = [];
-      continue;
-    } // gap across the transom
-    let f: Vec3 | null = null;
-    for (let j = 0; j < s.pts.length - 1; j++) {
-      const a = s.pts[j],
-        b = s.pts[j + 1];
-      if ((a[comp] - val) * (b[comp] - val) <= 0 && a[comp] !== b[comp]) {
-        const t = (val - a[comp]) / (b[comp] - a[comp]);
-        f = [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
-        break;
-      }
-    }
-    if (f) run.push(f);
-    else {
-      if (run.length > 1) runs.push(run);
-      run = [];
-    }
-  }
-  if (run.length > 1) runs.push(run);
-  return runs;
-}
 // ---------- design waterline (the horizontal world plane at worldZ = −model.waterline) ----------
 // immersion stats for a cut section: draft = deepest point below the WL, beam = breadth at the WL.
 

@@ -11,11 +11,9 @@ export function getCSS(v: string): string {
 export const COL = {
   sheer: getCSS("--sheer"),
   keel: getCSS("--keel"),
-  aft: getCSS("--aft"),
   fore: getCSS("--fore"),
   station: getCSS("--station"),
   wl: getCSS("--wl"),
-  bt: getCSS("--bt"),
   deck: getCSS("--deck"),
   mut: getCSS("--mut"),
 };

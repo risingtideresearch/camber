@@ -152,7 +152,7 @@ export function EditorApp() {
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
       const drag = getDrag();
-      if (!drag || drag.kind === "rot") return;
+      if (!drag) return;
       const [vx, vy] = getVB(drag, e);
       if (drag.kind === "slider") setX0(model, clamp(invX(vx), 0, L));
       else if (drag.kind === "sheer")
@@ -161,10 +161,9 @@ export function EditorApp() {
         moveTrim(model, drag.idx!, invX(vx), invZp(vy));
       else if (drag.kind === "transom")
         moveTransom(model, drag.idx!, invX(vx), invZp(vy));
-      else if (drag.kind === "weight") {
-        if (drag.wpart !== "x")
-          moveWeightBoundary(model, drag.idx!, drag.bnd!, invWY(vy));
-      } else if (drag.kind === "stn")
+      else if (drag.kind === "weight")
+        moveWeightBoundary(model, drag.idx!, drag.bnd!, invWY(vy));
+      else if (drag.kind === "stn")
         moveStationPoint(model, drag.ti!, drag.idx!, invN(vx), invD(vy));
       bumpModel();
     };

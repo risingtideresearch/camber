@@ -10,13 +10,7 @@
 // what lets the metric heatmap / scatter sample the whole space on a grid.
 
 import { clamp } from "../core/math";
-import {
-  L,
-  prepare,
-  type Model,
-  type Sheer,
-  type StationCP,
-} from "../core/model";
+import { prepare, type Model, type Sheer, type StationCP } from "../core/model";
 import { hydrostatics, type Hydro } from "../core/hydro";
 import type { HullData } from "../core/json";
 
@@ -75,7 +69,7 @@ export function padVerts(n: number): Pt[] {
   });
 }
 // inside the (convex) polygon? winding-agnostic: inside ⇔ all edge cross-products share one sign
-export function insidePoly(p: Pt, V: Pt[]): boolean {
+function insidePoly(p: Pt, V: Pt[]): boolean {
   let pos = false,
     neg = false;
   for (let i = 0; i < V.length; i++) {
@@ -116,7 +110,7 @@ export function clampPoly(p: Pt, V: Pt[]): Pt {
 }
 // mean-value coordinates of p w.r.t. polygon V — non-negative, summing to 1 inside a convex V, reducing to
 // ordinary barycentric coordinates when V is a triangle
-export function meanValue(p: Pt, V: Pt[]): number[] {
+function meanValue(p: Pt, V: Pt[]): number[] {
   const n = V.length,
     s = V.map((v) => ({ x: v.x - p.x, y: v.y - p.y })),
     r = s.map((d) => Math.hypot(d.x, d.y));
@@ -206,6 +200,3 @@ export function computeSamples(model: Model, hulls: Hull[]): Sample[] {
   }
   return samples;
 }
-
-// the model's fixed length re-exported for callers that scale the readout
-export { L };
