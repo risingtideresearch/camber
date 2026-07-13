@@ -6,13 +6,23 @@
 // own regardless of the curve's absolute curvature; the reference is a percentile, not the max, so a single
 // near-singular tip (a bow closure, a knuckle) doesn't crush the rest of the comb flat.
 //
-// This module is pure geometry (no DOM, no view transforms): the caller samples a curve into a dense
-// polyline — in whatever isotropic space it will be drawn in (2D content coordinates for the SVG editors, 3D
-// world units for the 3D view) — and gets back the hairs + envelope in that same space, ready to project.
-// The trimmed-sheer comb in model.ts keeps its own bespoke, converged-evaluator implementation; this one is
-// the general-purpose polyline version used everywhere the CurvatureControls overlay draws.
+// This module is pure geometry (no DOM, no view transforms). The caller hands over the curve's ORIGINAL
+// definition — an evaluator t → point, in whatever isotropic space the comb will be drawn in (2D content
+// coordinates for the SVG editors, 3D world units for the 3D view). The evaluator may be PARTIAL (null
+// where the curve doesn't exist: behind the transom plane, above the sheer trim, no waterline crossing);
+// each maximal existing run gets its own comb, with the run's edges converged onto the domain boundary by
+// bisection. Hairs are spaced uniformly by arc length; each hair's root is a true EVALUATION of the curve
+// (the arc-length equation is solved by bisection against the evaluator — never an interpolation between
+// samples), and κ comes from central differences of the evaluator at a fine ±ε (~1e-3 of the run, far
+// finer than the hair spacing).
+//
+// Evaluators must be SMOOTH at the ±ε scale: converge any internal root-find by bisection (see model.ts
+// bisectRoot) — a coarse scan placed with one linear-interpolation step puts its O(h²) noise straight
+// into κ. The trimmed-sheer comb keeps its bespoke converged evaluator in model.ts (its derivative
+// stencils share one expensive sampling pass); combFromSamples3 turns those samples into a comb here so
+// the auto-scaling matches everywhere.
 
-import type { Vec2, Vec3 } from "./math";
+import { clamp, type Vec2, type Vec3 } from "./math";
 
 export interface Comb2 {
   hairs: [Vec2, Vec2][]; // each hair: [root on the curve, tip on the convex side]
@@ -24,6 +34,7 @@ export interface Comb3 {
 }
 
 type Pt = number[]; // a point of any dimension; the builder is dimension-agnostic (κ needs no cross product)
+type PartialFn = (t: number) => Pt | null;
 
 const dist = (a: Pt, b: Pt): number => {
   let s = 0;
@@ -34,30 +45,11 @@ const dist = (a: Pt, b: Pt): number => {
   return Math.sqrt(s);
 };
 
-// resample a polyline to K+1 points spaced uniformly by arc length — so the central differences below are
-// well-conditioned (a raw polyline can bunch samples where the curve is straight and starve the bends)
-function resample(pts: Pt[], K: number): Pt[] {
-  const n = pts.length;
-  const cum: number[] = [0];
-  for (let i = 1; i < n; i++) cum.push(cum[i - 1] + dist(pts[i - 1], pts[i]));
-  const total = cum[n - 1];
-  if (!(total > 1e-12)) return pts.slice();
-  const out: Pt[] = [];
-  let j = 0;
-  for (let k = 0; k <= K; k++) {
-    const s = (total * k) / K;
-    while (j < n - 2 && cum[j + 1] < s) j++;
-    const seg = cum[j + 1] - cum[j] || 1,
-      t = (s - cum[j]) / seg;
-    out.push(pts[j].map((v, d) => v + (pts[j + 1][d] - v) * t));
-  }
-  return out;
-}
-
-// κ and the unit principal normal (toward the centre of curvature) at the middle of a symmetric triple, by
-// central differences: κ = |P″⊥| / |P′|² (reparameterization-invariant — no cross product, so it works in
-// any dimension). P″⊥ is the component of P″ perpendicular to the tangent — the normal part points toward
-// the centre of curvature, so the hair (drawn along −normal) lands on the convex side of the bend.
+// κ and the unit principal normal (toward the centre of curvature) from a symmetric parameter triple
+// [f(t−ε), f(t), f(t+ε)], by central differences: κ = |P″⊥| / |P′|² (reparameterization-invariant — the ε
+// cancels between numerator and denominator, and there is no cross product, so it works in any dimension).
+// P″⊥ is the component of P″ perpendicular to the tangent — the normal part points toward the centre of
+// curvature, so the hair (drawn along −normal) lands on the convex side of the bend.
 function sampleKN(a: Pt, p: Pt, b: Pt): { kappa: number; nrm: Pt } {
   const dim = p.length,
     d1: number[] = [],
@@ -83,65 +75,217 @@ function sampleKN(a: Pt, p: Pt, b: Pt): { kappa: number; nrm: Pt } {
   };
 }
 
-// the shared builder: a dense polyline → `nHairs` hairs + envelope, auto-scaled to `combLen`.
-function build(
-  pts: Pt[],
+// converge a run edge onto the existence boundary: f(tOk) exists, f(tBad) doesn't. Returns the surviving
+// side's parameter and its evaluation (a true point on the curve, arbitrarily close to the boundary).
+function refineEdge(
+  f: PartialFn,
+  tBad: number,
+  tOk: number,
+  pOk: Pt,
+): { t: number; p: Pt } {
+  let p = pOk;
+  for (let i = 0; i < 25; i++) {
+    const m = 0.5 * (tBad + tOk),
+      q = f(m);
+    if (q) {
+      tOk = m;
+      p = q;
+    } else tBad = m;
+  }
+  return { t: tOk, p };
+}
+
+// one maximal existing run of a partial evaluator: its (non-uniform) parameter/point table for arc-length
+// bracketing, the cumulative chord lengths, and the converged domain [t0, t1]
+interface Run {
+  pr: number[];
+  pp: Pt[];
+  cum: number[];
+  total: number;
+  t0: number;
+  t1: number;
+}
+
+// scan [t0,t1] at K+1 uniform parameters and split into maximal existing runs, edges refined by bisection
+function scanRuns(f: PartialFn, t0: number, t1: number, K: number): Run[] {
+  const ts: number[] = [],
+    ps: (Pt | null)[] = [];
+  for (let i = 0; i <= K; i++) {
+    const t = t0 + ((t1 - t0) * i) / K;
+    ts.push(t);
+    ps.push(f(t));
+  }
+  const runs: Run[] = [];
+  let i = 0;
+  while (i <= K) {
+    if (!ps[i]) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j + 1 <= K && ps[j + 1]) j++;
+    const pr: number[] = [],
+      pp: Pt[] = [];
+    if (i > 0) {
+      const e = refineEdge(f, ts[i - 1], ts[i], ps[i]!);
+      if (e.t < ts[i]) {
+        pr.push(e.t);
+        pp.push(e.p);
+      }
+    }
+    for (let k = i; k <= j; k++) {
+      pr.push(ts[k]);
+      pp.push(ps[k]!);
+    }
+    if (j < K) {
+      const e = refineEdge(f, ts[j + 1], ts[j], ps[j]!);
+      if (e.t > ts[j]) {
+        pr.push(e.t);
+        pp.push(e.p);
+      }
+    }
+    const cum = [0];
+    for (let k = 1; k < pr.length; k++)
+      cum.push(cum[k - 1] + dist(pp[k - 1], pp[k]));
+    const total = cum[cum.length - 1];
+    if (pr.length >= 2 && total > 1e-9)
+      runs.push({ pr, pp, cum, total, t0: pr[0], t1: pr[pr.length - 1] });
+    i = j + 1;
+  }
+  return runs;
+}
+
+// place a hair root exactly on the curve at arc length s into the run: bracket the containing chord
+// segment via the cumulative table, then bisect the parameter until the chord from the segment's start
+// matches the remaining length. The root is a true evaluation f(t*) — the table only brackets.
+function placeHair(f: PartialFn, run: Run, s: number): { t: number; p: Pt } {
+  const { pr, pp, cum } = run;
+  let k = 0;
+  while (k < cum.length - 2 && cum[k + 1] < s) k++;
+  const r = s - cum[k],
+    seg = cum[k + 1] - cum[k];
+  if (r <= 1e-12) return { t: pr[k], p: pp[k] };
+  if (r >= seg - 1e-12) return { t: pr[k + 1], p: pp[k + 1] };
+  let a = pr[k],
+    b = pr[k + 1];
+  for (let i = 0; i < 14; i++) {
+    const m = 0.5 * (a + b);
+    const q = f(m);
+    if (q && dist(pp[k], q) < r) a = m;
+    else b = m;
+  }
+  const t = 0.5 * (a + b);
+  return { t, p: f(t) ?? pp[k] };
+}
+
+// the shared builder: a (possibly partial) exact evaluator → one comb per existing run. `nHairs` is spread
+// across the runs by arc length; ONE reference curvature (the 90th-percentile hair κ, robust to a singular
+// tip) scales every run, since they are pieces of the same curve.
+function buildCombs(
+  f: PartialFn,
+  t0: number,
+  t1: number,
   nHairs: number,
   combLen: number,
-): { hairs: [Pt, Pt][]; env: Pt[] } {
-  const hairs: [Pt, Pt][] = [],
-    env: Pt[] = [];
-  if (nHairs < 1 || pts.length < 3) return { hairs, env };
-  const K = Math.max(nHairs * 2 + 2, 48), // dense uniform-arc resample, independent of the hair count
-    Q = resample(pts, K),
-    kap: number[] = new Array(Q.length).fill(0),
-    nrm: Pt[] = Q.map(() => [] as number[]);
-  for (let i = 1; i < Q.length - 1; i++) {
-    const s = sampleKN(Q[i - 1], Q[i], Q[i + 1]);
-    kap[i] = s.kappa;
-    nrm[i] = s.nrm;
-  }
-  // reference curvature: the 90th percentile of the interior κ (robust to a singular tip at a bow closure)
-  const sorted = kap
-    .slice(1, Q.length - 1)
+): { hairs: [Pt, Pt][]; env: Pt[] }[] {
+  if (nHairs < 1 || !(t1 > t0)) return [];
+  const K = Math.max(4 * nHairs, 96),
+    runs = scanRuns(f, t0, t1, K);
+  if (!runs.length) return [];
+  const grand = runs.reduce((s, r) => s + r.total, 0);
+  const perRun = runs.map((run) => {
+    const H = Math.max(1, Math.round((nHairs * run.total) / grand)),
+      hs: { root: Pt; kappa: number; nrm: Pt }[] = [];
+    for (let h = 0; h < H; h++) {
+      const s = H === 1 ? run.total / 2 : (run.total * h) / (H - 1),
+        { t, p } = placeHair(f, run, s);
+      // κ by fine central differences of the evaluator itself: ε ~1e-3 of the run's parameter span — far
+      // finer than the hair spacing — with the stencil centre clamped inside the domain, so an endpoint
+      // hair carries the curvature just inside the edge (the one-sided limit, to O(ε)).
+      const eps = (run.t1 - run.t0) * 1e-3,
+        tc = clamp(t, run.t0 + eps, run.t1 - eps),
+        qa = f(tc - eps),
+        qc = tc === t ? p : f(tc),
+        qb = f(tc + eps);
+      if (qa && qc && qb) {
+        const kn = sampleKN(qa, qc, qb);
+        hs.push({ root: p, kappa: kn.kappa, nrm: kn.nrm });
+      } else hs.push({ root: p, kappa: 0, nrm: p.map(() => 0) });
+    }
+    return hs;
+  });
+  const kaps = perRun
+    .flat()
+    .map((h) => h.kappa)
     .filter((k) => isFinite(k))
     .sort((a, b) => a - b);
-  const kref = sorted.length
-    ? sorted[Math.floor(0.9 * (sorted.length - 1))]
-    : 0;
-  if (!(kref > 1e-12)) return { hairs, env };
-  const lo = 1,
-    hi = Q.length - 2,
-    H = Math.min(nHairs, hi - lo + 1);
-  for (let h = 0; h < H; h++) {
-    const i =
-      H === 1
-        ? Math.round((lo + hi) / 2)
-        : Math.round(lo + ((hi - lo) * h) / (H - 1));
-    const len = Math.min(kap[i] / kref, 1) * combLen,
-      tip = Q[i].map((v, d) => v - nrm[i][d] * len);
-    hairs.push([Q[i], tip]);
-    env.push(tip);
-  }
-  return { hairs, env };
+  const kref = kaps.length ? kaps[Math.floor(0.9 * (kaps.length - 1))] : 0;
+  if (!(kref > 1e-12)) return [];
+  return perRun.map((hs) => {
+    const hairs: [Pt, Pt][] = [],
+      env: Pt[] = [];
+    for (const h of hs) {
+      const len = Math.min(h.kappa / kref, 1) * combLen || 0,
+        tip = h.root.map((v, d) => v - h.nrm[d] * len);
+      hairs.push([h.root, tip]);
+      env.push(tip);
+    }
+    return { hairs, env };
+  });
 }
 
-export function polylineComb2(
-  pts: Vec2[],
+export function curveCombs2(
+  f: (t: number) => Vec2 | null,
+  t0: number,
+  t1: number,
   nHairs: number,
   combLen: number,
-): Comb2 {
-  const r = build(pts as Pt[], nHairs, combLen);
-  return { hairs: r.hairs as [Vec2, Vec2][], env: r.env as Vec2[] };
+): Comb2[] {
+  return buildCombs(f, t0, t1, nHairs, combLen).map((c) => ({
+    hairs: c.hairs as [Vec2, Vec2][],
+    env: c.env as Vec2[],
+  }));
 }
 
-export function polylineComb3(
-  pts: Vec3[],
+export function curveCombs3(
+  f: (t: number) => Vec3 | null,
+  t0: number,
+  t1: number,
   nHairs: number,
+  combLen: number,
+): Comb3[] {
+  return buildCombs(f, t0, t1, nHairs, combLen).map((c) => ({
+    hairs: c.hairs as [Vec3, Vec3][],
+    env: c.env as Vec3[],
+  }));
+}
+
+// a comb from precomputed converged samples (root, κ, unit principal normal) — the trimmed-sheer comb's
+// bespoke evaluator (model.ts trimmedSheerViz) produces these on one shared expensive pass — with the
+// same percentile auto-scale as the evaluator-based combs, so every overlay reads on one footing.
+export function combFromSamples3(
+  samples: { p: Vec3; kappa: number; nrm: Vec3 }[],
   combLen: number,
 ): Comb3 {
-  const r = build(pts as Pt[], nHairs, combLen);
-  return { hairs: r.hairs as [Vec3, Vec3][], env: r.env as Vec3[] };
+  const hairs: [Vec3, Vec3][] = [],
+    env: Vec3[] = [];
+  const kaps = samples
+    .map((s) => s.kappa)
+    .filter((k) => isFinite(k))
+    .sort((a, b) => a - b);
+  const kref = kaps.length ? kaps[Math.floor(0.9 * (kaps.length - 1))] : 0;
+  if (kref > 1e-12)
+    for (const s of samples) {
+      const len = Math.min(s.kappa / kref, 1) * combLen || 0,
+        tip: Vec3 = [
+          s.p[0] - s.nrm[0] * len,
+          s.p[1] - s.nrm[1] * len,
+          s.p[2] - s.nrm[2] * len,
+        ];
+      hairs.push([s.p, tip]);
+      env.push(tip);
+    }
+  return { hairs, env };
 }
 
 // ---------- the editor-wide curvature-overlay settings ----------

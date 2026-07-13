@@ -351,6 +351,17 @@ export function frameAt(model: Model, x: number): Frame {
   return { p, T, n, d };
 }
 
+// the world point of station parameter u, in the station's frame: P = p + n(u)·n̂ + d(u)·d̂
+export function stationWorld(fr: Frame, st: Station, u: number): Vec3 {
+  const nn = st.n(u),
+    dd = st.d(u);
+  return [
+    fr.p[0] + nn * fr.n[0] + dd * fr.d[0],
+    fr.p[1] + nn * fr.n[1] + dd * fr.d[1],
+    fr.p[2] + nn * fr.n[2] + dd * fr.d[2],
+  ];
+}
+
 // cumulative chord-length parameter for a set of (n,d) points
 export function chordParam(ns: number[], ds: number[]): number[] {
   const ts = [0];
@@ -609,15 +620,7 @@ export function sweptSection(
 ): Section {
   const fr = frameAt(model, x),
     st = stationAt(model, x, trim); // trimmed hull: the keel-knuckle symmetric section; sheet: the raw half
-  const W = (u: number): Vec3 => {
-    const nn = st.n(u),
-      dd = st.d(u);
-    return [
-      fr.p[0] + nn * fr.n[0] + dd * fr.d[0],
-      fr.p[1] + nn * fr.n[1] + dd * fr.d[1],
-      fr.p[2] + nn * fr.n[2] + dd * fr.d[2],
-    ];
-  };
+  const W = (u: number): Vec3 => stationWorld(fr, st, u);
   // Bow extension: where the sheer guide has crossed the centerline (yf < 0, forward of the LOA via the
   // extrapolation in prepare) the station straddles the centerline. mirrorKeelStation builds the same keel-
   // symmetric, keel-rounded section it does everywhere (reflecting the starboard span [uA, ustar]), and the
@@ -706,19 +709,48 @@ export function sweptSection(
       keel = ub >= umax - 1e-6 && !open;
     }
   }
-  // column parameters across [ua, ub]. For the trimmed hull, PIN a column on each potential-knuckle template
-  // point (one that is a knuckle in some template, so a crease may run through it). The anchor is at a fixed
-  // column index (even fills between anchors), so the chine line is one consistent grid column the surface /
-  // mesh can crease along. The anchor's POSITION blends from the even-grid spot toward the knuckle param by
-  // the local blended knuckle strength: where the chine is strong it sits on the chine; where it fades (the
-  // fine bow, or it leaves the kept span) the columns relax to even — matching the chineless hull, so the
-  // sweep stays fair with no resampling step. Sharpness is data-driven; the crease column is just a home.
+  const { colU, creaseCols, creaseK } = sectionColumns(
+    model,
+    x,
+    st,
+    ua,
+    ub,
+    M,
+    trim,
+  );
+  const pts: Vec3[] = colU.map(W);
+  if (keel) {
+    pts[M][1] = 0;
+    creaseCols.push(M); // the keel is a crease line too (a V keel; flat keels stay smooth, data-driven)
+    creaseK.push(clamp(st.keelV ?? 0, 0, 1));
+  }
+  return { pts, open, aft, keel, creaseCols, creaseK };
+}
+
+// column parameters across the kept span [ua, ub]. With `anchor` (the trimmed hull), PIN a column on each
+// potential-knuckle template point (one that is a knuckle in some template, so a crease may run through it).
+// The anchor is at a fixed column index (even fills between anchors), so the chine line is one consistent
+// grid column the surface / mesh can crease along. The anchor's POSITION blends from the even-grid spot
+// toward the knuckle param by the local blended knuckle strength: where the chine is strong it sits on the
+// chine; where it fades (the fine bow, or it leaves the kept span) the columns relax to even — matching the
+// chineless hull, so the sweep stays fair with no resampling step. Sharpness is data-driven; the crease
+// column is just a home. Exported so the exact longitudinal evaluator (longitudinalPointAt) places its
+// point on the very same column curve the hull grid samples.
+export function sectionColumns(
+  model: Model,
+  x: number,
+  st: Station,
+  ua: number,
+  ub: number,
+  M: number,
+  anchor: boolean,
+): { colU: number[]; creaseCols: number[]; creaseK: number[] } {
   const creaseCols: number[] = [],
     creaseK: number[] = [];
   let colU: number[];
   const evenU = (j: number) => ua + ((ub - ua) * j) / M;
   const pots =
-    trim && st.ts
+    anchor && st.ts
       ? st.ts
           .map((_, i) => i)
           .filter((i) => model.templates.some((t) => (t[i]?.k ?? 0) > 0))
@@ -770,13 +802,7 @@ export function sweptSection(
   } else {
     colU = Array.from({ length: M + 1 }, (_, j) => evenU(j));
   }
-  const pts: Vec3[] = colU.map(W);
-  if (keel) {
-    pts[M][1] = 0;
-    creaseCols.push(M); // the keel is a crease line too (a V keel; flat keels stay smooth, data-driven)
-    creaseK.push(clamp(st.keelV ?? 0, 0, 1));
-  }
-  return { pts, open, aft, keel, creaseCols, creaseK };
+  return { colU, creaseCols, creaseK };
 }
 
 export function clippedSection(model: Model, x: number, M: number): Section {
@@ -804,18 +830,18 @@ export function forwardLimit(model: Model): number {
   return lo; // the last x with a (vanishingly small) section ⇒ the bow closes here
 }
 
-// The trimmed-sheer point at x — the hull's 3D top edge: the top point (the sheer-trim depth) of the
-// keel-mirrored station, the same construction sweptSection builds its first row from, but with the trim
-// and centerline crossings CONVERGED by bisection instead of read off the coarse scan with one linear-
-// interpolation step. This makes the evaluator smooth in x to ~1e-9 world units, so the curvature comb can
-// finite-difference it directly (sheerCombSamples) — differencing the coarse-scanned polyline instead put
-// the scan's O(h²) placement noise straight into κ and the comb was visibly unstable. No transom clip
-// here (trimmedSheerCurve applies that plane), so the point is smooth ACROSS the transom crossing and the
-// aft endpoint's curvature stencil can reach behind it. Returns null where the trimmed hull has no
-// section (aft of the bow closure, an open section, or a section entirely above the sheer trim).
-export function sheerPointAt(model: Model, x: number): Vec3 | null {
-  const fr = frameAt(model, x),
-    st = stationAt(model, x, true);
+// ---------- converged exact evaluators (for the curvature combs) ----------
+// The overlays' combs finite-difference these, so every internal crossing is CONVERGED by bisection
+// instead of read off a coarse scan with one linear-interpolation step — that scan's O(h²) placement
+// noise (~1e-2 world units) is pure noise to anything that differentiates the result.
+
+// The sheer-trim crossing (top of the kept span) of the keel-mirrored station at x, converged by
+// bisection. Returns null where the trimmed hull has no section here: the whole station above the trim,
+// or an empty section (trim crossing at or below the keel — sweptSection's `empty` test). The centerline
+// crossing that bounds the span below needs no scan: the keel-mirrored station puts the keel exactly at
+// the parameter MIDPOINT (mirrorKeelStation reflects the starboard span about its converged centerline
+// crossing), with y > 0 strictly inside it.
+function trimCrossU(model: Model, x: number, st: Station): number | null {
   if (st.tmax <= 0) return null; // no keel-mirrored section here
   const dtrim = -model.sheer.zf(x), // depth of the sheer line below the deck
     FN = 160;
@@ -838,18 +864,83 @@ export function sheerPointAt(model: Model, x: number): Vec3 | null {
     }
     if (umin < 0) return null; // the whole station is above the sheer trim ⇒ no hull at this x
   }
-  // The centerline (keel) crossing bounds the kept span below — needed only to reject an empty section
-  // (trim crossing at or below the keel), matching sweptSection's `empty` test. No scan needed: the
-  // keel-mirrored station puts the keel exactly at the parameter MIDPOINT (mirrorKeelStation reflects the
-  // starboard span about its converged centerline crossing), with y > 0 strictly inside it.
-  if (umin >= st.tmax / 2 - 1e-6) return null; // the section is entirely above the trim ⇒ no hull here
-  const nn = st.n(umin),
-    dd = st.d(umin);
-  return [
-    fr.p[0] + nn * fr.n[0] + dd * fr.d[0],
-    fr.p[1] + nn * fr.n[1] + dd * fr.d[1],
-    fr.p[2] + nn * fr.n[2] + dd * fr.d[2],
-  ];
+  return umin >= st.tmax / 2 - 1e-6 ? null : umin; // at/below the keel ⇒ empty section, no hull here
+}
+
+// The trimmed-sheer point at x — the hull's 3D top edge: the top point (the sheer-trim depth) of the
+// keel-mirrored station, the same construction sweptSection builds its first row from, but with the trim
+// crossing converged (trimCrossU). This makes the evaluator smooth in x to ~1e-9 world units, so the
+// curvature comb can finite-difference it directly (trimmedSheerViz) — differencing the coarse-scanned
+// polyline instead put the scan's O(h²) placement noise straight into κ and the comb was visibly
+// unstable. No transom clip here (trimmedSheerViz applies that plane), so the point is smooth ACROSS the
+// transom crossing and the aft endpoint's curvature stencil can reach behind it. Returns null where the
+// trimmed hull has no section (aft of the bow closure, an open section, or entirely above the sheer trim).
+export function sheerPointAt(model: Model, x: number): Vec3 | null {
+  const st = stationAt(model, x, true),
+    umin = trimCrossU(model, x, st);
+  if (umin === null) return null;
+  return stationWorld(frameAt(model, x), st, umin);
+}
+
+// The keel (centerline) point of the trimmed hull at x — the parameter midpoint of the keel-mirrored
+// station (see trimCrossU) — or null where there is no trimmed section, or the keel point lies aft of the
+// transom plane (matching the drawn keel, which starts where the transom outline reaches the centerline).
+// Smooth in x to converged precision, so the profile / 3D centerline combs finite-difference it directly.
+export function keelPointAt(model: Model, x: number): Vec3 | null {
+  const st = stationAt(model, x, true);
+  if (trimCrossU(model, x, st) === null) return null;
+  const p = stationWorld(frameAt(model, x), st, st.tmax / 2);
+  return p[0] - xTransom(model, p[2]) >= 0 ? p : null;
+}
+
+// The exact point of hull-grid longitudinal j (of M columns) at station x — the same column curve
+// trimmedHullGrid samples (colU over the kept span, chine-anchored via sectionColumns), but with the
+// span's trim crossing converged (trimCrossU) instead of read off sweptSection's coarse scan. Null where
+// the trimmed hull has no section, or aft of the transom plane (the grid columns start on it). Column M
+// is the keel — keelPointAt is that case.
+export function longitudinalPointAt(
+  model: Model,
+  x: number,
+  M: number,
+  j: number,
+): Vec3 | null {
+  const st = stationAt(model, x, true),
+    utop = trimCrossU(model, x, st);
+  if (utop === null) return null;
+  const { colU } = sectionColumns(model, x, st, utop, st.tmax / 2, M, true);
+  const p = stationWorld(frameAt(model, x), st, colU[j]);
+  return p[0] - xTransom(model, p[2]) >= 0 ? p : null;
+}
+
+// The design-waterline crossing of the trimmed section at station x, in world space — the same footprint
+// dwlContour polylines from the sampled sections, but evaluated from the original definition: scan the
+// kept starboard span (trim crossing → keel) for the immersion sign change and converge it by bisection.
+// Null when the span never crosses the waterline (fully dry, or fully wet — a submerged rail's crossing
+// sits above the sheer trim and is not hull), or when the crossing lies aft of the transom plane.
+export function dwlPointAt(model: Model, x: number): Vec3 | null {
+  const st = stationAt(model, x, true),
+    utop = trimCrossU(model, x, st);
+  if (utop === null) return null;
+  const fr = frameAt(model, x),
+    g = (u: number): number => {
+      const p = stationWorld(fr, st, u);
+      return immersion(model, p[0], p[2]);
+    };
+  const ukeel = st.tmax / 2,
+    FN = 48;
+  let pu = utop,
+    pg = g(utop);
+  for (let i = 1; i <= FN; i++) {
+    const u = utop + ((ukeel - utop) * i) / FN,
+      gu = g(u);
+    if (pg < 0 !== gu < 0) {
+      const p = stationWorld(fr, st, bisectRoot(g, pu, u, pg));
+      return p[0] - xTransom(model, p[2]) >= 0 ? p : null;
+    }
+    pu = u;
+    pg = gu;
+  }
+  return null;
 }
 
 // ---------- the trimmed sheer curve + its curvature comb ----------

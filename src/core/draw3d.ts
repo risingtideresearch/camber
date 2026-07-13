@@ -6,6 +6,10 @@ import {
   L,
   weightsAt,
   frameAt,
+  keelPointAt,
+  longitudinalPointAt,
+  stationAt,
+  stationWorld,
   xTransom,
   forwardLimit,
   sweptSection,
@@ -15,8 +19,10 @@ import {
 import { ModelSelection, selStationIdx } from "./modelSelection";
 import { trimmedHullGrid } from "./step";
 import {
+  combFromSamples3,
+  curveCombs3,
   defaultCurvature,
-  polylineComb3,
+  type Comb3,
   type CurvatureSettings,
 } from "./comb";
 import { ZMIN, ZMAX } from "./view";
@@ -327,8 +333,9 @@ function ribbonMesh(
 // hair tips gives the envelope, whose kinks reveal curvature (G2) discontinuities. The CurvatureControls
 // overlay draws four families of these on the 3D hull — the sheer edge, the keel/centerline, a fan of
 // fore-aft longitudinals, and a fan of transverse sections — each self-scaled so its sharpest hair is
-// COMB_LEN world units. The comb geometry comes from the shared polylineComb3 (core/comb); this file only
-// samples the curves and renders them (GL ribbons + the SVG lines-plan overlay).
+// COMB_LEN world units. The comb geometry comes from the shared exact-evaluator builders (core/comb) fed
+// with each curve's converged original definition (model.ts); this file only picks the curves and renders
+// them (GL ribbons + the SVG lines-plan overlay).
 const COMB_LEN = 90; // world-units length of the sharpest curvature hair (each comb auto-scales to this)
 // the sheer accent (matches --sheer in the 2D lines views); its comb shares the hue, reading as one overlay
 const SHEER_RGB = [0.867, 0.42, 0.125]; // for the GL ribbons (the SVG path uses COL.sheer, the same hue)
@@ -368,41 +375,65 @@ interface CurvCurve3 {
 // build the enabled 3D curvature curves + combs for the current settings. World-space and rotation-
 // independent, so draw3d caches this and only rebuilds it when the model / settings change (rotation reuses
 // the cache). The section / longitudinal counts pick how many curves of each fan get a comb; the hair counts
-// set each comb's density (shared with the 2D combs via CurvatureSettings).
+// set each comb's density (shared with the 2D combs via CurvatureSettings). The drawn CURVES stay the dense
+// sampled polylines; each COMB is built from that curve's original converged evaluator (see comb.ts) — never
+// by differencing the sampled polyline — so κ is exact and the envelope is stable under resampling.
 function buildCurvature3(model: Model, s: CurvatureSettings): CurvCurve3[] {
   const out: CurvCurve3[] = [],
     xFwd = forwardLimit(model);
   const add = (
     curve: Vec3[],
-    nHairs: number,
+    comb: Comb3 | null,
     key: string,
     mirror: boolean,
   ): void => {
     if (curve.length < 3) return;
-    const c = polylineComb3(curve, nHairs, COMB_LEN);
     out.push({
       curve,
-      hairs: c.hairs,
-      env: c.env,
+      hairs: comb?.hairs ?? [],
+      env: comb?.env ?? [],
       rgb: CURV_RGB[key],
       css: CURV_CSS[key],
       mirror,
     });
   };
+  // a partial evaluator yields one comb per existence run; the drawn 3D curves are single runs
+  // (sweptSection keeps the largest interval), so keep the longest comb (hair spacing is uniform,
+  // so most hairs = longest run)
+  const longest = (cs: Comb3[]): Comb3 | null =>
+    cs.reduce<Comb3 | null>(
+      (a, b) => (!a || b.hairs.length > a.hairs.length ? b : a),
+      null,
+    );
 
-  // the trimmed sheer edge (the hull's 3D top edge) — the converged evaluator gives a smooth, dense curve
-  if (s.d3Sheer)
-    add(trimmedSheerViz(model, 600).curve, s.nLongHairs, "sheer", true);
+  // the trimmed sheer edge (the hull's 3D top edge) — the bespoke converged evaluator supplies BOTH the
+  // dense curve and the comb samples (κ by converged central differences, one-sided stencils at the
+  // ends) in one shared pass; combFromSamples3 applies the common percentile auto-scale.
+  if (s.d3Sheer) {
+    const N = 600,
+      every = Math.max(1, Math.round(N / Math.max(2, s.nLongHairs))),
+      viz = trimmedSheerViz(model, N, every);
+    add(viz.curve, combFromSamples3(viz.comb, COMB_LEN), "sheer", true);
+  }
 
   // the keel/centerline and the longitudinal fan both ride the fair hull grid (columns = longitudinals,
-  // column 0 the sheer, column M the keel), so build it once if either is on.
+  // column 0 the sheer, column M the keel), so build it once if either is on. The combs evaluate the same
+  // column curves exactly (keelPointAt / longitudinalPointAt, trim crossing converged).
   if (s.d3Centerline || (s.d3Longitudinals && s.nLongCombs > 0)) {
     const M = 40,
       { grid } = trimmedHullGrid(model, 140, M);
     if (s.d3Centerline)
       add(
         grid.map((row) => row[M]),
-        s.nLongHairs,
+        longest(
+          curveCombs3(
+            (x) => keelPointAt(model, x),
+            0,
+            xFwd,
+            s.nLongHairs,
+            COMB_LEN,
+          ),
+        ),
         "keel",
         false,
       );
@@ -414,7 +445,15 @@ function buildCurvature3(model: Model, s: CurvatureSettings): CurvCurve3[] {
           n === 1 ? Math.round(M / 2) : Math.round(1 + ((M - 2) * k) / (n - 1));
         add(
           grid.map((row) => row[j]),
-          s.nLongHairs,
+          longest(
+            curveCombs3(
+              (x) => longitudinalPointAt(model, x, M, j),
+              0,
+              xFwd,
+              s.nLongHairs,
+              COMB_LEN,
+            ),
+          ),
           "long",
           true,
         );
@@ -422,7 +461,7 @@ function buildCurvature3(model: Model, s: CurvatureSettings): CurvCurve3[] {
     }
   }
 
-  // the transverse section fan: true constant-x sections, full-width where they close across the keel
+  // the transverse section fan, full-width where the sections close across the keel
   if (s.d3Sections && s.nSectCombs > 0) {
     const M = 40,
       n = s.nSectCombs;
@@ -437,7 +476,22 @@ function buildCurvature3(model: Model, s: CurvatureSettings): CurvCurve3[] {
         for (let j = sec.pts.length - 2; j >= 0; j--)
           curve.push([sec.pts[j][0], -sec.pts[j][1], sec.pts[j][2]]);
       }
-      add(curve, s.nSectHairs, "sect", false);
+      // the comb: the keel-mirrored station over its kept span (starboard trim crossing → keel → port),
+      // null above the sheer trim or behind the transom plane, so the run edges converge onto the clip
+      const st = stationAt(model, x, true),
+        fr = frameAt(model, x),
+        dtrim = -model.sheer.zf(x);
+      const f = (u: number): Vec3 | null => {
+        if (dtrim > 0 && st.d(u) < dtrim) return null;
+        const p = stationWorld(fr, st, u);
+        return p[0] - xTransom(model, p[2]) >= 0 ? p : null;
+      };
+      add(
+        curve,
+        longest(curveCombs3(f, 0, st.tmax, s.nSectHairs, COMB_LEN)),
+        "sect",
+        false,
+      );
     }
   }
   return out;

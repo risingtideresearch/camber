@@ -6,17 +6,22 @@ import {
   clippedSection,
   DMAX,
   dwlContour,
+  dwlPointAt,
   fairEval,
   forwardLimit,
   frameAt,
+  keelPointAt,
   L,
   NMAX,
   NMIN,
   sampleX,
   stationAt,
+  stationWorld,
   sweptSection,
   transomEdge,
   weightsAt,
+  XFWD,
+  xTransom,
   type Model,
   type Section,
   type StationCP,
@@ -27,7 +32,7 @@ import {
   OnModelSelect,
   selStationIdx,
 } from "./modelSelection";
-import { polylineComb2, type Comb2, type CurvatureSettings } from "./comb";
+import { curveCombs2, type Comb2, type CurvatureSettings } from "./comb";
 import {
   Lbase,
   LH,
@@ -437,28 +442,35 @@ export function drawPlan(
     );
   }
   // curvature combs: the sheer plan (deck-edge half-breadth) and the design-waterline footprint. Both are
-  // fore-aft (longitudinal) curves, so they share the longitudinal hair count.
+  // fore-aft (longitudinal) curves, so they share the longitudinal hair count. Each comb evaluates the
+  // curve's ORIGINAL definition — the plan spline directly, the waterline through the converged crossing
+  // evaluator (dwlPointAt) — never a resampled polyline (see comb.ts).
   if (curv?.on) {
     if (curv.planSheer) {
-      const pts = xs.map((x): [number, number] => [
-        mapX(x),
-        yPlan(model.sheer.yf(x)),
-      ]);
-      drawComb2(
-        svg,
-        polylineComb2(pts, curv.nLongHairs, COMB_LEN_STRIP),
-        COL.sheer,
-      );
+      const f = (x: number): Vec2 => [mapX(x), yPlan(model.sheer.yf(x))];
+      for (const c of curveCombs2(
+        f,
+        0,
+        L + XFWD,
+        curv.nLongHairs,
+        COMB_LEN_STRIP,
+      ))
+        drawComb2(svg, c, COL.sheer);
     }
-    if (curv.planWaterline)
-      for (const run of dwlContour(model, sections)) {
-        const pts = run.map((p): [number, number] => [mapX(p[0]), yPlan(p[1])]);
-        drawComb2(
-          svg,
-          polylineComb2(pts, curv.nLongHairs, COMB_LEN_STRIP),
-          COL.wl,
-        );
-      }
+    if (curv.planWaterline) {
+      const f = (x: number): Vec2 | null => {
+        const p = dwlPointAt(model, x);
+        return p && [mapX(p[0]), yPlan(p[1])];
+      };
+      for (const c of curveCombs2(
+        f,
+        0,
+        forwardLimit(model),
+        curv.nLongHairs,
+        COMB_LEN_STRIP,
+      ))
+        drawComb2(svg, c, COL.wl);
+    }
   }
   // cut station — true plan heading (the fan angle)
   cutTrace(model, svg, (p) => [mapX(p[0]), yPlan(p[1])]);
@@ -638,39 +650,49 @@ export function drawProfile(
   const cut = clippedSection(model, model.x0, 40);
   // curvature combs: the sheer-trim curve and the keel / centerline outline (both fore-aft, so the
   // longitudinal hair count), and the live cut station's profile trace (transverse, so the section count).
+  // Each comb evaluates the curve's ORIGINAL definition (see comb.ts), never the drawn polyline.
   if (curv?.on) {
     if (curv.profSheer) {
-      const pts = xs.map((x): [number, number] => [
-        mapX(x),
-        zScreenP(model.sheer.zf(x)),
-      ]);
-      drawComb2(
-        svg,
-        polylineComb2(pts, curv.nLongHairs, COMB_LEN_STRIP),
-        COL.sheer,
-      );
+      const f = (x: number): Vec2 => [mapX(x), zScreenP(model.sheer.zf(x))];
+      for (const c of curveCombs2(
+        f,
+        0,
+        L + XFWD,
+        curv.nLongHairs,
+        COMB_LEN_STRIP,
+      ))
+        drawComb2(svg, c, COL.sheer);
     }
+    // the keel/rocker run of the outline (converged keelPointAt, transom → bow closure). The short
+    // emergent-stem branch at a tumblehome bow is a different branch of the outline and carries no comb.
     if (curv.profCenterline && keel.length > 2) {
-      const pts = keel.map((p): [number, number] => [
-        mapX(p[0]),
-        zScreenP(p[2]),
-      ]);
-      drawComb2(
-        svg,
-        polylineComb2(pts, curv.nLongHairs, COMB_LEN_STRIP),
-        COL.keel,
-      );
+      const f = (x: number): Vec2 | null => {
+        const p = keelPointAt(model, x);
+        return p && [mapX(p[0]), zScreenP(p[2])];
+      };
+      for (const c of curveCombs2(f, 0, xFwd, curv.nLongHairs, COMB_LEN_STRIP))
+        drawComb2(svg, c, COL.keel);
     }
     if (curv.profCut) {
-      const pts = cut.pts.map((p): [number, number] => [
-        mapX(p[0]),
-        zScreenP(p[2]),
-      ]);
-      drawComb2(
-        svg,
-        polylineComb2(pts, curv.nSectHairs, COMB_LEN_STRIP),
-        "var(--slider)",
-      );
+      // the cut station's kept starboard span (sheer trim → keel), null above the trim or behind the
+      // transom plane — the comb's run edges converge onto the real clip by bisection
+      const st = stationAt(model, model.x0, true),
+        fr = frameAt(model, model.x0),
+        dtrim = -model.sheer.zf(model.x0);
+      const f = (u: number): Vec2 | null => {
+        if (dtrim > 0 && st.d(u) < dtrim) return null;
+        const p = stationWorld(fr, st, u);
+        if (p[0] - xTransom(model, p[2]) < 0) return null;
+        return [mapX(p[0]), zScreenP(p[2])];
+      };
+      for (const c of curveCombs2(
+        f,
+        0,
+        st.tmax / 2,
+        curv.nSectHairs,
+        COMB_LEN_STRIP,
+      ))
+        drawComb2(svg, c, "var(--slider)");
     }
   }
   // cut station — true profile rake (the fan shifts x as the section runs inboard to the keel)
@@ -696,26 +718,33 @@ export function drawProfile(
 // one section-template editor (template `ti`): the other templates ghosted faint behind it, this one
 // solid with draggable nodes. Built into a fresh svg by drawTemplates each render.
 
+// the exact content-space evaluator of a template's section curve, u → [snX(n(u)), snY(d(u))] over the
+// chord parameter u ∈ [0, tmax] — shared by the drawn polyline and its curvature comb (the comb needs the
+// original fairing definition, not a resample of the drawn polyline)
+function stnEval(
+  model: Model,
+  pts: StationCP[],
+): { f: (u: number) => Vec2; tmax: number } {
+  const ns = pts.map((p) => p.n),
+    ds = pts.map((p) => p.d),
+    ks = pts.map((p) => p.k),
+    ts = chordParam(ns, ds);
+  const nf = fairEval(model, ts, ns, ks),
+    df = fairEval(model, ts, ds, ks);
+  return { f: (u) => [snX(nf(u)), snY(df(u))], tmax: ts[ts.length - 1] };
+}
+
 export function stnCurve(
   model: Model,
   svg: SVGGElement,
   pts: StationCP[],
   c: string,
   op: number,
-): [number, number][] {
-  const ns = pts.map((p) => p.n),
-    ds = pts.map((p) => p.d),
-    ks = pts.map((p) => p.k),
-    ts = chordParam(ns, ds);
-  const nf = fairEval(model, ts, ns, ks),
-    df = fairEval(model, ts, ds, ks),
-    tm = ts[ts.length - 1],
-    out: [number, number][] = [],
+): void {
+  const { f, tmax } = stnEval(model, pts),
+    out: Vec2[] = [],
     N = 1000;
-  for (let i = 0; i <= N; i++) {
-    const u = (tm * i) / N;
-    out.push([snX(nf(u)), snY(df(u))]);
-  }
+  for (let i = 0; i <= N; i++) out.push(f((tmax * i) / N));
   svg.append(
     el("path", {
       d: poly(out),
@@ -727,7 +756,6 @@ export function stnCurve(
       "stroke-linecap": "round",
     }),
   );
-  return out; // the sampled content-space polyline, so a caller can build a curvature comb on it
 }
 
 // axes shared by the template editor and the cut station: sheer point at origin (top-left),
@@ -777,29 +805,23 @@ export function drawStation(
     arr = model.templates[ti];
   stnAxes(svg);
   // faint ghosts of every other template, then this one solid
-  const ghosts: { j: number; pts: [number, number][] }[] = [];
   model.templates.forEach((tpl, j) => {
-    if (j !== ti)
-      ghosts.push({ j, pts: stnCurve(model, svg, tpl, tplColor(j), 0.16) });
+    if (j !== ti) stnCurve(model, svg, tpl, tplColor(j), 0.16);
   });
-  const activePts = stnCurve(model, svg, arr, col, 1);
-  // curvature combs on the template section curves (transverse ⇒ the section hair count)
+  stnCurve(model, svg, arr, col, 1);
+  // curvature combs on the template section curves (transverse ⇒ the section hair count), each built
+  // from the template's exact fairing evaluator (stnEval), not the drawn polyline
   if (curv?.on) {
+    const comb = (tpl: StationCP[], c: string, op: number): void => {
+      const { f, tmax } = stnEval(model, tpl);
+      for (const cb of curveCombs2(f, 0, tmax, curv.nSectHairs, COMB_LEN_STN))
+        drawComb2(svg, cb, c, op);
+    };
     if (curv.tplUnselected)
-      for (const g of ghosts)
-        drawComb2(
-          svg,
-          polylineComb2(g.pts, curv.nSectHairs, COMB_LEN_STN),
-          tplColor(g.j),
-          0.5,
-        );
-    if (curv.tplSelected)
-      drawComb2(
-        svg,
-        polylineComb2(activePts, curv.nSectHairs, COMB_LEN_STN),
-        col,
-        0.95,
-      );
+      model.templates.forEach((tpl, j) => {
+        if (j !== ti) comb(tpl, tplColor(j), 0.5);
+      });
+    if (curv.tplSelected) comb(arr, col, 0.95);
   }
   arr.forEach((p, idx) => {
     const end = idx === 0,
@@ -1062,20 +1084,25 @@ export function drawCutStation(
   }
 
   // curvature combs on the two section curves (transverse ⇒ the section hair count): the raw interpolated
-  // half-section and the mirrored + keel-rounded full section.
+  // half-section and the mirrored + keel-rounded full section — both evaluated straight from their
+  // station definitions (n(u), d(u)), not from the drawn polylines.
   if (curv?.on) {
-    if (curv.cutRaw)
-      drawComb2(
-        svg,
-        polylineComb2(rawPts, curv.nSectHairs, COMB_LEN_STN),
-        "#c026d3",
-      );
-    if (curv.cutMirrored)
-      drawComb2(
-        svg,
-        polylineComb2(full, curv.nSectHairs, COMB_LEN_STN),
-        COL.station,
-      );
+    if (curv.cutRaw) {
+      const f = (u: number): Vec2 => [snX(raw.n(u)), snY(raw.d(u))];
+      for (const c of curveCombs2(
+        f,
+        0,
+        raw.tmax,
+        curv.nSectHairs,
+        COMB_LEN_STN,
+      ))
+        drawComb2(svg, c, "#c026d3");
+    }
+    if (curv.cutMirrored) {
+      const f = (u: number): Vec2 => [snX(st.n(u)), snY(st.d(u))];
+      for (const c of curveCombs2(f, 0, st.tmax, curv.nSectHairs, COMB_LEN_STN))
+        drawComb2(svg, c, COL.station);
+    }
   }
 
   // kept arc, bold — both sides: from the starboard sheer trim (umin) through the keel to the port sheer
