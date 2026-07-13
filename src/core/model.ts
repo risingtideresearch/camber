@@ -169,8 +169,8 @@ export interface Model {
 }
 
 export function createModel(): Model {
-  return {
-    sheer: null as unknown as Sheer,
+  const model: Model = {
+    sheer: { cp: [], trim: [], transom: [], yf: () => 0, zf: () => 0 },
     templates: [],
     keelK: [],
     weightFn: () => [1],
@@ -179,6 +179,8 @@ export function createModel(): Model {
     deckRake: 0,
     fairing: "pchip", // C¹ shape-preserving (keeps the chines); "c2"/"bspline" are code-toggle experiments
   };
+  resetModel(model); // a fresh model IS the default hull — never a half-initialized shell
+  return model;
 }
 
 export function resetModel(model: Model): void {
@@ -1103,7 +1105,8 @@ export function sampleX(): number[] {
 // before calling them), so they depend only on the core and live here with the other model mutations. They
 // clamp to the editable domain bounds (YMIN/YMAX/ZTRIMMIN and the ±80 minimum station spacing).
 
-// ---------- add stations / points ---------- (add* return the inserted index)
+// ---------- add stations / points ---------- (add* return the inserted index, or −1 when the
+// clicked segment has no room for another point at the ±80 minimum spacing — nothing is inserted)
 // Add a unified station at x: its plan y and its blend w are both read off the CURRENT curves there, so the
 // insert changes neither curve — it just adds a handle. (yGiven is the dragged y when adding in the plan
 // view; the blend strip passes the plan curve's own y so the station lands on the curve.)
@@ -1114,6 +1117,11 @@ export function addStation(model: Model, x: number, yGiven: number): number {
   x = clamp(x, cp[0].x + 80, L + XFWD);
   let k = cp.findIndex((p) => p.x > x);
   if (k < 0) k = n; // past every existing point → append at the bow end
+  // clamp against the ACTUAL insertion neighbors so the 80-unit spacing invariant survives the insert
+  const lo = cp[k - 1].x + 80,
+    hi = k < n ? cp[k].x - 80 : L + XFWD;
+  if (lo > hi) return -1; // the segment can't fit another station
+  x = clamp(x, lo, hi);
   cp.splice(k, 0, { x, y: clamp(yGiven, YMIN, YMAX), w: weightsAt(model, x) });
   return k;
 }
@@ -1128,6 +1136,11 @@ export function addTrimPoint(model: Model, x: number, z: number): number {
   x = clamp(x, cp[0].x + 80, L + XFWD);
   let k = cp.findIndex((p) => p.x > x);
   if (k < 0) k = n; // past every existing point → append at the bow end
+  // clamp against the ACTUAL insertion neighbors so the 80-unit spacing invariant survives the insert
+  const lo = cp[k - 1].x + 80,
+    hi = k < n ? cp[k].x - 80 : L + XFWD;
+  if (lo > hi) return -1; // the segment can't fit another point
+  x = clamp(x, lo, hi);
   cp.splice(k, 0, { x, z: clamp(z, ZTRIMMIN, 0), k: 0 });
   return k;
 }

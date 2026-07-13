@@ -171,6 +171,23 @@ function obj(v: unknown, ctx: string): Record<string, unknown> {
     throw new Error(`${ctx} must be an object`);
   return v as Record<string, unknown>;
 }
+// a forward x-step: point 0 holds the anchor x₀; later points must step strictly forward (dx > 0),
+// or the decoded x array is non-monotonic and no convex blend is valid
+function step(v: unknown, ctx: string, i: number): number {
+  const x = num(v, ctx);
+  if (i > 0 && x <= 0) throw new Error(`${ctx} must be > 0`);
+  return x;
+}
+// a depth step: point 0 is the pinned sheer point; later points must not step back up (dd ≥ 0 —
+// a zero step is legitimate, e.g. the flat run of a flat-bottomed section)
+function depthStep(v: unknown, ctx: string, i: number): number {
+  const x = num(v, ctx);
+  if (i > 0 && x < 0) throw new Error(`${ctx} must be ≥ 0`);
+  return x;
+}
+// an optional knuckle: absent or non-finite (a corrupted document) → 0 (smooth)
+const knuckle = (v: unknown): number =>
+  typeof v === "number" && isFinite(v) ? v : 0;
 // parse a fixed-length array of point objects, applying `field` to each (already an object)
 function points<T>(
   v: unknown,
@@ -245,9 +262,9 @@ function decodeVariant(
   const templates: StationCP[][] = rawTpls.map((tp, ti) =>
     decSection(
       points(tp, `${c}.templates[${ti}]`, nSec, (o, i) => ({
-        dd: num(o.dd, `${c}.templates[${ti}][${i}].dd`),
+        dd: depthStep(o.dd, `${c}.templates[${ti}][${i}].dd`, i),
         n: num(o.n, `${c}.templates[${ti}][${i}].n`),
-        k: typeof o.k === "number" ? o.k : 0,
+        k: knuckle(o.k),
       })),
     ),
   );
@@ -257,7 +274,7 @@ function decodeVariant(
     throw new Error(`${c}.sheerPlan must be an array of ≥ 2 points`);
   const cp = decPlan(
     points(v.sheerPlan, `${c}.sheerPlan`, v.sheerPlan.length, (o, i) => ({
-      dx: num(o.dx, `${c}.sheerPlan[${i}].dx`),
+      dx: step(o.dx, `${c}.sheerPlan[${i}].dx`, i),
       y: num(o.y, `${c}.sheerPlan[${i}].y`),
       w: Array.isArray(o.w)
         ? weightVec(o.w, `${c}.sheerPlan[${i}].w`, nTpl)
@@ -269,17 +286,15 @@ function decodeVariant(
     throw new Error(`${c}.sheerTrim must be an array of ≥ 2 points`);
   const trim = decTrim(
     points(v.sheerTrim, `${c}.sheerTrim`, v.sheerTrim.length, (o, i) => ({
-      dx: num(o.dx, `${c}.sheerTrim[${i}].dx`),
+      dx: step(o.dx, `${c}.sheerTrim[${i}].dx`, i),
       depth: num(o.depth, `${c}.sheerTrim[${i}].depth`),
-      k: typeof o.k === "number" ? o.k : 0,
+      k: knuckle(o.k),
     })),
   );
 
-  // keelK: optional per-template keel knuckle; missing/short → 0 (smooth)
+  // keelK: optional per-template keel knuckle; missing/short/non-finite → 0 (smooth)
   const keelK = Array.from({ length: nTpl }, (_, j) =>
-    Array.isArray(v.keelK) && typeof v.keelK[j] === "number"
-      ? clamp(v.keelK[j] as number, 0, 1)
-      : 0,
+    Array.isArray(v.keelK) ? clamp(knuckle(v.keelK[j]), 0, 1) : 0,
   );
 
   // blend weights: unified (already on each station) or MIGRATE a legacy document — a separate `weights`
@@ -291,7 +306,7 @@ function decodeVariant(
       "weights" in v && Array.isArray(v.weights)
         ? decWeights(
             points(v.weights, `${c}.weights`, v.weights.length, (o, i) => ({
-              dx: num(o.dx, `${c}.weights[${i}].dx`),
+              dx: step(o.dx, `${c}.weights[${i}].dx`, i),
               w: weightVec(o.w, `${c}.weights[${i}].w`, nTpl),
             })),
           )
@@ -301,10 +316,12 @@ function decodeVariant(
   }
 
   const to = obj(v.transom, `${c}.transom`);
+  const dDepthBot = num(to.dDepthBot, `${c}.transom.dDepthBot`);
+  if (dDepthBot <= 0) throw new Error(`${c}.transom.dDepthBot must be > 0`); // the bottom edge is deeper
   const transom = decTransom({
     x: num(to.x, `${c}.transom.x`),
     depthTop: num(to.depthTop, `${c}.transom.depthTop`),
-    dDepthBot: num(to.dDepthBot, `${c}.transom.dDepthBot`),
+    dDepthBot,
     transomRake: num(to.transomRake, `${c}.transom.transomRake`),
   });
 

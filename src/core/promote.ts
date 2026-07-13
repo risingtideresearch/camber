@@ -146,6 +146,7 @@ function promoteTemplates(data: HullData, K: number): void {
     data.templates.push(
       data.templates[data.templates.length - 1].map((p) => ({ ...p })),
     );
+    data.keelK.push(data.keelK[data.keelK.length - 1] ?? 0); // keelK stays index-aligned with templates
     data.cp.forEach((c) => c.w.push(0)); // the new template contributes nothing to THIS hull (Σw still = 1)
   }
 }
