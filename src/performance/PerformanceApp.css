@@ -1,0 +1,148 @@
+/* Styles for the hull performance viewer: the shell layout (same card primitives as the other apps),
+   the trim sliders, and the speed/power chart. */
+
+/* ---------- app shell ---------- */
+header {
+  padding: 16px 24px 0;
+}
+header h1 {
+  margin: 0;
+  font-size: 18px;
+}
+header p {
+  margin: 4px 0 0;
+  color: var(--mut);
+  font-size: 13px;
+  max-width: 820px;
+}
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 24px 32px;
+  max-width: 1500px;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+.row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.row .main {
+  flex: 1 1 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.row .side {
+  flex: 0 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.barrow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.designname {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.view3dwrap {
+  display: flex;
+  flex-direction: column;
+  aspect-ratio: 1000 / 460;
+}
+
+/* ---------- shared card primitives ---------- */
+.cap {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+  margin: 0 0 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.ctl {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.hint {
+  font-size: 12px;
+  color: var(--mut);
+}
+
+/* ---------- trim sliders ---------- */
+.trimrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.trimrow input[type="range"] {
+  flex: 1;
+  accent-color: var(--slider);
+}
+.trimval {
+  font-variant-numeric: tabular-nums;
+  color: var(--mut);
+  min-width: 42px;
+  text-align: right;
+}
+
+/* ---------- speed / power chart ---------- */
+.powerchart {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: none;
+}
+.powerbusy {
+  text-transform: none;
+  letter-spacing: normal;
+}
+.powerlegend {
+  display: flex;
+  gap: 14px;
+  font-size: 11px;
+  color: var(--mut);
+}
+.powerlegend .lg::before {
+  content: "";
+  display: inline-block;
+  width: 14px;
+  height: 0;
+  border-top: 2px solid;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.powerlegend .lgtotal::before {
+  border-color: #2b6cb0;
+}
+.powerlegend .lgwave::before {
+  border-color: #dd6b20;
+}
+.powerlegend .lgfric::before {
+  border-top-style: dashed;
+  border-color: #a0aec0;
+}
+.powerreadout {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  min-height: 16px;
+  white-space: nowrap;
+}
