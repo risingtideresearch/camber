@@ -34,7 +34,7 @@
   border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: 0 6px 20px rgba(17, 24, 31, 0.16);
-  max-height: min(72vh, 560px);
+  max-height: min(85vh, 700px);
   overflow-y: auto;
 }
 .dropdown-panel--left {
