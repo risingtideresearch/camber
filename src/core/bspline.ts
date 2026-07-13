@@ -23,29 +23,6 @@ function findSpan(n: number, p: number, u: number, U: number[]): number {
   return mid;
 }
 
-// de Boor's algorithm: the curve point at parameter u in span `span`
-function deBoor(
-  span: number,
-  u: number,
-  U: number[],
-  P: Vec2[],
-  p: number,
-): Vec2 {
-  const d: Vec2[] = [];
-  for (let j = 0; j <= p; j++) d[j] = [P[span - p + j][0], P[span - p + j][1]];
-  for (let r = 1; r <= p; r++)
-    for (let j = p; j >= r; j--) {
-      const i = span - p + j,
-        den = U[i + p - r + 1] - U[i],
-        a = den > 0 ? (u - U[i]) / den : 0;
-      d[j] = [
-        (1 - a) * d[j - 1][0] + a * d[j][0],
-        (1 - a) * d[j - 1][1] + a * d[j][1],
-      ];
-    }
-  return d[p];
-}
-
 // y(x) along a clamped cubic B-spline whose control polygon is `pts` (x strictly increasing, so x(u) is
 // monotone and invertible). Returns the curve's y at the given x.
 export function clampedBSplineSamplerX(pts: Vec2[]): (x: number) => number {
@@ -62,18 +39,31 @@ export function clampedBSplineSamplerX(pts: Vec2[]): (x: number) => number {
   for (let i = 0; i <= p; i++) U.push(1);
   const x0 = pts[0][0],
     x1 = pts[numCP - 1][0];
+  // de Boor's algorithm on a single coordinate (c = 0 for x, 1 for y), reusing one scratch row: this
+  // sampler is hot (every plan-sweep sample / frameAt queries it), so no per-query allocation.
+  const d = new Float64Array(p + 1);
+  const deBoor1 = (span: number, u: number, c: 0 | 1): number => {
+    for (let j = 0; j <= p; j++) d[j] = pts[span - p + j][c];
+    for (let r = 1; r <= p; r++)
+      for (let j = p; j >= r; j--) {
+        const i = span - p + j,
+          den = U[i + p - r + 1] - U[i],
+          a = den > 0 ? (u - U[i]) / den : 0;
+        d[j] = (1 - a) * d[j - 1] + a * d[j];
+      }
+    return d[p];
+  };
   return (x: number) => {
     x = clamp(x, x0, x1);
-    // invert the monotone x(u) by bisection, then read y at that u
+    // invert the monotone x(u) by bisection on the x component, then read y once at the converged u
     let lo = 0,
       hi = 1,
-      pt = pts[0];
+      mid = 0.5;
     for (let it = 0; it < 36; it++) {
-      const mid = (lo + hi) / 2;
-      pt = deBoor(findSpan(n, p, mid, U), mid, U, pts, p);
-      if (pt[0] < x) lo = mid;
+      mid = (lo + hi) / 2;
+      if (deBoor1(findSpan(n, p, mid, U), mid, 0) < x) lo = mid;
       else hi = mid;
     }
-    return pt[1];
+    return deBoor1(findSpan(n, p, mid, U), mid, 1);
   };
 }
