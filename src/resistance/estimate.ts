@@ -7,6 +7,8 @@
 // explicitly to override its estimate.
 //
 // Estimators (documented, first-order):
+//   ∇    ← displacement, else C_B·L·B·T (C_B given, else DEFAULT_CB) — so displacement can be estimated
+//          from the principal dimensions (incl. draft) alone
 //   C_M  ← C_B   Benford:   C_M = 1/(1 + (1−C_B)^3.5)
 //   C_P  = C_B / C_M
 //   C_WP ← C_B   Schneekluth (U-form): C_WP = (1 + 2·C_B)/3
@@ -15,6 +17,8 @@
 import type { HullGeometry, Provenance } from "./types";
 
 const RHO = { salt: 1025, fresh: 1000 };
+// mid-range block coefficient assumed when neither displacement nor C_B is given (∇ ≈ C_B·L·B·T)
+const DEFAULT_CB = 0.5;
 
 export interface DimensionsInput {
   lwl: number; // m
@@ -49,12 +53,19 @@ export function fromDimensions(input: DimensionsInput): HullGeometry {
   };
 
   const hullBox = lwl * beam * draft;
-  // volume + block coefficient: from displacement, or from an explicit C_B
-  const vol = mark(
-    "vol",
-    input.displacement ? input.displacement / rho : undefined,
-    () => (input.cb != null ? input.cb * hullBox : 0.5 * hullBox),
-  );
+  // volume: from displacement, else from a given C_B, else estimated as DEFAULT_CB·L·B·T. The first two
+  // are "given" (the caller pinned ∇, directly or via C_B); only the fallback is "estimated".
+  let vol: number;
+  if (input.displacement != null) {
+    vol = input.displacement / rho;
+    provenance.vol = "given";
+  } else if (input.cb != null) {
+    vol = input.cb * hullBox;
+    provenance.vol = "given";
+  } else {
+    vol = DEFAULT_CB * hullBox;
+    provenance.vol = "estimated";
+  }
   const cb = vol / hullBox;
   const cm = mark("cm", input.cm, () => 1 / (1 + (1 - cb) ** 3.5));
   const cp = mark("cp", input.cp, () => cb / cm);

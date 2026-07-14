@@ -58,6 +58,17 @@ function near(got: number, want: number, tol: number, label: string): void {
   );
 }
 
+// ---------- 1b. displacement estimated from dimensions (no displacement, no Cb) ----------
+{
+  const L = 30,
+    B = 6,
+    T = 2;
+  const g = fromDimensions({ lwl: L, beam: B, draft: T });
+  console.log("--- displacement from dimensions (Cb defaulted) ---");
+  near(g.vol, 0.5 * L * B * T, 0.001, "∇ = 0.5·L·B·T");
+  check(g.provenance.vol === "estimated", "∇ marked estimated");
+}
+
 // ---------- 2. overrides pass through ----------
 {
   const g = fromDimensions({

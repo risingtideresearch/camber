@@ -51,10 +51,11 @@ the worst-case scant input yields a full curve.
 
 ## Fidelity ladder
 
-| You have…                           | Build a `HullGeometry` by…                          | What you get               |
-| ----------------------------------- | --------------------------------------------------- | -------------------------- |
-| L, B, T + displacement (worst case) | `fromDimensions(...)` — estimates the coefficients  | Holtrop + Savitsky + blend |
-| measured form coefficients          | constructing the record directly (all fields given) | same, but accurate         |
+| You have…                             | Build a `HullGeometry` by…                           | What you get               |
+| ------------------------------------- | ---------------------------------------------------- | -------------------------- |
+| just L, B, T (worst case)             | `fromDimensions(...)` — estimates ∇ and coefficients | Holtrop + Savitsky + blend |
+| + displacement (or C_B) — recommended | `fromDimensions({ …, displacement })`                | same, ∇ no longer guessed  |
+| measured form coefficients            | constructing the record directly (all fields given)  | most accurate              |
 
 Every field a constructor fills in is recorded in `provenance` (`"given"` vs `"estimated"`), and
 `computeResistance` surfaces estimated inputs and out-of-envelope extrapolation in `result.warnings`.
@@ -113,6 +114,40 @@ const result = computeResistance(hull, { water: "salt" });
 
 ## API
 
+### `HullGeometry`
+
+The one record every method consumes — full-scale SI. Build it with `fromDimensions` (below) or construct
+it directly from measured values.
+
+```ts
+interface HullGeometry {
+  // principal dimensions — the required floor
+  lwl: number; // m
+  beam: number; // m, max waterline beam
+  draft: number; // m
+  vol: number; // m³, displaced volume ∇
+
+  // form coefficients
+  cp: number; // prismatic
+  cm: number; // midship-section
+  cwp: number; // waterplane-area
+  lcbPct: number; // LCB as % of L fwd of amidships (negative = aft)
+
+  // secondary form (methods estimate these internally if left unset)
+  halfEntrance: number; // deg; NaN → Holtrop estimates it
+  wettedArea: number; // m²; ≤0 → Holtrop estimates it
+  deadrise: number; // deg; used once the hull is planing-capable
+
+  // planing / bulb extras (optional)
+  transomArea?: number; // m²
+  bulbArea?: number; // m²
+
+  provenance: Provenance; // per-field "given" | "estimated" (set by the constructors)
+}
+
+type Provenance = Record<string, "given" | "estimated">;
+```
+
 ### `fromDimensions(input): HullGeometry`
 
 Fills form coefficients from principal dimensions with standard regressions; any coefficient you pass
@@ -139,14 +174,18 @@ interface DimensionsInput {
 }
 ```
 
-| Quantity         | Estimate                                       |
-| ---------------- | ---------------------------------------------- |
-| C_M              | Benford `1 / (1 + (1−C_B)^3.5)`                |
-| C_P              | `C_B / C_M`                                    |
-| C_WP             | Schneekluth `(1 + 2·C_B)/3`                    |
-| LCB              | `−1.5%` of L (slightly aft)                    |
-| i_E, wetted area | left unset → Holtrop estimates them internally |
-| deadrise         | `15°`                                          |
+| Quantity         | Estimate                                                  |
+| ---------------- | --------------------------------------------------------- |
+| ∇ (displacement) | `displacement`, else `C_B·L·B·T` (`cb`, else `C_B = 0.5`) |
+| C_M              | Benford `1 / (1 + (1−C_B)^3.5)`                           |
+| C_P              | `C_B / C_M`                                               |
+| C_WP             | Schneekluth `(1 + 2·C_B)/3`                               |
+| LCB              | `−1.5%` of L (slightly aft)                               |
+| i_E, wetted area | left unset → Holtrop estimates them internally            |
+| deadrise         | `15°`                                                     |
+
+`displacement` is optional: omit it (and `cb`) and ∇ is estimated from the principal dimensions — draft
+included — via `∇ = C_B·L·B·T` with a mid-range `C_B = 0.5`. Supply `displacement` or `cb` for accuracy.
 
 > ⚠️ These regressions assume conventional ship forms. For unusual hulls (very full, shallow, hard-chine)
 > they can be well off — e.g. Benford predicts C_M ≈ 0.93 for a hull whose true C_M is 0.63. Supply
