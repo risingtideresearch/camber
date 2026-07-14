@@ -14,7 +14,7 @@
 //
 // Run with `npm run test:savitsky` (tsx under node). Non-zero exit on any failure, to gate CI.
 
-import { savitsky, type SavitskyShip } from "../src/core/savitsky";
+import { savitsky, type SavitskyShip } from "../src/resistance/savitsky";
 
 let failures = 0;
 function near(got: number, want: number, tol: number, label: string): void {

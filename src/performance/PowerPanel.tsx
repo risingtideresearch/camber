@@ -1,69 +1,34 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Model } from "../core/model";
-import { L } from "../core/model";
 import { michellCurve, type MichellCurve } from "../core/michell";
-import { formFactor, type Hydro } from "../core/hydro";
-import { holtrop, type HoltropShip } from "../core/holtrop";
-import { savitsky, type SavitskyShip, DEFAULT_SPRAY } from "../core/savitsky";
-import { blendResistance, planingCapability, BLEND_LO } from "../core/blend";
+import type { Hydro } from "../core/hydro";
+import { fromHydrostatics, linScale } from "../core/hullResistance";
+import { computeResistance, FROUDES, DEFAULT_PC } from "../resistance/compute";
+import type { HullGeometry, ResistancePoint } from "../resistance/types";
 import type { Unit, Water } from "../components/MetricsPanel";
 
 // ---------- the speed / power curve ----------
-// Estimated BRAKE power P_B = P_E / PC in kW over the sailing range. The primary line is a BLEND of three
-// resistance methods, each used where it is physically valid and crossfaded by volumetric Froude number
-// (src/core/blend.ts):
-//
-//   • displacement (low Fn_∇): Holtrop-Mennen statistical total (src/core/holtrop.ts)
-//   • planing (high Fn_∇):     Savitsky, incl. a whisker-spray allowance (src/core/savitsky.ts)
-//   • the crossfade spans the semi-displacement hump.
-//
-// Michell (thin-ship wave resistance + ITTC-57 friction with a Holtrop form factor) is NOT in the blend —
-// it under-reads beamy hulls badly — but rides along as a shape diagnostic. All three methods are
-// available as faint underlays behind the "methods" toggle so the handoff is visible; the readout shows
-// the blend plus how much planing weight is in play.
-//
-// Everything is computed at full scale in SI (metres, newtons, m/s) regardless of the metric/imperial
-// display toggle — brake power in kW and speed in knots are unit-system independent. The Michell curve
-// C_w(Fn) is scale-free and recomputed (debounced) only when the hull/trim changes; Holtrop and Savitsky
-// are cheap and re-evaluated per render. Calibrated against S38ish/NPish2 sea-trial data (PC and the
-// blend band); no appendage or air-drag allowance.
-
-// Froude range runs to 0.9 (not the displacement blender's 0.65) so a short-LWL planing hull's speed
-// range — well past the hump — is on screen. Michell is only diagnostic up here; the blend leans on
-// Holtrop/Savitsky at these speeds anyway.
-const FNS: number[] = Array.from({ length: 69 }, (_, i) => 0.05 + i * 0.0125);
+// A thin view over the resistance module (src/resistance/): build a HullGeometry from the live
+// hydrostatics, hand it to computeResistance(), and draw the result. The primary line is the blended
+// best estimate (Holtrop → Savitsky by volumetric Froude number); Michell/Holtrop/Savitsky ride behind
+// the "methods" toggle as diagnostics. All physics, scaling, and blending live in the module — this file
+// only debounces the (heavy) Michell wave sampler, wires inputs, and renders.
 
 // chart geometry (viewBox units)
 const CW = 480,
   CH = 260,
   M = { l: 50, r: 12, t: 12, b: 34 };
 
-const G = 9.80665; // m/s²
-const TO_KN = 1.94384; // m/s → knots
-// overall (lumped) propulsive coefficient P_B = P_E / PC — quasi-propulsive × shaft, appendages, etc.
-// 0.57 was fitted to the NPish2 sea-trial data; edit to match a known propulsion package.
-const PC = 0.57;
-// seawater / freshwater density (kg/m³) and kinematic viscosity (m²/s) at 15 °C (ITTC), for Michell
-const RHO = { salt: 1025, fresh: 1000 };
-const NU = { salt: 1.18831e-6, fresh: 1.13902e-6 };
+const PC = DEFAULT_PC;
 
 interface PowerPanelProps {
   model: Model;
   modelVersion: number;
   active: boolean; // a hull is loaded and the waterplane is valid
-  hydro: Hydro | null; // live hydrostatics — feeds every method
+  hydro: Hydro | null; // live hydrostatics — feeds the geometry spec
   loa: number;
   unit: Unit;
   water: Water;
-}
-
-interface PowerPoint {
-  kn: number;
-  w: number; // planing weight in the blend [0,1]
-  pBlend: number; // primary brake-power estimate (kW)
-  pMichell: number; // Michell wave + friction, diagnostic (kW)
-  pHoltrop: number; // Holtrop total, diagnostic (kW)
-  pSavitsky: number; // Savitsky total, diagnostic (kW); NaN below the planing band
 }
 
 export function PowerPanel({
@@ -76,113 +41,59 @@ export function PowerPanel({
   water,
 }: PowerPanelProps) {
   const [showMethods, setShowMethods] = useState(false);
-  // Holtrop form factor (1+k) on the Michell diagnostic's friction term
-  const formK = useMemo(() => (hydro ? formFactor(hydro) : 1), [hydro]);
+  const [hover, setHover] = useState<number | null>(null);
 
-  // the live hull as full-scale SI ships for Holtrop and Savitsky: model-unit geometry × the metrics
-  // scale, converted to metres. Coefficients / LCB% are already scale-free.
-  const ships = useMemo(() => {
-    if (!hydro || !hydro.validWaterplane || !(loa > 0)) return null;
-    const lin = (loa / L) * (unit === "m" ? 1 : 0.3048); // model unit → metres
-    const amid = (hydro.xAft + hydro.xFwd) / 2;
-    const salt = water === "salt";
-    const hol: HoltropShip = {
-      L: hydro.lwl * lin,
-      B: hydro.bwl * lin,
-      T: hydro.draft * lin,
-      vol: hydro.vol * lin ** 3,
-      cp: hydro.cp,
-      cm: hydro.cm,
-      cwp: hydro.cw,
-      lcb: (100 * (hydro.lcb - amid)) / hydro.lwl, // % of L fwd of amidships
-      S: hydro.wettedArea * lin ** 2,
-      iE: hydro.halfEntrance,
-      salt,
-    };
-    const sav: SavitskyShip = {
-      weight: RHO[salt ? "salt" : "fresh"] * hydro.vol * lin ** 3 * G,
-      beam: hydro.bwl * lin, // waterline beam as a proxy for chine/planing beam
-      beta: hydro.deadrise, // amidships deadrise as a proxy for the planing area
-      lcg: (hydro.lcb - hydro.xAft) * lin, // forward of the transom
-      salt,
-    };
-    return { hol, sav };
-  }, [hydro, loa, unit, water]);
-
-  // the last computed Michell curve, keyed to the model version that produced it ("computing…" is
-  // derived, and the stale curve stays up while the fresh one cooks)
+  // the Michell wave curve is the one heavy computation and is scale-free (depends only on hull/trim, not
+  // LOA/unit/water), so it is recomputed on a debounce keyed to the model version — the blend itself
+  // (Holtrop + Savitsky) is cheap and updates live. "computing…" is derived (result version ≠ live).
   const [state, setState] = useState<{
     forVersion: number;
     curve: MichellCurve | null;
   }>({ forVersion: -1, curve: null });
-  const [hover, setHover] = useState<number | null>(null);
-  const curve = active ? state.curve : null;
+  const michell = active ? state.curve : null;
   const busy = active && state.forVersion !== modelVersion;
 
   useEffect(() => {
     if (!active) return;
     const id = window.setTimeout(() => {
-      setState({ forVersion: modelVersion, curve: michellCurve(model, FNS) });
+      setState({
+        forVersion: modelVersion,
+        curve: michellCurve(model, FROUDES),
+      });
     }, 150);
     return () => clearTimeout(id);
   }, [model, modelVersion, active]);
 
-  // dimensionalize every method at the chosen LOA / water, all in SI, → brake power in kW
-  const pts = useMemo<PowerPoint[] | null>(() => {
-    if (!curve || !ships || !(loa > 0)) return null;
-    const lin = (loa / L) * (unit === "m" ? 1 : 0.3048);
-    const lwlM = curve.lwl * lin,
-      areaM = curve.wettedArea * lin ** 2,
-      rho = RHO[water],
-      nu = NU[water],
-      cbrtVol = Math.cbrt(ships.hol.vol),
-      // per-hull planing capability (form gate) — keeps slender displacement hulls off the Savitsky branch
-      capability = planingCapability(ships.hol.L / ships.hol.B);
-    const toBrake = (R: number, V: number): number => (R * V) / 1000 / PC; // N·m/s → kW
-    const out: PowerPoint[] = [];
-    for (let i = 0; i < FNS.length; i++) {
-      const cw = curve.cw[i];
-      if (!Number.isFinite(cw)) continue;
-      const V = FNS[i] * Math.sqrt(G * lwlM),
-        fnVol = V / Math.sqrt(G * cbrtVol),
-        re = (V * lwlM) / nu,
-        cf = 0.075 / (Math.log10(re) - 2) ** 2,
-        q = 0.5 * rho * V * V * areaM;
-      const rMich = (cw + formK * cf) * q,
-        rHol = holtrop(ships.hol, V).rTotal,
-        rSav = savitsky(ships.sav, V, DEFAULT_SPRAY).rTotal;
-      const { r: rBlend, w } = blendResistance(fnVol, rHol, rSav, capability);
-      out.push({
-        kn: V * TO_KN,
-        w,
-        pBlend: toBrake(rBlend, V),
-        pMichell: toBrake(rMich, V),
-        pHoltrop: toBrake(rHol, V),
-        // Savitsky shown only for planing-capable hulls, in the speed range where it feeds the blend
-        pSavitsky:
-          capability > 0.5 && fnVol >= BLEND_LO ? toBrake(rSav, V) : NaN,
-      });
+  // geometry spec from the live hydrostatics (cheap; rebuilds as LOA/unit change), with the debounced
+  // Michell curve attached as the wave sampler when it is ready
+  const geometry = useMemo<HullGeometry | null>(() => {
+    if (!hydro || !hydro.validWaterplane || !(loa > 0)) return null;
+    const g = fromHydrostatics(hydro, linScale(loa, unit));
+    if (michell) {
+      const cwByFn = new Map(michell.fns.map((fn, i) => [fn, michell.cw[i]]));
+      g.waveCoefficient = (fn) => cwByFn.get(fn) ?? NaN;
     }
-    return out.length >= 2 ? out : null;
-  }, [curve, ships, formK, loa, unit, water]);
+    return g;
+  }, [hydro, loa, unit, michell]);
+
+  const result = useMemo(
+    () => (geometry ? computeResistance(geometry, { water, pc: PC }) : null),
+    [geometry, water],
+  );
+  const pts = result?.points ?? null;
 
   const plotW = CW - M.l - M.r,
     plotH = CH - M.t - M.b;
 
-  // whether the hull sits inside Holtrop's fitted envelope (per-hull; evaluate once at any speed)
-  const holtropInRange = useMemo(
-    () => (ships ? holtrop(ships.hol, 1).inRange : true),
-    [ships],
-  );
   const body = useMemo(() => {
-    if (!pts) return null;
+    if (!pts || pts.length < 2) return null;
     const knMax = pts[pts.length - 1].kn,
       // scale to the blend, plus the method underlays when shown, so nothing clips
       peak = Math.max(
-        ...pts.map((p) => p.pBlend),
+        ...pts.map((p) => p.brakeKW),
         ...(showMethods
           ? pts
-              .flatMap((p) => [p.pMichell, p.pHoltrop, p.pSavitsky])
+              .flatMap((p) => [p.brakeMichell, p.brakeHoltrop, p.brakeSavitsky])
               .filter(Number.isFinite)
           : []),
       ),
@@ -190,7 +101,7 @@ export function PowerPanel({
     if (!(knMax > 0) || !(pMax > 0)) return null;
     const sx = (kn: number): number => M.l + (kn / knMax) * plotW;
     const sy = (p: number): number => M.t + plotH * (1 - p / pMax);
-    const line = (f: (p: PowerPoint) => number): string =>
+    const line = (f: (p: ResistancePoint) => number): string =>
       pts
         .filter((p) => Number.isFinite(f(p)))
         .map((p) => `${sx(p.kn).toFixed(1)},${sy(f(p)).toFixed(1)}`)
@@ -206,14 +117,15 @@ export function PowerPanel({
       knMax,
       pMax,
       ticks,
-      blend: line((p) => p.pBlend),
-      michell: line((p) => p.pMichell),
-      holtrop: line((p) => p.pHoltrop),
-      savitsky: line((p) => p.pSavitsky),
+      blend: line((p) => p.brakeKW),
+      michell: line((p) => p.brakeMichell),
+      holtrop: line((p) => p.brakeHoltrop),
+      savitsky: line((p) => p.brakeSavitsky),
     };
   }, [pts, plotW, plotH, showMethods]);
 
   const hoverPt = hover != null && pts && body ? pts[hover] : null;
+  const holtropInRange = result?.holtropInRange ?? true;
   const fmtP = (v: number): string =>
     `${v.toFixed(v < 10 ? 2 : v < 100 ? 1 : 0)} kW`;
 
@@ -380,7 +292,7 @@ export function PowerPanel({
               />
               <circle
                 cx={body.sx(hoverPt.kn)}
-                cy={body.sy(hoverPt.pBlend)}
+                cy={body.sy(hoverPt.brakeKW)}
                 r="3.5"
                 fill="#2b6cb0"
               />
@@ -399,11 +311,11 @@ export function PowerPanel({
         </div>
         <div className="powerreadout">
           {hoverPt
-            ? `${hoverPt.kn.toFixed(1)} kn · ${fmtP(hoverPt.pBlend)} · ${(hoverPt.w * 100).toFixed(0)}% planing` +
+            ? `${hoverPt.kn.toFixed(1)} kn · ${fmtP(hoverPt.brakeKW)} · ${(hoverPt.planingWeight * 100).toFixed(0)}% planing` +
               (showMethods
-                ? ` · Michell ${fmtP(hoverPt.pMichell)} · Holtrop ${fmtP(hoverPt.pHoltrop)}` +
-                  (Number.isFinite(hoverPt.pSavitsky)
-                    ? ` · Savitsky ${fmtP(hoverPt.pSavitsky)}`
+                ? ` · Michell ${fmtP(hoverPt.brakeMichell)} · Holtrop ${fmtP(hoverPt.brakeHoltrop)}` +
+                  (Number.isFinite(hoverPt.brakeSavitsky)
+                    ? ` · Savitsky ${fmtP(hoverPt.brakeSavitsky)}`
                     : "")
                 : "")
             : " "}

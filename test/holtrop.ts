@@ -14,7 +14,7 @@ import {
   holtrop,
   holtropWettedArea,
   type HoltropShip,
-} from "../src/core/holtrop";
+} from "../src/resistance/holtrop";
 
 let failures = 0;
 function near(

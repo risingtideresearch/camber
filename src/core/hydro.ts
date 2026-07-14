@@ -12,6 +12,7 @@
 // approximation (exact in the limit).
 
 import { lerp, type Vec3 } from "./math";
+import { formFactor as resistanceFormFactor } from "../resistance/formFactor";
 import {
   type Model,
   L,
@@ -267,39 +268,16 @@ export function hydrostatics(
   };
 }
 
-// ---------- Holtrop-Mennen form factor (1+k) ----------
-// The viscous-pressure allowance on top of flat-plate skin friction: Holtrop & Mennen (1982), the
-// (1+k1) hull form factor, from the same waterline dimensions and prismatic coefficient hydrostatics
-// already reports. It rises with beam and fullness, which is exactly the beam-driven drag that
-// thin-ship (Michell) wave resistance and a bare ITTC-57 friction line both miss — so a beamy hull no
-// longer reads implausibly slippery. Assumes a normal stern (Cstern = 0, so c13 = 1). Returns 1.0 (no
-// allowance) when the waterplane is degenerate or the inputs are out of the regression's range, and is
-// clamped to a sane band so a pathological section can't blow up the power curve. Dimensionless and
-// scale-free: it depends only on ratios, so it is computed once per hull/trim, not per speed or LOA.
+// Holtrop-Mennen form factor (1+k1) for this hull — a thin Hydro→scalar adapter over the pure
+// resistance-module implementation (src/resistance/formFactor.ts).
 export function formFactor(h: Hydro): number {
-  const { lwl: L, bwl: B, draft: T, xAft, xFwd } = h;
-  if (!h.validWaterplane || !(L > 0 && B > 0 && T > 0) || !(h.cp > 0)) return 1;
-  // Clamp C_P and LCB to Holtrop's fitted envelope (C_P 0.55–0.85, LCB −4%..+2%). Beamy, full,
-  // aft-LCB hulls (e.g. a semi-displacement powerboat) otherwise drive the length-of-run negative and
-  // the guard would bail to 1.0 — leaving exactly the beam-heavy hulls that most need a form factor with
-  // none. Clamping degrades to the nearest in-range hull instead. Matches src/core/holtrop.ts.
-  const cp = Math.min(0.85, Math.max(0.55, h.cp));
-  const amid = (xAft + xFwd) / 2,
-    lcb = Math.min(2, Math.max(-4, (100 * (h.lcb - amid)) / L));
-  const tl = T / L,
-    c12 =
-      tl > 0.05
-        ? tl ** 0.2228446
-        : tl > 0.02
-          ? 48.2 * (tl - 0.02) ** 2.078 + 0.479948
-          : 0.479948,
-    // length of run, floored positive as a backstop
-    lr = Math.max(L * (1 - cp + (0.06 * cp * lcb) / (4 * cp - 1)), 0.05 * L);
-  const oneK =
-    0.93 +
-    c12 *
-      (B / lr) ** 0.92497 *
-      (0.95 - cp) ** -0.521448 *
-      (1 - cp + 0.0225 * lcb) ** 0.6906;
-  return Number.isFinite(oneK) ? Math.min(2, Math.max(1, oneK)) : 1;
+  if (!h.validWaterplane) return 1;
+  const amid = (h.xAft + h.xFwd) / 2;
+  return resistanceFormFactor({
+    lwl: h.lwl,
+    beam: h.bwl,
+    draft: h.draft,
+    cp: h.cp,
+    lcbPct: (100 * (h.lcb - amid)) / h.lwl,
+  });
 }
