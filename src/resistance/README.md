@@ -233,6 +233,35 @@ interface ResistanceResult {
 
 ---
 
+## Inferring regime / ∇ from a speed distribution (AIS)
+
+The forward model can be run backwards: because the resistance curve shapes how a vessel is operated, a
+distribution of observed speeds (e.g. AIS speed-over-ground) plus the waterline length reveals the
+operating regime — and, for semi-displacement hulls, a coarse displacement.
+
+```ts
+import { locateHump } from "./humpLocator";
+
+const r = locateHump({ lwl: 11.9, speedsKn: aisSamples });
+// → { regime, hullSpeedKn, topSpeedKn, humpSpeedKn?, volEstimate?, volBound?, confidence, note }
+```
+
+It reads two features:
+
+- **Displacement ceiling** at length-Froude ≈ 0.40 ("hull speed"). A distribution that stays at/below it
+  ⇒ `regime: "displacement"`. This barrier is length-based (already known), so it classifies but does
+  **not** refine ∇.
+- **Semi-displacement hump** at volumetric-Froude ≈ 1.1. A hull that loiters below it and cruises above
+  leaves a bimodal trough at the hump speed ⇒ `regime: "semi-displacement"`, and the trough speed inverts
+  to a `volEstimate`. A hull always running above it ⇒ `regime: "planing"` with ∇ only bounded from above.
+
+> ⚠️ ∇ from a hump speed is **coarse**: `∇ ∝ V_hump⁶`, so a 10% speed error is ~80% in ∇. Use it as an
+> order-of-magnitude cross-check on `C_B·L·B·T`, not a measurement — the dependable output is the regime.
+> Operating speed is also confounded (schedules, sea state, limits), so treat a bare speed distribution as
+> a weak prior. Feed `volEstimate` (or the regime) into `fromDimensions` to sharpen a scant spec.
+
+---
+
 ## Units
 
 **Real-world SI throughout** — metres, m³, newtons, m/s; power is returned in kW and speed in knots. The
