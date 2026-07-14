@@ -277,16 +277,15 @@ export function hydrostatics(
 // clamped to a sane band so a pathological section can't blow up the power curve. Dimensionless and
 // scale-free: it depends only on ratios, so it is computed once per hull/trim, not per speed or LOA.
 export function formFactor(h: Hydro): number {
-  const { lwl: L, bwl: B, draft: T, cp, xAft, xFwd } = h;
-  if (
-    !h.validWaterplane ||
-    !(L > 0 && B > 0 && T > 0) ||
-    !(cp > 0 && cp < 0.95)
-  )
-    return 1;
-  // LCB as a percentage of L forward of amidships (Holtrop's `lcb` convention)
+  const { lwl: L, bwl: B, draft: T, xAft, xFwd } = h;
+  if (!h.validWaterplane || !(L > 0 && B > 0 && T > 0) || !(h.cp > 0)) return 1;
+  // Clamp C_P and LCB to Holtrop's fitted envelope (C_P 0.55–0.85, LCB −4%..+2%). Beamy, full,
+  // aft-LCB hulls (e.g. a semi-displacement powerboat) otherwise drive the length-of-run negative and
+  // the guard would bail to 1.0 — leaving exactly the beam-heavy hulls that most need a form factor with
+  // none. Clamping degrades to the nearest in-range hull instead. Matches src/core/holtrop.ts.
+  const cp = Math.min(0.85, Math.max(0.55, h.cp));
   const amid = (xAft + xFwd) / 2,
-    lcb = (100 * (h.lcb - amid)) / L;
+    lcb = Math.min(2, Math.max(-4, (100 * (h.lcb - amid)) / L));
   const tl = T / L,
     c12 =
       tl > 0.05
@@ -294,14 +293,13 @@ export function formFactor(h: Hydro): number {
         : tl > 0.02
           ? 48.2 * (tl - 0.02) ** 2.078 + 0.479948
           : 0.479948,
-    // length of run
-    lr = L * (1 - cp + (0.06 * cp * lcb) / (4 * cp - 1));
-  if (!(lr > 0)) return 1;
+    // length of run, floored positive as a backstop
+    lr = Math.max(L * (1 - cp + (0.06 * cp * lcb) / (4 * cp - 1)), 0.05 * L);
   const oneK =
     0.93 +
     c12 *
       (B / lr) ** 0.92497 *
       (0.95 - cp) ** -0.521448 *
       (1 - cp + 0.0225 * lcb) ** 0.6906;
-  return Number.isFinite(oneK) ? Math.min(1.6, Math.max(1, oneK)) : 1;
+  return Number.isFinite(oneK) ? Math.min(2, Math.max(1, oneK)) : 1;
 }
