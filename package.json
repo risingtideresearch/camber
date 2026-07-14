@@ -19,7 +19,8 @@
     "test:michell": "tsx test/michell.ts",
     "test:holtrop": "tsx test/holtrop.ts",
     "test:savitsky": "tsx test/savitsky.ts",
-    "test": "npm run test:smooth && npm run test:centerline && npm run test:michell && npm run test:holtrop && npm run test:savitsky"
+    "test:dimensions": "tsx test/dimensions.ts",
+    "test": "npm run test:smooth && npm run test:centerline && npm run test:michell && npm run test:holtrop && npm run test:savitsky && npm run test:dimensions"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
