@@ -2,7 +2,7 @@
 
 A small, self-contained TypeScript module that estimates a displacement/planing hull's **calm-water
 resistance and brake power across a speed range**. It blends two classical methods according to which is
-physically valid at each speed, and can fold in a caller-supplied wave-resistance curve as a diagnostic.
+physically valid at each speed.
 
 Pure functions, **zero runtime dependencies**, framework-agnostic. You describe a hull with a single
 `HullGeometry` record — at whatever fidelity you have, from a handful of principal dimensions up to fully
@@ -33,32 +33,28 @@ R = (1 − w)·R_holtrop + w·R_savitsky,   w = planingSpeed(Fn_∇) · planingC
 ```
 
 - `planingSpeed(Fn_∇)` is a C¹-continuous smoothstep from 0 at `BLEND_LO` to 1 at `BLEND_HI`.
-- `planingCapability(L/B)` is a **form gate**: it's ~1 for planing-capable hulls (L/B ≲ 5) and 0 for
-  slender displacement hulls (L/B ≳ 7), so a light, slender hull is never pushed onto the planing branch
-  just because its small ∇ makes `Fn_∇` large.
+- `planingCapability(L/B)` is a **form gate**: ~1 for planing-capable hulls (L/B ≲ 5), 0 for slender
+  displacement hulls (L/B ≳ 7), so a light, slender hull is never pushed onto the planing branch just
+  because its small ∇ makes `Fn_∇` large.
 
 A pure displacement hull never reaches `BLEND_LO`, so its estimate is simply Holtrop.
 
-### Optional wave-resistance diagnostic
+The power answer needs only **coefficients**, which can be estimated from principal dimensions — so even
+the worst-case scant input yields a full curve.
 
-If a `HullGeometry` carries a `waveCoefficient: (fn) => C_w` sampler (e.g. from a thin-ship / Michell
-integral you compute elsewhere), each result point also reports a wave-based power (`brakeWave`) = that
-`C_w` plus ITTC-57 friction with the Holtrop form factor. This is **diagnostic only** — thin-ship theory
-under-reads beamy hulls, so it is deliberately never part of the blended answer. It's useful for seeing a
-hull's shape-driven humps and hollows against the blended level.
-
-**Consequence for geometry:** the power answer needs only _coefficients_ (which can be estimated from
-principal dimensions). A wave sampler adds the diagnostic but is never required.
+> **Not included:** thin-ship wave resistance (Michell) and other shape-sensitive wave methods. Those
+> under-read beamy hulls and aren't part of the blended answer; if you want a shape diagnostic, compute it
+> in the caller. `formFactor` is exported if you need the Holtrop `(1+k1)` viscous factor for such a
+> friction term.
 
 ---
 
 ## Fidelity ladder
 
-| You have…                           | Build a `HullGeometry` by…                          | What you get                |
-| ----------------------------------- | --------------------------------------------------- | --------------------------- |
-| L, B, T + displacement (worst case) | `fromDimensions(...)` — estimates the coefficients  | Holtrop + Savitsky + blend  |
-| measured form coefficients          | constructing the record directly (all fields given) | same, but accurate          |
-| a wave-resistance model too         | …and setting `waveCoefficient`                      | + the wave diagnostic curve |
+| You have…                           | Build a `HullGeometry` by…                          | What you get               |
+| ----------------------------------- | --------------------------------------------------- | -------------------------- |
+| L, B, T + displacement (worst case) | `fromDimensions(...)` — estimates the coefficients  | Holtrop + Savitsky + blend |
+| measured form coefficients          | constructing the record directly (all fields given) | same, but accurate         |
 
 Every field a constructor fills in is recorded in `provenance` (`"given"` vs `"estimated"`), and
 `computeResistance` surfaces estimated inputs and out-of-envelope extrapolation in `result.warnings`.
@@ -109,7 +105,6 @@ const hull: HullGeometry = {
   wettedArea: 40,
   deadrise: 12,
   provenance: {}, // all measured
-  // waveCoefficient: (fn) => myThinShipCw(fn),  // optional diagnostic
 };
 const result = computeResistance(hull, { water: "salt" });
 ```
@@ -177,14 +172,12 @@ interface ResistancePoint {
   brakeKW; // blended brake power (kW) — the primary estimate
   brakeHoltrop; // per-method brake power (kW)
   brakeSavitsky; // NaN when not planing-capable / below the band
-  brakeWave; // wave diagnostic (kW); NaN when no waveCoefficient was supplied
 }
 
 interface ResistanceResult {
   points: ResistancePoint[];
   holtropInRange: boolean; // Holtrop within its fitted envelope for this hull
   planingCapable: boolean; // form gate open (L/B low enough to plane)
-  hasWaveDiagnostic: boolean; // a waveCoefficient was supplied
   warnings: string[]; // estimated inputs, out-of-envelope extrapolation, …
 }
 ```
@@ -212,7 +205,7 @@ module has no notion of scale or model units; supply real dimensions.
 
 - The defaults **PC = 0.57** and the blend band **`Fn_∇ ∈ [0.85, 1.4]`** were fitted to sea-trial
   speed/power data for a ~12 m semi-displacement hull. The blend reproduced its planing range to ~10%.
-  Override `pc` (and `BLEND_LO`/`BLEND_HI` in `blend.ts`) for a different vessel or propulsion package.
+  Override `pc` (and `BLEND_LO` / `BLEND_HI` in `blend.ts`) for a different vessel or propulsion package.
 - Each method is validated against an external reference (see `../../test/`):
   - **Holtrop** → the published Holtrop-Mennen (1982) L = 205 m tanker worked example, every component <1%.
   - **Savitsky** → the OpenPlaning library in its base-1964 configuration (running trim, wetted-length
@@ -232,4 +225,5 @@ Run the suite with `npm test` (or individually, e.g. `npm run test:holtrop`).
   flags `holtropInRange = false` outside it — common for beamy planing hulls.
 - **Planing-capability gate** is an L/B heuristic (ignores deadrise/chines); a borderline L/B ≈ 5–6 hull
   is a judgement call.
-- **Not modelled:** appendage drag, air/windage, added resistance in waves, dynamic trim devices.
+- **Not modelled:** wave resistance / shape diagnostics, appendage drag, air/windage, added resistance in
+  waves, dynamic trim devices.

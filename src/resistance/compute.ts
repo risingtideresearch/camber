@@ -8,7 +8,6 @@
 import { holtrop, type HoltropShip } from "./holtrop";
 import { savitsky, type SavitskyShip, DEFAULT_SPRAY } from "./savitsky";
 import { blendResistance, planingCapability, BLEND_LO } from "./blend";
-import { formFactor } from "./formFactor";
 import type {
   HullGeometry,
   ResistanceOptions,
@@ -18,7 +17,6 @@ import type {
 const G = 9.80665; // m/s²
 const TO_KN = 1.94384; // m/s → knots
 const RHO = { salt: 1025, fresh: 1000 }; // kg/m³
-const NU = { salt: 1.18831e-6, fresh: 1.13902e-6 }; // m²/s at 15 °C (ITTC)
 
 // default lumped propulsive coefficient P_B = P_E / PC (fitted to NPish2 sea-trial data)
 export const DEFAULT_PC = 0.57;
@@ -36,8 +34,7 @@ export function computeResistance(
   const pc = opts.pc ?? DEFAULT_PC;
   const spray = opts.spray ?? DEFAULT_SPRAY;
   const froudes = opts.froudeNumbers ?? FROUDES;
-  const rho = RHO[water],
-    nu = NU[water];
+  const rho = RHO[water];
 
   const hol: HoltropShip = {
     L: g.lwl,
@@ -62,13 +59,6 @@ export function computeResistance(
     salt: water === "salt",
   };
   const capability = planingCapability(g.lwl / g.beam);
-  const formK = formFactor({
-    lwl: g.lwl,
-    beam: g.beam,
-    draft: g.draft,
-    cp: g.cp,
-    lcbPct: g.lcbPct,
-  });
   const cbrtVol = Math.cbrt(g.vol);
 
   const points = froudes.map((fn) => {
@@ -78,15 +68,6 @@ export function computeResistance(
     const rHol = holtrop(hol, V).rTotal;
     const rSav = savitsky(sav, V, spray).rTotal;
     const { r: rBlend, w } = blendResistance(fnVol, rHol, rSav, capability);
-    // wave-resistance diagnostic: injected C_w + ITTC-57 friction (with the form factor), if supplied
-    let brakeWave = NaN;
-    const cw = g.waveCoefficient?.(fn);
-    if (cw != null && Number.isFinite(cw)) {
-      const re = (V * g.lwl) / nu,
-        cf = 0.075 / (Math.log10(re) - 2) ** 2,
-        q = 0.5 * rho * V * V * g.wettedArea;
-      brakeWave = toBrake((cw + formK * cf) * q);
-    }
     return {
       fn,
       kn: V * TO_KN,
@@ -98,7 +79,6 @@ export function computeResistance(
       brakeHoltrop: toBrake(rHol),
       brakeSavitsky:
         capability > 0.5 && fnVol >= BLEND_LO ? toBrake(rSav) : NaN,
-      brakeWave,
     };
   });
 
@@ -118,7 +98,6 @@ export function computeResistance(
     points,
     holtropInRange,
     planingCapable: capability > 0.5,
-    hasWaveDiagnostic: !!g.waveCoefficient,
     warnings,
   };
 }

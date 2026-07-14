@@ -104,7 +104,6 @@ function near(got: number, want: number, tol: number, label: string): void {
       Math.abs(b.kn - kn) < Math.abs(a.kn - kn) ? b : a,
     );
   console.log("--- NPish2 end-to-end (scant constructor, measured coeffs) ---");
-  check(!res.hasMichell, "no Michell (dimensions tier)");
   check(res.planingCapable, "planing-capable (L/B ≈ 3.3)");
   check(
     !res.warnings.some((w) => w.includes("estimated")),

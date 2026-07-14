@@ -4,15 +4,20 @@ import { michellCurve, type MichellCurve } from "../core/michell";
 import type { Hydro } from "../core/hydro";
 import { fromHydrostatics, linScale } from "../core/hullResistance";
 import { computeResistance, FROUDES, DEFAULT_PC } from "../resistance/compute";
+import { formFactor } from "../resistance/formFactor";
 import type { HullGeometry, ResistancePoint } from "../resistance/types";
 import type { Unit, Water } from "../components/MetricsPanel";
 
 // ---------- the speed / power curve ----------
-// A thin view over the resistance module (src/resistance/): build a HullGeometry from the live
-// hydrostatics, hand it to computeResistance(), and draw the result. The primary line is the blended
-// best estimate (Holtrop → Savitsky by volumetric Froude number); Michell/Holtrop/Savitsky ride behind
-// the "methods" toggle as diagnostics. All physics, scaling, and blending live in the module — this file
-// only debounces the (heavy) Michell wave sampler, wires inputs, and renders.
+// The primary line is the blended best estimate from the resistance module (Holtrop → Savitsky by
+// volumetric Froude number); Holtrop and Savitsky ride behind the "methods" toggle as diagnostics. The
+// module owns all of that. This panel additionally overlays a Michell thin-ship wave curve as its own
+// shape diagnostic — Michell is the app's choice and lives here, not in the module: it debounces the
+// (heavy) Michell computation and dimensionalizes it with the module's form factor.
+
+const G = 9.80665; // m/s²
+const RHO = { salt: 1025, fresh: 1000 };
+const NU = { salt: 1.18831e-6, fresh: 1.13902e-6 };
 
 // chart geometry (viewBox units)
 const CW = 480,
@@ -64,23 +69,43 @@ export function PowerPanel({
     return () => clearTimeout(id);
   }, [model, modelVersion, active]);
 
-  // geometry spec from the live hydrostatics (cheap; rebuilds as LOA/unit change), with the debounced
-  // Michell curve attached as the wave sampler when it is ready
+  // geometry spec from the live hydrostatics (cheap; rebuilds as LOA/unit change)
   const geometry = useMemo<HullGeometry | null>(() => {
     if (!hydro || !hydro.validWaterplane || !(loa > 0)) return null;
-    const g = fromHydrostatics(hydro, linScale(loa, unit));
-    if (michell) {
-      const cwByFn = new Map(michell.fns.map((fn, i) => [fn, michell.cw[i]]));
-      g.waveCoefficient = (fn) => cwByFn.get(fn) ?? NaN;
-    }
-    return g;
-  }, [hydro, loa, unit, michell]);
+    return fromHydrostatics(hydro, linScale(loa, unit));
+  }, [hydro, loa, unit]);
 
   const result = useMemo(
     () => (geometry ? computeResistance(geometry, { water, pc: PC }) : null),
     [geometry, water],
   );
   const pts = result?.points ?? null;
+
+  // Michell thin-ship diagnostic, computed here (the module doesn't do wave resistance): brake power per
+  // Froude point = (C_w + (1+k)·C_f)·½ρV²S · V / PC. Aligned index-for-index with the result points
+  // (both sweep FROUDES). NaN where Michell can't evaluate.
+  const michellBrake = useMemo<number[] | null>(() => {
+    if (!michell || !geometry) return null;
+    const rho = RHO[water],
+      nu = NU[water],
+      { lwl, wettedArea: S } = geometry,
+      fk = formFactor({
+        lwl,
+        beam: geometry.beam,
+        draft: geometry.draft,
+        cp: geometry.cp,
+        lcbPct: geometry.lcbPct,
+      });
+    return michell.fns.map((fn, i) => {
+      const cw = michell.cw[i];
+      if (!Number.isFinite(cw)) return NaN;
+      const V = fn * Math.sqrt(G * lwl),
+        re = (V * lwl) / nu,
+        cf = 0.075 / (Math.log10(re) - 2) ** 2,
+        q = 0.5 * rho * V * V * S;
+      return ((cw + fk * cf) * q * V) / 1000 / PC;
+    });
+  }, [michell, geometry, water]);
 
   const plotW = CW - M.l - M.r,
     plotH = CH - M.t - M.b;
@@ -92,20 +117,36 @@ export function PowerPanel({
       peak = Math.max(
         ...pts.map((p) => p.brakeKW),
         ...(showMethods
-          ? pts
-              .flatMap((p) => [p.brakeWave, p.brakeHoltrop, p.brakeSavitsky])
-              .filter(Number.isFinite)
+          ? [
+              ...pts
+                .flatMap((p) => [p.brakeHoltrop, p.brakeSavitsky])
+                .filter(Number.isFinite),
+              ...(michellBrake ?? []).filter(Number.isFinite),
+            ]
           : []),
       ),
       pMax = peak * 1.1;
     if (!(knMax > 0) || !(pMax > 0)) return null;
     const sx = (kn: number): number => M.l + (kn / knMax) * plotW;
     const sy = (p: number): number => M.t + plotH * (1 - p / pMax);
+    // polyline from a per-point accessor…
     const line = (f: (p: ResistancePoint) => number): string =>
       pts
         .filter((p) => Number.isFinite(f(p)))
         .map((p) => `${sx(p.kn).toFixed(1)},${sy(f(p)).toFixed(1)}`)
         .join(" ");
+    // …or from an index-aligned array (the Michell overlay)
+    const lineIdx = (vals: number[] | null): string =>
+      vals
+        ? pts
+            .map((p, i) =>
+              Number.isFinite(vals[i])
+                ? `${sx(p.kn).toFixed(1)},${sy(vals[i]).toFixed(1)}`
+                : null,
+            )
+            .filter(Boolean)
+            .join(" ")
+        : "";
     const rawStep = knMax / 7,
       mag = 10 ** Math.floor(Math.log10(rawStep)),
       step = [1, 2, 5, 10].map((m) => m * mag).find((v) => v >= rawStep) ?? mag;
@@ -118,11 +159,11 @@ export function PowerPanel({
       pMax,
       ticks,
       blend: line((p) => p.brakeKW),
-      michell: line((p) => p.brakeWave),
+      michell: lineIdx(michellBrake),
       holtrop: line((p) => p.brakeHoltrop),
       savitsky: line((p) => p.brakeSavitsky),
     };
-  }, [pts, plotW, plotH, showMethods]);
+  }, [pts, plotW, plotH, showMethods, michellBrake]);
 
   const hoverPt = hover != null && pts && body ? pts[hover] : null;
   const holtropInRange = result?.holtropInRange ?? true;
@@ -313,7 +354,10 @@ export function PowerPanel({
           {hoverPt
             ? `${hoverPt.kn.toFixed(1)} kn · ${fmtP(hoverPt.brakeKW)} · ${(hoverPt.planingWeight * 100).toFixed(0)}% planing` +
               (showMethods
-                ? ` · Michell ${fmtP(hoverPt.brakeWave)} · Holtrop ${fmtP(hoverPt.brakeHoltrop)}` +
+                ? (hover != null && Number.isFinite(michellBrake?.[hover])
+                    ? ` · Michell ${fmtP(michellBrake![hover])}`
+                    : "") +
+                  ` · Holtrop ${fmtP(hoverPt.brakeHoltrop)}` +
                   (Number.isFinite(hoverPt.brakeSavitsky)
                     ? ` · Savitsky ${fmtP(hoverPt.brakeSavitsky)}`
                     : "")

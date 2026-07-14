@@ -2,13 +2,11 @@
 //
 // Bridges this app's hull representation to the geometry-agnostic resistance module. These are the only
 // places that know both the app's Model/Hydro types AND the resistance spec, so they own the model-unit →
-// metre scaling (the resistance module speaks real SI only) and the injection of the Michell wave sampler
-// from the full surfaces. `fromDimensions` (the scant tier) lives in the resistance module itself since it
-// needs neither.
+// metre scaling (the resistance module speaks real SI only). `fromDimensions` (the scant tier) lives in
+// the resistance module itself since it needs neither.
 
 import { L, type Model } from "./model";
 import { hydrostatics, type Hydro } from "./hydro";
-import { centerplaneGrid, michellCw } from "./michell";
 import type { HullGeometry, Provenance } from "../resistance/types";
 import type { Unit } from "../components/MetricsPanel";
 
@@ -47,17 +45,13 @@ export function fromHydrostatics(h: Hydro, lin: number): HullGeometry {
   };
 }
 
-// full-surfaces spec: measured hydrostatics + an injected Michell C_w(Fn) sampler (enables the diagnostic).
-// Computes the centerplane grid once; `michellCw` per Fn is the heavy part, so callers that re-run on every
-// frame should debounce this. Returns null when the waterplane is invalid or LOA is unset.
+// convenience: run hydrostatics on a model and scale to a HullGeometry in one call. Returns null when the
+// waterplane is invalid or LOA is unset.
 export function fromModel(
   model: Model,
   opts: { loa: number; unit: Unit },
 ): HullGeometry | null {
   const h = hydrostatics(model);
   if (!h || !h.validWaterplane || !(opts.loa > 0)) return null;
-  const g = fromHydrostatics(h, linScale(opts.loa, opts.unit));
-  const grid = centerplaneGrid(model);
-  if (grid) g.waveCoefficient = (fn) => michellCw(grid, fn);
-  return g;
+  return fromHydrostatics(h, linScale(opts.loa, opts.unit));
 }
