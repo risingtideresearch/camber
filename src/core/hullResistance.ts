@@ -7,7 +7,7 @@
 
 import { L, type Model } from "./model";
 import { hydrostatics, type Hydro } from "./hydro";
-import type { HullGeometry, Provenance } from "../resistance/types";
+import type { HullGeometry, Provenance } from "resistance";
 import type { Unit } from "../components/MetricsPanel";
 
 // model-unit → metre factor: the metrics LOA over the model's reference length, times the ft→m conversion

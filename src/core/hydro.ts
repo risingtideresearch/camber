@@ -12,7 +12,7 @@
 // approximation (exact in the limit).
 
 import { lerp, type Vec3 } from "./math";
-import { formFactor as resistanceFormFactor } from "../resistance/formFactor";
+import { formFactor as resistanceFormFactor } from "resistance";
 import {
   type Model,
   L,

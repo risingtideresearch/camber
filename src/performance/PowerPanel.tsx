@@ -3,9 +3,14 @@ import type { Model } from "../core/model";
 import { michellCurve, type MichellCurve } from "../core/michell";
 import type { Hydro } from "../core/hydro";
 import { fromHydrostatics, linScale } from "../core/hullResistance";
-import { computeResistance, FROUDES, DEFAULT_PC } from "../resistance/compute";
-import { formFactor } from "../resistance/formFactor";
-import type { HullGeometry, ResistancePoint } from "../resistance/types";
+import {
+  computeResistance,
+  formFactor,
+  FROUDES,
+  DEFAULT_PC,
+  type HullGeometry,
+  type ResistancePoint,
+} from "resistance";
 import type { Unit, Water } from "../components/MetricsPanel";
 
 // ---------- the speed / power curve ----------
