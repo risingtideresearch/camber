@@ -1,9 +1,9 @@
 // ---------- resistance assembly ----------
 //
-// The orchestration lifted out of the performance UI: given a HullGeometry (full-scale SI) and options,
-// sweep the speed range and run the three methods, blending Holtrop (displacement) with Savitsky
-// (planing) by volumetric Froude number, and — if a Michell wave sampler was supplied — a Michell
-// diagnostic. Returns brake power per method plus the blended best estimate. Pure and framework-free.
+// Given a HullGeometry (full-scale SI) and options, sweep the speed range and blend Holtrop
+// (displacement) with Savitsky (planing) by volumetric Froude number. If the geometry carries a
+// wave-resistance sampler, also report a wave diagnostic curve (not part of the blended answer).
+// Returns brake power per method plus the blended best estimate. Pure and framework-free.
 
 import { holtrop, type HoltropShip } from "./holtrop";
 import { savitsky, type SavitskyShip, DEFAULT_SPRAY } from "./savitsky";
@@ -78,14 +78,14 @@ export function computeResistance(
     const rHol = holtrop(hol, V).rTotal;
     const rSav = savitsky(sav, V, spray).rTotal;
     const { r: rBlend, w } = blendResistance(fnVol, rHol, rSav, capability);
-    // Michell diagnostic: wave C_w + ITTC-57 friction (with the form factor), if a sampler was supplied
-    let brakeMichell = NaN;
+    // wave-resistance diagnostic: injected C_w + ITTC-57 friction (with the form factor), if supplied
+    let brakeWave = NaN;
     const cw = g.waveCoefficient?.(fn);
     if (cw != null && Number.isFinite(cw)) {
       const re = (V * g.lwl) / nu,
         cf = 0.075 / (Math.log10(re) - 2) ** 2,
         q = 0.5 * rho * V * V * g.wettedArea;
-      brakeMichell = toBrake((cw + formK * cf) * q);
+      brakeWave = toBrake((cw + formK * cf) * q);
     }
     return {
       fn,
@@ -98,7 +98,7 @@ export function computeResistance(
       brakeHoltrop: toBrake(rHol),
       brakeSavitsky:
         capability > 0.5 && fnVol >= BLEND_LO ? toBrake(rSav) : NaN,
-      brakeMichell,
+      brakeWave,
     };
   });
 
@@ -118,7 +118,7 @@ export function computeResistance(
     points,
     holtropInRange,
     planingCapable: capability > 0.5,
-    hasMichell: !!g.waveCoefficient,
+    hasWaveDiagnostic: !!g.waveCoefficient,
     warnings,
   };
 }

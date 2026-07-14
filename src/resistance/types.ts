@@ -1,9 +1,9 @@
 // ---------- resistance module: geometry spec + result types ----------
 //
 // A hull is described by one normalized, full-scale SI record: HullGeometry. It can be built at any
-// fidelity — from scant principal dimensions (estimate.ts fills the coefficients) up to full surfaces
-// (an app adapter measures the coefficients via hydrostatics and injects a Michell wave sampler). The
-// physics (holtrop / savitsky / blend) never sees a hull "model": it consumes this record.
+// fidelity — from scant principal dimensions (estimate.ts fills the coefficients) up to fully measured
+// coefficients, optionally with a caller-supplied wave-resistance sampler. The physics
+// (holtrop / savitsky / blend) consumes only this record — it has no notion of a hull "model".
 
 // how each field of a HullGeometry was obtained — for honest reporting of estimated vs measured inputs
 export type Provenance = Record<string, "given" | "estimated">;
@@ -30,8 +30,9 @@ export interface HullGeometry {
   transomArea?: number; // m²
   bulbArea?: number; // m²
 
-  // full-fidelity wave model: a Michell C_w(Fn) sampler, injected by the surfaces adapter. Absent for
-  // scant/coefficient specs — the blended answer never needs it (Michell is a shape diagnostic only).
+  // optional wave-resistance coefficient sampler C_w(Fn) — a caller-supplied thin-ship / Michell-type
+  // wave model. Used only to report a shape-sensitive wave diagnostic curve; the blended answer never
+  // needs it (thin-ship theory under-reads beamy hulls). Absent for scant/coefficient-only specs.
   waveCoefficient?: (fn: number) => number;
 
   provenance: Provenance;
@@ -54,13 +55,13 @@ export interface ResistancePoint {
   brakeKW: number; // blended brake power (kW) — the primary estimate
   brakeHoltrop: number; // per-method brake power (kW)
   brakeSavitsky: number; // NaN when the hull isn't planing-capable / below the band
-  brakeMichell: number; // NaN when no wave sampler was supplied
+  brakeWave: number; // wave-resistance diagnostic (kW); NaN when no wave sampler was supplied
 }
 
 export interface ResistanceResult {
   points: ResistancePoint[];
   holtropInRange: boolean; // Holtrop within its fitted envelope for this hull
   planingCapable: boolean; // form gate open (L/B low enough to plane)
-  hasMichell: boolean; // a Michell diagnostic was available
+  hasWaveDiagnostic: boolean; // a wave-resistance sampler was supplied
   warnings: string[]; // estimated inputs, out-of-envelope extrapolation, etc.
 }

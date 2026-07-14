@@ -1,101 +1,127 @@
 # `resistance` — hull resistance & power prediction
 
-A geometry-agnostic module that estimates a hull's **calm-water resistance and brake power across a speed
-range**, by blending three classical methods according to which is physically valid at each speed. It has
-**no dependency on the app** (no React, no `Model`, no rendering): you hand it a `HullGeometry` — described
-at whatever fidelity you have, from a few principal dimensions up to full surfaces — and it returns a
-per-speed power curve.
+A small, self-contained TypeScript module that estimates a displacement/planing hull's **calm-water
+resistance and brake power across a speed range**. It blends two classical methods according to which is
+physically valid at each speed, and can fold in a caller-supplied wave-resistance curve as a diagnostic.
+
+Pure functions, **zero runtime dependencies**, framework-agnostic. You describe a hull with a single
+`HullGeometry` record — at whatever fidelity you have, from a handful of principal dimensions up to fully
+measured coefficients — and get back a per-speed power curve.
 
 ```
-                displacement            semi-displacement            planing
-   Fn_∇:  ────────────┼───────────────────────┼──────────────────────────►
-                    ~0.85                    ~1.4
-   method:     Holtrop-Mennen  ── smoothstep crossfade ──  Savitsky
-   (Michell rides along only as a shape diagnostic; it is never in the answer)
+              displacement          semi-displacement           planing
+   Fn_∇: ───────────────┼──────────────────────┼────────────────────────►
+                      BLEND_LO                BLEND_HI
+                      (0.85)                   (1.4)
+   method:      Holtrop-Mennen ── smoothstep crossfade ── Savitsky
 ```
 
 ---
 
-## Why three methods
+## The two methods and the blend
 
-No single classical method covers a real hull's whole speed range:
+No single classical method covers a hull's whole speed range, so the estimate crossfades between them by
+**volumetric Froude number** `Fn_∇ = V / √(g·∇^⅓)` — the standard displacement↔planing indicator:
 
-| Method                         | Regime                          | Sees                                        | Blind to                       |
-| ------------------------------ | ------------------------------- | ------------------------------------------- | ------------------------------ |
-| **Holtrop-Mennen**             | displacement / low speed        | bulk coefficients (C_P, C_B, L/B, LCB, i_E) | planing lift                   |
-| **Savitsky** (+ whisker spray) | planing / high speed            | dynamic lift on a trimmed bottom            | making waves                   |
-| **Michell** (thin-ship)        | displacement, _shape-sensitive_ | the actual offsets (humps/hollows)          | absolute level for beamy hulls |
+| Method                         | Regime                   | Basis                                                                   |
+| ------------------------------ | ------------------------ | ----------------------------------------------------------------------- |
+| **Holtrop-Mennen**             | displacement / low speed | statistical regression over bulk coefficients (C_P, C_B, L/B, LCB, i_E) |
+| **Savitsky** (+ whisker spray) | planing / high speed     | dynamic lift on a trimmed planing bottom                                |
 
-The **answer** is `Holtrop → Savitsky`, crossfaded by **volumetric Froude number** `Fn_∇ = V/√(g·∇^⅓)` with
-a C¹-continuous smoothstep through the semi-displacement hump, gated by a **length/beam planing-capability
-factor** so a slender displacement hull never mixes in the planing branch. Michell is computed only as a
-diagnostic overlay (it under-reads beamy hulls, so it is deliberately excluded from the blend).
+```
+R = (1 − w)·R_holtrop + w·R_savitsky,   w = planingSpeed(Fn_∇) · planingCapability(L/B)
+```
 
-**Key consequence for geometry:** the power answer needs only _coefficients_ (derivable from scant
-dimensions). Full surfaces improve those coefficients and add the Michell diagnostic, but are **not
-required**.
+- `planingSpeed(Fn_∇)` is a C¹-continuous smoothstep from 0 at `BLEND_LO` to 1 at `BLEND_HI`.
+- `planingCapability(L/B)` is a **form gate**: it's ~1 for planing-capable hulls (L/B ≲ 5) and 0 for
+  slender displacement hulls (L/B ≳ 7), so a light, slender hull is never pushed onto the planing branch
+  just because its small ∇ makes `Fn_∇` large.
+
+A pure displacement hull never reaches `BLEND_LO`, so its estimate is simply Holtrop.
+
+### Optional wave-resistance diagnostic
+
+If a `HullGeometry` carries a `waveCoefficient: (fn) => C_w` sampler (e.g. from a thin-ship / Michell
+integral you compute elsewhere), each result point also reports a wave-based power (`brakeWave`) = that
+`C_w` plus ITTC-57 friction with the Holtrop form factor. This is **diagnostic only** — thin-ship theory
+under-reads beamy hulls, so it is deliberately never part of the blended answer. It's useful for seeing a
+hull's shape-driven humps and hollows against the blended level.
+
+**Consequence for geometry:** the power answer needs only _coefficients_ (which can be estimated from
+principal dimensions). A wave sampler adds the diagnostic but is never required.
 
 ---
 
-## The fidelity ladder
+## Fidelity ladder
 
-| You have…                           | Build with                                      | Methods you get                                         |
-| ----------------------------------- | ----------------------------------------------- | ------------------------------------------------------- |
-| L, B, T + displacement (worst case) | `fromDimensions(...)`                           | Holtrop + Savitsky + blend (coefficients **estimated**) |
-| measured form coefficients          | `fromHydrostatics(hydro, lin)` _(app adapter)_  | same, but accurate                                      |
-| full surfaces                       | `fromModel(model, {loa, unit})` _(app adapter)_ | + Michell diagnostic + exact hydrostatics               |
+| You have…                           | Build a `HullGeometry` by…                          | What you get                |
+| ----------------------------------- | --------------------------------------------------- | --------------------------- |
+| L, B, T + displacement (worst case) | `fromDimensions(...)` — estimates the coefficients  | Holtrop + Savitsky + blend  |
+| measured form coefficients          | constructing the record directly (all fields given) | same, but accurate          |
+| a wave-resistance model too         | …and setting `waveCoefficient`                      | + the wave diagnostic curve |
 
-`fromDimensions` lives in this module (needs nothing else). `fromHydrostatics` / `fromModel` live in
-`src/core/hullResistance.ts` because they know the app's `Hydro`/`Model` types and own the model-unit→metre
-scaling and the Michell sampler injection.
+Every field a constructor fills in is recorded in `provenance` (`"given"` vs `"estimated"`), and
+`computeResistance` surfaces estimated inputs and out-of-envelope extrapolation in `result.warnings`.
 
 ---
 
 ## Quick start
 
-```ts
-import { fromDimensions } from "./resistance/estimate";
-import { computeResistance } from "./resistance/compute";
+Worst case — principal dimensions and a displacement; coefficients are estimated:
 
-// Worst case: principal dimensions + displacement. Coefficients are estimated.
+```ts
+import { fromDimensions } from "./estimate";
+import { computeResistance } from "./compute";
+
 const hull = fromDimensions({
   lwl: 11.9,
   beam: 3.6,
   draft: 0.7,
-  displacement: 15800, // kg  (or pass `cb` instead)
-  deadrise: 12, // needed once a hull is planing-capable
+  displacement: 15800, // kg  (or give a block coefficient `cb` instead)
+  deadrise: 12, // used once the hull is planing-capable
 });
 
 const result = computeResistance(hull, { water: "salt", pc: 0.57 });
 
 for (const p of result.points) {
   console.log(
-    p.kn.toFixed(1),
-    "kn →",
-    p.brakeKW.toFixed(0),
-    "kW",
-    `(${(p.planingWeight * 100).toFixed(0)}% planing)`,
+    `${p.kn.toFixed(1)} kn → ${p.brakeKW.toFixed(0)} kW (${(p.planingWeight * 100).toFixed(0)}% planing)`,
   );
 }
-console.log(result.warnings); // e.g. "estimated (not measured): cm, cp, cwp, …"
+console.log(result.warnings); // e.g. ["estimated (not measured): cm, cp, cwp, …"]
 ```
 
-With full surfaces (in the app):
+Measured coefficients — build the record directly (nothing is estimated):
 
 ```ts
-import { fromModel } from "./core/hullResistance";
-const g = fromModel(model, { loa: 13, unit: "m" }); // includes the Michell sampler
-const res = computeResistance(g!, { water: "salt" }); // res.points[i].brakeMichell now finite
+import type { HullGeometry } from "./types";
+
+const hull: HullGeometry = {
+  lwl: 11.9,
+  beam: 3.6,
+  draft: 0.7,
+  vol: 15.4,
+  cp: 0.82,
+  cm: 0.63,
+  cwp: 0.79,
+  lcbPct: -9.2,
+  halfEntrance: 26,
+  wettedArea: 40,
+  deadrise: 12,
+  provenance: {}, // all measured
+  // waveCoefficient: (fn) => myThinShipCw(fn),  // optional diagnostic
+};
+const result = computeResistance(hull, { water: "salt" });
 ```
 
 ---
 
 ## API
 
-### `fromDimensions(input): HullGeometry` _(scant tier)_
+### `fromDimensions(input): HullGeometry`
 
-Fills the form coefficients from principal dimensions using standard regressions, recording every filled
-field in `provenance`. Any coefficient supplied explicitly overrides its estimate.
+Fills form coefficients from principal dimensions with standard regressions; any coefficient you pass
+explicitly overrides its estimate and is marked `"given"`.
 
 ```ts
 interface DimensionsInput {
@@ -118,96 +144,92 @@ interface DimensionsInput {
 }
 ```
 
-Estimators (first-order, documented in `estimate.ts`):
-
-| Quantity | Estimate                                       |
-| -------- | ---------------------------------------------- |
-| C_M      | Benford `1 / (1 + (1−C_B)^3.5)`                |
-| C_P      | `C_B / C_M`                                    |
-| C_WP     | Schneekluth `(1 + 2·C_B)/3`                    |
-| LCB      | `−1.5%` (slightly aft)                         |
-| i_E, S   | left unset → Holtrop estimates them internally |
-| deadrise | `15°`                                          |
+| Quantity         | Estimate                                       |
+| ---------------- | ---------------------------------------------- |
+| C_M              | Benford `1 / (1 + (1−C_B)^3.5)`                |
+| C_P              | `C_B / C_M`                                    |
+| C_WP             | Schneekluth `(1 + 2·C_B)/3`                    |
+| LCB              | `−1.5%` of L (slightly aft)                    |
+| i_E, wetted area | left unset → Holtrop estimates them internally |
+| deadrise         | `15°`                                          |
 
 > ⚠️ These regressions assume conventional ship forms. For unusual hulls (very full, shallow, hard-chine)
-> they can be well off — e.g. Benford predicts C_M ≈ 0.93 for a hull whose real C_M is 0.63. Supply
-> measured coefficients when you have them; the `provenance` map and `result.warnings` flag what was
-> guessed.
+> they can be well off — e.g. Benford predicts C_M ≈ 0.93 for a hull whose true C_M is 0.63. Supply
+> measured coefficients when you have them; `provenance` and `result.warnings` flag whatever was guessed.
 
-### `computeResistance(g, opts?): ResistanceResult`
+### `computeResistance(hull, opts?): ResistanceResult`
 
 ```ts
 interface ResistanceOptions {
   water?: "salt" | "fresh"; // default "salt"
-  pc?: number; // lumped propulsive coefficient P_B = P_E/PC; default DEFAULT_PC (0.57)
+  pc?: number; // lumped propulsive coefficient, P_B = P_E / PC; default DEFAULT_PC (0.57)
   spray?: number; // Savitsky whisker-spray fraction; default DEFAULT_SPRAY (0.15)
-  froudeNumbers?: number[]; // length-Froude sweep; default FROUDES (0.05…0.9)
+  froudeNumbers?: number[]; // length-Froude sweep; default FROUDES (0.05 … 0.9)
 }
 
 interface ResistancePoint {
   fn;
   kn;
-  speed; // Froude no., knots, m/s
+  speed; // length-Froude number, knots, m/s
   fnVol; // volumetric Froude number (blend regime indicator)
   planingWeight; // w ∈ [0,1] applied in the blend
   rBlend; // blended resistance (N)
   brakeKW; // blended brake power (kW) — the primary estimate
-  brakeHoltrop;
-  brakeSavitsky;
-  brakeMichell; // per-method (kW); NaN where unavailable
+  brakeHoltrop; // per-method brake power (kW)
+  brakeSavitsky; // NaN when not planing-capable / below the band
+  brakeWave; // wave diagnostic (kW); NaN when no waveCoefficient was supplied
 }
 
 interface ResistanceResult {
   points: ResistancePoint[];
   holtropInRange: boolean; // Holtrop within its fitted envelope for this hull
   planingCapable: boolean; // form gate open (L/B low enough to plane)
-  hasMichell: boolean; // a Michell diagnostic was available
+  hasWaveDiagnostic: boolean; // a waveCoefficient was supplied
   warnings: string[]; // estimated inputs, out-of-envelope extrapolation, …
 }
 ```
 
-### Lower-level building blocks (pure)
+### Lower-level building blocks (all pure)
 
 - `holtrop(ship, V, variant?)` — Holtrop-Mennen total resistance (N). `variant` `"1984"` (default) or
   `"1982"`. Clamps to its fitted envelope and reports `inRange`.
-- `savitsky(ship, V, spray?)` — Savitsky planing resistance (N). `spray` fraction defaults to 0 (the pure
-  '64 method); `DEFAULT_SPRAY = 0.15` adds a lumped whisker-spray allowance.
-- `blendResistance(fnVol, rDisp, rPlan, capability?)` → `{ r, w }`; `planingSpeed(fnVol)`,
-  `planingCapability(lengthBeam)`, `BLEND_LO`, `BLEND_HI`.
-- `formFactor({lwl, beam, draft, cp, lcbPct})` — Holtrop `(1+k1)` viscous form factor.
+- `savitsky(ship, V, spray?)` — Savitsky planing resistance (N). `spray` defaults to 0 (pure 1964
+  method); `DEFAULT_SPRAY = 0.15` adds a lumped whisker-spray allowance (Savitsky-Brown 1976).
+- `blendResistance(fnVol, rDisplacement, rPlaning, capability?)` → `{ r, w }`, plus
+  `planingSpeed(fnVol)`, `planingCapability(lengthBeam)`, `BLEND_LO`, `BLEND_HI`.
+- `formFactor({ lwl, beam, draft, cp, lcbPct })` — Holtrop `(1+k1)` viscous form factor.
 
 ---
 
-## Units & scale
+## Units
 
-The module speaks **real-world SI only** — metres, m³, newtons, m/s; power out in kW; speed reported in
-knots. It has no notion of "model units" or display scale. All scaling from the app's unitless model space
-lives in the `fromModel` / `fromHydrostatics` adapters.
+**Real-world SI throughout** — metres, m³, newtons, m/s; power is returned in kW and speed in knots. The
+module has no notion of scale or model units; supply real dimensions.
 
 ---
 
 ## Calibration & validation
 
-- **PC = 0.57** and the **blend band `Fn_∇ ∈ [0.85, 1.4]`** were fitted to NPish2 sea-trial data (7 speed
-  points). The blend reproduces its planing range to ~10%; low-speed predictions fall _under_ the quoted
-  brake power, consistent with engine-RPM headroom at low load.
-- Each method is validated against a reference (`test/`):
-  - **Holtrop** → the published Holtrop-Mennen (1982) L=205 m tanker worked example, every component <1%.
-  - **Savitsky** → the OpenPlaning library in its base '64 configuration (τ, λ, V_m within ~1–2%).
-  - **Michell** → an independent Wigley-hull evaluation of the integral.
-  - **fromDimensions** → estimator regressions + an end-to-end reproduction of the NPish2 blend.
+- The defaults **PC = 0.57** and the blend band **`Fn_∇ ∈ [0.85, 1.4]`** were fitted to sea-trial
+  speed/power data for a ~12 m semi-displacement hull. The blend reproduced its planing range to ~10%.
+  Override `pc` (and `BLEND_LO`/`BLEND_HI` in `blend.ts`) for a different vessel or propulsion package.
+- Each method is validated against an external reference (see `../../test/`):
+  - **Holtrop** → the published Holtrop-Mennen (1982) L = 205 m tanker worked example, every component <1%.
+  - **Savitsky** → the OpenPlaning library in its base-1964 configuration (running trim, wetted-length
+    ratio and mean bottom velocity within ~1–2%).
+  - **`fromDimensions`** → the estimator regressions plus an end-to-end blend reproduction.
 
-Run `npm test` (or `npm run test:holtrop` etc.).
+Run the suite with `npm test` (or individually, e.g. `npm run test:holtrop`).
 
 ---
 
-## Limitations (be honest with the output)
+## Limitations
 
-- **Estimators** (scant tier) assume conventional ship forms; check `provenance` / `warnings`.
-- **Savitsky inputs are approximated** by the app adapter: amidships deadrise for the planing area, LCB at
-  rest for LCG, waterline beam for chine beam.
+- **Estimators** (`fromDimensions`) assume conventional ship forms — check `provenance` / `warnings`.
+- **Savitsky inputs** are effectively prismatic: one deadrise and one beam stand in for a warped planing
+  surface, and LCG is taken as the at-rest LCB.
 - **Extrapolation:** Holtrop clamps to its fitted envelope (C_P 0.55–0.85, L/B 3.9–15, LCB −4…+2%) and
   flags `holtropInRange = false` outside it — common for beamy planing hulls.
-- **Planing-capability gate** is an L/B heuristic (ignores deadrise/chines); a borderline L/B ≈ 5–6 hull is
-  a judgement call.
-- **Not modelled:** appendage drag, air/windage, added resistance in waves, dynamic trim tabs.
+- **Planing-capability gate** is an L/B heuristic (ignores deadrise/chines); a borderline L/B ≈ 5–6 hull
+  is a judgement call.
+- **Not modelled:** appendage drag, air/windage, added resistance in waves, dynamic trim devices.

@@ -93,7 +93,7 @@ export function PowerPanel({
         ...pts.map((p) => p.brakeKW),
         ...(showMethods
           ? pts
-              .flatMap((p) => [p.brakeMichell, p.brakeHoltrop, p.brakeSavitsky])
+              .flatMap((p) => [p.brakeWave, p.brakeHoltrop, p.brakeSavitsky])
               .filter(Number.isFinite)
           : []),
       ),
@@ -118,7 +118,7 @@ export function PowerPanel({
       pMax,
       ticks,
       blend: line((p) => p.brakeKW),
-      michell: line((p) => p.brakeMichell),
+      michell: line((p) => p.brakeWave),
       holtrop: line((p) => p.brakeHoltrop),
       savitsky: line((p) => p.brakeSavitsky),
     };
@@ -313,7 +313,7 @@ export function PowerPanel({
           {hoverPt
             ? `${hoverPt.kn.toFixed(1)} kn · ${fmtP(hoverPt.brakeKW)} · ${(hoverPt.planingWeight * 100).toFixed(0)}% planing` +
               (showMethods
-                ? ` · Michell ${fmtP(hoverPt.brakeMichell)} · Holtrop ${fmtP(hoverPt.brakeHoltrop)}` +
+                ? ` · Michell ${fmtP(hoverPt.brakeWave)} · Holtrop ${fmtP(hoverPt.brakeHoltrop)}` +
                   (Number.isFinite(hoverPt.brakeSavitsky)
                     ? ` · Savitsky ${fmtP(hoverPt.brakeSavitsky)}`
                     : "")
