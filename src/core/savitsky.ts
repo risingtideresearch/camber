@@ -48,9 +48,18 @@ export interface SavitskyResult {
   cf: number; // ITTC-57 friction coefficient (on V_m)
   rFric: number; // skin-friction drag component (N)
   rInduced: number; // induced/pressure drag W·tanτ (N)
-  rTotal: number; // total bare-hull resistance (N)
+  rSpray: number; // whisker-spray drag allowance (N); 0 for the pure '64 method
+  rTotal: number; // total resistance incl. spray (N)
   inRange: boolean; // false when outside Savitsky's tested envelope (not yet planing / extreme trim)
 }
+
+// Whisker-spray drag as a fraction of the bare planing resistance. Savitsky, Delorme & Datla (2007,
+// "Inclusion of Whisker Spray Drag…", Marine Technology 44/1) quantify the viscous drag in the spray
+// sheet forward of the stagnation line — omitted by the '64 method — as ~15–20% of total high-speed
+// resistance. Rather than reproduce their full spray-geometry procedure, we carry it as one lumped,
+// documented fraction; 0.15 is the mid-literature value (and the level that made np's fitted PC land at
+// a physical ~0.57). Opt-in: the pure '64 method (spray = 0) is what test/savitsky.ts validates.
+export const DEFAULT_SPRAY = 0.15;
 
 // solve f(x)=target on [lo,hi] by bisection (f monotonic over the bracket); returns the clamped bracket
 // end if the target lies outside f's range there
@@ -82,8 +91,13 @@ const bisect = (
 const cpFrac = (cv: number, lambda: number): number =>
   0.75 - 1 / (5.21 * (cv / lambda) ** 2 + 2.39);
 
-// Savitsky resistance at speed V (m/s).
-export function savitsky(s: SavitskyShip, V: number): SavitskyResult {
+// Savitsky resistance at speed V (m/s). `spray` is the whisker-spray fraction (see DEFAULT_SPRAY);
+// pass 0 for the pure '64 method.
+export function savitsky(
+  s: SavitskyShip,
+  V: number,
+  spray = 0,
+): SavitskyResult {
   const { weight: W, beam: b, beta, lcg } = s;
   const salt = s.salt ?? true;
   const rho = RHO[salt ? "salt" : "fresh"];
@@ -129,7 +143,9 @@ export function savitsky(s: SavitskyShip, V: number): SavitskyResult {
   const rFric = 0.5 * rho * vm * vm * lambda * b * b * cf;
 
   const rInduced = W * Math.tan(tauR);
-  const rTotal = rInduced + rFric / Math.cos(tauR);
+  const rBare = rInduced + rFric / Math.cos(tauR);
+  const rSpray = spray * rBare;
+  const rTotal = rBare + rSpray;
 
   // Savitsky (1964) tested envelope: planing (C_V ≳ 1), trim ~2–15°, λ ≲ 4
   const inRange = cv >= 1 && tau >= 2 && tau <= 15 && lambda <= 4;
@@ -146,6 +162,7 @@ export function savitsky(s: SavitskyShip, V: number): SavitskyResult {
     cf,
     rFric,
     rInduced,
+    rSpray,
     rTotal,
     inRange,
   };

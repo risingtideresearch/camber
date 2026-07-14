@@ -129,19 +129,21 @@ header p {
   margin-right: 5px;
   vertical-align: middle;
 }
-.powerlegend .lgtotal::before {
+.powerlegend .lgblend::before {
   border-color: #2b6cb0;
+  border-top-width: 3px;
 }
-.powerlegend .lgwave::before {
+.powerlegend .lgmich::before {
+  border-top-style: dashed;
   border-color: #dd6b20;
 }
-.powerlegend .lgfric::before {
-  border-top-style: dashed;
-  border-color: #a0aec0;
-}
-.powerlegend .lgholtrop::before {
+.powerlegend .lgholt::before {
   border-top-style: dashed;
   border-color: #2f855a;
+}
+.powerlegend .lgsavi::before {
+  border-top-style: dashed;
+  border-color: #805ad5;
 }
 .holtroptoggle {
   display: flex;

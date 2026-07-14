@@ -4,54 +4,54 @@ import { L } from "../core/model";
 import { michellCurve, type MichellCurve } from "../core/michell";
 import { formFactor, type Hydro } from "../core/hydro";
 import { holtrop, type HoltropShip } from "../core/holtrop";
+import { savitsky, type SavitskyShip, DEFAULT_SPRAY } from "../core/savitsky";
+import { blendResistance, planingCapability, BLEND_LO } from "../core/blend";
 import type { Unit, Water } from "../components/MetricsPanel";
 
 // ---------- the speed / power curve ----------
-// Estimated BRAKE power P_B = P_E / PC in kW over the sailing range, from two independent estimates the
-// user can compare:
+// Estimated BRAKE power P_B = P_E / PC in kW over the sailing range. The primary line is a BLEND of three
+// resistance methods, each used where it is physically valid and crossfaded by volumetric Froude number
+// (src/core/blend.ts):
 //
-//  • MICHELL (default): P_E = R_total · U with R_total = ((1+k)·C_f + C_w)·½ρU²S — C_w from Michell's
-//    integral (src/core/michell.ts), C_f from the ITTC-57 line C_f = 0.075/(log₁₀Re − 2)², and (1+k)
-//    the Holtrop form factor (src/core/hydro.ts) lifting flat-plate friction to include viscous-pressure
-//    drag. This curve is shape-true (Michell reads the actual offsets, so humps/hollows are real) but
-//    thin-ship, so it UNDER-reads the absolute level for beamy (low L/B) hulls.
-//  • HOLTROP (optional overlay): the full Holtrop-Mennen statistical total (src/core/holtrop.ts). It only
-//    sees bulk coefficients so it can't show a hull's individual humps, but it is calibrated across L/B
-//    and gives a trustworthy absolute LEVEL — the beam-driven magnitude Michell misses. Toggle it on to
-//    sanity-check the Michell curve's height against a known hull.
+//   • displacement (low Fn_∇): Holtrop-Mennen statistical total (src/core/holtrop.ts)
+//   • planing (high Fn_∇):     Savitsky, incl. a whisker-spray allowance (src/core/savitsky.ts)
+//   • the crossfade spans the semi-displacement hump.
 //
-// Both are effective (tow) power ÷ the same lumped propulsive coefficient PC → brake power; neither adds
-// air drag. A first-order estimate for comparing hulls and trims, not a substitute for a propulsion match.
+// Michell (thin-ship wave resistance + ITTC-57 friction with a Holtrop form factor) is NOT in the blend —
+// it under-reads beamy hulls badly — but rides along as a shape diagnostic. All three methods are
+// available as faint underlays behind the "methods" toggle so the handoff is visible; the readout shows
+// the blend plus how much planing weight is in play.
 //
-// The Michell curve C_w(Fn) is scale-free and depends only on the geometry at the current waterline, so
-// it is recomputed (debounced) only when the hull or trim changes; Holtrop is cheap and re-evaluated per
-// render from the live hydrostatics. The LOA / unit / water inputs re-dimensionalize instantly.
+// Everything is computed at full scale in SI (metres, newtons, m/s) regardless of the metric/imperial
+// display toggle — brake power in kW and speed in knots are unit-system independent. The Michell curve
+// C_w(Fn) is scale-free and recomputed (debounced) only when the hull/trim changes; Holtrop and Savitsky
+// are cheap and re-evaluated per render. Calibrated against S38ish/NPish2 sea-trial data (PC and the
+// blend band); no appendage or air-drag allowance.
 
-const FNS: number[] = Array.from({ length: 49 }, (_, i) => 0.05 + i * 0.0125);
+// Froude range runs to 0.9 (not the displacement blender's 0.65) so a short-LWL planing hull's speed
+// range — well past the hump — is on screen. Michell is only diagnostic up here; the blend leans on
+// Holtrop/Savitsky at these speeds anyway.
+const FNS: number[] = Array.from({ length: 69 }, (_, i) => 0.05 + i * 0.0125);
 
 // chart geometry (viewBox units)
 const CW = 480,
   CH = 260,
   M = { l: 50, r: 12, t: 12, b: 34 };
 
-const G = { m: 9.80665, ft: 32.174 }; // gravity per length unit
-const TO_KN = { m: 1.94384, ft: 0.592484 }; // (m/s | ft/s) → knots
-// effective power → kilowatts, per length unit: m/s·N = W (÷1000); ft/s·lbf = 1.355818 W (÷1000)
-const TO_KW = { m: 1 / 1000, ft: 1.355818 / 1000 };
+const G = 9.80665; // m/s²
+const TO_KN = 1.94384; // m/s → knots
 // overall (lumped) propulsive coefficient P_B = P_E / PC — quasi-propulsive × shaft, appendages, etc.
-// 0.6 is a mid-range value for a small displacement hull; edit to match a known propulsion package
-const PC = 0.6;
-// kinematic viscosity at 15 °C (ITTC), per length unit
-const NU = {
-  m: { salt: 1.188e-6, fresh: 1.139e-6 }, // m²/s
-  ft: { salt: 1.188e-6 * 10.7639, fresh: 1.139e-6 * 10.7639 }, // ft²/s
-};
+// 0.57 was fitted to the NPish2 sea-trial data; edit to match a known propulsion package.
+const PC = 0.57;
+// seawater / freshwater density (kg/m³) and kinematic viscosity (m²/s) at 15 °C (ITTC), for Michell
+const RHO = { salt: 1025, fresh: 1000 };
+const NU = { salt: 1.18831e-6, fresh: 1.13902e-6 };
 
 interface PowerPanelProps {
   model: Model;
   modelVersion: number;
   active: boolean; // a hull is loaded and the waterplane is valid
-  hydro: Hydro | null; // live hydrostatics — feeds the form factor and the Holtrop overlay
+  hydro: Hydro | null; // live hydrostatics — feeds every method
   loa: number;
   unit: Unit;
   water: Water;
@@ -59,11 +59,11 @@ interface PowerPanelProps {
 
 interface PowerPoint {
   kn: number;
-  pw: number; // Michell wave share of brake power P_B (kW)
-  pf: number; // friction share (kW)
-  pt: number; // Michell total brake power (kW)
-  rt: number; // Michell total resistance (N | lbf)
-  ph: number; // Holtrop total brake power (kW); NaN when unavailable
+  w: number; // planing weight in the blend [0,1]
+  pBlend: number; // primary brake-power estimate (kW)
+  pMichell: number; // Michell wave + friction, diagnostic (kW)
+  pHoltrop: number; // Holtrop total, diagnostic (kW)
+  pSavitsky: number; // Savitsky total, diagnostic (kW); NaN below the planing band
 }
 
 export function PowerPanel({
@@ -75,17 +75,18 @@ export function PowerPanel({
   unit,
   water,
 }: PowerPanelProps) {
-  const [showHoltrop, setShowHoltrop] = useState(true);
-  // Holtrop form factor (1+k) on the Michell curve's friction term; 1 = flat-plate only
+  const [showMethods, setShowMethods] = useState(false);
+  // Holtrop form factor (1+k) on the Michell diagnostic's friction term
   const formK = useMemo(() => (hydro ? formFactor(hydro) : 1), [hydro]);
 
-  // the live hull as a full-scale SI ship for Holtrop: model-unit geometry × the metrics scale, then
-  // converted to metres (Holtrop is calibrated in SI). Coefficients and LCB% are already scale-free.
-  const ship = useMemo<HoltropShip | null>(() => {
+  // the live hull as full-scale SI ships for Holtrop and Savitsky: model-unit geometry × the metrics
+  // scale, converted to metres. Coefficients / LCB% are already scale-free.
+  const ships = useMemo(() => {
     if (!hydro || !hydro.validWaterplane || !(loa > 0)) return null;
     const lin = (loa / L) * (unit === "m" ? 1 : 0.3048); // model unit → metres
     const amid = (hydro.xAft + hydro.xFwd) / 2;
-    return {
+    const salt = water === "salt";
+    const hol: HoltropShip = {
       L: hydro.lwl * lin,
       B: hydro.bwl * lin,
       T: hydro.draft * lin,
@@ -95,13 +96,21 @@ export function PowerPanel({
       cwp: hydro.cw,
       lcb: (100 * (hydro.lcb - amid)) / hydro.lwl, // % of L fwd of amidships
       S: hydro.wettedArea * lin ** 2,
-      iE: hydro.halfEntrance, // NaN → Holtrop estimates it
-      salt: water === "salt",
+      iE: hydro.halfEntrance,
+      salt,
     };
+    const sav: SavitskyShip = {
+      weight: RHO[salt ? "salt" : "fresh"] * hydro.vol * lin ** 3 * G,
+      beam: hydro.bwl * lin, // waterline beam as a proxy for chine/planing beam
+      beta: hydro.deadrise, // amidships deadrise as a proxy for the planing area
+      lcg: (hydro.lcb - hydro.xAft) * lin, // forward of the transom
+      salt,
+    };
+    return { hol, sav };
   }, [hydro, loa, unit, water]);
+
   // the last computed Michell curve, keyed to the model version that produced it ("computing…" is
-  // derived, and the stale curve stays up while the fresh one cooks — same pattern as the blender's
-  // wave panel)
+  // derived, and the stale curve stays up while the fresh one cooks)
   const [state, setState] = useState<{
     forVersion: number;
     curve: MichellCurve | null;
@@ -118,76 +127,74 @@ export function PowerPanel({
     return () => clearTimeout(id);
   }, [model, modelVersion, active]);
 
-  // dimensionalize the scale-free curve at the chosen LOA / water
+  // dimensionalize every method at the chosen LOA / water, all in SI, → brake power in kW
   const pts = useMemo<PowerPoint[] | null>(() => {
-    if (!curve || !(loa > 0)) return null;
-    const s = loa / L,
-      lwl = curve.lwl * s,
-      area = curve.wettedArea * s * s,
-      g = G[unit],
-      nu = NU[unit][water],
-      rho =
-        unit === "m"
-          ? water === "salt"
-            ? 1025
-            : 1000 // kg/m³
-          : (water === "salt" ? 64 : 62.4) / G.ft; // slug/ft³
+    if (!curve || !ships || !(loa > 0)) return null;
+    const lin = (loa / L) * (unit === "m" ? 1 : 0.3048);
+    const lwlM = curve.lwl * lin,
+      areaM = curve.wettedArea * lin ** 2,
+      rho = RHO[water],
+      nu = NU[water],
+      cbrtVol = Math.cbrt(ships.hol.vol),
+      // per-hull planing capability (form gate) — keeps slender displacement hulls off the Savitsky branch
+      capability = planingCapability(ships.hol.L / ships.hol.B);
+    const toBrake = (R: number, V: number): number => (R * V) / 1000 / PC; // N·m/s → kW
     const out: PowerPoint[] = [];
     for (let i = 0; i < FNS.length; i++) {
       const cw = curve.cw[i];
       if (!Number.isFinite(cw)) continue;
-      const u = FNS[i] * Math.sqrt(g * lwl),
-        re = (u * lwl) / nu,
+      const V = FNS[i] * Math.sqrt(G * lwlM),
+        fnVol = V / Math.sqrt(G * cbrtVol),
+        re = (V * lwlM) / nu,
         cf = 0.075 / (Math.log10(re) - 2) ** 2,
-        q = 0.5 * rho * u * u * area, // ½ρU²S
-        rw = cw * q,
-        rf = formK * cf * q, // (1+k) form factor lifts flat-plate friction to viscous total
-        // resistance·speed → effective power in kW, then ÷PC for brake power
-        toP = (u * TO_KW[unit]) / PC,
-        kn = u * TO_KN[unit];
-      // Holtrop total at the same speed (SI throughout): R_total[N]·V[m/s]/1000 = kW, then ÷PC
-      const vMs = kn / TO_KN.m;
-      const ph = ship ? (holtrop(ship, vMs).rTotal * vMs) / 1000 / PC : NaN;
+        q = 0.5 * rho * V * V * areaM;
+      const rMich = (cw + formK * cf) * q,
+        rHol = holtrop(ships.hol, V).rTotal,
+        rSav = savitsky(ships.sav, V, DEFAULT_SPRAY).rTotal;
+      const { r: rBlend, w } = blendResistance(fnVol, rHol, rSav, capability);
       out.push({
-        kn,
-        pw: rw * toP,
-        pf: rf * toP,
-        pt: (rw + rf) * toP,
-        rt: rw + rf,
-        ph,
+        kn: V * TO_KN,
+        w,
+        pBlend: toBrake(rBlend, V),
+        pMichell: toBrake(rMich, V),
+        pHoltrop: toBrake(rHol, V),
+        // Savitsky shown only for planing-capable hulls, in the speed range where it feeds the blend
+        pSavitsky:
+          capability > 0.5 && fnVol >= BLEND_LO ? toBrake(rSav, V) : NaN,
       });
     }
     return out.length >= 2 ? out : null;
-  }, [curve, formK, ship, loa, unit, water]);
+  }, [curve, ships, formK, loa, unit, water]);
 
   const plotW = CW - M.l - M.r,
     plotH = CH - M.t - M.b;
 
-  const holtropOn = showHoltrop && !!ship;
-  // whether the hull sits inside Holtrop's fitted envelope (per-hull, so evaluate once at any speed)
+  // whether the hull sits inside Holtrop's fitted envelope (per-hull; evaluate once at any speed)
   const holtropInRange = useMemo(
-    () => (ship ? holtrop(ship, 1).inRange : true),
-    [ship],
+    () => (ships ? holtrop(ships.hol, 1).inRange : true),
+    [ships],
   );
   const body = useMemo(() => {
     if (!pts) return null;
     const knMax = pts[pts.length - 1].kn,
-      // scale to whichever curve is taller so the overlay never clips
+      // scale to the blend, plus the method underlays when shown, so nothing clips
       peak = Math.max(
-        ...pts.map((p) => p.pt),
-        ...(holtropOn ? pts.map((p) => p.ph).filter(Number.isFinite) : []),
+        ...pts.map((p) => p.pBlend),
+        ...(showMethods
+          ? pts
+              .flatMap((p) => [p.pMichell, p.pHoltrop, p.pSavitsky])
+              .filter(Number.isFinite)
+          : []),
       ),
-      pMax = peak * 1.08;
+      pMax = peak * 1.1;
     if (!(knMax > 0) || !(pMax > 0)) return null;
     const sx = (kn: number): number => M.l + (kn / knMax) * plotW;
     const sy = (p: number): number => M.t + plotH * (1 - p / pMax);
-    // a polyline over only the finite samples of f (Holtrop can be NaN at the extremes)
     const line = (f: (p: PowerPoint) => number): string =>
       pts
         .filter((p) => Number.isFinite(f(p)))
         .map((p) => `${sx(p.kn).toFixed(1)},${sy(f(p)).toFixed(1)}`)
         .join(" ");
-    // knot ticks at a readable step
     const rawStep = knMax / 7,
       mag = 10 ** Math.floor(Math.log10(rawStep)),
       step = [1, 2, 5, 10].map((m) => m * mag).find((v) => v >= rawStep) ?? mag;
@@ -199,23 +206,16 @@ export function PowerPanel({
       knMax,
       pMax,
       ticks,
-      total: line((p) => p.pt),
-      wave: line((p) => p.pw),
-      friction: line((p) => p.pf),
-      holtrop: line((p) => p.ph),
+      blend: line((p) => p.pBlend),
+      michell: line((p) => p.pMichell),
+      holtrop: line((p) => p.pHoltrop),
+      savitsky: line((p) => p.pSavitsky),
     };
-  }, [pts, plotW, plotH, holtropOn]);
+  }, [pts, plotW, plotH, showMethods]);
 
   const hoverPt = hover != null && pts && body ? pts[hover] : null;
-  const pUnit = "kW";
   const fmtP = (v: number): string =>
-    `${v.toFixed(v < 10 ? 2 : v < 100 ? 1 : 0)} ${pUnit}`;
-  const fmtR = (v: number): string =>
-    unit === "m"
-      ? v >= 1000
-        ? `${(v / 1000).toFixed(v < 10000 ? 2 : 1)} kN`
-        : `${v.toFixed(0)} N`
-      : `${v.toFixed(v < 100 ? 1 : 0)} lbf`;
+    `${v.toFixed(v < 10 ? 2 : v < 100 ? 1 : 0)} kW`;
 
   return (
     <div className="card">
@@ -225,14 +225,14 @@ export function PowerPanel({
         <span style={{ flex: 1 }} />
         <label
           className="holtroptoggle"
-          title="Overlay the Holtrop-Mennen total-power estimate"
+          title="Show the individual method curves behind the blend"
         >
           <input
             type="checkbox"
-            checked={showHoltrop}
-            onChange={(e) => setShowHoltrop(e.target.checked)}
+            checked={showMethods}
+            onChange={(e) => setShowMethods(e.target.checked)}
           />
-          Holtrop
+          methods
         </label>
       </div>
       <div className="ctl">
@@ -317,39 +317,41 @@ export function PowerPanel({
             fontSize="11"
             fill="#1a202c"
           >
-            {`P_B · ${pUnit}`}
+            P_B · kW
           </text>
           {body && (
             <>
+              {showMethods && (
+                <>
+                  <polyline
+                    points={body.michell}
+                    fill="none"
+                    stroke="#dd6b20"
+                    strokeWidth="1.2"
+                    strokeDasharray="4 3"
+                  />
+                  <polyline
+                    points={body.holtrop}
+                    fill="none"
+                    stroke="#2f855a"
+                    strokeWidth="1.2"
+                    strokeDasharray="4 3"
+                  />
+                  <polyline
+                    points={body.savitsky}
+                    fill="none"
+                    stroke="#805ad5"
+                    strokeWidth="1.2"
+                    strokeDasharray="4 3"
+                  />
+                </>
+              )}
               <polyline
-                points={body.friction}
-                fill="none"
-                stroke="#a0aec0"
-                strokeWidth="1.2"
-                strokeDasharray="4 3"
-              />
-              <polyline
-                points={body.wave}
-                fill="none"
-                stroke="#dd6b20"
-                strokeWidth="1.2"
-              />
-              <polyline
-                points={body.total}
+                points={body.blend}
                 fill="none"
                 stroke="#2b6cb0"
-                strokeWidth="2"
+                strokeWidth="2.6"
               />
-              {holtropOn && (
-                <polyline
-                  points={body.holtrop}
-                  fill="none"
-                  stroke="#2f855a"
-                  strokeWidth="2.4"
-                  strokeDasharray="9 5"
-                  strokeLinecap="round"
-                />
-              )}
             </>
           )}
           {!body && !busy && (
@@ -378,50 +380,44 @@ export function PowerPanel({
               />
               <circle
                 cx={body.sx(hoverPt.kn)}
-                cy={body.sy(hoverPt.pt)}
+                cy={body.sy(hoverPt.pBlend)}
                 r="3.5"
                 fill="#2b6cb0"
               />
-              {holtropOn && Number.isFinite(hoverPt.ph) && (
-                <circle
-                  cx={body.sx(hoverPt.kn)}
-                  cy={body.sy(hoverPt.ph)}
-                  r="3.5"
-                  fill="#2f855a"
-                />
-              )}
             </g>
           )}
         </svg>
         <div className="powerlegend">
-          <span className="lg lgtotal">Michell total</span>
-          <span className="lg lgwave">wave (Michell)</span>
-          <span className="lg lgfric">friction (ITTC-57 · 1+k)</span>
-          {holtropOn && (
-            <span className="lg lgholtrop">
-              Holtrop total{!holtropInRange && " · extrapolated"}
-            </span>
+          <span className="lg lgblend">best estimate</span>
+          {showMethods && (
+            <>
+              <span className="lg lgmich">Michell</span>
+              <span className="lg lgholt">Holtrop{!holtropInRange && "*"}</span>
+              <span className="lg lgsavi">Savitsky</span>
+            </>
           )}
         </div>
         <div className="powerreadout">
           {hoverPt
-            ? `${hoverPt.kn.toFixed(1)} kn · Michell ${fmtP(hoverPt.pt)} (wave ${fmtP(hoverPt.pw)} + friction ${fmtP(hoverPt.pf)})` +
-              (holtropOn && Number.isFinite(hoverPt.ph)
-                ? ` · Holtrop ${fmtP(hoverPt.ph)}`
-                : ` · R ${fmtR(hoverPt.rt)}`)
+            ? `${hoverPt.kn.toFixed(1)} kn · ${fmtP(hoverPt.pBlend)} · ${(hoverPt.w * 100).toFixed(0)}% planing` +
+              (showMethods
+                ? ` · Michell ${fmtP(hoverPt.pMichell)} · Holtrop ${fmtP(hoverPt.pHoltrop)}` +
+                  (Number.isFinite(hoverPt.pSavitsky)
+                    ? ` · Savitsky ${fmtP(hoverPt.pSavitsky)}`
+                    : "")
+                : "")
             : " "}
         </div>
         <div className="hint">
-          Estimated brake (engine) power ÷ propulsive coefficient
-          PC&nbsp;=&nbsp;{PC.toFixed(2)}. Solid line: Michell wave + ITTC-57
-          friction (form factor 1+k&nbsp;=&nbsp;{formK.toFixed(2)}) — shape-true
-          but thin-ship, so it under-reads beamy hulls. Dashed: the
-          Holtrop-Mennen statistical total, an absolute-level anchor (no
-          individual humps). They agree on friction and diverge where wave
-          resistance does.
-          {holtropOn && !holtropInRange
-            ? " This hull is outside Holtrop's fitted envelope (L/B, C_P or LCB), so its dashed level is extrapolated — treat it as indicative."
-            : " No appendage or air drag."}
+          Estimated brake power ÷ propulsive coefficient PC&nbsp;=&nbsp;
+          {PC.toFixed(2)}. The line blends Holtrop (displacement) into Savitsky
+          (planing) by volumetric Froude number, crossfading through the
+          semi-displacement hump. Turn on <em>methods</em> to see the three
+          curves behind it. Calibrated to sea-trial data; no appendage or air
+          drag.
+          {showMethods && !holtropInRange
+            ? " *Holtrop is outside its fitted envelope for this hull (extrapolated)."
+            : ""}
         </div>
       </div>
     </div>
