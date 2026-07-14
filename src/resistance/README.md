@@ -1,12 +1,12 @@
 # `resistance` — hull resistance & power prediction
 
 A small, self-contained TypeScript module that estimates a displacement/planing hull's **calm-water
-resistance and brake power across a speed range**. It blends two classical methods according to which is
-physically valid at each speed.
+resistance, brake power, and specific power (kW/tonne) across a speed range**. It blends two classical
+methods according to which is physically valid at each speed.
 
 Pure functions, **zero runtime dependencies**, framework-agnostic. You describe a hull with a single
-`HullGeometry` record — at whatever fidelity you have, from a handful of principal dimensions up to fully
-measured coefficients — and get back a per-speed power curve.
+`HullGeometry` record — at whatever fidelity you have, from length and beam alone up to fully measured
+coefficients — and get back a per-speed power curve.
 
 ```
               displacement          semi-displacement           planing
@@ -39,75 +39,49 @@ R = (1 − w)·R_holtrop + w·R_savitsky,   w = planingSpeed(Fn_∇) · planingC
 
 A pure displacement hull never reaches `BLEND_LO`, so its estimate is simply Holtrop.
 
-The power answer needs only **coefficients**, which can be estimated from principal dimensions — so even
-the worst-case scant input yields a full curve.
-
-> **Not included:** thin-ship wave resistance (Michell) and other shape-sensitive wave methods. Those
-> under-read beamy hulls and aren't part of the blended answer; if you want a shape diagnostic, compute it
-> in the caller. `formFactor` is exported if you need the Holtrop `(1+k1)` viscous factor for such a
-> friction term.
-
----
-
-## Specific power (kW/tonne) & battery repowering
-
-Every result point carries `specificKWperT` — brake power **per tonne of displacement**. For feasibility
-questions like "could this boat be repowered battery-electric?", this is the metric that matters: the
-usable range at a given speed is governed by the battery _mass fraction_ of displacement, so
-
-```
-battery mass fraction ≈ specificKWperT · hours / (batterySpecificEnergy_kWh_per_t · η)
-```
-
-— absolute displacement cancels out. And conveniently, **`specificKWperT` is far less sensitive to
-unknown size than absolute kW**: displacement appears in both the power and the divisor and largely
-cancels (exactly in the wave term). In a sweep where draft and C_B are unknown across a ~3× spread in ∇,
-absolute brake kW varied ~34% but kW/tonne only ~11% (`test/dimensions.ts`). So a useful kW/tonne estimate
-needs only **length, beam, speed, and a hull-type guess** — not a measured draft or displacement — and is
-tightest in displacement mode.
+> **Not included:** thin-ship wave resistance (Michell) and other shape-sensitive wave methods. They
+> under-read beamy hulls and are deliberately outside the blended answer; compute one in the caller if you
+> want a shape diagnostic. (`formFactor` is exported for the Holtrop `(1+k1)` viscous term such a friction
+> calculation needs.)
 
 ---
 
 ## Fidelity ladder
 
-| You have…                             | Build a `HullGeometry` by…                           | What you get               |
-| ------------------------------------- | ---------------------------------------------------- | -------------------------- |
-| just L, B, T (worst case)             | `fromDimensions(...)` — estimates ∇ and coefficients | Holtrop + Savitsky + blend |
-| + displacement (or C_B) — recommended | `fromDimensions({ …, displacement })`                | same, ∇ no longer guessed  |
-| measured form coefficients            | constructing the record directly (all fields given)  | most accurate              |
+The blended answer needs only **coefficients**, which can be estimated from principal dimensions — so even
+the scantest input yields a full curve. Supply more, get more accuracy:
 
-Every field a constructor fills in is recorded in `provenance` (`"given"` vs `"estimated"`), and
+| You have…                       | Build a `HullGeometry` with…                       | Result                |
+| ------------------------------- | -------------------------------------------------- | --------------------- |
+| length + beam (scantest)        | `fromDimensions(...)` — estimates draft, ∇, coeffs | full curve, roughest  |
+| + displacement or C_B (± draft) | `fromDimensions({ …, displacement })`              | ∇ pinned, not guessed |
+| measured form coefficients      | the `HullGeometry` record directly                 | most accurate         |
+
+Every field a constructor estimates is recorded in `provenance` (`"given"` vs `"estimated"`), and
 `computeResistance` surfaces estimated inputs and out-of-envelope extrapolation in `result.warnings`.
 
 ---
 
 ## Quick start
 
-Worst case — principal dimensions and a displacement; coefficients are estimated:
+Scant — length and beam only; draft, displacement and coefficients are all estimated:
 
 ```ts
 import { fromDimensions } from "./estimate";
 import { computeResistance } from "./compute";
 
-const hull = fromDimensions({
-  lwl: 11.9,
-  beam: 3.6,
-  draft: 0.7,
-  displacement: 15800, // kg  (or give a block coefficient `cb` instead)
-  deadrise: 12, // used once the hull is planing-capable
-});
-
+const hull = fromDimensions({ lwl: 11.9, beam: 3.6, deadrise: 12 });
 const result = computeResistance(hull, { water: "salt", pc: 0.57 });
 
 for (const p of result.points) {
   console.log(
-    `${p.kn.toFixed(1)} kn → ${p.brakeKW.toFixed(0)} kW (${(p.planingWeight * 100).toFixed(0)}% planing)`,
+    `${p.kn.toFixed(1)} kn → ${p.brakeKW.toFixed(0)} kW · ${p.specificKWperT.toFixed(2)} kW/t (${(p.planingWeight * 100).toFixed(0)}% planing)`,
   );
 }
-console.log(result.warnings); // e.g. ["estimated (not measured): cm, cp, cwp, …"]
+console.log(result.warnings); // e.g. ["estimated (not measured): draft, vol, cm, cp, cwp, …"]
 ```
 
-Measured coefficients — build the record directly (nothing is estimated):
+Measured — build the record directly (nothing is estimated):
 
 ```ts
 import type { HullGeometry } from "./types";
@@ -169,8 +143,8 @@ type Provenance = Record<string, "given" | "estimated">;
 
 ### `fromDimensions(input): HullGeometry`
 
-Fills form coefficients from principal dimensions with standard regressions; any coefficient you pass
-explicitly overrides its estimate and is marked `"given"`.
+Fills the geometry from principal dimensions using standard regressions; any value you pass explicitly
+overrides its estimate and is marked `"given"`.
 
 ```ts
 interface DimensionsInput {
@@ -178,9 +152,9 @@ interface DimensionsInput {
   beam: number; // m — required
   draft?: number; // m — optional; estimated from beam (B/T ≈ 3.5) when omitted
   displacement?: number; // kg — provide this…
-  cb?: number; // …or a block coefficient
+  cb?: number; // …or a block coefficient; else ∇ is estimated (C_B = 0.5)
   water?: "salt" | "fresh"; // for displacement↔volume (default "salt")
-  // optional overrides (else estimated):
+  // optional coefficient overrides (all number; estimated when omitted):
   cp?;
   cm?;
   cwp?;
@@ -193,23 +167,20 @@ interface DimensionsInput {
 }
 ```
 
-| Quantity         | Estimate                                                  |
-| ---------------- | --------------------------------------------------------- |
-| T (draft)        | `draft`, else `B / 3.5` (beam/draft ≈ 3.5)                |
-| ∇ (displacement) | `displacement`, else `C_B·L·B·T` (`cb`, else `C_B = 0.5`) |
-| C_M              | Benford `1 / (1 + (1−C_B)^3.5)`                           |
-| C_P              | `C_B / C_M`                                               |
-| C_WP             | Schneekluth `(1 + 2·C_B)/3`                               |
-| LCB              | `−1.5%` of L (slightly aft)                               |
-| i_E, wetted area | left unset → Holtrop estimates them internally            |
-| deadrise         | `15°`                                                     |
-
-`displacement` is optional: omit it (and `cb`) and ∇ is estimated from the principal dimensions — draft
-included — via `∇ = C_B·L·B·T` with a mid-range `C_B = 0.5`. Supply `displacement` or `cb` for accuracy.
+| Quantity         | Estimate when not supplied                     |
+| ---------------- | ---------------------------------------------- |
+| T (draft)        | `B / 3.5` (beam/draft ≈ 3.5)                   |
+| ∇ (displacement) | `C_B·L·B·T`, with `C_B` from `cb` else `0.5`   |
+| C_M              | Benford `1 / (1 + (1−C_B)^3.5)`                |
+| C_P              | `C_B / C_M`                                    |
+| C_WP             | Schneekluth `(1 + 2·C_B)/3`                    |
+| LCB              | `−1.5%` of L (slightly aft)                    |
+| i_E, wetted area | left unset → Holtrop estimates them internally |
+| deadrise         | `15°`                                          |
 
 > ⚠️ These regressions assume conventional ship forms. For unusual hulls (very full, shallow, hard-chine)
 > they can be well off — e.g. Benford predicts C_M ≈ 0.93 for a hull whose true C_M is 0.63. Supply
-> measured coefficients when you have them; `provenance` and `result.warnings` flag whatever was guessed.
+> measured values when you have them; `provenance` and `result.warnings` flag whatever was guessed.
 
 ### `computeResistance(hull, opts?): ResistanceResult`
 
@@ -222,16 +193,16 @@ interface ResistanceOptions {
 }
 
 interface ResistancePoint {
-  fn;
-  kn;
-  speed; // length-Froude number, knots, m/s
-  fnVol; // volumetric Froude number (blend regime indicator)
-  planingWeight; // w ∈ [0,1] applied in the blend
-  rBlend; // blended resistance (N)
-  brakeKW; // blended brake power (kW) — the primary estimate
-  specificKWperT; // brake power per tonne of displacement (kW/t) — the size-robust metric
-  brakeHoltrop; // per-method brake power (kW)
-  brakeSavitsky; // NaN when not planing-capable / below the band
+  fn: number; // length-Froude number
+  kn: number; // speed (knots)
+  speed: number; // speed (m/s)
+  fnVol: number; // volumetric Froude number (blend regime indicator)
+  planingWeight: number; // w ∈ [0,1] applied in the blend
+  rBlend: number; // blended resistance (N)
+  brakeKW: number; // blended brake power (kW) — the primary estimate
+  specificKWperT: number; // brake power per tonne of displacement (kW/t)
+  brakeHoltrop: number; // Holtrop-only brake power (kW)
+  brakeSavitsky: number; // Savitsky-only brake power (kW); NaN below the planing band
 }
 
 interface ResistanceResult {
@@ -251,6 +222,24 @@ interface ResistanceResult {
 - `blendResistance(fnVol, rDisplacement, rPlaning, capability?)` → `{ r, w }`, plus
   `planingSpeed(fnVol)`, `planingCapability(lengthBeam)`, `BLEND_LO`, `BLEND_HI`.
 - `formFactor({ lwl, beam, draft, cp, lcbPct })` — Holtrop `(1+k1)` viscous form factor.
+
+---
+
+## Specific power (kW/tonne) & battery repowering
+
+Every result point carries `specificKWperT` — brake power **per tonne of displacement**. For feasibility
+questions like "could this boat be repowered battery-electric?", this is the metric that matters: usable
+range at a given speed is governed by the battery _mass fraction_ of displacement,
+
+```
+battery mass fraction ≈ specificKWperT · hours / (batterySpecificEnergy_kWh_per_t · η)
+```
+
+so absolute displacement cancels out. It also **survives unknown size far better than absolute kW** —
+displacement appears in both the power and the divisor and largely cancels (exactly in the wave term). In
+a sweep where draft and C_B are unknown across a ~3× spread in ∇, absolute brake kW varied ~34% but
+kW/tonne only ~11% (`test/dimensions.ts`). So a useful kW/tonne figure needs only **length, beam, speed,
+and a hull-type guess** — no measured draft or displacement — and is tightest in displacement mode.
 
 ---
 
@@ -274,7 +263,7 @@ It reads two features:
   **not** refine ∇.
 - **Semi-displacement hump** at volumetric-Froude ≈ 1.1. A hull that loiters below it and cruises above
   leaves a bimodal trough at the hump speed ⇒ `regime: "semi-displacement"`, and the trough speed inverts
-  to a `volEstimate`. A hull always running above it ⇒ `regime: "planing"` with ∇ only bounded from above.
+  to a `volEstimate`. A hull always running above it ⇒ `regime: "planing"`, with ∇ only bounded from above.
 
 > ⚠️ ∇ from a hump speed is **coarse**: `∇ ∝ V_hump⁶`, so a 10% speed error is ~80% in ∇. Use it as an
 > order-of-magnitude cross-check on `C_B·L·B·T`, not a measurement — the dependable output is the regime.
@@ -299,7 +288,9 @@ module has no notion of scale or model units; supply real dimensions.
   - **Holtrop** → the published Holtrop-Mennen (1982) L = 205 m tanker worked example, every component <1%.
   - **Savitsky** → the OpenPlaning library in its base-1964 configuration (running trim, wetted-length
     ratio and mean bottom velocity within ~1–2%).
-  - **`fromDimensions`** → the estimator regressions plus an end-to-end blend reproduction.
+  - **`fromDimensions`** → the estimator regressions, an end-to-end blend reproduction, and the kW/tonne
+    size-robustness sweep.
+  - **`locateHump`** → a synthetic-distribution round-trip across all three regimes.
 
 Run the suite with `npm test` (or individually, e.g. `npm run test:holtrop`).
 
@@ -316,3 +307,7 @@ Run the suite with `npm test` (or individually, e.g. `npm run test:holtrop`).
   is a judgement call.
 - **Not modelled:** wave resistance / shape diagnostics, appendage drag, air/windage, added resistance in
   waves, dynamic trim devices.
+
+```
+
+```
