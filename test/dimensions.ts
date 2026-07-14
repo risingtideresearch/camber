@@ -139,6 +139,47 @@ function near(got: number, want: number, tol: number, label: string): void {
     (p, i, a) => i === 0 || p.brakeKW >= a[i - 1].brakeKW - 1e-6,
   );
   check(mono, "brake power increases with speed");
+  // specific power = brake / displacement (tonnes)
+  const tonnes = (1025 * g.vol) / 1000;
+  near(
+    p15.specificKWperT,
+    p15.brakeKW / tonnes,
+    1e-6,
+    "specificKWperT = brakeKW / tonnes",
+  );
+}
+
+// ---------- 4. specific power (kW/t) is size-robust under unknown draft/displacement ----------
+// The battery-repowering metric. With L, B fixed and a displacement-mode speed, sweep draft × C_B (so ∇
+// spans a wide range) and confirm kW/tonne varies far less than absolute kW — ∇ largely cancels.
+{
+  const L = 12,
+    B = 3.6;
+  const nearestKn = (res: ReturnType<typeof computeResistance>, kn: number) =>
+    res.points.reduce((a, b) =>
+      Math.abs(b.kn - kn) < Math.abs(a.kn - kn) ? b : a,
+    );
+  const kw: number[] = [],
+    kwt: number[] = [],
+    disp: number[] = [];
+  for (const draft of [0.6, 0.9, 1.2])
+    for (const cb of [0.45, 0.55, 0.65]) {
+      const g = fromDimensions({ lwl: L, beam: B, draft, cb });
+      const p = nearestKn(computeResistance(g, { water: "salt" }), 9);
+      kw.push(p.brakeKW);
+      kwt.push(p.specificKWperT);
+      disp.push((1025 * g.vol) / 1000);
+    }
+  const cv = (v: number[]) => {
+    const m = v.reduce((a, b) => a + b, 0) / v.length;
+    return Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / v.length) / m;
+  };
+  console.log("--- kW/tonne robustness @9 kn (draft×Cb sweep) ---");
+  console.log(
+    `    ∇ CV ${(cv(disp) * 100).toFixed(0)}% · kW CV ${(cv(kw) * 100).toFixed(0)}% · kW/t CV ${(cv(kwt) * 100).toFixed(0)}%`,
+  );
+  check(cv(kwt) < cv(kw), "kW/tonne varies less than absolute kW");
+  check(cv(kwt) < 0.2, "kW/tonne pinned within ~20% despite unknown ∇");
 }
 
 if (failures) {

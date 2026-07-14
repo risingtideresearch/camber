@@ -60,6 +60,7 @@ export function computeResistance(
   };
   const capability = planingCapability(g.lwl / g.beam);
   const cbrtVol = Math.cbrt(g.vol);
+  const tonnes = (rho * g.vol) / 1000; // displacement mass in tonnes
 
   const points = froudes.map((fn) => {
     const V = fn * Math.sqrt(G * g.lwl);
@@ -68,6 +69,7 @@ export function computeResistance(
     const rHol = holtrop(hol, V).rTotal;
     const rSav = savitsky(sav, V, spray).rTotal;
     const { r: rBlend, w } = blendResistance(fnVol, rHol, rSav, capability);
+    const brakeKW = toBrake(rBlend);
     return {
       fn,
       kn: V * TO_KN,
@@ -75,7 +77,8 @@ export function computeResistance(
       fnVol,
       planingWeight: w,
       rBlend,
-      brakeKW: toBrake(rBlend),
+      brakeKW,
+      specificKWperT: brakeKW / tonnes,
       brakeHoltrop: toBrake(rHol),
       brakeSavitsky:
         capability > 0.5 && fnVol >= BLEND_LO ? toBrake(rSav) : NaN,

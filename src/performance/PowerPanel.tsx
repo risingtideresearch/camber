@@ -352,7 +352,7 @@ export function PowerPanel({
         </div>
         <div className="powerreadout">
           {hoverPt
-            ? `${hoverPt.kn.toFixed(1)} kn · ${fmtP(hoverPt.brakeKW)} · ${(hoverPt.planingWeight * 100).toFixed(0)}% planing` +
+            ? `${hoverPt.kn.toFixed(1)} kn · ${fmtP(hoverPt.brakeKW)} · ${hoverPt.specificKWperT.toFixed(2)} kW/t · ${(hoverPt.planingWeight * 100).toFixed(0)}% planing` +
               (showMethods
                 ? (hover != null && Number.isFinite(michellBrake?.[hover])
                     ? ` · Michell ${fmtP(michellBrake![hover])}`

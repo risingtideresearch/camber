@@ -49,6 +49,25 @@ the worst-case scant input yields a full curve.
 
 ---
 
+## Specific power (kW/tonne) & battery repowering
+
+Every result point carries `specificKWperT` — brake power **per tonne of displacement**. For feasibility
+questions like "could this boat be repowered battery-electric?", this is the metric that matters: the
+usable range at a given speed is governed by the battery _mass fraction_ of displacement, so
+
+```
+battery mass fraction ≈ specificKWperT · hours / (batterySpecificEnergy_kWh_per_t · η)
+```
+
+— absolute displacement cancels out. And conveniently, **`specificKWperT` is far less sensitive to
+unknown size than absolute kW**: displacement appears in both the power and the divisor and largely
+cancels (exactly in the wave term). In a sweep where draft and C_B are unknown across a ~3× spread in ∇,
+absolute brake kW varied ~34% but kW/tonne only ~11% (`test/dimensions.ts`). So a useful kW/tonne estimate
+needs only **length, beam, speed, and a hull-type guess** — not a measured draft or displacement — and is
+tightest in displacement mode.
+
+---
+
 ## Fidelity ladder
 
 | You have…                             | Build a `HullGeometry` by…                           | What you get               |
@@ -155,9 +174,9 @@ explicitly overrides its estimate and is marked `"given"`.
 
 ```ts
 interface DimensionsInput {
-  lwl: number;
-  beam: number;
-  draft: number; // m — required
+  lwl: number; // m — required
+  beam: number; // m — required
+  draft?: number; // m — optional; estimated from beam (B/T ≈ 3.5) when omitted
   displacement?: number; // kg — provide this…
   cb?: number; // …or a block coefficient
   water?: "salt" | "fresh"; // for displacement↔volume (default "salt")
@@ -176,6 +195,7 @@ interface DimensionsInput {
 
 | Quantity         | Estimate                                                  |
 | ---------------- | --------------------------------------------------------- |
+| T (draft)        | `draft`, else `B / 3.5` (beam/draft ≈ 3.5)                |
 | ∇ (displacement) | `displacement`, else `C_B·L·B·T` (`cb`, else `C_B = 0.5`) |
 | C_M              | Benford `1 / (1 + (1−C_B)^3.5)`                           |
 | C_P              | `C_B / C_M`                                               |
@@ -209,6 +229,7 @@ interface ResistancePoint {
   planingWeight; // w ∈ [0,1] applied in the blend
   rBlend; // blended resistance (N)
   brakeKW; // blended brake power (kW) — the primary estimate
+  specificKWperT; // brake power per tonne of displacement (kW/t) — the size-robust metric
   brakeHoltrop; // per-method brake power (kW)
   brakeSavitsky; // NaN when not planing-capable / below the band
 }

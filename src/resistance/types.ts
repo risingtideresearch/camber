@@ -48,6 +48,7 @@ export interface ResistancePoint {
   planingWeight: number; // w ∈ [0,1] applied in the blend
   rBlend: number; // blended resistance (N)
   brakeKW: number; // blended brake power (kW) — the primary estimate
+  specificKWperT: number; // brake power per tonne of displacement (kW/t) — the size-robust metric
   brakeHoltrop: number; // per-method brake power (kW)
   brakeSavitsky: number; // NaN when the hull isn't planing-capable / below the band
 }

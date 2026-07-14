@@ -7,8 +7,9 @@
 // explicitly to override its estimate.
 //
 // Estimators (documented, first-order):
+//   T    ← draft, else B / DEFAULT_BT (beam/draft ≈ 3.5) — draft is optional
 //   ∇    ← displacement, else C_B·L·B·T (C_B given, else DEFAULT_CB) — so displacement can be estimated
-//          from the principal dimensions (incl. draft) alone
+//          from length + beam (+ estimated draft) alone
 //   C_M  ← C_B   Benford:   C_M = 1/(1 + (1−C_B)^3.5)
 //   C_P  = C_B / C_M
 //   C_WP ← C_B   Schneekluth (U-form): C_WP = (1 + 2·C_B)/3
@@ -19,11 +20,14 @@ import type { HullGeometry, Provenance } from "./types";
 const RHO = { salt: 1025, fresh: 1000 };
 // mid-range block coefficient assumed when neither displacement nor C_B is given (∇ ≈ C_B·L·B·T)
 const DEFAULT_CB = 0.5;
+// mid-range beam/draft assumed when draft is unknown (T ≈ B / DEFAULT_BT). Draft is a weak lever on the
+// size-robust kW/t metric, so a rough value is usually enough — see specificKWperT / the README.
+const DEFAULT_BT = 3.5;
 
 export interface DimensionsInput {
   lwl: number; // m
   beam: number; // m
-  draft: number; // m
+  draft?: number; // m — optional; estimated from beam (B/T ≈ 3.5) when omitted
   displacement?: number; // kg — provide this or `cb`
   cb?: number; // block coefficient — provide this or `displacement`
   water?: "salt" | "fresh"; // for displacement↔volume (default salt)
@@ -40,7 +44,7 @@ export interface DimensionsInput {
 }
 
 export function fromDimensions(input: DimensionsInput): HullGeometry {
-  const { lwl, beam, draft } = input;
+  const { lwl, beam } = input;
   const rho = RHO[input.water ?? "salt"];
   const provenance: Provenance = {};
   const mark = <T>(key: string, given: T | undefined, estimate: () => T): T => {
@@ -52,6 +56,7 @@ export function fromDimensions(input: DimensionsInput): HullGeometry {
     return estimate();
   };
 
+  const draft = mark("draft", input.draft, () => beam / DEFAULT_BT);
   const hullBox = lwl * beam * draft;
   // volume: from displacement, else from a given C_B, else estimated as DEFAULT_CB·L·B·T. The first two
   // are "given" (the caller pinned ∇, directly or via C_B); only the fallback is "estimated".
