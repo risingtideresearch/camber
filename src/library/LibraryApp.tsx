@@ -10,6 +10,7 @@ import { loadJsonText, parseDocument } from "../core/json";
 import { buildStep } from "../core/step";
 import { buildStl } from "../core/stl";
 import { buildPreviewSvg } from "../core/preview";
+import { buildZip, type ZipEntry } from "../core/zip";
 import { Button } from "../components/Button";
 import { TopBar } from "../components/TopBar";
 import { DesignCard } from "./DesignCard";
@@ -25,8 +26,7 @@ import "./LibraryApp.css";
 const msg = (e: unknown): string =>
   e instanceof Error ? e.message : String(e);
 
-function downloadBlob(filename: string, text: string, mime: string): void {
-  const blob = new Blob([text], { type: mime });
+function download(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -35,6 +35,10 @@ function downloadBlob(filename: string, text: string, mime: string): void {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function downloadBlob(filename: string, text: string, mime: string): void {
+  download(filename, new Blob([text], { type: mime }));
 }
 
 // a filesystem-safe version of a design name for download filenames
@@ -161,6 +165,28 @@ export function LibraryApp() {
       alert("Export JSON failed: " + msg(e));
     }
   };
+  // bundle every design's document (already in `rows`) into one ZIP of pretty-printed JSON files
+  const exportAllJson = () => {
+    if (rows.length === 0) return;
+    try {
+      const encoder = new TextEncoder();
+      const used = new Set<string>(); // dedupe filenames — two designs may share a name
+      const entries: ZipEntry[] = rows.map((row) => {
+        const base = safeName(row.name);
+        let name = `${base}.json`;
+        for (let i = 2; used.has(name); i++) name = `${base} (${i}).json`;
+        used.add(name);
+        return {
+          name,
+          data: encoder.encode(JSON.stringify(row.document, null, 2)),
+        };
+      });
+      const stamp = new Date().toISOString().slice(0, 10);
+      download(`camber-designs-${stamp}.zip`, buildZip(entries));
+    } catch (e) {
+      alert("Export All JSON failed: " + msg(e));
+    }
+  };
   const exportStep = () => {
     if (!selectedRow) return;
     try {
@@ -266,6 +292,13 @@ export function LibraryApp() {
           onClick={importJson}
         >
           Import JSON…
+        </Button>
+        <Button
+          disabled={rows.length === 0}
+          title="Download every design in the library as a ZIP of JSON files"
+          onClick={exportAllJson}
+        >
+          Export All JSON
         </Button>
       </TopBar>
 
