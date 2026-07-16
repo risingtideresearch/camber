@@ -89,7 +89,7 @@
 //   simply yields the canonical hull — which is exactly how `meanDoc()` works.
 
 import { type Model, L, NMIN, NMAX, DMAX, YMAX, ZTRIMMIN } from "./model";
-import { encSection, loadJsonText } from "./json";
+import { encSection, loadJsonText, type HullDocument } from "./json";
 
 const clamp = (v: number, lo: number, hi: number): number =>
   v < lo ? lo : v > hi ? hi : v;
@@ -284,11 +284,12 @@ function decodeDoc(model: Model, z: Coord): string {
     }
   }
 
-  // --- sheer plan: control points evenly along x; interior half-breadths carry #2 residuals (planY) ---
-  const sheerPlan = Array.from({ length: P }, (_, i) => ({
-    dx: i === 0 ? 0 : L / (P - 1),
-    y: planY[i],
-  }));
+  // --- sheer plan: control points evenly along x; interior half-breadths carry #2 residuals (planY).
+  // Each station carries its blend weights: a straight aft→fore handoff over the two templates. ---
+  const sheerPlan = Array.from({ length: P }, (_, i) => {
+    const t = i / (P - 1);
+    return { dx: i === 0 ? 0 : L / (P - 1), y: planY[i], w: [1 - t, t] };
+  });
 
   // --- sheer trim backbone: a smooth spring, deepest amidships, rising to both ends ---
   const dMaxTrim = bounded(z(), 260, 150, 380),
@@ -327,21 +328,16 @@ function decodeDoc(model: Model, z: Coord): string {
     transomRake: real(z(), -0.25, 0.2),
   };
 
-  const doc = {
+  const doc: HullDocument = {
+    name: "random",
     length: L,
     waterline: model.waterline, // preserve the current trim controls; only the shape is resampled
     deckRakeDeg: (model.deckRake * 180) / Math.PI,
-    topology: { sheerPlan: P, sheerTrim: Q, section: S },
-    variants: [
-      {
-        name: "random",
-        sheerPlan,
-        sheerTrim,
-        transom,
-        aft: encSection(aft),
-        fore: encSection(fore),
-      },
-    ],
+    sheerPlan,
+    sheerTrim,
+    transom,
+    templates: [encSection(aft), encSection(fore)],
+    keelK: [0, 0],
   };
   return JSON.stringify(doc);
 }

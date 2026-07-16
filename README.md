@@ -61,8 +61,8 @@ Try it here: [https://risingtideresearch.github.io/camber/](https://risingtidere
 
 Right-handed, in **unitless length** — coordinates are plain numbers, not millimeters. The
 overall length is a fixed `L = 1000`, so a hull spans `x ∈ [0, 1000]` and every coordinate is a
-small integer-scale number; read them as whatever unit the design is meant in. (Earlier
-documents were authored at `L = 4000` "mm"; they still load — see [Persistence](#persistence).)
+small integer-scale number; read them as whatever unit the design is meant in. (A document
+authored at another scale is rescaled to `L` on load — see [Persistence](#persistence).)
 
 - `x` — longitudinal (fore-and-aft), increasing from stern toward bow. Origin at the
   **transom reference** (`x = 0`); the bow is at `x = L`, the hull's overall length.
@@ -117,13 +117,15 @@ A hull document is one hull — a flat set of generators, no wrapper:
 
 ```
 HullDocument {
-  name?:     string
-  length:    number           // L, overall length (x of the bow); the unitless scale (= 1000)
-  sheerPlan: PlanPoint[]       // ≥ 2; the deck-edge guide curve — and the blend path (see below)
-  sheerTrim: TrimPoint[]       // ≥ 2; the real sheer, in profile
-  transom:   Transom           // the raked stern plane (always two points)
-  templates: SectionPoint[][]  // K ≥ 1 templates, each the same length S ≥ 2 (index 0 = sheer point)
-  keelK:     number[]          // length K; per-template keel knuckle ∈ [0,1]
+  name?:        string
+  length:       number          // L, overall length (x of the bow); the unitless scale (= 1000)
+  waterline?:   number          // depth of the design waterline below the sheer origin
+  deckRakeDeg?: number          // deck rake (degrees, +ve = bow up); the hull is built deck-flat
+  sheerPlan:    PlanPoint[]     // ≥ 2; the deck-edge guide curve — and the blend path (see below)
+  sheerTrim:    TrimPoint[]     // ≥ 2; the real sheer, in profile
+  transom:      Transom         // the raked stern plane (always two points)
+  templates:    SectionPoint[][] // K ≥ 1 templates, each the same length S ≥ 2 (index 0 = sheer point)
+  keelK?:       number[]        // length K; per-template keel knuckle ∈ [0,1]
 }
 ```
 
@@ -135,8 +137,8 @@ transom is always two points (top and bottom of its raked plane). The templates 
 index-aligned, so each along-hull blend pairs point `i` with point `i`.
 
 `length` is the document's **unitless scale**. Geometry is built in world `x ∈ [0, L]`; on
-import, a document authored at a different `length` (e.g. a legacy `4000`) is rescaled to the
-current `L`, so old and new documents live at one scale and blend cleanly. A point's sharpness
+import, a document authored at a different `length` is rescaled to the current `L`, so every
+document lives at one scale and they blend cleanly. A point's sharpness
 carries no discrete structure either — it is a per-point **knuckle** number (see
 [the section templates](#the-section-templates)).
 
@@ -607,13 +609,12 @@ lengths. A document may carry an optional `name`. Both `k` and `keelK` are optio
 default to `0` (smooth / flat keel); a missing or short `keelK` fills with `0` per template.
 Absolute coordinates are recovered by running sums on load.
 
-**Scale and legacy migration.** `length` is the document's own unitless scale; on load,
-coordinates are rescaled from it to the current `L`, so a document authored at any length lands
-at one scale. The importer also still reads the **earlier layouts**: a `topology` + `variants`
-wrapper (one or more hulls — the editor takes the first, the blender takes all), an `aft` / `fore`
-template pair instead of `templates`, and a separate `weights` path instead of per-station `w`
-(re-sampled onto the plan stations on load). So a legacy `length: 4000`, topology/variants
-document still opens and converts cleanly. There is still no explicit _version tag_.
+**Scale.** `length` is the document's own unitless scale; on load, coordinates are rescaled from
+it to the current `L`, so a document authored at any length lands at one scale. There is no
+explicit _version tag_, and the importer reads **only** the layout above: earlier shapes — a
+`topology` + `variants` wrapper, an `aft` / `fore` template pair instead of `templates`, or a
+separate `weights` path instead of per-station `w` — are no longer accepted and are rejected as
+malformed.
 
 A complete (deliberately minimal) document — two plan/trim points, three section points, two
 templates on a straight blend path, with one knuckle at the chine and a flat keel aft fading to a
@@ -671,9 +672,9 @@ Deliberately deferred and not modelled:
   hull. A design needing a longitudinal authored as its own surface curve is a different
   parameterization.
 - **Plating and scantlings.** The model describes a molded surface, not a shell.
-- **Format version tags.** The JSON carries its `length` (which doubles as a scale tag) and the
-  importer reads the legacy layouts (see [Persistence](#persistence)), but there is no explicit
-  version field, so a future breaking change has no declared migration path.
+- **Format version tags.** The JSON carries its `length` (which doubles as a scale tag), but
+  there is no explicit version field and the importer reads exactly one layout (see
+  [Persistence](#persistence)), so a breaking change has no declared migration path.
 - **Exact cross-topology morphing.** Blending designs with different control-point counts _is_
   supported — the blender promotes the family to a common form (see
   [Interpolation](#interpolation-and-blending)) — but by a shape-preserving **refit**, not an

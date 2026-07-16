@@ -92,11 +92,8 @@ function setKeel(k: number): void {
 function loadCase(name: string): void {
   resetModel(model);
   if (name !== "default") {
-    const doc = parseDocument(
-      model,
-      readFileSync(join(examplesDir(), name), "utf8"),
-    );
-    loadHull(model, doc.variants[0]);
+    const doc = parseDocument(readFileSync(join(examplesDir(), name), "utf8"));
+    loadHull(model, doc.hull);
   }
   prepare(model);
 }

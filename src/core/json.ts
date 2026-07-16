@@ -1,59 +1,63 @@
 // ---------- hull-document JSON: the on-disk format, plus editor export / import ----------
 //
-// One document = one hull (no topology block, no variants wrapper — control-point counts are implied by the
-// arrays). It is increment-encoded — sheer/trim points carry a forward step `dx` (point 0 holds the anchor
-// x₀), section points carry a depth step `dd` (point 0 is the pinned sheer point), and the transom is
-// `{x, depthTop, dDepthBot, transomRake}`. Increments are what make any convex blend valid. `length` is the
-// document's unitless scale (the current model's L); coordinates are rescaled to L on import, so a legacy
-// 4000-unit document still loads correctly.
+// One document = one hull — a flat `HullDocument` (no topology block, no variants wrapper — control-point
+// counts are implied by the arrays). It is increment-encoded — sheer/trim points carry a forward step `dx`
+// (point 0 holds the anchor x₀), section points carry a depth step `dd` (point 0 is the pinned sheer point),
+// and the transom is `{x, depthTop, dDepthBot, transomRake}`. Increments are what make any convex blend
+// valid. `length` is the document's unitless scale (the current model's L); coordinates are rescaled to L on
+// import, so a document authored at any length lands at the model's scale.
 //
-// The importer also still reads the LEGACY shape (a `topology`/`variants` wrapper around one or more hulls)
-// so older saved/exported documents keep working. The live model works in absolute coordinates, so we ENCODE
-// on export and DECODE on import. This module is the single source of truth for the format — the editor and
-// the interpolation viewer both go through it.
+// The live model works in absolute coordinates, so we ENCODE on export and DECODE on import. This module is
+// the single source of truth for the format — the editor and the interpolation viewer both go through it.
 
 import { clamp } from "./math";
 import {
   type Model,
   L,
-  buildWeightSampler,
-  linearPath,
   normSimplex,
   type SheerCP,
   type TrimCP,
   type TransomCP,
   type StationCP,
-  type WeightCP,
 } from "./model";
 
-// ---------- on-disk types ----------
-interface PlanPoint {
-  dx: number;
+// ---------- the on-disk format ----------
+// A hull document exactly as it is serialized. Lengths are in the document's own `length` units; `k` and
+// `keelK` are optional on read and default to 0 (smooth). See the README's "Persistence" section.
+export interface PlanPoint {
+  dx: number; // forward step from the previous station; point 0 holds the anchor x₀
   y: number;
-  w?: number[]; // unified format: the station's blend weights ride on the plan point. Absent in old docs.
+  w: number[]; // the station's blend weights over the templates: barycentric, length K, in the simplex
 }
-interface TrimPoint {
+export interface TrimPoint {
   dx: number;
-  depth: number;
-  k: number;
+  depth: number; // below the deck datum (z = −depth)
+  k?: number;
 }
-interface SectionPoint {
-  dd: number;
+export interface SectionPoint {
+  dd: number; // depth step from the previous point; point 0 is the pinned sheer point
   n: number;
-  k: number;
+  k?: number;
 }
-interface WeightPoint {
-  dx: number;
-  w: number[]; // barycentric weights over the templates; in the simplex
-}
-interface Transom {
+export interface Transom {
   x: number;
   depthTop: number;
-  dDepthBot: number;
-  transomRake: number;
+  dDepthBot: number; // top-to-bottom depth step; > 0, the bottom edge is deeper
+  transomRake: number; // run-over-rise dx/dz; 0 is upright
+}
+export interface HullDocument {
+  name?: string;
+  length: number; // the document's unitless scale
+  waterline?: number; // depth below the sheer origin
+  deckRakeDeg?: number;
+  sheerPlan: PlanPoint[]; // ≥ 2 stations; each carries its blend weights
+  sheerTrim: TrimPoint[]; // ≥ 2 points
+  transom: Transom;
+  templates: SectionPoint[][]; // K ≥ 1 templates, index-aligned, all of the same length S ≥ 2
+  keelK?: number[]; // length K; per-template keel knuckle
 }
 
-// ---------- a parsed variant in the live model's absolute coordinates ----------
+// ---------- a parsed hull in the live model's absolute coordinates ----------
 export interface HullData {
   name?: string;
   cp: SheerCP[];
@@ -73,7 +77,7 @@ export interface ParsedDoc {
     section: number;
     templateCount: number;
   };
-  variants: HullData[];
+  hull: HullData;
 }
 
 // ---------- encode: absolute model coords → increment-encoded on-disk form ----------
@@ -106,28 +110,21 @@ function decPlan(plan: PlanPoint[]): SheerCP[] {
   let x = 0;
   return plan.map((p, i) => {
     x = i === 0 ? p.dx : x + p.dx;
-    return { x, y: p.y, w: Array.isArray(p.w) ? p.w.slice() : [] }; // w filled by migration if absent
+    return { x, y: p.y, w: normSimplex(p.w) };
   });
 }
 function decTrim(trim: TrimPoint[]): TrimCP[] {
   let x = 0;
   return trim.map((p, i) => {
     x = i === 0 ? p.dx : x + p.dx;
-    return { x, z: -p.depth, k: clamp(p.k, 0, 1) };
+    return { x, z: -p.depth, k: clamp(p.k ?? 0, 0, 1) };
   });
 }
 function decSection(pts: SectionPoint[]): StationCP[] {
   let d = 0;
   return pts.map((p, i) => {
     d = i === 0 ? 0 : d + p.dd;
-    return { n: p.n, d, k: clamp(p.k, 0, 1) };
-  });
-}
-function decWeights(pts: WeightPoint[]): WeightCP[] {
-  let x = 0;
-  return pts.map((p, i) => {
-    x = i === 0 ? p.dx : x + p.dx;
-    return { x, w: normSimplex(p.w) };
+    return { n: p.n, d, k: clamp(p.k ?? 0, 0, 1) };
   });
 }
 function decTransom(t: Transom): TransomCP[] {
@@ -136,13 +133,12 @@ function decTransom(t: Transom): TransomCP[] {
   return [top, { x: t.x + (z - top.z) * t.transomRake, z }];
 }
 
-// ---------- export: the current model as a single-hull document ----------
-// One document = one hull. `length` is the unitless scale (the model's L) and doubles as a scale/version tag
-// for the importer (legacy multi-hull documents carry a `topology`/`variants` wrapper and length 4000).
-// Control-point counts are implied by the array lengths, so there is no separate topology block.
+// ---------- export: the current model as a hull document ----------
+// `length` is the unitless scale (the model's L). Control-point counts are implied by the array lengths, so
+// there is no separate topology block.
 export function buildJson(model: Model): string {
   const s = model.sheer;
-  const doc = {
+  const doc: HullDocument = {
     length: L,
     waterline: model.waterline,
     deckRakeDeg: (model.deckRake * 180) / Math.PI,
@@ -206,30 +202,14 @@ function weightVec(v: unknown, ctx: string, k: number): number[] {
   return v.map((x, i) => num(x, `${ctx}[${i}]`));
 }
 
-// decode one hull — a flat document, or one entry of a legacy `variants` array — to absolute model
-// coordinates. Control-point counts are taken from the arrays themselves; `docLength` only places the
-// default blend handoff for legacy documents that lack per-station weights.
-function decodeVariant(
-  model: Model,
-  v: Record<string, unknown>,
-  c: string,
-  docLength: number,
-): HullData {
+// decode the document's hull to absolute model coordinates. Control-point counts are taken from the arrays
+// themselves: the templates fix K and the shared section-point count, the sheer arrays their own lengths.
+function decodeHull(v: Record<string, unknown>): HullData {
+  const c = "document"; // error-message prefix — the whole document IS the hull
   // templates first — they fix the template count K and the shared section-point count
-  const rawTpls: unknown[] =
-    "templates" in v
-      ? Array.isArray(v.templates) && v.templates.length >= 1
-        ? v.templates
-        : (() => {
-            throw new Error(`${c}.templates must be a non-empty array`);
-          })()
-      : "aft" in v && "fore" in v
-        ? [v.aft, v.fore] // legacy aft/fore pair → two templates
-        : (() => {
-            throw new Error(
-              `${c} has no templates (and no legacy aft/fore pair)`,
-            );
-          })();
+  if (!Array.isArray(v.templates) || v.templates.length < 1)
+    throw new Error(`${c}.templates must be a non-empty array`);
+  const rawTpls = v.templates;
   if (!Array.isArray(rawTpls[0]))
     throw new Error(`${c}.templates[0] must be an array of section points`);
   const nSec = rawTpls[0].length;
@@ -245,16 +225,14 @@ function decodeVariant(
     ),
   );
 
-  // plan stations (each carries its blend weights w in the unified format)
+  // plan stations — each carries its blend weights w over the K templates
   if (!Array.isArray(v.sheerPlan) || v.sheerPlan.length < 2)
     throw new Error(`${c}.sheerPlan must be an array of ≥ 2 points`);
   const cp = decPlan(
     points(v.sheerPlan, `${c}.sheerPlan`, v.sheerPlan.length, (o, i) => ({
       dx: step(o.dx, `${c}.sheerPlan[${i}].dx`, i),
       y: num(o.y, `${c}.sheerPlan[${i}].y`),
-      w: Array.isArray(o.w)
-        ? weightVec(o.w, `${c}.sheerPlan[${i}].w`, nTpl)
-        : undefined,
+      w: weightVec(o.w, `${c}.sheerPlan[${i}].w`, nTpl),
     })),
   );
 
@@ -272,24 +250,6 @@ function decodeVariant(
   const keelK = Array.from({ length: nTpl }, (_, j) =>
     Array.isArray(v.keelK) ? clamp(knuckle(v.keelK[j]), 0, 1) : 0,
   );
-
-  // blend weights: unified (already on each station) or MIGRATE a legacy document — a separate `weights`
-  // path, or none (→ the default linear handoff) — by sampling that path at each station's x.
-  if (cp.every((p) => p.w.length === nTpl)) {
-    cp.forEach((p) => (p.w = normSimplex(p.w)));
-  } else {
-    const oldW =
-      "weights" in v && Array.isArray(v.weights)
-        ? decWeights(
-            points(v.weights, `${c}.weights`, v.weights.length, (o, i) => ({
-              dx: step(o.dx, `${c}.weights[${i}].dx`, i),
-              w: weightVec(o.w, `${c}.weights[${i}].w`, nTpl),
-            })),
-          )
-        : linearPath(nTpl, docLength);
-    const wf = buildWeightSampler(model, oldW);
-    cp.forEach((p) => (p.w = wf(p.x)));
-  }
 
   const to = obj(v.transom, `${c}.transom`);
   const dDepthBot = num(to.dDepthBot, `${c}.transom.dDepthBot`);
@@ -311,8 +271,8 @@ function decodeVariant(
   };
 }
 
-// scale a decoded hull's length-dimensioned coordinates by `s` — used to lift a legacy 4000-unit document to
-// the model's current unitless length. Knuckles k and blend weights w are dimensionless and left alone.
+// scale a decoded hull's length-dimensioned coordinates by `s` — used to lift a document authored at another
+// scale to the model's unitless length. Knuckles k and blend weights w are dimensionless and left alone.
 function scaleHull(d: HullData, s: number): void {
   d.cp.forEach((p) => ((p.x *= s), (p.y *= s)));
   d.trim.forEach((p) => ((p.x *= s), (p.z *= s)));
@@ -320,18 +280,13 @@ function scaleHull(d: HullData, s: number): void {
   d.templates.forEach((tpl) => tpl.forEach((p) => ((p.n *= s), (p.d *= s))));
 }
 
-// parse + validate a hull document and decode it to absolute model coordinates. Reads the current flat
-// single-hull shape AND the legacy topology/variants wrapper; counts come from the arrays. The document's
-// `length` is its unitless scale — coordinates are rescaled to the model's L on import (so a legacy 4000-unit
-// document loads at the current scale). Throws on any structural problem; nothing is committed until it all
-// validates.
-export function parseDocument(model: Model, text: string): ParsedDoc {
+// parse + validate a hull document and decode it to absolute model coordinates; counts come from the arrays.
+// The document's `length` is its unitless scale — coordinates are rescaled to the model's L on import.
+// Throws on any structural problem; nothing is committed until it all validates.
+export function parseDocument(text: string): ParsedDoc {
   const doc = obj(JSON.parse(text), "document");
-  const legacy = "variants" in doc; // legacy multi-hull documents wrap variants in a topology/variants block
-  if (!legacy && !("sheerPlan" in doc))
-    throw new Error(
-      "not a hull document (no sheerPlan, and no legacy variants)",
-    );
+  if (!("sheerPlan" in doc))
+    throw new Error("not a hull document (no sheerPlan)");
   const docLength =
     typeof doc.length === "number" && isFinite(doc.length) && doc.length > 0
       ? doc.length
@@ -345,37 +300,27 @@ export function parseDocument(model: Model, text: string): ParsedDoc {
       ? doc.deckRakeDeg
       : 0;
 
-  const rawList: Record<string, unknown>[] = legacy
-    ? Array.isArray(doc.variants) && doc.variants.length
-      ? doc.variants.map((vv, i) => obj(vv, `variants[${i}]`))
-      : (() => {
-          throw new Error("variants must be a non-empty array");
-        })()
-    : [doc];
-  const variants = rawList.map((v, i) =>
-    decodeVariant(model, v, legacy ? `variants[${i}]` : "document", docLength),
-  );
+  const hull = decodeHull(doc);
 
   // normalize to the model's length (decoded coordinates are in the document's units)
   const s = L / docLength;
-  if (Math.abs(s - 1) > 1e-9) variants.forEach((d) => scaleHull(d, s));
+  if (Math.abs(s - 1) > 1e-9) scaleHull(hull, s);
 
-  const t0 = variants[0];
   return {
     length: L,
     waterline: waterline * s,
     deckRake: (deckRakeDeg * Math.PI) / 180,
     topology: {
-      sheerPlan: t0.cp.length,
-      sheerTrim: t0.trim.length,
-      section: t0.templates[0].length,
-      templateCount: t0.templates.length,
+      sheerPlan: hull.cp.length,
+      sheerTrim: hull.trim.length,
+      section: hull.templates[0].length,
+      templateCount: hull.templates.length,
     },
-    variants,
+    hull,
   };
 }
 
-// load a parsed variant into the live model
+// load a parsed hull into the live model
 export function loadHull(model: Model, v: HullData): void {
   model.sheer.cp = v.cp;
   model.sheer.trim = v.trim;
@@ -385,11 +330,10 @@ export function loadHull(model: Model, v: HullData): void {
   model.x0 = clamp(model.x0, 0, L);
 }
 
-// editor import: load the document's first variant; returns the document's variant count
-export function loadJsonText(model: Model, text: string): number {
-  const parsed = parseDocument(model, text);
-  loadHull(model, parsed.variants[0]);
+// editor import: load the document into the model
+export function loadJsonText(model: Model, text: string): void {
+  const parsed = parseDocument(text);
+  loadHull(model, parsed.hull);
   model.waterline = parsed.waterline;
   model.deckRake = parsed.deckRake;
-  return parsed.variants.length;
 }

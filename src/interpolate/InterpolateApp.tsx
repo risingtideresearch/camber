@@ -40,8 +40,8 @@ const msg = (e: unknown): string =>
 // stable empty sentinel — identity is compared against samplesState.forHulls to derive `sampling`
 const NO_SAMPLES: Sample[] = [];
 
-// add every variant of a parsed document to the family (a document can carry several), checking each against
-// the shared length. Collects any per-variant problems into `errs`. Mutates `hulls` and `famLength`.
+// add a parsed document's hull to the family, checking it against the shared length. Collects any problem
+// into `errs`. Mutates `hulls` and `famLength`.
 function addParsedDoc(
   parsed: ParsedDoc,
   base: string,
@@ -49,27 +49,18 @@ function addParsedDoc(
   famLength: { current: number | null },
   errs: string[],
 ): void {
-  let vi = 0;
-  for (const data of parsed.variants) {
-    if (hulls.length >= 5) {
-      errs.push(
-        `${base}: family is full (max 5 hulls) — some variants skipped`,
-      );
-      break;
-    }
-    if (famLength.current == null) famLength.current = parsed.length;
-    else if (Math.abs(parsed.length - famLength.current) > 1e-6) {
-      errs.push(
-        `${base}: length mismatch — ${parsed.length} vs the family's ${famLength.current}. Lengths must match.`,
-      );
-      vi++;
-      continue;
-    }
-    const name =
-      data.name ?? (parsed.variants.length > 1 ? `${base} #${vi + 1}` : base);
-    hulls.push({ name, data });
-    vi++;
+  if (hulls.length >= 5) {
+    errs.push(`${base}: family is full (max 5 hulls) — hull skipped`);
+    return;
   }
+  if (famLength.current == null) famLength.current = parsed.length;
+  else if (Math.abs(parsed.length - famLength.current) > 1e-6) {
+    errs.push(
+      `${base}: length mismatch — ${parsed.length} vs the family's ${famLength.current}. Lengths must match.`,
+    );
+    return;
+  }
+  hulls.push({ name: parsed.hull.name ?? base, data: parsed.hull });
 }
 
 export function InterpolateApp() {
@@ -217,7 +208,7 @@ export function InterpolateApp() {
         for (const f of list) {
           try {
             addParsedDoc(
-              parseDocument(model, await f.text()),
+              parseDocument(await f.text()),
               f.name.replace(/\.json$/i, "") || "hull",
               next,
               famLengthRef,
@@ -230,7 +221,7 @@ export function InterpolateApp() {
         finishLoad(next, errs, "Some files could not be loaded");
       });
     },
-    [model, finishLoad, enqueueLoad],
+    [finishLoad, enqueueLoad],
   );
 
   const loadByIds = useCallback(
@@ -242,7 +233,7 @@ export function InterpolateApp() {
           try {
             const { name: nm, documentText } = await getDesign(id);
             addParsedDoc(
-              parseDocument(model, documentText),
+              parseDocument(documentText),
               nm,
               next,
               famLengthRef,
@@ -254,7 +245,7 @@ export function InterpolateApp() {
         }
         finishLoad(next, errs, "Some designs could not be loaded");
       }),
-    [model, finishLoad, enqueueLoad],
+    [finishLoad, enqueueLoad],
   );
 
   // ---------- boot: drag-and-drop onto the page, and the ?ids= library selection ----------

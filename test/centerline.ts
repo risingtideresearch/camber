@@ -199,11 +199,7 @@ function worstKeelButtock(): { curv: number; x: number; y: number } {
 
 function loadCase(path: string | null): void {
   resetModel(model);
-  if (path)
-    loadHull(
-      model,
-      parseDocument(model, readFileSync(path, "utf8")).variants[0],
-    );
+  if (path) loadHull(model, parseDocument(readFileSync(path, "utf8")).hull);
   prepare(model);
 }
 

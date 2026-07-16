@@ -1,4 +1,3 @@
-import type { Model } from "../core/model";
 import { parseDocument } from "../core/json";
 import type { DesignRow } from "../core/supabase";
 
@@ -11,12 +10,11 @@ export interface Topo {
   templates: number;
 }
 
-// parseDocument infers the counts from the document's arrays (and migrates legacy docs). Returns null if the
-// document can't be parsed — the card then shows no chips and is never blend-compatible. The passed model is
-// scratch (parseDocument decodes into it), so this is safe to call repeatedly for the whole list.
-export function topoOf(model: Model, row: DesignRow): Topo | null {
+// parseDocument infers the counts from the document's arrays. Returns null if the document can't be parsed —
+// the card then shows no chips and is never blend-compatible.
+export function topoOf(row: DesignRow): Topo | null {
   try {
-    const p = parseDocument(model, JSON.stringify(row.document));
+    const p = parseDocument(JSON.stringify(row.document));
     return {
       length: p.length,
       plan: p.topology.sheerPlan,

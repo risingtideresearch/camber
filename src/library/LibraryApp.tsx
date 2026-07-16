@@ -66,9 +66,9 @@ export function LibraryApp() {
   // every design's topology (stat chips + blend compatibility), recomputed when the list changes
   const topoById = useMemo(() => {
     const m = new Map<string, Topo | null>();
-    for (const row of rows) m.set(row.id, topoOf(model, row));
+    for (const row of rows) m.set(row.id, topoOf(row));
     return m;
-  }, [rows, model]);
+  }, [rows]);
 
   const selectedRow = rows.find((r) => r.id === selectedId);
 
@@ -245,7 +245,7 @@ export function LibraryApp() {
       let text: string;
       try {
         text = await file.text();
-        parseDocument(model, text); // validate before storing; throws on a malformed document
+        parseDocument(text); // validate before storing; throws on a malformed document
       } catch (e) {
         alert("Import failed: " + msg(e));
         return;
