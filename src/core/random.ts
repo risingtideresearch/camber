@@ -89,7 +89,8 @@
 //   simply yields the canonical hull — which is exactly how `meanDoc()` works.
 
 import { type Model, L, NMIN, NMAX, DMAX, YMAX, ZTRIMMIN } from "./model";
-import { encSection, loadJsonText, type HullDocument } from "./json";
+import { type HullDocument } from "./document";
+import { encSection, loadJsonText } from "./json";
 
 const clamp = (v: number, lo: number, hi: number): number =>
   v < lo ? lo : v > hi ? hi : v;

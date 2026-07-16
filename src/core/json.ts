@@ -1,16 +1,24 @@
-// ---------- hull-document JSON: the on-disk format, plus editor export / import ----------
+// ---------- hull-document JSON: encode / decode, plus editor export / import ----------
 //
-// One document = one hull — a flat `HullDocument` (no topology block, no variants wrapper — control-point
-// counts are implied by the arrays). It is increment-encoded — sheer/trim points carry a forward step `dx`
-// (point 0 holds the anchor x₀), section points carry a depth step `dd` (point 0 is the pinned sheer point),
-// and the transom is `{x, depthTop, dDepthBot, transomRake}`. Increments are what make any convex blend
-// valid. `length` is the document's unitless scale (the current model's L); coordinates are rescaled to L on
-// import, so a document authored at any length lands at the model's scale.
+// The format itself — the `HullDocument` structures, the increment encoding they use, and the version tag —
+// is declared in `document.ts`. This module is the crossing between it and the live model: the model works
+// in absolute coordinates, so we ENCODE on export and DECODE on import. `length` is the document's unitless
+// scale; coordinates are rescaled to the model's L on import, so a document authored at any length lands at
+// the model's scale.
 //
-// The live model works in absolute coordinates, so we ENCODE on export and DECODE on import. This module is
-// the single source of truth for the format — the editor and the interpolation viewer both go through it.
+// Together with `document.ts` this is the single source of truth for the format — the editor and the
+// interpolation viewer both go through it.
 
 import { clamp } from "./math";
+import {
+  VERSION,
+  isReadableVersion,
+  type HullDocument,
+  type PlanPoint,
+  type TrimPoint,
+  type SectionPoint,
+  type Transom,
+} from "./document";
 import {
   type Model,
   L,
@@ -20,42 +28,6 @@ import {
   type TransomCP,
   type StationCP,
 } from "./model";
-
-// ---------- the on-disk format ----------
-// A hull document exactly as it is serialized. Lengths are in the document's own `length` units; `k` and
-// `keelK` are optional on read and default to 0 (smooth). See the README's "Persistence" section.
-export interface PlanPoint {
-  dx: number; // forward step from the previous station; point 0 holds the anchor x₀
-  y: number;
-  w: number[]; // the station's blend weights over the templates: barycentric, length K, in the simplex
-}
-export interface TrimPoint {
-  dx: number;
-  depth: number; // below the deck datum (z = −depth)
-  k?: number;
-}
-export interface SectionPoint {
-  dd: number; // depth step from the previous point; point 0 is the pinned sheer point
-  n: number;
-  k?: number;
-}
-export interface Transom {
-  x: number;
-  depthTop: number;
-  dDepthBot: number; // top-to-bottom depth step; > 0, the bottom edge is deeper
-  transomRake: number; // run-over-rise dx/dz; 0 is upright
-}
-export interface HullDocument {
-  name?: string;
-  length: number; // the document's unitless scale
-  waterline?: number; // depth below the sheer origin
-  deckRakeDeg?: number;
-  sheerPlan: PlanPoint[]; // ≥ 2 stations; each carries its blend weights
-  sheerTrim: TrimPoint[]; // ≥ 2 points
-  transom: Transom;
-  templates: SectionPoint[][]; // K ≥ 1 templates, index-aligned, all of the same length S ≥ 2
-  keelK?: number[]; // length K; per-template keel knuckle
-}
 
 // ---------- a parsed hull in the live model's absolute coordinates ----------
 export interface HullData {
@@ -139,6 +111,7 @@ function decTransom(t: Transom): TransomCP[] {
 export function buildJson(model: Model): string {
   const s = model.sheer;
   const doc: HullDocument = {
+    version: VERSION,
     length: L,
     waterline: model.waterline,
     deckRakeDeg: (model.deckRake * 180) / Math.PI,
@@ -285,6 +258,11 @@ function scaleHull(d: HullData, s: number): void {
 // Throws on any structural problem; nothing is committed until it all validates.
 export function parseDocument(text: string): ParsedDoc {
   const doc = obj(JSON.parse(text), "document");
+  // the version gate comes first: past it, nothing in the document can be trusted to mean what it says here
+  if (!isReadableVersion(doc))
+    throw new Error(
+      `document version ${JSON.stringify(doc.version)} is not readable by this app (it reads version ${VERSION} and earlier)`,
+    );
   if (!("sheerPlan" in doc))
     throw new Error("not a hull document (no sheerPlan)");
   const docLength =

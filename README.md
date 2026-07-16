@@ -62,7 +62,7 @@ Try it here: [https://risingtideresearch.github.io/camber/](https://risingtidere
 Right-handed, in **unitless length** — coordinates are plain numbers, not millimeters. The
 overall length is a fixed `L = 1000`, so a hull spans `x ∈ [0, 1000]` and every coordinate is a
 small integer-scale number; read them as whatever unit the design is meant in. (A document
-authored at another scale is rescaled to `L` on load — see [Persistence](#persistence).)
+authored at another scale is rescaled to `L` on load — see [The document](#the-document).)
 
 - `x` — longitudinal (fore-and-aft), increasing from stern toward bow. Origin at the
   **transom reference** (`x = 0`); the bow is at `x = L`, the hull's overall length.
@@ -117,6 +117,7 @@ A hull document is one hull — a flat set of generators, no wrapper:
 
 ```
 HullDocument {
+  version?:     number          // format version, defaults to 1
   name?:        string
   length:       number          // L, overall length (x of the bow); the unitless scale (= 1000)
   waterline?:   number          // depth of the design waterline below the sheer origin
@@ -597,67 +598,6 @@ Guaranteed by the encoding rather than checked after a solve:
 The emergent keel, draft, waterlines, buttocks, transom outline, displacement, and whether a
 section is open or empty are _derived_ — none is an invariant.
 
-## Persistence
-
-The on-disk format is the `HullDocument` serialized directly to JSON — the structures named
-above, with their field names verbatim: a `length` (the unitless scale), then `sheerPlan`
-(`PlanPoint`), `sheerTrim` (`TrimPoint`), `transom` (`Transom`), a `templates` array of `K`
-`SectionPoint` lists, and a `keelK` array of `K` keel knuckles, in the increment encoding defined
-above — `dx` / `dd` steps, the transom's `depthTop` / `dDepthBot` / `transomRake`, per-point `k`,
-and each plan station's barycentric `w`. There is no `topology` block: counts are the array
-lengths. A document may carry an optional `name`. Both `k` and `keelK` are optional on read and
-default to `0` (smooth / flat keel); a missing or short `keelK` fills with `0` per template.
-Absolute coordinates are recovered by running sums on load.
-
-**Scale.** `length` is the document's own unitless scale; on load, coordinates are rescaled from
-it to the current `L`, so a document authored at any length lands at one scale. There is no
-explicit _version tag_, and the importer reads **only** the layout above: earlier shapes — a
-`topology` + `variants` wrapper, an `aft` / `fore` template pair instead of `templates`, or a
-separate `weights` path instead of per-station `w` — are no longer accepted and are rejected as
-malformed.
-
-A complete (deliberately minimal) document — two plan/trim points, three section points, two
-templates on a straight blend path, with one knuckle at the chine and a flat keel aft fading to a
-V keel forward (`keelK` `[0, 1]`); the fuller hulls in [`examples/`](examples/) follow the same
-shape:
-
-```json
-{
-  "name": "demo",
-  "length": 1000,
-  "sheerPlan": [
-    { "dx": 0, "y": 205, "w": [1, 0] },
-    { "dx": 1000, "y": 0, "w": [0, 1] }
-  ],
-  "sheerTrim": [
-    { "dx": 0, "depth": 15 },
-    { "dx": 1000, "depth": 10 }
-  ],
-  "transom": {
-    "x": 38,
-    "depthTop": 14,
-    "dDepthBot": 166,
-    "transomRake": -0.3459
-  },
-  "templates": [
-    [
-      { "dd": 0, "n": 0, "k": 0 },
-      { "dd": 100, "n": 62, "k": 1 },
-      { "dd": 150, "n": 225, "k": 0 }
-    ],
-    [
-      { "dd": 0, "n": 0, "k": 0 },
-      { "dd": 125, "n": 75, "k": 0 },
-      { "dd": 175, "n": 250, "k": 0 }
-    ]
-  ],
-  "keelK": [0, 1]
-}
-```
-
-Each document is one hull; the editor reads and writes one, and the interpolation viewer loads
-several documents as one blend family. Complete examples live in [`examples/`](examples/).
-
 ## Out of scope
 
 Deliberately deferred and not modelled:
@@ -672,9 +612,6 @@ Deliberately deferred and not modelled:
   hull. A design needing a longitudinal authored as its own surface curve is a different
   parameterization.
 - **Plating and scantlings.** The model describes a molded surface, not a shell.
-- **Format version tags.** The JSON carries its `length` (which doubles as a scale tag), but
-  there is no explicit version field and the importer reads exactly one layout (see
-  [Persistence](#persistence)), so a breaking change has no declared migration path.
 - **Exact cross-topology morphing.** Blending designs with different control-point counts _is_
   supported — the blender promotes the family to a common form (see
   [Interpolation](#interpolation-and-blending)) — but by a shape-preserving **refit**, not an

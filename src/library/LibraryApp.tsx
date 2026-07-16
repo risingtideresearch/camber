@@ -6,6 +6,7 @@ import {
   listDesigns,
   type DesignRow,
 } from "../core/supabase";
+import { isReadableVersion } from "../core/document";
 import { loadJsonText, parseDocument } from "../core/json";
 import { buildStep } from "../core/step";
 import { buildStl } from "../core/stl";
@@ -84,7 +85,11 @@ export function LibraryApp() {
   // ---------- loading ----------
   const refresh = useCallback(async () => {
     try {
-      const next = await listDesigns();
+      // Drop documents a newer build wrote (version > VERSION) before they reach `rows`: this app cannot read
+      // them, so it cannot list, open, blend or export them either — every path below works off `rows`.
+      const next = (await listDesigns()).filter((r) =>
+        isReadableVersion(r.document),
+      );
       setRows(next);
       setError(null);
       setSelectedId((cur) =>
