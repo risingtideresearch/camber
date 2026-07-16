@@ -1,0 +1,191 @@
+/* the weights & flotation card — a sibling of the section editor / blend strip, fills its resizable Area */
+.analysiscard {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.analysiscard .cap {
+  margin-bottom: 6px;
+}
+.anbody {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+/* section headers within the card */
+.an-sec {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mut);
+  margin: 10px 0 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 2px;
+}
+.an-sec:first-child {
+  margin-top: 0;
+}
+
+/* labelled scalar inputs (LOA, shell, water) */
+.an-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+}
+.an-field > span:first-child {
+  flex: 0 0 42px;
+  color: var(--mut);
+}
+.an-field input,
+.an-field select {
+  flex: 1 1 0;
+  min-width: 0;
+  font: inherit;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.an-unit {
+  color: var(--mut);
+  flex: 0 0 auto;
+}
+
+/* add-item button in the section header */
+.an-add {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--accent);
+  border-radius: 6px;
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  cursor: pointer;
+  font-size: 14px;
+}
+.an-add:hover {
+  background: var(--bg);
+}
+.an-empty {
+  color: var(--mut);
+  font-style: italic;
+  margin: 4px 0;
+}
+
+/* one placed mass */
+.an-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px;
+  margin: 5px 0;
+  background: var(--bg);
+}
+.an-item-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.an-item-row + .an-item-row {
+  margin-top: 5px;
+}
+.an-name {
+  flex: 1 1 0;
+  min-width: 0;
+  font: inherit;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.an-num {
+  flex: 0 0 62px;
+  font: inherit;
+  padding: 2px 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  text-align: right;
+}
+.an-del {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--danger);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.an-xyz label {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--mut);
+}
+.an-xyz input {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  padding: 2px 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+/* result rows */
+.an-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 2px 0;
+}
+.an-k {
+  color: var(--mut);
+}
+.an-v {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.an-strong .an-k,
+.an-strong .an-v {
+  color: var(--ink);
+  font-weight: 700;
+}
+.an-warn {
+  color: var(--danger);
+}
+.an-note {
+  color: var(--mut);
+  margin: 6px 0;
+  line-height: 1.35;
+}
+.an-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 2px;
+  color: var(--mut);
+}
+.an-float {
+  width: 100%;
+  margin: 10px 0 2px;
+  padding: 6px 8px;
+  font: inherit;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--accent);
+  cursor: pointer;
+}
+.an-float:hover:not(:disabled) {
+  background: var(--bg);
+}
+.an-float:disabled {
+  border-color: var(--line);
+  color: var(--mut);
+  cursor: default;
+}

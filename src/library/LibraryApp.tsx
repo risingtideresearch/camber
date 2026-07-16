@@ -270,6 +270,14 @@ export function LibraryApp() {
         >
           Import JSON…
         </Button>
+        <Button
+          title="Hydrostatics — displacement, CG & flotation of any STL or hull"
+          onClick={() => {
+            window.location.href = "hydro.html";
+          }}
+        >
+          Hydrostatics
+        </Button>
       </TopBar>
 
       {!blendMode ? (

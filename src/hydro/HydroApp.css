@@ -1,0 +1,85 @@
+.hydroapp {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.hydrobar {
+  gap: 8px;
+  padding: 6px 12px;
+}
+.hydrotitle {
+  font-weight: 700;
+  font-size: 15px;
+}
+.hydrobtn {
+  font: inherit;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+}
+.hydrobtn:hover {
+  background: var(--bg);
+}
+.hydrosubject {
+  font-size: 13px;
+  color: var(--mut);
+  margin-left: 4px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hydroaxes {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--mut);
+}
+.hydroaxes select {
+  font: inherit;
+  padding: 1px 3px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+.spacer {
+  flex: 1 1 auto;
+}
+.hydrolink {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 13px;
+}
+.hydrolink:hover {
+  text-decoration: underline;
+}
+
+.hydromain {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+}
+.hydroleft {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  padding: 10px;
+}
+.hydroright {
+  flex: 0 0 340px;
+  min-width: 0;
+  border-left: 1px solid var(--line);
+  padding: 10px;
+  display: flex;
+  overflow: hidden;
+}
+.hydroright .analysiscard {
+  width: 100%;
+}

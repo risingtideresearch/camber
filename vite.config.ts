@@ -8,6 +8,7 @@ import react from "@vitejs/plugin-react";
 //   library.html     → src/library.tsx       (React design library)
 //   editor.html      → src/editor.tsx        (React editor)
 //   interpolate.html → src/interpolate.tsx   (React interpolation viewer)
+//   hydro.html       → src/hydro.tsx         (React hydrostatics / displacement & CG)
 //
 // base: "./" makes all emitted asset URLs relative, so the built site works whether it is served
 // from a domain root or a GitHub Pages project subpath (…/camber/).
@@ -22,6 +23,7 @@ export default defineConfig({
         library: resolve(import.meta.dirname, "library.html"),
         editor: resolve(import.meta.dirname, "editor.html"),
         interpolate: resolve(import.meta.dirname, "interpolate.html"),
+        hydro: resolve(import.meta.dirname, "hydro.html"),
       },
     },
   },
