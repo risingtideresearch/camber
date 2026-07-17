@@ -109,11 +109,16 @@ function decodeHull(v: Record<string, unknown>): HullData {
   const rawPlan = arr(v.sheerPlan, `${c}.sheerPlan`, 2);
   const sheerPlan: PlanCP[] = rawPlan.map((p, i) => {
     const o = obj(p, `${c}.sheerPlan[${i}]`);
-    return { x: num(o.x, `${c}.sheerPlan[${i}].x`), y: num(o.y, `${c}.sheerPlan[${i}].y`) };
+    return {
+      x: num(o.x, `${c}.sheerPlan[${i}].x`),
+      y: num(o.y, `${c}.sheerPlan[${i}].y`),
+    };
   });
   for (let i = 1; i < sheerPlan.length; i++)
     if (sheerPlan[i].x <= sheerPlan[i - 1].x)
-      throw new Error(`${c}.sheerPlan[${i}].x must be > the previous point's x`);
+      throw new Error(
+        `${c}.sheerPlan[${i}].x must be > the previous point's x`,
+      );
 
   const rawTrim = arr(v.sheerTrim, `${c}.sheerTrim`, 2);
   const sheerTrim: TrimCP[] = rawTrim.map((p, i) => {
@@ -126,14 +131,19 @@ function decodeHull(v: Record<string, unknown>): HullData {
   });
   for (let i = 1; i < sheerTrim.length; i++)
     if (sheerTrim[i].x <= sheerTrim[i - 1].x)
-      throw new Error(`${c}.sheerTrim[${i}].x must be > the previous point's x`);
+      throw new Error(
+        `${c}.sheerTrim[${i}].x must be > the previous point's x`,
+      );
 
   const rawTr = arr(v.transom, `${c}.transom`, 2);
   if (rawTr.length !== 2)
     throw new Error(`${c}.transom must have exactly 2 points (top and bottom)`);
   const transom: TransomCP[] = rawTr.map((p, i) => {
     const o = obj(p, `${c}.transom[${i}]`);
-    return { x: num(o.x, `${c}.transom[${i}].x`), z: num(o.z, `${c}.transom[${i}].z`) };
+    return {
+      x: num(o.x, `${c}.transom[${i}].x`),
+      z: num(o.z, `${c}.transom[${i}].z`),
+    };
   });
   if (transom[1].z >= transom[0].z)
     throw new Error(`${c}.transom[1] (the bottom) must be below transom[0]`);
@@ -166,7 +176,9 @@ function decodeHull(v: Record<string, unknown>): HullData {
   stations.sort((a, b) => a.u - b.u);
   for (let j = 1; j < stations.length; j++)
     if (stations[j].u <= stations[j - 1].u)
-      throw new Error(`${c}.stations: two stations share the same u (${stations[j].u})`);
+      throw new Error(
+        `${c}.stations: two stations share the same u (${stations[j].u})`,
+      );
 
   return {
     name: typeof v.name === "string" ? v.name : "",
@@ -187,7 +199,9 @@ export function convertUnits(d: HullData, to: Unit): void {
   d.sheerPlan.forEach((p) => ((p.x *= s), (p.y *= s)));
   d.sheerTrim.forEach((p) => ((p.x *= s), (p.z *= s)));
   d.transom.forEach((p) => ((p.x *= s), (p.z *= s)));
-  d.stations.forEach((st) => st.points.forEach((p) => ((p.n *= s), (p.z *= s))));
+  d.stations.forEach((st) =>
+    st.points.forEach((p) => ((p.n *= s), (p.z *= s))),
+  );
   d.unit = to;
 }
 
@@ -204,15 +218,21 @@ export function parseDocument(text: string): ParsedDoc {
     throw new Error(
       `document version ${JSON.stringify(raw.version)} is not readable by this app (it reads version ${VERSION} and earlier)`,
     );
-  if (!("sheerPlan" in raw)) throw new Error("not a hull document (no sheerPlan)");
+  if (!("sheerPlan" in raw))
+    throw new Error("not a hull document (no sheerPlan)");
 
   const doc =
     documentVersion(raw) < 2
-      ? (convertV1ToV2(raw as unknown as V1Doc) as unknown as Record<string, unknown>)
+      ? (convertV1ToV2(raw as unknown as V1Doc) as unknown as Record<
+          string,
+          unknown
+        >)
       : raw;
 
   const waterline =
-    typeof doc.waterline === "number" && isFinite(doc.waterline) ? doc.waterline : 0;
+    typeof doc.waterline === "number" && isFinite(doc.waterline)
+      ? doc.waterline
+      : 0;
   const deckRakeDeg =
     typeof doc.deckRakeDeg === "number" && isFinite(doc.deckRakeDeg)
       ? doc.deckRakeDeg

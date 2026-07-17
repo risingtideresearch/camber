@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react";
-import { clippedSection, waterlineStats, type Model } from "../core/model";
+import { type Model } from "../core/model";
+import { sweptSection, waterlineStats } from "../core/mesh";
 import type { ModelSelection } from "../core/modelSelection";
 import type { CurvatureSettings } from "../core/comb";
 import { drawCutStation } from "../core/draw2d";
@@ -7,7 +8,7 @@ import { STW, STH } from "../core/view";
 import { SvgView } from "./SvgView";
 import "./CutStationView.css";
 
-// The live cut-station panel: the interpolated section at the red cut x0, plus a draft / WL-beam readout.
+// The live cut-station panel: the lofted section at the red cut x0, plus a draft / WL-beam readout.
 // Both the drawing (drawCutStation into its <svg>) and the readout react to model / selection changes.
 interface CutStationViewProps {
   model: Model;
@@ -15,6 +16,12 @@ interface CutStationViewProps {
   selection: ModelSelection;
   curvature: CurvatureSettings;
 }
+
+// A measurement in the model's own unit. The coordinates are absolute now, so a hull may legitimately be
+// 5000 (mm) or 5 (m) long — rounding everything to the nearest integer would erase a metre-unit hull's
+// readout entirely.
+const fmt = (v: number): string =>
+  Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2);
 
 export function CutStationView({
   model,
@@ -32,12 +39,14 @@ export function CutStationView({
 
   // the draft / WL-beam readout for the live cut, measured against the design waterline
   const label = useMemo(() => {
-    const h = clippedSection(model, model.x0, 18);
-    const wl = waterlineStats(model, h),
-      open = h.open ? " · open" : "";
+    const at = `x=${fmt(model.x0)} ${model.unit}`;
+    const h = sweptSection(model, model.plan.uAtX(model.x0), 4, true);
+    if (h.empty) return `${at} · no hull here`;
+    const wl = waterlineStats(model, h.pts),
+      open = h.keel ? "" : " · open"; // the section never reached the centerline
     return wl.wet
-      ? `x=${Math.round(model.x0)}${open} · draft ${Math.round(wl.draft)} · WL beam ${Math.round(wl.beam)}`
-      : `x=${Math.round(model.x0)}${open} · above WL`;
+      ? `${at}${open} · draft ${fmt(wl.draft)} · WL beam ${fmt(wl.beam)}`
+      : `${at}${open} · above WL`;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, modelVersion]);
 

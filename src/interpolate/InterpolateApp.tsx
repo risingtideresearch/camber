@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createModel, prepare, L, type Model } from "../core/model";
+import { createModel, loa, prepare, type Model } from "../core/model";
 import { hydrostatics, type Hydro } from "../core/hydro";
 import { parseDocument, type ParsedDoc } from "../core/json";
 import { promoteFamily } from "../core/promote";
@@ -40,24 +40,20 @@ const msg = (e: unknown): string =>
 // stable empty sentinel — identity is compared against samplesState.forHulls to derive `sampling`
 const NO_SAMPLES: Sample[] = [];
 
-// add a parsed document's hull to the family, checking it against the shared length. Collects any problem
-// into `errs`. Mutates `hulls` and `famLength`.
+// Add a parsed document's hull to the family. Collects any problem into `errs`; mutates `hulls`.
+//
+// There is nothing left to check but the family's size: v1 required every hull to share one `length` (its
+// coordinates were unitless against it), while v2's are absolute in a real unit — promoteFamily converts the
+// family into the first hull's unit and reconciles the control-point counts and the station correspondence,
+// and hulls of different lengths simply blend to an intermediate length.
 function addParsedDoc(
   parsed: ParsedDoc,
   base: string,
   hulls: Hull[],
-  famLength: { current: number | null },
   errs: string[],
 ): void {
   if (hulls.length >= 5) {
     errs.push(`${base}: family is full (max 5 hulls) — hull skipped`);
-    return;
-  }
-  if (famLength.current == null) famLength.current = parsed.length;
-  else if (Math.abs(parsed.length - famLength.current) > 1e-6) {
-    errs.push(
-      `${base}: length mismatch — ${parsed.length} vs the family's ${famLength.current}. Lengths must match.`,
-    );
     return;
   }
   hulls.push({ name: parsed.hull.name ?? base, data: parsed.hull });
@@ -68,7 +64,7 @@ export function InterpolateApp() {
   // blend is (re)computed during render (below), so the model is always current before any child effect draws.
   const [model] = useState<Model>(() => {
     const m = createModel();
-    m.x0 = L / 2;
+    m.x0 = loa(m) / 2; // amidships; the blend overwrites the geometry, so this only seeds the cut
     return m;
   });
 
@@ -124,7 +120,7 @@ export function InterpolateApp() {
   // dedicated scratch model so the live blend is never disturbed.
   const scratch = useMemo<Model>(() => {
     const m = createModel();
-    m.x0 = L / 2;
+    m.x0 = loa(m) / 2;
     return m;
   }, []);
   useEffect(() => {
@@ -138,8 +134,8 @@ export function InterpolateApp() {
     return () => clearTimeout(id);
   }, [hulls, scratch]);
 
-  // ---------- the metrics length scale (geometry-independent; just reformats the readout) ----------
-  const [loa, setLoa] = useState(12);
+  // ---------- the metrics readout unit (geometry-independent; just reformats the readout — the hull's real
+  // size comes from the document's own unit now) ----------
   const [unit, setUnit] = useState<Unit>("m");
   const [water, setWater] = useState<Water>("salt");
 
@@ -152,7 +148,6 @@ export function InterpolateApp() {
   const savingRef = useRef(false);
   const flashUntilRef = useRef(0); // hold a transient "Saving…" / "Saved ✓" until this timestamp
   const hullsRef = useRef(hulls); // latest family for the window listeners / async loaders / poll
-  const famLengthRef = useRef<number | null>(null);
   useEffect(() => {
     nameRef.current = name;
   }, [name]);
@@ -174,20 +169,15 @@ export function InterpolateApp() {
   // ---------- file / library loading (additive: dropping more files grows the family, up to 5) ----------
   const finishLoad = useCallback(
     (next: Hull[], errs: string[], label: string) => {
-      // lift any mixed topologies to a common one before blending
-      setPromoted(
-        promoteFamily(
-          model,
-          next.map((h) => h.data),
-        ),
-      );
+      // reconcile the family's unit, control-point counts and station correspondence before blending
+      setPromoted(promoteFamily(next.map((h) => h.data)));
       hullsRef.current = next; // keep the ref fresh for back-to-back loads
       setHulls(next);
       setTTwo(0.5); // a fresh family starts centred (equal blend)
       setPuck({ x: PADC, y: PADC });
       if (errs.length) alert(`${label}:\n\n${errs.join("\n")}`);
     },
-    [model],
+    [],
   );
 
   // overlapping loads (a file dropped while the boot ?ids= fetch is in flight) are serialized through this
@@ -211,7 +201,6 @@ export function InterpolateApp() {
               parseDocument(await f.text()),
               f.name.replace(/\.json$/i, "") || "hull",
               next,
-              famLengthRef,
               errs,
             );
           } catch (e) {
@@ -232,13 +221,7 @@ export function InterpolateApp() {
         for (const id of ids) {
           try {
             const { name: nm, documentText } = await getDesign(id);
-            addParsedDoc(
-              parseDocument(documentText),
-              nm,
-              next,
-              famLengthRef,
-              errs,
-            );
+            addParsedDoc(parseDocument(documentText), nm, next, errs);
           } catch (e) {
             errs.push(`${id}: ${msg(e)}`);
           }
@@ -462,10 +445,9 @@ export function InterpolateApp() {
             />
             <MetricsPanel
               hydro={liveHydro}
-              loa={loa}
+              docUnit={hulls.length ? hulls[0].data.unit : model.unit}
               unit={unit}
               water={water}
-              onLoa={setLoa}
               onUnit={setUnit}
               onWater={setWater}
             />

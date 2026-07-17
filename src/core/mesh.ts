@@ -54,7 +54,7 @@ export interface SectionRow {
 // The scan is coarse and the ends are converged: `keepAt` is the min of three constraints, so it has kinks
 // where the binding constraint changes and a root-finder that assumed smoothness could walk off one. A scan
 // to bracket, then bisection to converge, is robust to that and still lands on the root to float precision.
-function keptSpan(
+export function keptSpan(
   model: Model,
   fr: Frame,
   sec: Section,
@@ -73,8 +73,7 @@ function keptSpan(
   if (lo < 0) return null; // every row trimmed away — no hull at this u
   const at = (i: number): number => (sec.vmax * i) / FN;
   // the top edge: the sheer, unless the column's very first row is already inside (nothing cut it)
-  const vTop =
-    lo === 0 ? 0 : bisectRoot(g, at(lo - 1), at(lo), gs[lo - 1]);
+  const vTop = lo === 0 ? 0 : bisectRoot(g, at(lo - 1), at(lo), gs[lo - 1]);
   // the bottom edge: the centerline or the transom, unless the section ran out first (an open section)
   const vBot =
     hi === FN ? sec.vmax : bisectRoot(g, at(hi + 1), at(hi), gs[hi + 1]);
@@ -90,7 +89,11 @@ function keptSpan(
 //
 // Anchor 0 is the sheer edge and anchor S−1 the keel, which is why knot 0 (the deck point, always above the
 // sheer trim) and the last knot never contribute a crease of their own.
-function anchorsFor(S: number, vTop: number, vBot: number): {
+function anchorsFor(
+  S: number,
+  vTop: number,
+  vBot: number,
+): {
   anchors: number[];
   pinned: boolean[]; // is this anchor the knot itself, rather than clamped onto the boundary?
 } {
@@ -118,7 +121,9 @@ export function sweptSection(
   const fr = frameAt(model, u),
     sec = sectionAt(model, u),
     S = sec.vmax + 1;
-  const span = trim ? keptSpan(model, fr, sec) : ([0, sec.vmax] as [number, number]);
+  const span = trim
+    ? keptSpan(model, fr, sec)
+    : ([0, sec.vmax] as [number, number]);
   if (!span)
     return { pts: [], empty: true, keel: false, creaseRows: [], creaseK: [] };
   const [vTop, vBot] = span,
@@ -130,7 +135,11 @@ export function sweptSection(
     if (i === 0) pts.push(sectionWorld(fr, sec, anchors[0]));
     for (let r = 1; r <= R; r++)
       pts.push(
-        sectionWorld(fr, sec, anchors[i] + ((anchors[i + 1] - anchors[i]) * r) / R),
+        sectionWorld(
+          fr,
+          sec,
+          anchors[i] + ((anchors[i + 1] - anchors[i]) * r) / R,
+        ),
       );
     // the knot ending this segment gets the crease, if it is a real interior knot and creased at all
     const j = i + 1;
@@ -202,7 +211,12 @@ export function hullGrid(
 
 // map a half-section's crease rows onto the (possibly mirrored) row: a chine at half-index c sits at c and,
 // mirrored, at 2M − c; the keel (half-index M) is the single centre index M.
-function spread(s: SectionRow, len: number, M: number, mirror: boolean): number[] {
+function spread(
+  s: SectionRow,
+  len: number,
+  M: number,
+  mirror: boolean,
+): number[] {
   const cs = new Array(len).fill(0);
   for (let t = 0; t < s.creaseRows.length; t++) {
     const c = s.creaseRows[t],
@@ -304,7 +318,8 @@ export function dwlPointAt(model: Model, u: number): Vec3 | null {
   for (let i = 1; i <= FN; i++) {
     const v = span[0] + ((span[1] - span[0]) * i) / FN,
       gv = g(v);
-    if (pg < 0 !== gv < 0) return sectionWorld(fr, sec, bisectRoot(g, pv, v, pg));
+    if (pg < 0 !== gv < 0)
+      return sectionWorld(fr, sec, bisectRoot(g, pv, v, pg));
     pv = v;
     pg = gv;
   }
@@ -312,7 +327,8 @@ export function dwlPointAt(model: Model, u: number): Vec3 | null {
 }
 
 const immersionOf = (model: Model, p: Vec3): number =>
-  -model.waterline - (p[0] * Math.sin(model.deckRake) + p[2] * Math.cos(model.deckRake));
+  -model.waterline -
+  (p[0] * Math.sin(model.deckRake) + p[2] * Math.cos(model.deckRake));
 
 // ---------- the hull's longitudinal extent ----------
 // The bow closes where the sections vanish — the forefoot rises above the sheer trim, or a tumblehome lens

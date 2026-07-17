@@ -1,22 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  clippedSection,
   createModel,
-  forwardLimit,
-  L,
-  moveSheer,
+  loa,
+  movePlanPoint,
   moveStationPoint,
+  moveStationU,
   moveTransom,
   moveTrim,
-  moveWeightBoundary,
   prepare,
   resetModel,
   setDeckRake,
+  setUnit,
   setWaterline,
   setX0,
   type Model,
-  type Section,
 } from "../core/model";
+import {
+  aftLimit,
+  forwardLimit,
+  sweptSection,
+  type SectionRow,
+} from "../core/mesh";
+import type { Unit } from "../core/document";
 import type { ModelSelection } from "../core/modelSelection";
 import {
   defaultStlSettings,
@@ -28,7 +33,7 @@ import { getHullBBox } from "../core/draw3d";
 import { buildJson } from "../core/json";
 import { clamp } from "../core/math";
 import { getDrag, setDrag } from "../core/drag";
-import { invD, invN, invWY, invX, invY, invZp } from "../core/view";
+import { viewOf } from "../core/view";
 import { getVB } from "./svgCoords";
 import { deleteSelected, setKnuckle } from "./selection";
 import {
@@ -49,7 +54,6 @@ import { CurvatureControls } from "./CurvatureControls";
 import { defaultCurvature } from "../core/comb";
 import { DesignBar } from "./DesignBar";
 import { View3d } from "../components/View3d";
-import { WeightsView } from "./WeightsView";
 import { PlanView } from "./PlanView";
 import { ProfileView } from "./ProfileView";
 import { useSvgViewSync } from "./svgViewSync";
@@ -88,21 +92,25 @@ export function EditorApp() {
 
   // imported reference STL — session only, never saved. Drawn translucent over the hull in the 3D view.
   const [stl, setStl] = useState<StlState | null>(null);
-  const onImportStl = useCallback(async (file: File) => {
-    try {
-      const geom = parseStl(await file.arrayBuffer());
-      const designBox = getHullBBox(); // freeze the current hull bounds; the fit scale is relative to them
-      setStl({
-        geom,
-        designBox,
-        settings: defaultStlSettings(geom, designBox),
-      });
-    } catch (e) {
-      alert(
-        "Couldn't import STL: " + (e instanceof Error ? e.message : String(e)),
-      );
-    }
-  }, []);
+  const onImportStl = useCallback(
+    async (file: File) => {
+      try {
+        const geom = parseStl(await file.arrayBuffer());
+        const designBox = getHullBBox(model); // freeze the current hull bounds; the fit scale is relative to them
+        setStl({
+          geom,
+          designBox,
+          settings: defaultStlSettings(geom, designBox),
+        });
+      } catch (e) {
+        alert(
+          "Couldn't import STL: " +
+            (e instanceof Error ? e.message : String(e)),
+        );
+      }
+    },
+    [model],
+  );
   const onChangeStl = useCallback(
     (patch: Partial<StlSettings>) =>
       setStl((s) => (s ? { ...s, settings: { ...s.settings, ...patch } } : s)),
@@ -126,16 +134,22 @@ export function EditorApp() {
     nameRef.current = name;
   }, [name]);
 
-  // prepare() the model and sample the sections the plan / profile strips draw. Runs during render (before
-  // the child views' draw effects) whenever the model changes, so every view sees a prepared model.
-  const sections = useMemo<Section[]>(() => {
+  // prepare() the model and sample the swept sections the plan / profile strips draw (the max-beam line, the
+  // keel / stem outline). Runs during render (before the child views' draw effects) whenever the model
+  // changes, so every view sees a prepared model.
+  //
+  // The sweep spans [aftLimit, forwardLimit] — where the hull actually exists, between the transom cut and
+  // the bow closure — in the plan's own parameter. Cosine spacing clusters the samples at both ends, where a
+  // fine bow or a raked transom changes the section fastest.
+  const rows = useMemo<SectionRow[]>(() => {
     prepare(model);
     const NSEC = 80,
-      xFwd = forwardLimit(model),
-      out: Section[] = [];
+      u0 = aftLimit(model),
+      u1 = forwardLimit(model),
+      out: SectionRow[] = [];
     for (let i = 0; i <= NSEC; i++) {
-      const x = (xFwd * (1 - Math.cos((Math.PI * i) / NSEC))) / 2;
-      out.push(clippedSection(model, x, 18));
+      const t = (1 - Math.cos((Math.PI * i) / NSEC)) / 2;
+      out.push(sweptSection(model, u0 + (u1 - u0) * t, 4, true));
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -150,17 +164,23 @@ export function EditorApp() {
       const drag = getDrag();
       if (!drag) return;
       const [vx, vy] = getVB(drag, e);
-      if (drag.kind === "slider") setX0(model, clamp(invX(vx), 0, L));
+      // the view transforms follow the hull's length, so they are re-derived per move rather than imported
+      // as module constants (a drag on the plan's last point changes the LOA under itself)
+      const v = viewOf(model);
+      if (drag.kind === "slider")
+        setX0(model, clamp(v.invX(vx), 0, loa(model)));
       else if (drag.kind === "sheer")
-        moveSheer(model, drag.idx!, invX(vx), invY(vy));
+        movePlanPoint(model, drag.idx!, v.invX(vx), v.invY(vy));
       else if (drag.kind === "trim")
-        moveTrim(model, drag.idx!, invX(vx), invZp(vy));
+        moveTrim(model, drag.idx!, v.invX(vx), v.invZp(vy));
       else if (drag.kind === "transom")
-        moveTransom(model, drag.idx!, invX(vx), invZp(vy));
-      else if (drag.kind === "weight")
-        moveWeightBoundary(model, drag.idx!, drag.bnd!, invWY(vy));
+        moveTransom(model, drag.idx!, v.invX(vx), v.invZp(vy));
+      // a station handle rides the plan curve: the pointer's x picks the station's u by inverting the
+      // plan's monotone x(u), which is the same inversion the cut scrubber uses
+      else if (drag.kind === "stationU")
+        moveStationU(model, drag.idx!, model.plan.uAtX(v.invX(vx)));
       else if (drag.kind === "stn")
-        moveStationPoint(model, drag.ti!, drag.idx!, invN(vx), invD(vy));
+        moveStationPoint(model, drag.si!, drag.idx!, v.invN(vx), v.invZ(vy));
       bumpModel();
     };
     const onUp = () => setDrag(null); // selection persists after a drag, so the point stays editable
@@ -321,6 +341,19 @@ export function EditorApp() {
     setDeckRake(model, deg);
     bumpModel();
   };
+  // Changing the unit asks which of the two things the user meant: keep the hull the same PHYSICAL size and
+  // convert the numbers (2000 mm → 2 m), or keep the numbers and reinterpret them at the new unit's scale
+  // (2000 mm → 2000 m). Neither is a safe default, so it is asked rather than assumed.
+  const onUnit = (unit: Unit) => {
+    if (unit === model.unit) return;
+    const rescale = confirm(
+      `Change the unit from ${model.unit} to ${unit}.\n\n` +
+        `OK — convert the numbers, keeping the hull the same size.\n` +
+        `Cancel — keep the numbers, resizing the hull to ${unit}.`,
+    );
+    setUnit(model, unit, rescale);
+    bumpModel();
+  };
   const onKnuckle = (k: number) => {
     if (setKnuckle(model, selection, k)) bumpModel();
   };
@@ -361,7 +394,12 @@ export function EditorApp() {
           onDelete={onDelete}
         />
         <span className="tabsep" />
-        <TrimControls model={model} onWaterline={onWaterline} onRake={onRake} />
+        <TrimControls
+          model={model}
+          onWaterline={onWaterline}
+          onRake={onRake}
+          onUnit={onUnit}
+        />
         <CurvatureControls value={curvature} onChange={setCurvature} />
         <DesignBar
           name={name}
@@ -385,9 +423,10 @@ export function EditorApp() {
       </div>
       <div className="main">
         {booted && (
-          // Resizable layout: three independent columns, each a vertical split of two stacked views —
-          // plan / profile, section editor / blend strip, and 3D view / live cut station. Drag any
-          // separator to resize. (Replaces the old measured column-fitting layout.)
+          // Resizable layout: three independent columns — plan / profile, the section editor, and the 3D
+          // view / live cut station. Drag any separator to resize. (The middle column used to be split with
+          // the blend-weights strip below the section editor; v2 has no blend, so the section editor takes
+          // the column: a station's position along the hull is now its own handle on the plan curve.)
           <AreaGroup className="areagroup" orientation="horizontal">
             <Area className="area" defaultSize="50%">
               <AreaGroup className="areagroup" orientation="vertical">
@@ -396,7 +435,7 @@ export function EditorApp() {
                     model={model}
                     modelVersion={modelVersion}
                     selection={selection}
-                    sections={sections}
+                    rows={rows}
                     tool={tool}
                     onSelect={setSelection}
                     setTool={setTool}
@@ -411,7 +450,7 @@ export function EditorApp() {
                     model={model}
                     modelVersion={modelVersion}
                     selection={selection}
-                    sections={sections}
+                    rows={rows}
                     tool={tool}
                     onSelect={setSelection}
                     setTool={setTool}
@@ -424,32 +463,16 @@ export function EditorApp() {
             </Area>
             <AreaSeparator className="areasep" />
             <Area className="area" defaultSize="25%" minSize="200px">
-              <AreaGroup className="areagroup" orientation="vertical">
-                <Area className="area" defaultSize="50%">
-                  <SidePanel
-                    model={model}
-                    modelVersion={modelVersion}
-                    selection={selection}
-                    tool={tool}
-                    onSelect={setSelection}
-                    setTool={setTool}
-                    bumpModel={bumpModel}
-                    curvature={curvature}
-                  />
-                </Area>
-                <AreaSeparator className="areasep" />
-                <Area className="area" defaultSize="50%">
-                  <WeightsView
-                    model={model}
-                    modelVersion={modelVersion}
-                    selection={selection}
-                    tool={tool}
-                    onSelect={setSelection}
-                    setTool={setTool}
-                    bumpModel={bumpModel}
-                  />
-                </Area>
-              </AreaGroup>
+              <SidePanel
+                model={model}
+                modelVersion={modelVersion}
+                selection={selection}
+                tool={tool}
+                onSelect={setSelection}
+                setTool={setTool}
+                bumpModel={bumpModel}
+                curvature={curvature}
+              />
             </Area>
             <AreaSeparator className="areasep" />
             <Area className="area" defaultSize="25%" minSize="200px">

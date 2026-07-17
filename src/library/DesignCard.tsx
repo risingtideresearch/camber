@@ -9,7 +9,7 @@ interface DesignCardProps {
   row: DesignRow;
   topo: Topo | null;
   selected: boolean; // the single selected card (out of blend mode)
-  compat: boolean; // in blend mode: a same-length, blendable peer
+  compat: boolean; // in blend mode: a blendable peer (any hull whose document parses)
   incompat: boolean; // in blend mode: dimmed and inert
   picked: boolean; // in blend mode: chosen for the blend
   onClick: () => void;
@@ -21,7 +21,7 @@ function fmtDate(iso: string): string {
   return isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
-function StatChip({ value, label }: { value: number; label: string }) {
+function StatChip({ value, label }: { value: number | string; label: string }) {
   return (
     <span className="stat">
       <b>{value}</b> {label}
@@ -66,7 +66,11 @@ export function DesignCard({
       <div className="cname">{row.name}</div>
       {topo && (
         <div className="topo">
-          <StatChip value={topo.templates} label="templates" />
+          <StatChip
+            value={topo.loa >= 100 ? topo.loa.toFixed(0) : topo.loa.toFixed(2)}
+            label={topo.unit}
+          />
+          <StatChip value={topo.stations} label="stations" />
           <StatChip value={topo.section} label="section" />
           <StatChip value={topo.plan} label="plan" />
           <StatChip value={topo.trim} label="trim" />

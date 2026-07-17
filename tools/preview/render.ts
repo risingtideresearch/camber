@@ -18,19 +18,18 @@ import { dirname } from "node:path";
 import { readFileSync } from "node:fs";
 import {
   createModel,
-  L,
+  loa,
   resetModel,
   prepare,
-  sweptSection,
-  forwardLimit,
   worldZ,
-  weightsAt,
+  keepAt,
   frameAt,
-  xTransom,
+  stationWorld,
 } from "../../src/core/model";
-import { trimmedHullGrid, buildStep } from "../../src/core/step";
+import { hullGrid, trimmedHullGrid } from "../../src/core/mesh";
+import { buildStep } from "../../src/core/step";
 import { loadJsonText } from "../../src/core/json";
-import { mirrorRow, type Vec3 } from "../../src/core/math";
+import { type Vec3 } from "../../src/core/math";
 
 const model = createModel();
 
@@ -64,6 +63,13 @@ function projector(yaw: number, pitch: number) {
   };
 }
 
+// Wrap an SVG body in a viewBox fitted to the drawn bounds, rasterized `OUT_W` px wide.
+//
+// The height is stated explicitly, from the viewBox's own aspect. Given a width but no height, resvg takes
+// the canvas height from the viewBox's height in USER UNITS and then letterboxes the content into it — which
+// was a mild cosmetic quirk while coordinates were unitless against L = 1000, and is a wild one now that they
+// are absolute (a 5 m hull in mm gave a 1000×2678 canvas with the boat in a band across the middle).
+const OUT_W = 1000;
 function svgWrap(
   body: string,
   minX: number,
@@ -73,8 +79,11 @@ function svgWrap(
   pad: number,
   bg = "#fff",
 ): string {
-  const vb = `${minX - pad} ${minY - pad} ${w + 2 * pad} ${h + 2 * pad}`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1000" viewBox="${vb}"><rect x="${minX - pad}" y="${minY - pad}" width="${w + 2 * pad}" height="${h + 2 * pad}" fill="${bg}"/>${body}</svg>`;
+  const W = w + 2 * pad,
+    H = h + 2 * pad,
+    outH = Math.max(1, Math.round((OUT_W * H) / (W || 1)));
+  const vb = `${minX - pad} ${minY - pad} ${W} ${H}`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${OUT_W}" height="${outH}" viewBox="${vb}"><rect x="${minX - pad}" y="${minY - pad}" width="${W}" height="${H}" fill="${bg}"/>${body}</svg>`;
 }
 
 // ---- lines: painter's white facets + bold feature edges (replicates the editor Lines view) ----
@@ -85,13 +94,18 @@ function renderLines(
   sel: number,
   kind: string,
 ): string {
-  const { grid, creaseCols } = trimmedHullGrid(model, 80, 10);
+  // R = 3 sub-steps per section segment: few, widely spaced longitudinals, as a lines plan wants. The rows
+  // come back FULL WIDTH (starboard sheer 0 → keel → port sheer NC), so unlike v1 there is no half to mirror.
+  const { grid, creaseCols, keel } = trimmedHullGrid(model, 80, 3);
   const NS = grid.length - 1,
-    M = grid[0].length - 1,
+    NC = (grid[0]?.length ?? 0) - 1,
+    KEEL = NC >> 1,
     crease = new Set(creaseCols);
-  const SP = grid.map((r) => r.map(P)),
-    PP = grid.map((r) => r.map(([x, y, z]) => P([x, -y, z])));
-  const gridM = grid.map((r) => r.map(([x, y, z]): Vec3 => [x, -y, z]));
+  // the bold longitudinals: both sheers, the keel (which carries no crease of its own — the mesh leaves it
+  // smooth — but is still the hull's profile), and every chine
+  const feature = (j: number): boolean =>
+    j === 0 || j === NC || j === KEEL || crease.has(j);
+  const SP = grid.map((r) => r.map(P));
   let minX = 1e9,
     minY = 1e9,
     maxX = -1e9,
@@ -146,29 +160,28 @@ function renderLines(
     fam: [P2, P2][];
     wl: [P2, P2][];
   }[] = [];
-  for (const [G, GW] of [
-    [SP, grid],
-    [PP, gridM],
-  ] as [P2[][], Vec3[][]][])
-    for (let i = 0; i < NS; i++)
-      for (let j = 0; j < M; j++) {
-        const A = G[i][j],
-          B = G[i][j + 1],
-          C = G[i + 1][j + 1],
-          D = G[i + 1][j];
+  for (let i = 0; i < NS; i++)
+    for (let j = 0; j < NC; j++) {
+      // where the section is open there is no surface across the centerline — don't bridge the gap
+      if (j === KEEL && (!keel[i] || !keel[i + 1])) continue;
+      {
+        const A = SP[i][j],
+          B = SP[i][j + 1],
+          C = SP[i + 1][j + 1],
+          D = SP[i + 1][j];
         for (const p of [A, B, C, D]) {
           minX = Math.min(minX, p.x);
           maxX = Math.max(maxX, p.x);
           minY = Math.min(minY, p.y);
           maxY = Math.max(maxY, p.y);
         }
-        const wA = GW[i][j],
-          wB = GW[i][j + 1],
-          wC = GW[i + 1][j + 1],
-          wD = GW[i + 1][j];
+        const wA = grid[i][j],
+          wB = grid[i][j + 1],
+          wC = grid[i + 1][j + 1],
+          wD = grid[i + 1][j];
         const bold: [P2, P2][] = [];
-        if (j === 0 || crease.has(j)) bold.push([D, A]);
-        if (j + 1 === M || crease.has(j + 1)) bold.push([B, C]);
+        if (feature(j)) bold.push([D, A]);
+        if (feature(j + 1)) bold.push([B, C]);
         if (i === 0) bold.push([A, B]); // transom trim line — bold in every mode
         const fam: [P2, P2][] = [];
         if (kind === "buttocks") {
@@ -212,10 +225,11 @@ function renderLines(
           wl: dwl ? [dwl] : [],
         });
       }
-  // selected template point → its longitudinal, interleaved into the painter's order so it occludes properly
+    }
+  // the selected station point → its longitudinal, interleaved into the painter's order so it occludes properly
   type Item = { depth: number; q?: (typeof quads)[number]; seg?: [P2, P2] };
   const items: Item[] = quads.map((q) => ({ depth: q.depth, q }));
-  if (sel >= 0 && sel < model.templates[0].length) {
+  if (sel >= 0 && sel < model.loft.S) {
     const c1 = Math.cos(yaw),
       s1 = Math.sin(yaw),
       c2 = Math.cos(pitch),
@@ -226,37 +240,25 @@ function renderLines(
       vy = -c2 * c1,
       vz = c2 * s1 * sT + s2 * cT;
     const vl = Math.hypot(vx, vy, vz) || 1,
-      BIAS = 60;
+      BIAS = 0.06 * loa(model); // a world-space nudge toward the eye, in the hull's own length
     vx /= vl;
     vy /= vl;
     vz /= vl;
-    const tpl = model.templates,
-      NP = 120,
+    // the locus of station point `sel` along the hull IS the loft of that point, trimmed exactly as the
+    // hull is (keepAt is the same signed min of the three cuts the mesh uses)
+    const NP = 120,
       WP: Vec3[] = [],
-      keep: boolean[] = [];
+      keepP: boolean[] = [];
     for (let i = 0; i <= NP; i++) {
-      const x = (L * i) / NP,
-        wt = weightsAt(model, x);
-      let n = 0,
-        d = 0;
-      for (let t = 0; t < tpl.length; t++) {
-        n += wt[t] * tpl[t][sel].n;
-        d += wt[t] * tpl[t][sel].d;
-      }
-      const fr = frameAt(model, x),
-        w: Vec3 = [
-          fr.p[0] + n * fr.n[0] + d * fr.d[0],
-          fr.p[1] + n * fr.n[1] + d * fr.d[1],
-          fr.p[2] + n * fr.n[2] + d * fr.d[2],
-        ];
-      WP.push(w);
-      keep.push(
-        d >= -model.sheer.zf(x) && w[1] >= 0 && w[0] >= xTransom(model, w[2]),
-      );
+      const u = i / NP,
+        fr = frameAt(model, u),
+        nz = model.loft.at(u).pts[sel];
+      WP.push(stationWorld(fr, nz[0], nz[1]));
+      keepP.push(keepAt(model, fr, nz) >= 0);
     }
     for (const sgn of [1, -1])
       for (let i = 0; i < NP; i++) {
-        if (!keep[i] || !keep[i + 1]) continue;
+        if (!keepP[i] || !keepP[i + 1]) continue;
         const a = P([
           WP[i][0] + vx * BIAS,
           sgn * WP[i][1] + vy * BIAS,
@@ -304,16 +306,10 @@ function renderShaded(
   pitch = 0,
   zebra = false,
 ): string {
-  const Mh = 44,
-    N = 200,
-    xf = forwardLimit(model);
-  const rows: Vec3[][] = [];
-  for (let i = 0; i <= N; i++) {
-    const x = xf * 0.5 * (1 - Math.cos((Math.PI * i) / N)); // cosine spacing, matches the real mesh
-    const s = sweptSection(model, x, Mh, true, false);
-    if (s.aft) continue;
-    rows.push(mirrorRow(s.pts));
-  }
+  // R = 11 sub-steps per section segment → 44 columns per half, as the app's mesh uses. hullGrid returns the
+  // rows already trimmed and already full width (starboard sheer → keel → port sheer), so there is nothing
+  // to mirror here — v1 swept an untrimmed half and mirrored it row by row.
+  const rows = hullGrid(model, 200, 11, true).rows;
   const Lt = [0.4, -0.5, 0.76],
     nl = Math.hypot(Lt[0], Lt[1], Lt[2]);
   // view direction (toward eye) in world, for the zebra reflection bands
@@ -482,14 +478,21 @@ const out = outArg ?? `out/${mode}-${a2}.png`;
 
 resetModel(model);
 // CAMBER_DOC=<path> loads a specific HullDocument JSON instead of the default boat; CAMBER_KEELK overrides
-// the keel knuckle on every template (handy for A/B-ing the keel-flat-vs-V pucker).
+// the keel knuckle on every station.
+//
+// NOTE: CAMBER_KEELK currently changes NOTHING you can see here. `keelK` is parsed, stored, lofted and
+// round-tripped, but the mesh deliberately does not read it yet — the keel gets no crease row, because
+// honouring it means DEFORMING the section near the centerline (a hard V has to be built, not merely
+// shaded), which lands as its own change. The override is kept wired so it is ready to A/B then.
 if (process.env.CAMBER_DOC)
   loadJsonText(model, readFileSync(process.env.CAMBER_DOC, "utf8"));
-if (process.env.CAMBER_KEELK)
-  model.keelK = model.keelK.map(() => parseFloat(process.env.CAMBER_KEELK!));
+if (process.env.CAMBER_KEELK) {
+  const k = parseFloat(process.env.CAMBER_KEELK);
+  for (const st of model.stations) st.keelK = k;
+}
 prepare(model);
 const P = projector(yaw, pitch);
-const sel = process.env.CAMBER_SEL ? parseInt(process.env.CAMBER_SEL, 10) : -1; // template point index to highlight
+const sel = process.env.CAMBER_SEL ? parseInt(process.env.CAMBER_SEL, 10) : -1; // station point index to highlight
 // lines family: pass mode "body"|"buttocks"|"waterline" directly, or use mode "lines" + CAMBER_LINES env
 const linesKind = ["body", "buttocks", "waterline"].includes(mode)
   ? mode
@@ -510,5 +513,5 @@ writeFileSync(
   new Resvg(svg, { fitTo: { mode: "width", value: 1000 } }).render().asPng(),
 );
 console.log(
-  `wrote ${out}  (mode=${mode}, yaw=${yaw.toFixed(3)}, pitch=${pitch.toFixed(3)}, L=${L})`,
+  `wrote ${out}  (mode=${mode}, yaw=${yaw.toFixed(3)}, pitch=${pitch.toFixed(3)}, loa=${loa(model)} ${model.unit})`,
 );

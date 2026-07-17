@@ -39,18 +39,15 @@ const GROUPS: { title: string; rows: [BoolKey, string][] }[] = [
     ],
   },
   {
-    title: "Station Templates",
+    title: "Stations",
     rows: [
-      ["tplSelected", "Selected template"],
-      ["tplUnselected", "Unselected template"],
+      ["stnSelected", "Selected station"],
+      ["stnUnselected", "Unselected stations"],
     ],
   },
   {
     title: "Cut Section",
-    rows: [
-      ["cutRaw", "Raw interpolated"],
-      ["cutMirrored", "Mirrored + keel-round"],
-    ],
+    rows: [["cutSection", "Lofted section"]],
   },
   {
     title: "3D View",
@@ -86,8 +83,7 @@ const SLIDERS: {
     min: 4,
     max: 100,
     step: 2,
-    title:
-      "Hairs per transverse comb (section templates, cut sections, 3D sections)",
+    title: "Hairs per transverse comb (stations, cut sections, 3D sections)",
   },
   {
     key: "nLongCombs",

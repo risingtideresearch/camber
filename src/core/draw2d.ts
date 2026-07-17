@@ -1,31 +1,28 @@
-import { SEL, HILITE, SELB, COL, tplColor } from "./colors";
+import { SEL, HILITE, SELB, COL, stationColor } from "./colors";
 import { startDrag } from "./drag";
 import type { Vec2, Vec3 } from "./math";
 import {
-  chordParam,
-  clippedSection,
-  DMAX,
+  bounds,
+  frameAt,
+  keepAt,
+  loa,
+  sectionAt,
+  stationWorld,
+  type Bounds,
+  type Model,
+  type StationPointCP,
+} from "./model";
+import {
   dwlContour,
   dwlPointAt,
-  fairEval,
   forwardLimit,
-  frameAt,
   keelPointAt,
-  L,
-  NMAX,
-  NMIN,
-  sampleX,
-  stationAt,
-  stationWorld,
+  keptSpan,
   sweptSection,
   transomEdge,
-  weightsAt,
-  XFWD,
-  xTransom,
-  type Model,
-  type Section,
-  type StationCP,
-} from "./model";
+  type SectionRow,
+} from "./mesh";
+import { crCurveAuto } from "./spline";
 import {
   isSelected,
   ModelSelection,
@@ -33,19 +30,7 @@ import {
   selStationIdx,
 } from "./modelSelection";
 import { curveCombs2, type Comb2, type CurvatureSettings } from "./comb";
-import {
-  Lbase,
-  LH,
-  mapX,
-  Ptop,
-  PXpad,
-  PZbase,
-  snX,
-  snY,
-  wY,
-  yPlan,
-  zScreenP,
-} from "./view";
+import { viewOf, PXpad, Ptop, type View } from "./view";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 
@@ -66,12 +51,18 @@ export function poly(pts: Vec2[]): string {
   return d;
 }
 
+// The cut scrubber's position along the plan. `model.x0` is authored in x (it is a vertical line in the
+// plan / profile strips, which is what the user drags), but everything swept is parameterized in u, so the
+// section it cuts is found by inverting the plan's monotone x(u) once per draw.
+const cutU = (model: Model): number => model.plan.uAtX(model.x0);
+
 // ---------- curvature-comb overlay (2D) ----------
 // The sharpest hair's length, in CONTENT-space units. The 2D editors draw in an ISOTROPIC content space (the
-// view transforms in view.ts share one px/mm), so a comb built in content space renders with visually
+// view transforms in view.ts share one px/model-unit), so a comb built in content space renders with visually
 // perpendicular hairs; it then scales with the zoom like every other drawn curve (only strokes stay a
 // constant screen width, via non-scaling-stroke). Two sizes: the wide plan/profile strips vs the square
-// station / cut editors.
+// station / cut editors. Both are content-space constants: the content box is 1000 wide (or STW) whatever
+// the hull's length, so they do not follow the model's scale.
 const COMB_LEN_STRIP = 45,
   COMB_LEN_STN = 42;
 
@@ -114,9 +105,8 @@ function drawComb2(
 // Everything is drawn into the SvgView's content <g>, which the view scales (MSX, MSY) to zoom / fit. Strokes
 // stay a constant screen width via the non-scaling-stroke CSS in SvgView.css; but points, the cut triangle,
 // and text labels have an intrinsic size, so they're wrapped in a group that counter-scales by the inverse of
-// the current view scale. Shapes `build` draws around the local origin then render at a constant pixel size —
-// and circles stay circular even under the weights strip's non-uniform fill. Each draw* entry point sets the
-// current scale (setMarkerScale) before it draws.
+// the current view scale. Shapes `build` draws around the local origin then render at a constant pixel size.
+// Each draw* entry point sets the current scale (setMarkerScale) before it draws.
 let MSX = 1,
   MSY = 1;
 export function setMarkerScale(sx: number, sy: number): void {
@@ -136,7 +126,7 @@ function fixed(
   parent.append(g);
 }
 // a constant-size text label anchored at content point (x, y) — like placing a <text> there, but immune to
-// the view scale (so labels stay legible and undistorted at any zoom / fill)
+// the view scale (so labels stay legible and undistorted at any zoom)
 function fixedText(
   parent: SVGGElement,
   x: number,
@@ -151,9 +141,22 @@ function fixedText(
   });
 }
 
-export function gridX(svg: SVGGElement, top: number, bot: number): void {
+// a native tooltip on an SVG node
+function titled(node: SVGElement, text: string): SVGElement {
+  const t = document.createElementNS(SVGNS, "title");
+  t.textContent = text;
+  node.append(t);
+  return node;
+}
+
+export function gridX(
+  v: View,
+  svg: SVGGElement,
+  top: number,
+  bot: number,
+): void {
   for (let q = 0; q <= 4; q++) {
-    const x = mapX((L * q) / 4);
+    const x = v.mapX((v.len * q) / 4);
     svg.append(
       el("line", {
         x1: x,
@@ -170,13 +173,14 @@ export function gridX(svg: SVGGElement, top: number, bot: number): void {
 // the draggable cut handle: a triangle + an invisible vertical hit band at x0. The visible red line is
 // the station's true-angle trace, drawn by the caller (drawPlan/drawProfile) from the swept section.
 export function stationLine(
+  v: View,
   model: Model,
   svg: SVGGElement,
   top: number,
   bot: number,
   onSelect: OnModelSelect,
 ): void {
-  const x = mapX(model.x0);
+  const x = v.mapX(model.x0);
   const hit = el("line", {
     x1: x,
     y1: top,
@@ -207,15 +211,16 @@ export function stationLine(
 
 export type Proj = (p: Vec3) => [number, number];
 
-// the swept station at x0 projected into a 2D view → its true heading/rake (not a plain vertical cut).
-// A caller that already has the clipped section at x0 (40 samples) can pass it in to avoid recomputing.
+// the swept section at the cut, projected into a 2D view → its true heading/rake (not a plain vertical cut).
+// A caller that already has the row at the cut can pass it in to avoid recomputing.
 export function cutTrace(
   model: Model,
   svg: SVGGElement,
   proj: Proj,
-  section?: Section,
+  row?: SectionRow,
 ): void {
-  const cut = section ?? clippedSection(model, model.x0, 40);
+  const cut = row ?? sweptSection(model, cutU(model), 10, true);
+  if (cut.empty) return;
   svg.append(
     el("path", {
       d: poly(cut.pts.map(proj)),
@@ -231,10 +236,14 @@ export function cutTrace(
 // Where the plan curve's inboard radius of curvature R is smaller than the section's inboard reach, the
 // fanned station planes cross and the swept surface folds (cusps) — every offset from R inward is doubled
 // over. The fold's outboard edge is at offset R along the normal (the plan curve's centre of curvature / its
-// evolute); the inboard edge is the section's deepest swept point (the keel where it closes, otherwise the
-// open bottom). This is section-aware: a station is flagged only where the rendered section actually reaches
-// offset R. Each run carries, per station, the plan edges (world x,y at offsets R and n_max) and the profile
-// band (z at the offset-R depth and at the deepest depth), so both views can shade the same folded region.
+// evolute); the inboard edge is the section's deepest swept point. This is section-aware: a station is
+// flagged only where the rendered section actually reaches offset R. Each run carries, per station, the plan
+// edges (world x,y at offsets R and n_max) and the profile band (z at the offset-R depth and at the deepest
+// depth), so both views can shade the same folded region.
+//
+// The plan is a parametric curve now, so the fold test is stated directly on it: with n̂ the frame's inboard
+// normal, the signed curvature about n̂ is κ = (P″·n̂)/|P′|², and κ > 0 puts the centre of curvature INBOARD
+// at offset R = 1/κ. P″ is a central difference of the EXACT hodograph (plan.d), not of the position.
 
 export type CuspPt = {
   x: number;
@@ -245,9 +254,8 @@ export type CuspPt = {
 };
 
 export function cuspRuns(model: Model): CuspPt[][] {
-  const yf = model.sheer.yf,
-    e = 1,
-    N = 120,
+  const N = 120,
+    e = 1e-4, // in u, for the hodograph's central difference
     runs: CuspPt[][] = [];
   let run: CuspPt[] = [];
   const flush = (): void => {
@@ -255,37 +263,44 @@ export function cuspRuns(model: Model): CuspPt[][] {
     run = [];
   };
   for (let i = 0; i <= N; i++) {
-    const x = (L * i) / N,
-      yp = (yf(x + e) - yf(x - e)) / (2 * e),
-      ypp = (yf(x + e) - 2 * yf(x) + yf(x - e)) / (e * e);
+    const u = i / N,
+      fr = frameAt(model, u),
+      d1 = model.plan.d(u),
+      ua = Math.max(0, u - e),
+      ub = Math.min(1, u + e),
+      da = model.plan.d(ua),
+      db = model.plan.d(ub),
+      h = ub - ua || 1,
+      d2: Vec2 = [(db[0] - da[0]) / h, (db[1] - da[1]) / h],
+      sp2 = d1[0] * d1[0] + d1[1] * d1[1] || 1,
+      kn = (d2[0] * fr.n[0] + d2[1] * fr.n[1]) / sp2;
     let hit: CuspPt | null = null;
-    // concave toward the centerline, and tight enough that R is below the geometric centerline reach
-    if (
-      ypp < -1e-9 &&
-      Math.pow(1 + yp * yp, 1.5) / -ypp < yf(x) * Math.sqrt(1 + yp * yp)
-    ) {
-      const R = Math.pow(1 + yp * yp, 1.5) / -ypp,
-        fr = frameAt(model, x),
-        sec = sweptSection(model, x, 72, true);
-      if (!(sec.aft && !sec.keel)) {
-        let dR = -1,
-          nMax = -Infinity,
-          dMax = -Infinity;
-        for (const p of sec.pts) {
-          const n = (p[0] - fr.p[0]) * fr.n[0] + (p[1] - fr.p[1]) * fr.n[1], // inboard offset along n̂
-            d = -p[2];
-          if (n >= R && dR < 0) dR = d;
-          if (n > nMax) nMax = n;
-          if (d > dMax) dMax = d;
+    if (kn > 1e-12) {
+      const R = 1 / kn,
+        // the section is trimmed at the centerline, so it can never reach past it: an R beyond the
+        // centerline's own offset cannot fold anything. A cheap reject before sweeping the section.
+        ncl = Math.abs(fr.n[1]) > 1e-9 ? -fr.p[1] / fr.n[1] : Infinity;
+      if (R < ncl) {
+        const sec = sweptSection(model, u, 18, true);
+        if (!sec.empty) {
+          let zAtR = NaN,
+            nMax = -Infinity,
+            zMin = Infinity;
+          for (const p of sec.pts) {
+            const n = (p[0] - fr.p[0]) * fr.n[0] + (p[1] - fr.p[1]) * fr.n[1]; // inboard offset along n̂
+            if (n >= R && isNaN(zAtR)) zAtR = p[2];
+            if (n > nMax) nMax = n;
+            if (p[2] < zMin) zMin = p[2];
+          }
+          if (nMax >= R && !isNaN(zAtR) && zMin < zAtR)
+            hit = {
+              x: fr.p[0],
+              outer: [fr.p[0] + R * fr.n[0], fr.p[1] + R * fr.n[1]], // offset R — the cuspidal edge
+              inner: [fr.p[0] + nMax * fr.n[0], fr.p[1] + nMax * fr.n[1]], // deepest swept offset
+              zTop: zAtR,
+              zBot: zMin,
+            };
         }
-        if (nMax >= R && dR >= 0 && dMax > dR)
-          hit = {
-            x,
-            outer: [fr.p[0] + R * fr.n[0], fr.p[1] + R * fr.n[1]], // offset R — the cuspidal edge
-            inner: [fr.p[0] + nMax * fr.n[0], fr.p[1] + nMax * fr.n[1]], // deepest swept offset
-            zTop: -dR,
-            zBot: -dMax,
-          };
       }
     }
     if (hit) run.push(hit);
@@ -299,23 +314,24 @@ export function drawPlan(
   svg: SVGGElement, // the SvgView content group
   model: Model,
   selection: ModelSelection,
-  sections: Section[],
+  rows: SectionRow[],
   onSelect: OnModelSelect,
   sc: [number, number],
   curv?: CurvatureSettings,
 ): void {
+  const v = viewOf(model);
   setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
-  gridX(svg, 8, LH - 8);
+  gridX(v, svg, 8, v.lh - 8);
   // (waterline contours other than the DWL footprint are shown in the 3D Waterline lines view, not here)
   // faint band below the centerline (y < 0): "past the centerline" — where the sheer plan crosses to close a
   // tumblehome bow.
   svg.append(
     el("rect", {
       x: PXpad,
-      y: Lbase,
+      y: v.lbase,
       width: 1000 - 2 * PXpad,
-      height: LH - Lbase,
+      height: v.lh - v.lbase,
       fill: "var(--keel)",
       opacity: 0.05,
     }),
@@ -324,9 +340,9 @@ export function drawPlan(
   svg.append(
     el("line", {
       x1: PXpad,
-      y1: Lbase,
+      y1: v.lbase,
       x2: 1000 - PXpad,
-      y2: Lbase,
+      y2: v.lbase,
       stroke: "var(--keel)",
       "stroke-width": 1.5,
       opacity: 0.5,
@@ -336,21 +352,16 @@ export function drawPlan(
   fixedText(
     svg,
     PXpad - 4,
-    Lbase - 4,
+    v.lbase - 4,
     { "text-anchor": "end", "font-size": 10, fill: "var(--keel)" },
     "CL",
   );
-  stationLine(model, svg, 8, LH - 8, onSelect);
-  // the sheer plan curve (the deck-edge half-breadth) — drawn only out to the last control point; the plan is
-  // not extrapolated past what the user drew (the hull ends at the last cp too, see forwardLimit)
-  const xEnd = model.sheer.cp[model.sheer.cp.length - 1].x,
-    xs: number[] = [];
-  for (let i = 0; i <= 110; i++) xs.push((xEnd * i) / 110);
+  stationLine(v, model, svg, 8, v.lh - 8, onSelect);
   // the plan control polygon: the sheer points are B-spline handles, not on-curve, so show the polygon
   // they define faintly behind the curve (the curve interpolates only the ends and stays inside the rest)
   svg.append(
     el("path", {
-      d: poly(model.sheer.cp.map((cp) => [mapX(cp.x), yPlan(cp.y)])),
+      d: poly(model.sheerPlan.map((cp): Vec2 => [v.mapX(cp.x), v.yPlan(cp.y)])),
       fill: "none",
       stroke: COL.sheer,
       "stroke-width": 1,
@@ -358,9 +369,16 @@ export function drawPlan(
       "stroke-dasharray": "3 4",
     }),
   );
+  // the sheer plan curve (the deck-edge half-breadth), sampled in its own parameter — it is a parametric
+  // curve, not a graph, so that it can be drawn crossing the centerline at a tumblehome bow.
+  const pl: Vec2[] = [];
+  for (let i = 0; i <= 160; i++) {
+    const [x, y] = model.plan.at(i / 160);
+    pl.push([v.mapX(x), v.yPlan(y)]);
+  }
   svg.append(
     el("path", {
-      d: poly(xs.map((x) => [mapX(x), yPlan(model.sheer.yf(x))])),
+      d: poly(pl),
       fill: "none",
       stroke: COL.sheer,
       "stroke-width": 2,
@@ -374,8 +392,8 @@ export function drawPlan(
   // lies OUTBOARD of the sheer (deck edge), and where it reaches the centerline is the true bow closure — so
   // it is the line to watch when shaping a tumblehome bow (the deck can close while the body is still open).
   const beam: Vec3[] = [];
-  for (const s of sections) {
-    if (s.aft || !s.pts.length) continue;
+  for (const s of rows) {
+    if (s.empty || !s.pts.length) continue;
     let p = s.pts[0];
     for (const q of s.pts) if (q[1] > p[1]) p = q;
     beam.push(p);
@@ -383,7 +401,7 @@ export function drawPlan(
   if (beam.length > 1)
     svg.append(
       el("path", {
-        d: poly(beam.map((p) => [mapX(p[0]), yPlan(p[1])])),
+        d: poly(beam.map((p): Vec2 => [v.mapX(p[0]), v.yPlan(p[1])])),
         fill: "none",
         stroke: COL.fore,
         "stroke-width": 2.4, // the result line — drawn solid and heavier than the dashed sheer-plan guide
@@ -396,7 +414,7 @@ export function drawPlan(
   if (te.length > 1) {
     svg.append(
       el("path", {
-        d: poly(te.map((p) => [mapX(p[0]), yPlan(p[1])])),
+        d: poly(te.map((p): Vec2 => [v.mapX(p[0]), v.yPlan(p[1])])),
         fill: "none",
         stroke: "var(--transom)",
         "stroke-width": 2.2,
@@ -406,10 +424,10 @@ export function drawPlan(
     );
   }
   // design-waterline footprint (where the hull meets the WL plane)
-  for (const run of dwlContour(model, sections)) {
+  for (const run of dwlContour(model)) {
     svg.append(
       el("path", {
-        d: poly(run.map((p) => [mapX(p[0]), yPlan(p[1])])),
+        d: poly(run.map((p): Vec2 => [v.mapX(p[0]), v.yPlan(p[1])])),
         fill: "none",
         stroke: COL.wl,
         "stroke-width": 2,
@@ -423,12 +441,12 @@ export function drawPlan(
   // folded area — from the cuspidal edge (offset R) inboard to the deepest swept point — in red.
   for (const run of cuspRuns(model)) {
     const ring = run
-      .map((s): [number, number] => [mapX(s.outer[0]), yPlan(s.outer[1])])
+      .map((s): Vec2 => [v.mapX(s.outer[0]), v.yPlan(s.outer[1])])
       .concat(
         run
           .slice()
           .reverse()
-          .map((s): [number, number] => [mapX(s.inner[0]), yPlan(s.inner[1])]),
+          .map((s): Vec2 => [v.mapX(s.inner[0]), v.yPlan(s.inner[1])]),
       );
     svg.append(
       el("path", {
@@ -442,65 +460,66 @@ export function drawPlan(
     );
   }
   // curvature combs: the sheer plan (deck-edge half-breadth) and the design-waterline footprint. Both are
-  // fore-aft (longitudinal) curves, so they share the longitudinal hair count. Each comb evaluates the
-  // curve's ORIGINAL definition — the plan spline directly, the waterline through the converged crossing
-  // evaluator (dwlPointAt) — never a resampled polyline (see comb.ts).
+  // fore-aft (longitudinal) curves, so they share the longitudinal hair count, and both run over the plan's
+  // own parameter u. Each comb evaluates the curve's ORIGINAL definition — the plan spline directly, the
+  // waterline through the converged crossing evaluator (dwlPointAt) — never a resampled polyline (comb.ts).
   if (curv?.on) {
     if (curv.planSheer) {
-      const f = (x: number): Vec2 => [mapX(x), yPlan(model.sheer.yf(x))];
-      for (const c of curveCombs2(
-        f,
-        0,
-        L + XFWD,
-        curv.nLongHairs,
-        COMB_LEN_STRIP,
-      ))
+      const f = (u: number): Vec2 => {
+        const [x, y] = model.plan.at(u);
+        return [v.mapX(x), v.yPlan(y)];
+      };
+      for (const c of curveCombs2(f, 0, 1, curv.nLongHairs, COMB_LEN_STRIP))
         drawComb2(svg, c, COL.sheer);
     }
     if (curv.planWaterline) {
-      const f = (x: number): Vec2 | null => {
-        const p = dwlPointAt(model, x);
-        return p && [mapX(p[0]), yPlan(p[1])];
+      // partial: null wherever the section has no waterline crossing (dry, or fully wet) — each existing
+      // run gets its own comb, so the domain is simply the whole plan.
+      const f = (u: number): Vec2 | null => {
+        const p = dwlPointAt(model, u);
+        return p && [v.mapX(p[0]), v.yPlan(p[1])];
       };
-      for (const c of curveCombs2(
-        f,
-        0,
-        forwardLimit(model),
-        curv.nLongHairs,
-        COMB_LEN_STRIP,
-      ))
+      for (const c of curveCombs2(f, 0, 1, curv.nLongHairs, COMB_LEN_STRIP))
         drawComb2(svg, c, COL.wl);
     }
   }
   // cut station — true plan heading (the fan angle)
-  cutTrace(model, svg, (p) => [mapX(p[0]), yPlan(p[1])]);
-  ringDot(svg, mapX(model.x0), yPlan(model.sheer.yf(model.x0)), COL.sheer);
-  model.sheer.cp.forEach((cp, idx) =>
-    cpDot(selection, svg, idx, mapX(cp.x), yPlan(cp.y), onSelect),
+  cutTrace(model, svg, (p) => [v.mapX(p[0]), v.yPlan(p[1])]);
+  const [cx, cy] = model.plan.at(cutU(model));
+  ringDot(svg, v.mapX(cx), v.yPlan(cy), COL.sheer);
+  model.sheerPlan.forEach((cp, idx) =>
+    cpDot(selection, svg, idx, v.mapX(cp.x), v.yPlan(cp.y), onSelect),
   );
+  // station handles: each station sits at a definite u along the plan, so its handle rides the plan curve
+  // and drags along it. This is the edit v1 could not express — a template had no position, only a weight.
+  model.stations.forEach((st, si) => {
+    const [sx, sy] = model.plan.at(st.u);
+    stationHandle(svg, si, v.mapX(sx), v.yPlan(sy), onSelect);
+  });
 }
 
 export function drawProfile(
   svg: SVGGElement, // the SvgView content group
   model: Model,
   selection: ModelSelection,
-  sections: Section[],
+  rows: SectionRow[],
   onSelect: OnModelSelect,
   sc: [number, number],
   curv?: CurvatureSettings,
 ): void {
+  const v = viewOf(model);
   setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
-  gridX(svg, Ptop - 4, PZbase);
-  stationLine(model, svg, Ptop - 4, PZbase, onSelect);
+  gridX(v, svg, Ptop - 4, v.pzBase);
+  stationLine(v, model, svg, Ptop - 4, v.pzBase, onSelect);
   // (buttock contours are shown in the 3D Buttocks lines view, not here)
   // flat deck at z = 0 — now just a construction reference; the real top edge is the sheer trim below it
   svg.append(
     el("line", {
       x1: PXpad,
-      y1: zScreenP(0),
+      y1: v.zScreenP(0),
       x2: 1000 - PXpad,
-      y2: zScreenP(0),
+      y2: v.zScreenP(0),
       stroke: COL.deck,
       "stroke-width": 1.5,
       "stroke-dasharray": "6 4",
@@ -509,22 +528,22 @@ export function drawProfile(
   fixedText(
     svg,
     1000 - PXpad,
-    zScreenP(0) - 5,
+    v.zScreenP(0) - 5,
     { "text-anchor": "end", "font-size": 10, fill: COL.deck },
     "flat deck",
   );
   // design waterline: horizontal in world ⇒ a raked line in this deck-frame profile (slope = the rake).
-  // Runs all the way forward to the hull's closure (forwardLimit), past the LOA for a tumblehome bow.
-  const xFwd = forwardLimit(model),
+  // Runs from the transom to the hull's closure (forwardLimit, in u → its x on the plan).
+  const xFwd = model.plan.at(forwardLimit(model))[0],
     wlS = Math.sin(model.deckRake),
     wlC = Math.cos(model.deckRake),
-    zWL = (x: number) => (-model.waterline - x * wlS) / wlC;
+    zWL = (x: number): number => (-model.waterline - x * wlS) / wlC;
   svg.append(
     el("line", {
-      x1: mapX(0),
-      y1: zScreenP(zWL(0)),
-      x2: mapX(xFwd),
-      y2: zScreenP(zWL(xFwd)),
+      x1: v.mapX(0),
+      y1: v.zScreenP(zWL(0)),
+      x2: v.mapX(xFwd),
+      y2: v.zScreenP(zWL(xFwd)),
       stroke: COL.wl,
       "stroke-width": 1.8,
       opacity: 0.9,
@@ -532,8 +551,8 @@ export function drawProfile(
   );
   fixedText(
     svg,
-    mapX(xFwd) - 4,
-    zScreenP(zWL(xFwd)) - 5,
+    v.mapX(xFwd) - 4,
+    v.zScreenP(zWL(xFwd)) - 5,
     { "text-anchor": "end", "font-size": 10, fill: COL.wl },
     "DWL",
   );
@@ -543,28 +562,30 @@ export function drawProfile(
   //  • stem: at a tumblehome bow the deck tucks to the centerline, so the section TOP (s.pts[0]) dives below
   //    the authored trim and meets the keel at the forefoot. Trace that diving top edge back from the forefoot
   //    to where it rejoins the trim — the real raked leading edge, not a fabricated plumb line.
-  const closing = sections.filter((s) => s.keel && s.pts.length > 1);
+  const closing = rows.filter((s) => s.keel && s.pts.length > 1);
   const keel = closing.map((s) => s.pts[s.pts.length - 1]);
   if (keel.length) {
-    const te = transomEdge(model);
-    if (te.length) keel.unshift(te[te.length - 1]); // transom keel: deepest point of the transom outline
+    const te0 = transomEdge(model);
+    if (te0.length) keel.unshift(te0[te0.length - 1]); // transom keel: deepest point of the transom outline
 
     // the bow stem: the CONTIGUOUS run of forwardmost sections whose top has dived below the authored trim
     // (the tumblehome lens). Only the forward run — a section's top can also drop below the trim near the
     // transom (the raked transom clip), and including those would draw a stray line back to the transom.
-    const dived = (s: Section): boolean =>
-      s.pts[0][2] < model.sheer.zf(s.pts[0][0]) - 3;
+    // The tolerance is a fraction of the hull's own length (it was an absolute number against v1's L=1000).
+    const tol = 0.003 * loa(model);
+    const dived = (s: SectionRow): boolean =>
+      s.pts[0][2] < model.trimZ(s.pts[0][0]) - tol;
     let b = closing.length;
     while (b > 0 && dived(closing[b - 1])) b--;
     const stem = closing.slice(b).map((s) => s.pts[0]); // forward, increasing x
     if (stem.length)
       for (let i = stem.length - 1; i >= 0; i--) keel.push(stem[i]); // forefoot → back to the trim
-    else keel.push([xFwd, 0, model.sheer.zf(xFwd)]); // a fine bow closes straight onto the trim at the stem
+    else keel.push([xFwd, 0, model.trimZ(xFwd)]); // a fine bow closes straight onto the trim at the stem
   }
   if (keel.length > 1)
     svg.append(
       el("path", {
-        d: poly(keel.map((p) => [mapX(p[0]), zScreenP(p[2])])),
+        d: poly(keel.map((p): Vec2 => [v.mapX(p[0]), v.zScreenP(p[2])])),
         fill: "none",
         stroke: COL.keel,
         "stroke-width": 2.4,
@@ -572,12 +593,16 @@ export function drawProfile(
         "stroke-linecap": "round",
       }),
     );
-  // sheer trim line (real sheer in profile) — the swept sheet is cut to this, kept below the deck
-  const xs = sampleX();
+  // sheer trim line (real sheer in profile) — the swept sheet is cut to this, kept below the deck. It is
+  // authored against x and read as a graph, so it is sampled across its own x domain.
+  const tx0 = model.sheerTrim[0].x,
+    tx1 = model.sheerTrim[model.sheerTrim.length - 1].x;
   // the trim control polygon, shown faint (the curve interpolates these points, with per-point knuckles)
   svg.append(
     el("path", {
-      d: poly(model.sheer.trim.map((cp) => [mapX(cp.x), zScreenP(cp.z)])),
+      d: poly(
+        model.sheerTrim.map((cp): Vec2 => [v.mapX(cp.x), v.zScreenP(cp.z)]),
+      ),
       fill: "none",
       stroke: COL.sheer,
       "stroke-width": 1,
@@ -585,9 +610,14 @@ export function drawProfile(
       "stroke-dasharray": "3 4",
     }),
   );
+  const tpts: Vec2[] = [];
+  for (let i = 0; i <= 160; i++) {
+    const x = tx0 + ((tx1 - tx0) * i) / 160;
+    tpts.push([v.mapX(x), v.zScreenP(model.trimZ(x))]);
+  }
   svg.append(
     el("path", {
-      d: poly(xs.map((x) => [mapX(x), zScreenP(model.sheer.zf(x))])),
+      d: poly(tpts),
       fill: "none",
       stroke: COL.sheer,
       "stroke-width": 2.4,
@@ -596,13 +626,13 @@ export function drawProfile(
     }),
   );
   // transom: the construction line through the two control points (dashed) + the actual cut edge (solid)
-  const [ta, tb] = model.sheer.transom;
+  const [ta, tb] = model.transom;
   svg.append(
     el("line", {
-      x1: mapX(ta.x),
-      y1: zScreenP(ta.z),
-      x2: mapX(tb.x),
-      y2: zScreenP(tb.z),
+      x1: v.mapX(ta.x),
+      y1: v.zScreenP(ta.z),
+      x2: v.mapX(tb.x),
+      y2: v.zScreenP(tb.z),
       stroke: "var(--transom)",
       "stroke-width": 1.3,
       opacity: 0.6,
@@ -613,7 +643,7 @@ export function drawProfile(
   if (te.length > 1)
     svg.append(
       el("path", {
-        d: poly(te.map((p) => [mapX(p[0]), zScreenP(p[2])])),
+        d: poly(te.map((p): Vec2 => [v.mapX(p[0]), v.zScreenP(p[2])])),
         fill: "none",
         stroke: "var(--transom)",
         "stroke-width": 2.4,
@@ -623,18 +653,16 @@ export function drawProfile(
     );
   fixedText(
     svg,
-    mapX(ta.x) + 6,
-    zScreenP(ta.z) - 4,
+    v.mapX(ta.x) + 6,
+    v.zScreenP(ta.z) - 4,
     { "font-size": 10, fill: "var(--transom)" },
     "transom",
   );
   // cusp marker: shade the folded depth band (offset = R down to the deepest swept point) at the cusping
   // stations, in red — the same folded region the plan view shades.
   for (const run of cuspRuns(model)) {
-    const top = run.map((s): [number, number] => [mapX(s.x), zScreenP(s.zTop)]),
-      bot = run
-        .map((s): [number, number] => [mapX(s.x), zScreenP(s.zBot)])
-        .reverse();
+    const top = run.map((s): Vec2 => [v.mapX(s.x), v.zScreenP(s.zTop)]),
+      bot = run.map((s): Vec2 => [v.mapX(s.x), v.zScreenP(s.zBot)]).reverse();
     svg.append(
       el("path", {
         d: poly(top.concat(bot)) + "Z",
@@ -646,49 +674,43 @@ export function drawProfile(
       }),
     );
   }
-  // the cut station's clipped section, computed once and shared by the comb, the trace, and the keel dot
-  const cut = clippedSection(model, model.x0, 40);
+  // the cut station's trimmed section, computed once and shared by the trace and the keel dot
+  const cu = cutU(model),
+    cut = sweptSection(model, cu, 10, true);
   // curvature combs: the sheer-trim curve and the keel / centerline outline (both fore-aft, so the
   // longitudinal hair count), and the live cut station's profile trace (transverse, so the section count).
   // Each comb evaluates the curve's ORIGINAL definition (see comb.ts), never the drawn polyline.
   if (curv?.on) {
     if (curv.profSheer) {
-      const f = (x: number): Vec2 => [mapX(x), zScreenP(model.sheer.zf(x))];
-      for (const c of curveCombs2(
-        f,
-        0,
-        L + XFWD,
-        curv.nLongHairs,
-        COMB_LEN_STRIP,
-      ))
+      const f = (x: number): Vec2 => [v.mapX(x), v.zScreenP(model.trimZ(x))];
+      for (const c of curveCombs2(f, tx0, tx1, curv.nLongHairs, COMB_LEN_STRIP))
         drawComb2(svg, c, COL.sheer);
     }
-    // the keel/rocker run of the outline (converged keelPointAt, transom → bow closure). The short
+    // the keel/rocker run of the outline (converged keelPointAt over the plan's parameter). The short
     // emergent-stem branch at a tumblehome bow is a different branch of the outline and carries no comb.
     if (curv.profCenterline && keel.length > 2) {
-      const f = (x: number): Vec2 | null => {
-        const p = keelPointAt(model, x);
-        return p && [mapX(p[0]), zScreenP(p[2])];
+      const f = (u: number): Vec2 | null => {
+        const p = keelPointAt(model, u);
+        return p && [v.mapX(p[0]), v.zScreenP(p[2])];
       };
-      for (const c of curveCombs2(f, 0, xFwd, curv.nLongHairs, COMB_LEN_STRIP))
+      for (const c of curveCombs2(f, 0, 1, curv.nLongHairs, COMB_LEN_STRIP))
         drawComb2(svg, c, COL.keel);
     }
     if (curv.profCut) {
-      // the cut station's kept starboard span (sheer trim → keel), null above the trim or behind the
-      // transom plane — the comb's run edges converge onto the real clip by bisection
-      const st = stationAt(model, model.x0, true),
-        fr = frameAt(model, model.x0),
-        dtrim = -model.sheer.zf(model.x0);
-      const f = (u: number): Vec2 | null => {
-        if (dtrim > 0 && st.d(u) < dtrim) return null;
-        const p = stationWorld(fr, st, u);
-        if (p[0] - xTransom(model, p[2]) < 0) return null;
-        return [mapX(p[0]), zScreenP(p[2])];
+      // the cut station's kept span in profile, null wherever the section is trimmed away — `keepAt` is the
+      // single signed trim test, so the comb's run edges converge onto the real clip by bisection
+      const fr = frameAt(model, cu),
+        sec = sectionAt(model, cu);
+      const f = (t: number): Vec2 | null => {
+        const nz = sec.at(t);
+        if (keepAt(model, fr, nz) < 0) return null;
+        const p = stationWorld(fr, nz[0], nz[1]);
+        return [v.mapX(p[0]), v.zScreenP(p[2])];
       };
       for (const c of curveCombs2(
         f,
         0,
-        st.tmax / 2,
+        sec.vmax,
         curv.nSectHairs,
         COMB_LEN_STRIP,
       ))
@@ -696,55 +718,68 @@ export function drawProfile(
     }
   }
   // cut station — true profile rake (the fan shifts x as the section runs inboard to the keel)
-  cutTrace(model, svg, (p) => [mapX(p[0]), zScreenP(p[2])], cut);
-  // keel dot at the section's deepest point — the keel flag and the last point (u = ub, y snapped to 0)
-  // come from fixed-resolution scans in sweptSection, so they are sample-count independent
-  if (cut.keel)
+  cutTrace(model, svg, (p) => [v.mapX(p[0]), v.zScreenP(p[2])], cut);
+  // keel dot at the section's deepest point — the keel flag and the last point (y snapped to 0) come from
+  // the converged trim in sweptSection, so they are sample-count independent
+  if (cut.keel && cut.pts.length)
     ringDot(
       svg,
-      mapX(cut.pts[cut.pts.length - 1][0]),
-      zScreenP(cut.pts[cut.pts.length - 1][2]),
+      v.mapX(cut.pts[cut.pts.length - 1][0]),
+      v.zScreenP(cut.pts[cut.pts.length - 1][2]),
       COL.keel,
     );
-  ringDot(svg, mapX(model.x0), zScreenP(model.sheer.zf(model.x0)), COL.sheer);
-  model.sheer.trim.forEach((cp, idx) =>
-    trimDot(selection, svg, idx, mapX(cp.x), zScreenP(cp.z), cp.k, onSelect),
+  ringDot(svg, v.mapX(model.x0), v.zScreenP(model.trimZ(model.x0)), COL.sheer);
+  model.sheerTrim.forEach((cp, idx) =>
+    trimDot(
+      selection,
+      svg,
+      idx,
+      v.mapX(cp.x),
+      v.zScreenP(cp.z),
+      cp.k,
+      onSelect,
+    ),
   );
-  model.sheer.transom.forEach((cp, idx) =>
-    transomDot(selection, svg, idx, mapX(cp.x), zScreenP(cp.z), onSelect),
+  model.transom.forEach((cp, idx) =>
+    transomDot(selection, svg, idx, v.mapX(cp.x), v.zScreenP(cp.z), onSelect),
   );
 }
 
-// one section-template editor (template `ti`): the other templates ghosted faint behind it, this one
-// solid with draggable nodes. Built into a fresh svg by drawTemplates each render.
+// ---------- the station editors ----------
+// One station editor (station `si`): the other stations ghosted faint behind it, this one solid with
+// draggable nodes. Built into a fresh svg by drawStation each render.
 
-// the exact content-space evaluator of a template's section curve, u → [snX(n(u)), snY(d(u))] over the
-// chord parameter u ∈ [0, tmax] — shared by the drawn polyline and its curvature comb (the comb needs the
-// original fairing definition, not a resample of the drawn polyline)
+// the exact content-space evaluator of a station's section curve, t → [snX(n(t)), snY(z(t))] over the
+// curve's own parameter t ∈ [0, vmax] (point i at t = i) — shared by the drawn polyline and its curvature
+// comb (the comb needs the original curve definition, not a resample of the drawn polyline)
 function stnEval(
-  model: Model,
-  pts: StationCP[],
-): { f: (u: number) => Vec2; tmax: number } {
-  const ns = pts.map((p) => p.n),
-    ds = pts.map((p) => p.d),
-    ks = pts.map((p) => p.k),
-    ts = chordParam(ns, ds);
-  const nf = fairEval(model, ts, ns, ks),
-    df = fairEval(model, ts, ds, ks);
-  return { f: (u) => [snX(nf(u)), snY(df(u))], tmax: ts[ts.length - 1] };
+  v: View,
+  pts: StationPointCP[],
+): { f: (t: number) => Vec2; vmax: number } {
+  const c = crCurveAuto(
+    pts.map((p) => [p.n, p.z]),
+    pts.map((p) => p.k),
+  );
+  return {
+    f: (t) => {
+      const p = c.at(t);
+      return [v.snX(p[0]), v.snY(p[1])];
+    },
+    vmax: c.vmax,
+  };
 }
 
 export function stnCurve(
-  model: Model,
+  v: View,
   svg: SVGGElement,
-  pts: StationCP[],
+  pts: StationPointCP[],
   c: string,
   op: number,
 ): void {
-  const { f, tmax } = stnEval(model, pts),
+  const { f, vmax } = stnEval(v, pts),
     out: Vec2[] = [],
-    N = 1000;
-  for (let i = 0; i <= N; i++) out.push(f((tmax * i) / N));
+    N = 600;
+  for (let i = 0; i <= N; i++) out.push(f((vmax * i) / N));
   svg.append(
     el("path", {
       d: poly(out),
@@ -758,33 +793,33 @@ export function stnCurve(
   );
 }
 
-// axes shared by the template editor and the cut station: sheer point at origin (top-left),
-// n inboard →, d down ↓, the "sheer" label at the origin
-function stnAxes(svg: SVGGElement): void {
+// axes shared by the station editor and the cut station: the deck point at the origin (top-left),
+// n inboard →, z down ↓, the "sheer" label at the origin
+function stnAxes(v: View, b: Bounds, svg: SVGGElement): void {
   svg.append(
     el("line", {
-      x1: snX(NMIN),
-      y1: snY(0),
-      x2: snX(NMAX),
-      y2: snY(0),
+      x1: v.snX(b.nMin),
+      y1: v.snY(0),
+      x2: v.snX(b.nMax),
+      y2: v.snY(0),
       stroke: "#edf2f7",
       "stroke-width": 1,
     }),
   );
   svg.append(
     el("line", {
-      x1: snX(0),
-      y1: snY(0),
-      x2: snX(0),
-      y2: snY(DMAX),
+      x1: v.snX(0),
+      y1: v.snY(0),
+      x2: v.snX(0),
+      y2: v.snY(b.zMin),
       stroke: "#e2e8f0",
       "stroke-width": 1.2,
     }),
   );
   fixedText(
     svg,
-    snX(0) + 6,
-    snY(0) - 6,
+    v.snX(0) + 6,
+    v.snY(0) - 6,
     { "font-size": 10, fill: COL.mut || "#718096" },
     "sheer",
   );
@@ -794,45 +829,47 @@ export function drawStation(
   model: Model,
   selection: ModelSelection,
   svg: SVGGElement,
-  ti: number,
+  si: number,
   onSelect: OnModelSelect,
   sc: [number, number],
   curv?: CurvatureSettings,
 ): void {
+  const v = viewOf(model),
+    b = bounds(model);
   setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
-  const col = tplColor(ti),
-    arr = model.templates[ti];
-  stnAxes(svg);
-  // faint ghosts of every other template, then this one solid
-  model.templates.forEach((tpl, j) => {
-    if (j !== ti) stnCurve(model, svg, tpl, tplColor(j), 0.16);
+  const col = stationColor(si),
+    arr = model.stations[si].points;
+  stnAxes(v, b, svg);
+  // faint ghosts of every other station, then this one solid
+  model.stations.forEach((st, j) => {
+    if (j !== si) stnCurve(v, svg, st.points, stationColor(j), 0.16);
   });
-  stnCurve(model, svg, arr, col, 1);
-  // curvature combs on the template section curves (transverse ⇒ the section hair count), each built
-  // from the template's exact fairing evaluator (stnEval), not the drawn polyline
+  stnCurve(v, svg, arr, col, 1);
+  // curvature combs on the station section curves (transverse ⇒ the section hair count), each built from
+  // the station's exact curve evaluator (stnEval), not the drawn polyline
   if (curv?.on) {
-    const comb = (tpl: StationCP[], c: string, op: number): void => {
-      const { f, tmax } = stnEval(model, tpl);
-      for (const cb of curveCombs2(f, 0, tmax, curv.nSectHairs, COMB_LEN_STN))
+    const comb = (pts: StationPointCP[], c: string, op: number): void => {
+      const { f, vmax } = stnEval(v, pts);
+      for (const cb of curveCombs2(f, 0, vmax, curv.nSectHairs, COMB_LEN_STN))
         drawComb2(svg, cb, c, op);
     };
-    if (curv.tplUnselected)
-      model.templates.forEach((tpl, j) => {
-        if (j !== ti) comb(tpl, tplColor(j), 0.5);
+    if (curv.stnUnselected)
+      model.stations.forEach((st, j) => {
+        if (j !== si) comb(st.points, stationColor(j), 0.5);
       });
-    if (curv.tplSelected) comb(arr, col, 0.95);
+    if (curv.stnSelected) comb(arr, col, 0.95);
   }
   arr.forEach((p, idx) => {
     const end = idx === 0,
       s = end ? 4 : 6,
-      // knuckle applies to every point but the pinned sheer point (idx 0) — including the keel point;
+      // knuckle applies to every point but the pinned deck point (idx 0) — including the keel point;
       // the node morphs round (k=0) → square (k=1) via corner radius to show its sharpness
       knuck = idx > 0,
       k = knuck ? Math.min(Math.max(p.k, 0), 1) : 0,
       rad = (1 - k) * s,
-      sel = isSelected(selection, "template", idx, ti); // the selected node is drawn solid red
-    fixed(svg, snX(p.n), snY(p.d), (g) => {
+      sel = isSelected(selection, "station", idx, si); // the selected node is drawn solid red
+    fixed(svg, v.snX(p.n), v.snY(p.z), (g) => {
       const node = el("rect", {
         x: -s,
         y: -s,
@@ -845,148 +882,29 @@ export function drawStation(
         "stroke-width": 1.8,
       });
       node.addEventListener("pointerdown", (e) =>
-        stnPointDown(ti, idx, end, svg, e, onSelect),
+        stnPointDown(si, idx, end, svg, e, onSelect),
       );
       g.append(node);
     });
   });
-  // when a template point is selected, mark the corresponding index on every OTHER template's ghost curve
+  // when a station point is selected, mark the corresponding index on every OTHER station's ghost curve
   // with a small red ✕, so you can see where that control point lands on the other sections.
-  const si = selStationIdx(model, selection);
-  if (si !== null)
-    model.templates.forEach((tpl, j) => {
-      if (j !== ti) redX(svg, snX(tpl[si].n), snY(tpl[si].d));
+  const sIdx = selStationIdx(model, selection);
+  if (sIdx !== null)
+    model.stations.forEach((st, j) => {
+      if (j !== si)
+        redX(svg, v.snX(st.points[sIdx].n), v.snY(st.points[sIdx].z));
     });
 }
 
-// the horizontal blend ribbon: x runs left→right (shared mapX, aligned with plan/profile), and at each x
-// the templates stack BOTTOM→TOP, band j being template j's share — the bands summing to 1 everywhere.
-// Each station shows the K−1 band-boundary handles (drag ↕) that edit the simplex split; x is set in the
-// plan view (the station is shared). The red cut slider (shared stationLine) scrubs x here too.
-
-export function drawWeights(
-  svg: SVGGElement,
-  model: Model,
-  selection: ModelSelection,
-  onSelect: OnModelSelect,
-  sc: [number, number],
-): void {
-  setMarkerScale(sc[0], sc[1]);
-  svg.replaceChildren();
-  const K = model.templates.length,
-    top = wY(1),
-    bot = wY(0),
-    xEnd = model.sheer.cp[model.sheer.cp.length - 1].x,
-    xL = mapX(0),
-    xR = mapX(xEnd);
-  gridX(svg, top, bot); // vertical x-gridlines (quarters of the length) — aligned with plan/profile
-
-  // simplex guides at 0 / ½ / 1: horizontal
-  for (const g of [0, 0.5, 1])
-    svg.append(
-      el("line", {
-        x1: xL,
-        y1: wY(g),
-        x2: xR,
-        y2: wY(g),
-        stroke: "#edf2f7",
-        "stroke-width": 1,
-      }),
-    );
-  // stacked bands from the sampled curve (each band a horizontal ribbon, its top/bottom edges varying with x)
-  const NS = 120,
-    xs: number[] = [],
-    cum: number[][] = [];
-  for (let i = 0; i <= NS; i++) {
-    const x = (xEnd * i) / NS,
-      w = weightsAt(model, x),
-      c = [0];
-    let s = 0;
-    for (let j = 0; j < K; j++) {
-      s += w[j];
-      c.push(s);
-    }
-    xs.push(x);
-    cum.push(c);
-  }
-  for (let j = 0; j < K; j++) {
-    const upper = xs.map((x, i): [number, number] => [
-        mapX(x),
-        wY(cum[i][j + 1]),
-      ]),
-      lower = xs
-        .map((x, i): [number, number] => [mapX(x), wY(cum[i][j])])
-        .reverse();
-    svg.append(
-      el("path", {
-        d: poly(upper.concat(lower)) + "Z",
-        fill: tplColor(j),
-        opacity: 0.5,
-        stroke: "none",
-      }),
-    );
-  }
-  // stern / bow labels (x runs stern→bow, left→right)
-  for (const [txt, x, anchor] of [
-    ["stern", xL, "start"],
-    ["bow", xR, "end"],
-  ] as const) {
-    fixedText(
-      svg,
-      x,
-      top - 4,
-      { "font-size": 10, fill: COL.mut, "text-anchor": anchor },
-      txt,
-    );
-  }
-  stationLine(model, svg, top, bot, onSelect); // the red cut scrubber (vertical, shared with the plan/profile strips)
-
-  // control points: a vertical guide + the K−1 band-boundary handles (drag ↕). One column per unified
-  // station at its x; x is set in the plan view (the station is shared), so there is no x-handle here.
-  model.sheer.cp.forEach((cp, i) => {
-    const x = mapX(cp.x),
-      sel = selection && selection.tgt === "weight" && selection.idx === i;
-    svg.append(
-      el("line", {
-        x1: x,
-        y1: top,
-        x2: x,
-        y2: bot,
-        stroke: "#fff",
-        "stroke-width": 1,
-        opacity: 0.75,
-      }),
-    );
-    const C: number[] = [];
-    let s = 0;
-    for (let j = 0; j < K; j++) {
-      s += cp.w[j];
-      C.push(s);
-    }
-    for (let b = 0; b < K - 1; b++) {
-      const hy = wY(C[b]);
-      fixed(svg, x, hy, (g) => {
-        const h = el("circle", {
-          cx: 0,
-          cy: 0,
-          r: 5,
-          fill: sel ? SEL : "#fff", // selected blend point → red handles
-          stroke: sel ? "#fff" : tplColor(b),
-          "stroke-width": 2,
-          style: "cursor:ns-resize",
-        });
-        h.addEventListener("pointerdown", (e) =>
-          weightHandleDown(i, b, svg, e as PointerEvent, onSelect),
-        );
-        g.append(h);
-      });
-    }
-  });
-}
-
-// the interpolated (blended) station at the red cut x0, with both trims marked: the sheer trim
-// (horizontal, at depth -z_sheer(x0)) and the centerline trim (vertical, at the n where the section
-// reaches the boat centerline y=0). The bold arc between them is what survives into the final shape.
+// ---------- the live cut station ----------
+// The section at the red cut, with its trims marked: the sheer trim, the centerline (where the section
+// reaches y = 0) and the design waterline. The bold arc between the trims is what survives into the hull.
+//
+// The reference lines are drawn as polylines across n rather than as single horizontals: the station plane
+// is normal to the plan's heading, so running inboard along n also moves in world x — and the sheer trim and
+// the waterline are both functions of x. Where the plan is straight they render flat, as they did in v1;
+// where it turns they slope, which is the truth.
 
 export function drawCutStation(
   svg: SVGGElement,
@@ -995,52 +913,25 @@ export function drawCutStation(
   sc: [number, number],
   curv?: CurvatureSettings,
 ): void {
+  const v = viewOf(model),
+    b = bounds(model);
   setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
-  stnAxes(svg);
+  stnAxes(v, b, svg);
 
-  const st = stationAt(model, model.x0, true), // the keel-knuckle symmetric section — matches the trimmed hull
-    fr = frameAt(model, model.x0);
-  const dtrim = Math.max(0, Math.min(-model.sheer.zf(model.x0), DMAX)); // sheer-trim depth below the flat deck
-  const yAt = (u: number) => fr.p[1] + st.n(u) * fr.n[1]; // world y along the section (the d-axis is vertical)
-  const ncl = Math.abs(fr.n[1]) > 1e-6 ? -fr.p[1] / fr.n[1] : NMAX; // inboard offset where the section meets y=0
+  const u = cutU(model),
+    fr = frameAt(model, u),
+    sec = sectionAt(model, u),
+    span = keptSpan(model, fr, sec);
+  const xAt = (n: number): number => fr.p[0] + n * fr.n[0]; // world x at inboard offset n
+  const ncl = Math.abs(fr.n[1]) > 1e-6 ? -fr.p[1] / fr.n[1] : b.nMax; // offset where the section meets y=0
 
-  // kept span [umin,umax]: top at the sheer trim, bottom at the centerline (the keel) — mirrors sweptSection
-  let umin = 0,
-    umax = st.tmax,
-    open = true;
-  const FN = 240;
-  if (dtrim > 0) {
-    umin = st.tmax;
-    for (let i = 1; i <= FN; i++) {
-      const u = (st.tmax * i) / FN;
-      if (st.d(u) >= dtrim) {
-        const da = st.d((st.tmax * (i - 1)) / FN);
-        umin = (st.tmax * (i - 1 + (dtrim - da) / (st.d(u) - da || 1))) / FN;
-        break;
-      }
-    }
-  }
-  let prev = yAt(0);
-  for (let i = 1; i <= FN; i++) {
-    const u = (st.tmax * i) / FN,
-      y = yAt(u);
-    if (prev >= 0 && y < 0) {
-      umax = (st.tmax * (i - 1 + prev / (prev - y))) / FN;
-      open = false;
-      break;
-    }
-    prev = y;
-  }
-  const empty = umin >= umax - 1e-6; // keel shallower than the trim ⇒ nothing kept
-
-  // the full adjusted section, faint and dashed — both halves: sheer → keel (at the midpoint) → port sheer,
-  // so the mirrored keel-rounded shape is visible across the centerline
-  const full: [number, number][] = [],
+  // the full swept section, faint and dashed: the sheet before the trims cut it
+  const full: Vec2[] = [],
     N = 300;
   for (let i = 0; i <= N; i++) {
-    const u = (st.tmax * i) / N;
-    full.push([snX(st.n(u)), snY(st.d(u))]);
+    const p = sec.at((sec.vmax * i) / N);
+    full.push([v.snX(p[0]), v.snY(p[1])]);
   }
   svg.append(
     el("path", {
@@ -1055,66 +946,24 @@ export function drawCutStation(
     }),
   );
 
-  // DIAGNOSTIC: the raw interpolated half-section (before the keel mirror/round), magenta, so the keel
-  // construction's effect is visible — where the magenta and the gray diverge near the centerline is exactly
-  // the mirror + keel-flatten/round at work.
-  const raw = stationAt(model, model.x0, false),
-    rawPts: [number, number][] = [];
-  for (let i = 0; i <= N; i++) {
-    const u = (raw.tmax * i) / N;
-    rawPts.push([snX(raw.n(u)), snY(raw.d(u))]);
-  }
-  svg.append(
-    el("path", {
-      d: poly(rawPts),
-      fill: "none",
-      stroke: "#c026d3",
-      "stroke-width": 1.4,
-      opacity: 0.8,
-      "stroke-dasharray": "2 3",
-      "stroke-linejoin": "round",
-      "stroke-linecap": "round",
-    }),
-  );
-  for (const [txt, col, y] of [
-    ["raw interpolated", "#c026d3", 16],
-    ["mirrored + keel-round", COL.station, 30],
-  ] as const) {
-    fixedText(svg, snX(NMIN) + 4, y, { "font-size": 10, fill: col }, txt);
+  // curvature comb on the section curve (transverse ⇒ the section hair count), evaluated straight from the
+  // section's own definition, not from the drawn polyline
+  if (curv?.on && curv.cutSection) {
+    const f = (t: number): Vec2 => {
+      const p = sec.at(t);
+      return [v.snX(p[0]), v.snY(p[1])];
+    };
+    for (const c of curveCombs2(f, 0, sec.vmax, curv.nSectHairs, COMB_LEN_STN))
+      drawComb2(svg, c, COL.station);
   }
 
-  // curvature combs on the two section curves (transverse ⇒ the section hair count): the raw interpolated
-  // half-section and the mirrored + keel-rounded full section — both evaluated straight from their
-  // station definitions (n(u), d(u)), not from the drawn polylines.
-  if (curv?.on) {
-    if (curv.cutRaw) {
-      const f = (u: number): Vec2 => [snX(raw.n(u)), snY(raw.d(u))];
-      for (const c of curveCombs2(
-        f,
-        0,
-        raw.tmax,
-        curv.nSectHairs,
-        COMB_LEN_STN,
-      ))
-        drawComb2(svg, c, "#c026d3");
-    }
-    if (curv.cutMirrored) {
-      const f = (u: number): Vec2 => [snX(st.n(u)), snY(st.d(u))];
-      for (const c of curveCombs2(f, 0, st.tmax, curv.nSectHairs, COMB_LEN_STN))
-        drawComb2(svg, c, COL.station);
-    }
-  }
-
-  // kept arc, bold — both sides: from the starboard sheer trim (umin) through the keel to the port sheer
-  // trim (its mirror at tmax − umin), so the surviving hull section shows full width with its keel
-  if (!empty) {
-    const kept: [number, number][] = [],
-      KN = 240,
-      ka = umin,
-      kb = st.tmax - umin;
+  // the kept arc, bold: sheer trim → keel (or the transom / the open bottom)
+  if (span) {
+    const kept: Vec2[] = [],
+      KN = 240;
     for (let i = 0; i <= KN; i++) {
-      const u = ka + ((kb - ka) * i) / KN;
-      kept.push([snX(st.n(u)), snY(st.d(u))]);
+      const p = sec.at(span[0] + ((span[1] - span[0]) * i) / KN);
+      kept.push([v.snX(p[0]), v.snY(p[1])]);
     }
     svg.append(
       el("path", {
@@ -1128,63 +977,72 @@ export function drawCutStation(
     );
   }
 
-  // sheer trim (horizontal at d=dtrim) + the point where the section starts
-  if (dtrim > 0) {
-    svg.append(
-      el("line", {
-        x1: snX(NMIN),
-        y1: snY(dtrim),
-        x2: snX(NMAX),
-        y2: snY(dtrim),
-        stroke: COL.sheer,
-        "stroke-width": 1.5,
-        "stroke-dasharray": "5 4",
-      }),
-    );
-    fixedText(
-      svg,
-      snX(NMIN) + 4,
-      snY(dtrim) - 4,
-      { "font-size": 10, fill: COL.sheer },
-      "sheer trim",
-    );
-    if (!empty)
-      ringDot(svg, snX(st.n(umin)), snY(st.d(umin)), COL.sheer, 4, 1.6);
+  // the sheer trim across the section, + the point where the kept arc starts on it
+  const trimLine: Vec2[] = [];
+  for (let i = 0; i <= 48; i++) {
+    const n = b.nMin + ((b.nMax - b.nMin) * i) / 48;
+    trimLine.push([v.snX(n), v.snY(model.trimZ(xAt(n)))]);
   }
-  // centerline trim (vertical at n=ncl) + the keel point where the section closes
-  const nclC = Math.max(NMIN, Math.min(ncl, NMAX));
   svg.append(
-    el("line", {
-      x1: snX(nclC),
-      y1: snY(0),
-      x2: snX(nclC),
-      y2: snY(DMAX),
-      stroke: COL.keel,
+    el("path", {
+      d: poly(trimLine),
+      fill: "none",
+      stroke: COL.sheer,
       "stroke-width": 1.5,
-      opacity: open ? 0.4 : 1,
       "stroke-dasharray": "5 4",
     }),
   );
   fixedText(
     svg,
-    snX(nclC) - 4,
-    snY(DMAX) - 6,
+    v.snX(b.nMin) + 4,
+    v.snY(model.trimZ(xAt(b.nMin))) - 4,
+    { "font-size": 10, fill: COL.sheer },
+    "sheer trim",
+  );
+  if (span) {
+    const p = sec.at(span[0]);
+    ringDot(svg, v.snX(p[0]), v.snY(p[1]), COL.sheer, 4, 1.6);
+  }
+  // centerline trim (vertical at n = ncl) — solid where the section actually closes on it, faint where it
+  // runs out first (an open section)
+  const closed =
+    !!span && Math.abs(fr.p[1] + sec.at(span[1])[0] * fr.n[1]) < 1e-6;
+  const nclC = Math.max(b.nMin, Math.min(ncl, b.nMax));
+  svg.append(
+    el("line", {
+      x1: v.snX(nclC),
+      y1: v.snY(0),
+      x2: v.snX(nclC),
+      y2: v.snY(b.zMin),
+      stroke: COL.keel,
+      "stroke-width": 1.5,
+      opacity: closed ? 1 : 0.4,
+      "stroke-dasharray": "5 4",
+    }),
+  );
+  fixedText(
+    svg,
+    v.snX(nclC) - 4,
+    v.snY(b.zMin) - 6,
     { "text-anchor": "end", "font-size": 10, fill: COL.keel },
     "centerline",
   );
-  // (no keel-point marker here — it would sit right on the seam and hide the very continuity being inspected;
-  // the blended keel knuckle is shown by the keel slider)
-  // design waterline at this station: the depth where worldZ = −waterline (combines sinkage + rake)
-  const dWL =
-    (model.waterline + model.x0 * Math.sin(model.deckRake)) /
-    Math.cos(model.deckRake);
-  if (dWL > 0 && dWL < DMAX) {
+  // (no keel-point marker here — it would sit right on the seam and hide the very continuity being inspected)
+  // the design waterline across the section: the height where worldZ = −waterline (sinkage + rake)
+  const wlS = Math.sin(model.deckRake),
+    wlC = Math.cos(model.deckRake),
+    wlLine: Vec2[] = [];
+  for (let i = 0; i <= 48; i++) {
+    const n = b.nMin + ((b.nMax - b.nMin) * i) / 48,
+      z = (-model.waterline - xAt(n) * wlS) / wlC;
+    wlLine.push([v.snX(n), v.snY(z)]);
+  }
+  const zWL0 = (-model.waterline - xAt(0) * wlS) / wlC;
+  if (zWL0 < 0 && zWL0 > b.zMin) {
     svg.append(
-      el("line", {
-        x1: snX(NMIN),
-        y1: snY(dWL),
-        x2: snX(NMAX),
-        y2: snY(dWL),
+      el("path", {
+        d: poly(wlLine),
+        fill: "none",
         stroke: COL.wl,
         "stroke-width": 1.5,
         opacity: 0.9,
@@ -1193,29 +1051,23 @@ export function drawCutStation(
     );
     fixedText(
       svg,
-      snX(NMAX) - 4,
-      snY(dWL) - 4,
+      v.snX(b.nMax) - 4,
+      v.snY((-model.waterline - xAt(b.nMax) * wlS) / wlC) - 4,
       { "text-anchor": "end", "font-size": 10, fill: COL.wl },
       "WL",
     );
   }
 
-  // mark where the currently selected template point lands on this interpolated station (its blend by w(x0))
+  // mark where the currently selected station point lands on this lofted section
   const selIdx = selStationIdx(model, selection);
   if (selIdx !== null) {
-    const wt = weightsAt(model, model.x0);
-    let bn = 0,
-      bd = 0;
-    model.templates.forEach((tpl, j) => {
-      bn += wt[j] * tpl[selIdx].n;
-      bd += wt[j] * tpl[selIdx].d;
-    });
-    linkDot(svg, snX(bn), snY(bd), COL.station);
+    const p = model.loft.at(u).pts[selIdx];
+    linkDot(svg, v.snX(p[0]), v.snY(p[1]), COL.station);
   }
 }
 
-// a fixed-size white dot with a colored ring: the non-draggable "computed point" markers (the cut-x
-// sheer / keel dots and the cut station's sheer-trim start point)
+// a fixed-size white dot with a colored ring: the non-draggable "computed point" markers (the cut sheer /
+// keel dots and the cut station's sheer-trim start point)
 function ringDot(
   svg: SVGGElement,
   sx: number,
@@ -1239,7 +1091,7 @@ function ringDot(
 }
 
 // a small red ✕ marking the spot that corresponds (same index) to the selected point — drawn on the other
-// templates' ghost curves so you can see where that control point lands on the other sections
+// stations' ghost curves so you can see where that control point lands on the other sections
 export function redX(svg: SVGGElement, sx: number, sy: number): void {
   const r = 4.5;
   fixed(svg, sx, sy, (g) => {
@@ -1261,7 +1113,7 @@ export function redX(svg: SVGGElement, sx: number, sy: number): void {
   });
 }
 
-// mark the point that CORRESPONDS (same index) to the current selection on the interpolated cut station:
+// mark the point that CORRESPONDS (same index) to the current selection on the lofted cut station:
 // a dashed amber ring over a dot in `col`, reading as "linked", matching the amber 3D guide ribbon.
 export function linkDot(
   svg: SVGGElement,
@@ -1319,6 +1171,31 @@ export function cpDot(
   });
 }
 
+// A station's handle on the plan curve: a diamond (distinct from the round plan control points, which it
+// may sit near) in the station's own accent colour, dragged fore-aft to move the station along the sheer.
+export function stationHandle(
+  svg: SVGGElement,
+  si: number,
+  sx: number,
+  sy: number,
+  onSelect: OnModelSelect,
+): void {
+  fixed(svg, sx, sy, (g) => {
+    const d = el("path", {
+      d: "M0 -7 L7 0 L0 7 L-7 0 Z",
+      fill: stationColor(si),
+      stroke: "#fff",
+      "stroke-width": 1.5,
+      style: "cursor:ew-resize",
+    });
+    titled(d, `Station ${si + 1} — drag along the sheer to move it`);
+    d.addEventListener("pointerdown", (e) =>
+      stationUDown(si, svg, e, onSelect),
+    );
+    g.append(d);
+  });
+}
+
 export function trimDot(
   selection: ModelSelection,
   svg: SVGGElement,
@@ -1328,7 +1205,7 @@ export function trimDot(
   k: number,
   onSelect: OnModelSelect,
 ): void {
-  // morph round (k=0, smooth) → square (k=1, hard corner) via corner radius, like the template nodes
+  // morph round (k=0, smooth) → square (k=1, hard corner) via corner radius, like the station nodes
   const s = 5.5,
     rad = (1 - Math.min(Math.max(k, 0), 1)) * s;
   fixed(svg, sx, sy, (g) => {
@@ -1374,13 +1251,13 @@ export function transomDot(
   });
 }
 
-//------------- event callabacks attached to the SVG nodes in the above draw functions -------------
+//------------- event callbacks attached to the SVG nodes in the above draw functions -------------
 
-// click on a template point → select it (and, if it can move, start dragging). The pinned sheer-origin
+// click on a station point → select it (and, if it can move, start dragging). The pinned deck point
 // (idx 0) selects but does not drag.
 
 export function stnPointDown(
-  ti: number,
+  si: number,
   idx: number,
   end: boolean,
   svg: SVGGElement,
@@ -1389,10 +1266,10 @@ export function stnPointDown(
 ): void {
   e.stopPropagation();
   if (end) {
-    onSelect({ tgt: "template", idx, ti });
+    onSelect({ tgt: "station", idx, si });
     return;
   }
-  startDrag({ kind: "stn", ti, idx }, svg, e, onSelect);
+  startDrag({ kind: "stn", si, idx }, svg, e, onSelect);
 }
 
 export function sheerPointDown(
@@ -1425,14 +1302,14 @@ export function transomPointDown(
   startDrag({ kind: "transom", idx }, svg, e, onSelect);
 }
 
-// a weight-curve handle: drag band boundary `bnd`, editing the simplex split at that control point.
-export function weightHandleDown(
-  idx: number,
-  bnd: number,
+// a station's position handle: drags the station along the sheer plan (its u). Like the cut slider, it
+// moves rather than selects — a station is chosen by its tab in the section editor.
+export function stationUDown(
+  si: number,
   svg: SVGGElement,
   e: PointerEvent,
   onSelect: OnModelSelect,
 ): void {
   e.stopPropagation();
-  startDrag({ kind: "weight", idx, bnd }, svg, e, onSelect);
+  startDrag({ kind: "stationU", idx: si }, svg, e, onSelect);
 }

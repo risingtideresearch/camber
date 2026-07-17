@@ -46,16 +46,19 @@
 //             reach = (maxBeam / Tx) · eᵖ ,   ρ = one coordinate
 //       ρ = 0 closes the bottom with a margin; ρ → −∞ opens it; ρ → +∞ overshoots. "Does the hull
 //       close" becomes a single interpretable axis instead of a coincidence the sampler must hit.
-//       Geometry: at a station the world half-breadth of a template point at inboard offset n is
+//       Geometry: at a station the world half-breadth of a section point at inboard offset n is
 //       y = beam + n·n̂_y with n̂_y = −Tx, where Tx is the x-component of the unit sheer-plan tangent
 //       (so n̂ swings inboard as the sheer turns). The section reaches the centerline where n = beam/Tx.
-//       The template's n-values blend LINEARLY aft→fore but the beam BULGES amidships, so the binding
-//       station is the widest one — we bind reach on max(beam/Tx) over the hull, not on the ends.
-//   #4  the aft and fore templates are carried as base ± ½Δ, not two independents. Δ = 0 is constant
+//       The lofted n-values run LINEARLY aft→fore (two stations ⇒ a straight loft) but the beam BULGES
+//       amidships, so the binding station is the widest one — we bind reach on max(beam/Tx) over the
+//       hull, not on the ends.
+//   #4  the aft and fore STATIONS are carried as base ± ½Δ, not two independents. Δ = 0 is constant
 //       camber (aft = fore — the natural baseline); the prior centres Δ on a gentle bow-fining trend
 //       (finer, rounder, deeper-forefoot forward); Δ free reaches any pair. The midship section is
 //       exactly `base`. BOTH the gross character (#4 backbone) and the per-point (#2) residuals use
 //       this base/Δ split, so "constant camber" is recoverable at every level by zeroing the Δ coords.
+//       The two stations sit at u = 0 and u = 1, and a two-knot loft is exactly a straight line between
+//       them, so the section still varies LINEARLY aft→fore — which is what #3 below leans on.
 //
 // ---- levers NOT yet pulled (where the next iteration should go) ---------------------------
 //   #1  dimensionless coordinates: carry L/B, B/T, a prismatic-like fullness, deadrise ANGLE … as the
@@ -69,7 +72,10 @@
 //   #7  a fuller transom coupling (its outline tied to the aft sections, beyond depthTop = sheer-at-stern).
 //
 // ---- empirically (from the throwaway verification harnesses, not kept in the repo) --------
-//   θ = 0 → closure ≈ 0.97, half-beam ≈ 503 mm, draft ≈ 642 mm, L/B ≈ 4.0 — a sensible boat.
+//   Measured when the model was unitless against a fixed L = 1000; the backbone targets below are still
+//   written at that scale and are scaled to the live hull's LOA by `S1` (see decodeDoc), so the shapes
+//   these describe are unchanged — only their absolute size follows the hull.
+//   θ = 0 → closure ≈ 0.97, half-beam ≈ 503, draft ≈ 642, L/B ≈ 4.0 — a sensible boat.
 //   100% of sampled θ are VALID at every `adventure` scale (generality holds).
 //   the prior concentrates: closed-fraction degrades smoothly as `adventure` grows; open bottoms are
 //   common only far from the origin. At adventure = 1, ≈8% of draws open — part of why this is not yet
@@ -87,10 +93,12 @@
 //   ⇒ M = 19 + (P-2) + (Q-2) + (4S-6)      (default topology 5 / 4 / 5  ⇒  M = 38)
 //   Past the end of θ the coordinate source returns 0 (the backbone value), so a short or empty θ
 //   simply yields the canonical hull — which is exactly how `meanDoc()` works.
+//   (v1 carried per-station blend WEIGHTS in the plan; they were always the straight aft→fore handoff
+//   and never consumed a coordinate, so dropping them leaves the layout of θ untouched.)
 
-import { type Model, L, NMIN, NMAX, DMAX, YMAX, ZTRIMMIN } from "./model";
-import { type HullDocument } from "./document";
-import { encSection, loadJsonText } from "./json";
+import { bounds, loa, type Bounds, type Model } from "./model";
+import { VERSION, type HullDocument } from "./document";
+import { loadJsonText } from "./json";
 
 const clamp = (v: number, lo: number, hi: number): number =>
   v < lo ? lo : v > hi ? hi : v;
@@ -141,24 +149,28 @@ function bump(
   return vp + (v1 - vp) * smooth(fp >= 1 ? 1 : (f - fp) / (1 - fp));
 }
 
-// One section template (deck → turn of bilge → deep keel point) over S points, as absolute (n, d, k).
+// One station's section (deck → turn of bilge → deep keel point) over S points, as absolute (n, d, k),
+// where d is DEPTH below the deck datum (the document stores world z = −d; the residual pass below works
+// in depth increments, which is why the sign is flipped only on the way out).
 // The deepest point reaches `nKeel` inboard — past the centerline for every station — so a keel emerges
-// from the clip; where the sweep crosses y=0 sets the LOCAL draft (a fine bow crosses high and sweeps
+// from the trim; where the sweep crosses y=0 sets the LOCAL draft (a fine bow crosses high and sweeps
 // the forefoot up, a full midship crosses deep on the deadrise). So `draft` here is the depth of the
-// template's deepest point, NOT the hull's draft — the real draft is shallower and emerges per station.
-// This emergent keel is the constant-camber idea; the template is the same shape swept along the sheer.
-// Points: 0 = pinned sheer (deck edge); a single bilge point at `bIdx` carries the knuckle; the topside
+// section's deepest point, NOT the hull's draft — the real draft is shallower and emerges per station.
+// This emergent keel is the constant-camber idea; the section is the same shape swept along the sheer.
+// Points: 0 = pinned deck point; a single bilge point at `bIdx` carries the knuckle; the topside
 // (deck→bilge) and the bottom (bilge→keel) are straight runs that the downstream spline fairs.
 function buildSection(
   S: number,
+  b: Bounds,
+  dMin: number, // the shallowest a keel point may be, in the hull's own scale
   nKeel: number,
   draft: number,
   Db: number, // turn-of-bilge depth fraction
   Nb: number, // turn-of-bilge inboard fraction (small ⇒ near-vertical topside)
   kBilge: number, // knuckle at the bilge (1 = hard chine, 0 = round)
 ): { n: number; d: number; k: number }[] {
-  const dKeel = clamp(draft, 60, DMAX);
-  const pts = [{ n: 0, d: 0, k: 0 }]; // pinned sheer point
+  const dKeel = clamp(draft, dMin, -b.zMin);
+  const pts = [{ n: 0, d: 0, k: 0 }]; // pinned deck point
   const bIdx = S >= 3 ? clamp(Math.round((S - 1) * 0.55), 1, S - 2) : -1; // which point is the bilge
   for (let i = 1; i < S; i++) {
     let n: number,
@@ -180,7 +192,7 @@ function buildSection(
       n = Nb * nKeel + (nKeel - Nb * nKeel) * r;
       d = Db * dKeel + (dKeel - Db * dKeel) * r;
     }
-    pts.push({ n: clamp(n, NMIN, NMAX), d, k });
+    pts.push({ n: clamp(n, b.nMin, b.nMax), d, k });
   }
   return pts;
 }
@@ -189,12 +201,20 @@ function buildSection(
 // `() => adventure·randn()` samples around it. The sequence of next() calls IS the traversal of θ.
 type Coord = () => number;
 
-// The reparameterization φ: θ → HullDocument (on-disk increment encoding), over the CURRENT topology.
+// The reparameterization φ: θ → HullDocument (v2: absolute coordinates in the model's own unit), over the
+// CURRENT topology.
 function decodeDoc(model: Model, z: Coord): string {
-  const P = model.sheer.cp.length, // sheerPlan count
-    Q = model.sheer.trim.length, // sheerTrim count
-    S = model.templates[0].length; // section count (every template shares it)
-  const DEPTH_MAX = -ZTRIMMIN;
+  const P = model.sheerPlan.length, // sheerPlan count
+    Q = model.sheerTrim.length, // sheerTrim count
+    S = model.stations[0].points.length; // section count (every station shares it)
+  const b = bounds(model),
+    L = loa(model) || 1,
+    DEPTH_MAX = -b.zTrimMin;
+  // The backbone targets below are written at v1's unitless 1000-long scale, where this prior was tuned.
+  // v2's coordinates are absolute in the document's unit, so every LENGTH-dimensioned target is mapped onto
+  // the live hull's own LOA — the canonical boat is then the same SHAPE whatever the hull's size or unit.
+  // Fractions, slopes, and logit-space targets carry across untouched.
+  const S1 = (v: number): number => (v * L) / 1000;
 
   // #2 helper: a base ± ½Δ residual pair, consuming two coordinates. Δ=0 (second coord 0) ⇒ aft & fore
   // get the SAME residual (constant-camber-consistent); a nonzero Δ lets the two ends deviate per-point.
@@ -208,17 +228,17 @@ function decodeDoc(model: Model, z: Coord): string {
   };
 
   // --- beam backbone → a smooth unimodal half-breadth curve B(x): fine bow, fuller stern ---
-  const Bmax = bounded(z(), 620, 480, 820),
+  const Bmax = bounded(z(), S1(620), S1(480), S1(820)),
     fPeak = bounded(z(), 0.58, 0.5, 0.68),
     Btransom = Bmax * bounded(z(), 0.78, 0.55, 0.95),
     Bbow = Bmax * bounded(z(), 0.04, 0.005, 0.12);
   const beam = (x: number): number =>
-    clamp(bump(clamp(x, 0, L) / L, fPeak, Btransom, Bmax, Bbow), 0, YMAX);
+    clamp(bump(clamp(x, 0, L) / L, fPeak, Btransom, Bmax, Bbow), 0, b.yMax);
   const tx = (x: number): number => {
-    const e = 25,
-      a = Math.max(x - e, 0),
-      b = Math.min(x + e, L);
-    return 1 / Math.hypot(1, (beam(b) - beam(a)) / (b - a || 1)); // sheer-tangent x-component
+    const e = S1(25),
+      lo = Math.max(x - e, 0),
+      hi = Math.min(x + e, L);
+    return 1 / Math.hypot(1, (beam(hi) - beam(lo)) / (hi - lo || 1)); // sheer-tangent x-component
   };
   // #2: per-point half-breadth residuals on the INTERIOR plan points (ends stay on the backbone, so the
   // transom beam and the fine bow are governed by their backbone latents). Multiplicative ⇒ y ≥ 0 always.
@@ -226,7 +246,7 @@ function decodeDoc(model: Model, z: Coord): string {
     const y = beam((L * i) / (P - 1));
     return i === 0 || i === P - 1
       ? y
-      : clamp(y * Math.exp(0.12 * z()), 0, YMAX);
+      : clamp(y * Math.exp(0.12 * z()), 0, b.yMax);
   });
 
   // --- #3: keel reach as a residual on the decoded beam. The binding station is the widest one (n
@@ -236,7 +256,7 @@ function decodeDoc(model: Model, z: Coord): string {
     const x = (L * i) / 20;
     maxReq = Math.max(maxReq, beam(x) / Math.max(tx(x), 0.3));
   }
-  const reach = clamp(positive(z(), maxReq * 1.15, 0.16), 0, NMAX); // ρ=0 ⇒ closes w/ 15% margin
+  const reach = clamp(positive(z(), maxReq * 1.15, 0.16), 0, b.nMax); // ρ=0 ⇒ closes w/ 15% margin
 
   // --- #4: aft/fore section character carried as base ± ½Δ (Δ=0 ⇒ constant camber) ---
   const Db = bounded(z(), 0.64, 0.5, 0.76); // turn-of-bilge depth fraction (shared)
@@ -247,19 +267,24 @@ function decodeDoc(model: Model, z: Coord): string {
     nbDelta = real(z(), -0.9, 0.8); // <0 ⇒ fore has a tighter bilge (more deadrise) than aft
   const NbAft = nbLo + (nbHi - nbLo) * sigmoid(nbBase - 0.5 * nbDelta),
     NbFore = nbLo + (nbHi - nbLo) * sigmoid(nbBase + 0.5 * nbDelta);
-  // template keel-point depth (actual draft emerges shallower), as a base with a log fore/aft trend:
-  const draftBase = positive(z(), 680, 0.22),
+  // keel-point depth (actual draft emerges shallower), as a base with a log fore/aft trend:
+  const dMin = S1(60), // the shallowest a keel point may be
+    draftBase = positive(z(), S1(680), 0.22),
     draftDelta = real(z(), 0.3, 0.25); // >0 ⇒ deeper forefoot than run
-  const draftAft = clamp(draftBase * Math.exp(-0.5 * draftDelta), 60, DMAX),
-    draftFore = clamp(draftBase * Math.exp(+0.5 * draftDelta), 60, DMAX);
+  const draftAft = clamp(
+      draftBase * Math.exp(-0.5 * draftDelta),
+      dMin,
+      -b.zMin,
+    ),
+    draftFore = clamp(draftBase * Math.exp(+0.5 * draftDelta), dMin, -b.zMin);
   // chine knuckle, base ± ½Δ in logit space:
   const kBase = real(z(), 0.0, 1.1),
     kDelta = real(z(), -2.6, 1.0); // <0 ⇒ fore rounder than aft (hard chine aft → soft bow)
   const kAft = sigmoid(kBase - 0.5 * kDelta),
     kFore = sigmoid(kBase + 0.5 * kDelta);
 
-  const aft = buildSection(S, reach, draftAft, Db, NbAft, kAft);
-  const fore = buildSection(S, reach, draftFore, Db, NbFore, kFore);
+  const aft = buildSection(S, b, dMin, reach, draftAft, Db, NbAft, kAft);
+  const fore = buildSection(S, b, dMin, reach, draftFore, Db, NbFore, kFore);
   // #2: per-point section residuals, base ± ½Δ. Depth steps get a multiplicative log-residual (dd > 0
   // preserved for any θ ⇒ the section never stops descending), so the keel point's depth drifts but the
   // strict-descent invariant is safe. Inboard n gets an additive residual on the interior points only —
@@ -279,23 +304,24 @@ function decodeDoc(model: Model, z: Coord): string {
       fore[i].d = fD;
     }
     for (let i = 1; i < S - 1; i++) {
-      const r = pair(55, 45);
-      aft[i].n = clamp(aft[i].n + r.aft, NMIN, NMAX);
-      fore[i].n = clamp(fore[i].n + r.fore, NMIN, NMAX);
+      const r = pair(S1(55), S1(45));
+      aft[i].n = clamp(aft[i].n + r.aft, b.nMin, b.nMax);
+      fore[i].n = clamp(fore[i].n + r.fore, b.nMin, b.nMax);
     }
   }
 
   // --- sheer plan: control points evenly along x; interior half-breadths carry #2 residuals (planY).
-  // Each station carries its blend weights: a straight aft→fore handoff over the two templates. ---
-  const sheerPlan = Array.from({ length: P }, (_, i) => {
-    const t = i / (P - 1);
-    return { dx: i === 0 ? 0 : L / (P - 1), y: planY[i], w: [1 - t, t] };
-  });
+  // (v1 also carried per-point blend weights here — the straight aft→fore handoff. v2 has no blend: the
+  // two sections are stations at u = 0 and u = 1, and the loft between them IS that handoff.) ---
+  const sheerPlan = Array.from({ length: P }, (_, i) => ({
+    x: (L * i) / (P - 1),
+    y: planY[i],
+  }));
 
   // --- sheer trim backbone: a smooth spring, deepest amidships, rising to both ends ---
-  const dMaxTrim = bounded(z(), 260, 150, 380),
-    dTransom = bounded(z(), 70, 30, 140),
-    dBow = bounded(z(), 45, 15, 110),
+  const dMaxTrim = bounded(z(), S1(260), S1(150), S1(380)),
+    dTransom = bounded(z(), S1(70), S1(30), S1(140)),
+    dBow = bounded(z(), S1(45), S1(15), S1(110)),
     fLow = bounded(z(), 0.45, 0.32, 0.58);
   const trimDepth = (x: number): number =>
     clamp(
@@ -305,40 +331,55 @@ function decodeDoc(model: Model, z: Coord): string {
     );
   // #2: per-point depth residuals on interior trim points (ends governed by their backbone latents)
   const sheerTrim = Array.from({ length: Q }, (_, i) => {
-    const d = trimDepth((L * i) / (Q - 1));
+    const x = (L * i) / (Q - 1),
+      d = trimDepth(x);
     return {
-      dx: i === 0 ? 0 : L / (Q - 1),
-      depth:
-        i === 0 || i === Q - 1
-          ? d
-          : clamp(d * Math.exp(0.13 * z()), 0, DEPTH_MAX),
+      x,
+      z: -(i === 0 || i === Q - 1
+        ? d
+        : clamp(d * Math.exp(0.13 * z()), 0, DEPTH_MAX)),
+      k: 0,
     };
   });
 
-  // --- transom: top edge meets the sheer at the stern (predicted, no own coord); immersion ∝ aft draft ---
-  const depthTop = clamp(trimDepth(0), 5, DEPTH_MAX * 0.5),
+  // --- transom: top edge meets the sheer at the stern (predicted, no own coord); immersion ∝ aft draft.
+  // v1 stated a point, a depth-step and a rake slope; v2 states both profile points outright, so the rake
+  // is applied here rather than stored. ---
+  const depthTop = clamp(trimDepth(0), S1(5), DEPTH_MAX * 0.5),
     depthBot = clamp(
       bounded(z(), 0.7, 0.45, 0.95) * draftAft * 0.8,
-      depthTop + 40,
+      depthTop + S1(40),
       DEPTH_MAX,
     );
-  const transom = {
-    x: clamp(bounded(z(), 150, 60, 360), 0, L * 0.45),
-    depthTop,
-    dDepthBot: depthBot - depthTop,
-    transomRake: real(z(), -0.25, 0.2),
-  };
+  const tx0 = clamp(bounded(z(), S1(150), S1(60), S1(360)), 0, L * 0.45),
+    rake = real(z(), -0.25, 0.2), // dx/dz: negative ⇒ the foot sits FORWARD of the top (a raked transom)
+    zTop = -depthTop,
+    zBot = -depthBot;
+  const transom = [
+    { x: tx0, z: zTop },
+    { x: tx0 + (zBot - zTop) * rake, z: zBot },
+  ];
+
+  // the two sections become stations at the ends of the plan; `d` is depth, the document stores world z
+  const station = (
+    u: number,
+    pts: { n: number; d: number; k: number }[],
+  ): HullDocument["stations"][number] => ({
+    u,
+    keelK: 0,
+    points: pts.map((p) => ({ n: p.n, z: -p.d, k: p.k })),
+  });
 
   const doc: HullDocument = {
+    version: VERSION,
     name: "random",
-    length: L,
+    unit: model.unit,
     waterline: model.waterline, // preserve the current trim controls; only the shape is resampled
     deckRakeDeg: (model.deckRake * 180) / Math.PI,
     sheerPlan,
     sheerTrim,
     transom,
-    templates: [encSection(aft), encSection(fore)],
-    keelK: [0, 0],
+    stations: [station(0, aft), station(1, fore)],
   };
   return JSON.stringify(doc);
 }

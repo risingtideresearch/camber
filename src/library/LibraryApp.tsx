@@ -58,9 +58,11 @@ export function LibraryApp() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // blend mode: null when off; otherwise the base hull's length — peers must share it (the interpolator
-  // reconciles differing control-point counts on open, so a shared length is the only hard requirement).
-  const [blend, setBlend] = useState<{ baseLength: number } | null>(null);
+  // blend mode: null when off, otherwise the id of the hull it was started from. Any hull whose document
+  // PARSES is a peer — the interpolator reconciles differing units and control-point counts on open, and
+  // differing lengths simply blend (v1 required one shared `length` only because its coordinates were
+  // unitless against it; v2's are absolute in a real unit).
+  const [blend, setBlend] = useState<{ base: string } | null>(null);
   const [blendSel, setBlendSel] = useState<Set<string>>(() => new Set());
   const blendMode = blend !== null;
 
@@ -74,11 +76,7 @@ export function LibraryApp() {
   const selectedRow = rows.find((r) => r.id === selectedId);
 
   const isCompatible = useCallback(
-    (id: string): boolean => {
-      if (!blend) return false;
-      const t = topoById.get(id);
-      return !!t && t.length === blend.baseLength;
-    },
+    (id: string): boolean => !!blend && !!topoById.get(id),
     [blend, topoById],
   );
 
@@ -127,7 +125,7 @@ export function LibraryApp() {
   const enterBlend = () => {
     const t = selectedRow ? topoById.get(selectedRow.id) : null;
     if (!selectedRow || !t) return;
-    setBlend({ baseLength: t.length });
+    setBlend({ base: selectedRow.id });
     setBlendSel(new Set([selectedRow.id]));
   };
   const exitBlend = () => {
@@ -141,10 +139,11 @@ export function LibraryApp() {
     window.location.href = `interpolate.html?ids=${ids.join(",")}`;
   };
 
-  // Blend needs the selected design plus at least one same-length peer (counts are reconciled on open).
+  // Blend needs the selected design plus at least one other readable hull (units, counts and station
+  // correspondence are all reconciled on open).
   const selTopo = selectedRow ? topoById.get(selectedRow.id) : null;
   const blendPeers = selTopo
-    ? rows.filter((r) => topoById.get(r.id)?.length === selTopo.length).length
+    ? rows.filter((r) => topoById.get(r.id)).length
     : 0;
   const compatCount = blend ? rows.filter((r) => isCompatible(r.id)).length : 0;
 

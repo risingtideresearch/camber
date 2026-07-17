@@ -1,27 +1,34 @@
 import type { ReactNode } from "react";
 import type { Hydro } from "../core/hydro";
-import { L } from "../core/model";
+import { unitScale } from "../core/json";
+import type { Unit as DocUnit } from "../core/document";
 
 // ---------- naval-architecture metrics, live from the blended hull ----------
-// Unitless coefficients always show; dimensional metrics use the length scale from the LOA input (the real
-// length that the model's x = L maps to). Stability is geometry only — KMt, not GM (GM needs a weight/KG).
+// Unitless coefficients always show; the dimensional ones are converted from the DOCUMENT's unit into the
+// display unit. v1 needed an "LOA" input here because its coordinates were unitless — the hull's real size
+// was not in the document and had to be asserted; v2's are absolute, so the size is known and the only
+// question left is which unit to read it in. Stability is geometry only — KMt, not GM (GM needs a weight/KG).
 
 export type Unit = "m" | "ft";
 export type Water = "salt" | "fresh";
 
 interface MetricsPanelProps {
   hydro: Hydro | null;
-  loa: number;
+  docUnit: DocUnit; // the unit the blended model's coordinates are in
   unit: Unit;
   water: Water;
-  onLoa: (v: number) => void;
   onUnit: (u: Unit) => void;
   onWater: (w: Water) => void;
 }
 
-// build the metric rows for a valid hydrostatics result at the chosen length scale
-function metricRows(h: Hydro, loa: number, u: Unit, water: Water): ReactNode[] {
-  const s = loa > 0 ? loa / L : 0; // chosen units per model unit
+// build the metric rows for a valid hydrostatics result, converted into the display unit
+function metricRows(
+  h: Hydro,
+  docUnit: DocUnit,
+  u: Unit,
+  water: Water,
+): ReactNode[] {
+  const s = unitScale(docUnit, u); // display units per model unit
   const rho =
     u === "m"
       ? water === "salt"
@@ -114,10 +121,9 @@ function metricRows(h: Hydro, loa: number, u: Unit, water: Water): ReactNode[] {
 
 export function MetricsPanel({
   hydro,
-  loa,
+  docUnit,
   unit,
   water,
-  onLoa,
   onUnit,
   onWater,
 }: MetricsPanelProps) {
@@ -128,18 +134,14 @@ export function MetricsPanel({
       </div>
       <div className="ctl">
         <div className="scalerow">
-          <label title="Overall length the model's x=L maps to — sets the scale for the dimensional metrics">
-            LOA
-            <input
-              type="number"
-              min="0"
-              step="0.1"
-              value={loa}
-              onChange={(e) => onLoa(parseFloat(e.target.value) || 0)}
-            />
+          <label
+            className="docunit"
+            title="The unit the blended hull's coordinates are stated in (the family's own unit)"
+          >
+            in {docUnit}
           </label>
           <select
-            title="Length unit"
+            title="Display the dimensional metrics in this unit"
             value={unit}
             onChange={(e) => onUnit(e.target.value as Unit)}
           >
@@ -157,7 +159,7 @@ export function MetricsPanel({
         </div>
         <div className="metrics">
           {hydro ? (
-            metricRows(hydro, loa, unit, water)
+            metricRows(hydro, docUnit, unit, water)
           ) : (
             <div className="mrow">
               <span className="mk">—</span>
@@ -166,8 +168,9 @@ export function MetricsPanel({
           )}
         </div>
         <div className="hint">
-          Unitless metrics show always; dimensional ones use the length scale
-          above. Stability is geometry only (KMt) — GM needs a weight/KG.
+          Unitless metrics show always; dimensional ones are converted from the
+          hull's own unit. Stability is geometry only (KMt) — GM needs a
+          weight/KG.
         </div>
       </div>
     </div>

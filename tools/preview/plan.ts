@@ -4,14 +4,8 @@
 import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import {
-  createModel,
-  L,
-  resetModel,
-  prepare,
-  sweptSection,
-  forwardLimit,
-} from "../../src/core/model";
+import { createModel, loa, resetModel, prepare } from "../../src/core/model";
+import { sweptSection, forwardLimit } from "../../src/core/mesh";
 import { loadJsonText } from "../../src/core/json";
 
 const model = createModel();
@@ -21,18 +15,28 @@ resetModel(model);
 if (doc) loadJsonText(model, readFileSync(doc, "utf8"));
 prepare(model);
 
-const xFwd = forwardLimit(model);
-const sheerPts: [number, number][] = []; // (x, yf) deck edge
+// the hull spans the plan's own parameter u, so both curves are sampled in it and read out in x — the plan
+// is a parametric curve now, not a graph, which is also what lets it be drawn crossing the centerline
+const L = loa(model);
+const uFwd = forwardLimit(model),
+  xFwd = model.plan.at(uFwd)[0];
+const sheerPts: [number, number][] = []; // (x, y) deck edge
 const maxBeam: [number, number][] = []; // (x, max y of the section)
 const N = 200;
 for (let i = 0; i <= N; i++) {
-  const x = (xFwd * i) / N;
-  sheerPts.push([x, model.sheer.yf(x)]);
-  const s = sweptSection(model, x, 24, true, false);
-  if (s.aft) continue;
-  let my = -1e9;
-  for (const p of s.pts) my = Math.max(my, p[1]);
-  maxBeam.push([x, my]);
+  const u = (uFwd * i) / N;
+  const [px, py] = model.plan.at(u);
+  sheerPts.push([px, py]);
+  const s = sweptSection(model, u, 6, true);
+  if (s.empty) continue;
+  let my = -1e9,
+    mx = px;
+  for (const q of s.pts)
+    if (q[1] > my) {
+      my = q[1];
+      mx = q[0];
+    }
+  maxBeam.push([mx, my]);
 }
 
 // scale: x across width, y (half-breadth) vertical with the centerline near the bottom; allow a little y<0
@@ -43,7 +47,7 @@ const W = 1400,
   padT = 20,
   padB = 60;
 const xs = (x: number) => padL + (x / xFwd) * (W - padL - padR);
-const ymin = -80,
+const ymin = -0.08 * L,
   ymax = Math.max(...maxBeam.map((p) => p[1])) * 1.05;
 const ysc = (y: number) =>
   H - padB - ((y - ymin) / (ymax - ymin)) * (H - padT - padB);
@@ -65,7 +69,7 @@ body += `<text x="${xs(L) + 3}" y="${H - padB - 4}" font-size="11" fill="#94a3b8
 body += path(poly(maxBeam), "#0f766e", 2.4); // widest-point longitudinal (teal)
 body += path(poly(sheerPts), "#dd6b20", 2.4); // sheer plan / deck edge (orange)
 // control points of the sheer plan
-for (const cp of model.sheer.cp)
+for (const cp of model.sheerPlan)
   body += `<circle cx="${xs(cp.x).toFixed(1)}" cy="${ysc(cp.y).toFixed(1)}" r="3.5" fill="#dd6b20"/>`;
 body += `<text x="${padL}" y="${H - 8}" font-size="12" fill="#dd6b20">sheer plan (deck edge)</text>`;
 body += `<text x="${padL + 200}" y="${H - 8}" font-size="12" fill="#0f766e">widest point (max beam)</text>`;
@@ -74,4 +78,6 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" wid
 const out = process.argv[2] || "out/plan.png";
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, new Resvg(svg).render().asPng());
-console.log(`wrote ${out}  forwardLimit=${xFwd.toFixed(0)}`);
+console.log(
+  `wrote ${out}  loa=${L} ${model.unit}  forwardLimit u=${uFwd.toFixed(3)} (x=${xFwd.toFixed(0)})`,
+);

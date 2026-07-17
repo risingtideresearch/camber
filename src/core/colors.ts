@@ -18,8 +18,8 @@ export const COL = {
   mut: getCSS("--mut"),
 };
 
-// per-template accent colors, cycled. Template 0 is the old "aft" blue; later ones fan toward purple/amber.
-export const TPL_PALETTE = [
+// per-station accent colors, cycled. Station 0 is the old "aft" blue; later ones fan toward purple/amber.
+export const STATION_PALETTE = [
   "#2b6cb0",
   "#7c3aed",
   "#dd6b20",
@@ -29,8 +29,9 @@ export const TPL_PALETTE = [
   "#0369a1",
 ];
 
-export function tplColor(i: number): string {
-  return TPL_PALETTE[
-    ((i % TPL_PALETTE.length) + TPL_PALETTE.length) % TPL_PALETTE.length
+export function stationColor(i: number): string {
+  return STATION_PALETTE[
+    ((i % STATION_PALETTE.length) + STATION_PALETTE.length) %
+      STATION_PALETTE.length
   ];
 }

@@ -1,16 +1,23 @@
 // ---------- the blend math: a convex combination of a hull family, plus the barycentric blend control ----------
 //
 // A blend of variants V₁…Vₙ with weights wᵢ ≥ 0, Σwᵢ = 1 is `Σ wᵢ·Vᵢ`, taken componentwise over the shared
-// topology (the exported JSON stores absolute coordinates, and a convex combination of strictly-ordered
-// absolute sequences is itself strictly ordered, so blending absolutes is valid). Blending is defined only
-// within one topology, so promoteFamily() must first lift the family to a common form.
+// topology (the document stores absolute coordinates, and a convex combination of strictly-ordered absolute
+// sequences is itself strictly ordered, so blending absolutes is valid — and that is what keeps every blend a
+// well-formed hull: the plan's x, the trim's x, and the stations' u all stay strictly increasing).
+//
+// Blending is defined only within one topology and one unit, so promoteFamily() must first lift the family to
+// a common form; the blend then carries the family's (i.e. the first hull's) unit.
+//
+// A station's u blends like everything else, so the sections travel along the hull between the variants. That
+// only means anything because the family is index-aligned by CORRESPONDENCE — station j of every hull is the
+// same place on the boat (see promote.ts) — otherwise the blend would mix a bow section into a stern one.
 //
 // The blend control is a position → weight map: a 1-D slider for two hulls, a barycentric polygon "pad" for
 // three or more (mean-value coordinates over the vertices). Every interior point is a valid blend, which is
 // what lets the metric heatmap / scatter sample the whole space on a grid.
 
 import { clamp } from "../core/math";
-import { prepare, type Model, type Sheer, type StationCP } from "../core/model";
+import { prepare, type Model } from "../core/model";
 import { hydrostatics, type Hydro } from "../core/hydro";
 import type { HullData } from "../core/json";
 
@@ -25,34 +32,34 @@ export interface Hull {
 export function blend(model: Model, hulls: Hull[], weights: number[]): void {
   const total = weights.reduce((a, x) => a + x, 0) || 1;
   const w = weights.map((x) => x / total); // normalize to Σ = 1 (barycentric)
+  const mix = (f: (h: Hull) => number): number =>
+    hulls.reduce((a, h, k) => a + w[k] * f(h), 0);
 
-  const plan = hulls[0].data.cp.map((cp0, i) => ({
-    x: hulls.reduce((a, h, k) => a + w[k] * h.data.cp[i].x, 0),
-    y: hulls.reduce((a, h, k) => a + w[k] * h.data.cp[i].y, 0),
-    // the blend weights ride on the station — a convex blend of simplex points is itself in the simplex
-    w: cp0.w.map((_, j) =>
-      hulls.reduce((a, h, k) => a + w[k] * h.data.cp[i].w[j], 0),
-    ),
+  model.unit = hulls[0].data.unit; // the family shares one unit (promoteFamily converted them)
+  model.sheerPlan = hulls[0].data.sheerPlan.map((_, i) => ({
+    x: mix((h) => h.data.sheerPlan[i].x),
+    y: mix((h) => h.data.sheerPlan[i].y),
   }));
-  const trim = hulls[0].data.trim.map((_, i) => ({
-    x: hulls.reduce((a, h, k) => a + w[k] * h.data.trim[i].x, 0),
-    z: hulls.reduce((a, h, k) => a + w[k] * h.data.trim[i].z, 0),
-    k: hulls.reduce((a, h, kk) => a + w[kk] * h.data.trim[i].k, 0),
+  model.sheerTrim = hulls[0].data.sheerTrim.map((_, i) => ({
+    x: mix((h) => h.data.sheerTrim[i].x),
+    z: mix((h) => h.data.sheerTrim[i].z),
+    k: mix((h) => h.data.sheerTrim[i].k),
   }));
-  const transom = hulls[0].data.transom.map((_, i) => ({
-    x: hulls.reduce((a, h, k) => a + w[k] * h.data.transom[i].x, 0),
-    z: hulls.reduce((a, h, k) => a + w[k] * h.data.transom[i].z, 0),
+  model.transom = hulls[0].data.transom.map((_, i) => ({
+    x: mix((h) => h.data.transom[i].x),
+    z: mix((h) => h.data.transom[i].z),
   }));
-  // each template j, blended point-for-point across the family (templates are index-aligned)
-  const templates: StationCP[][] = hulls[0].data.templates.map((tpl, j) =>
-    tpl.map((_, i) => ({
-      n: hulls.reduce((a, h, k) => a + w[k] * h.data.templates[j][i].n, 0),
-      d: hulls.reduce((a, h, k) => a + w[k] * h.data.templates[j][i].d, 0),
-      k: hulls.reduce((a, h, kk) => a + w[kk] * h.data.templates[j][i].k, 0),
+  // station j of every hull is the same PLACE on the boat (promote.ts's correspondence), so its position
+  // along the hull blends with its shape
+  model.stations = hulls[0].data.stations.map((st0, j) => ({
+    u: mix((h) => h.data.stations[j].u),
+    keelK: mix((h) => h.data.stations[j].keelK),
+    points: st0.points.map((_, i) => ({
+      n: mix((h) => h.data.stations[j].points[i].n),
+      z: mix((h) => h.data.stations[j].points[i].z),
+      k: mix((h) => h.data.stations[j].points[i].k),
     })),
-  );
-  model.sheer = { cp: plan, trim, transom, yf: () => 0, zf: () => 0 } as Sheer;
-  model.templates = templates;
+  }));
 }
 
 // ---------- the blend control: a slider param (2 hulls) / a polygon pad puck (3+ hulls) ----------

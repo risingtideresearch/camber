@@ -69,9 +69,12 @@ export interface Frame {
 }
 
 // A section: the (n, z) curve of the station at some u, plus the knuckles that shaped it. `at(v)` runs
-// v ∈ [0, vmax] with station point i at v = i exactly.
+// v ∈ [0, vmax] with station point i at v = i exactly. `d(v)` is the exact tangent d(n,z)/dv — the curve
+// computes it anyway, and a caller that wants an angle off the section (the deadrise at the keel, say)
+// should read it rather than difference `at`.
 export interface Section {
   at: (v: number) => Vec2;
+  d: (v: number) => Vec2;
   vmax: number; // = S − 1
   ks: number[]; // the blended knuckle at each point
   keelK: number; // the blended keel crease
@@ -121,31 +124,34 @@ const TRANSOM_DEF: [number, number][] = [
 ];
 // [n, z, k] per point, aft station then forward. The bilge (index 2) is a hard chine aft (k=1) fading to a
 // round bilge forward (k=0): a hard-chine planing stern blending into a soft bow along the one hull.
-const STATION_DEFS: { u: number; keelK: number; pts: [number, number, number][] }[] =
-  [
-    {
-      u: 0,
-      keelK: 0,
-      pts: [
-        [0, 0, 0],
-        [23, -80, 0],
-        [65, -160, 1],
-        [140, -220, 0],
-        [245, -250, 0],
-      ],
-    },
-    {
-      u: 1,
-      keelK: 0,
-      pts: [
-        [0, 0, 0],
-        [38, -108, 0],
-        [100, -210, 0],
-        [180, -280, 0],
-        [255, -305, 0],
-      ],
-    },
-  ];
+const STATION_DEFS: {
+  u: number;
+  keelK: number;
+  pts: [number, number, number][];
+}[] = [
+  {
+    u: 0,
+    keelK: 0,
+    pts: [
+      [0, 0, 0],
+      [23, -80, 0],
+      [65, -160, 1],
+      [140, -220, 0],
+      [245, -250, 0],
+    ],
+  },
+  {
+    u: 1,
+    keelK: 0,
+    pts: [
+      [0, 0, 0],
+      [38, -108, 0],
+      [100, -210, 0],
+      [180, -280, 0],
+      [255, -305, 0],
+    ],
+  },
+];
 
 export function createModel(): Model {
   const model = {
@@ -253,7 +259,11 @@ function buildLoft(model: Model): Loft {
       ks = st.points.map((p) => p.k);
     return {
       S: n,
-      at: () => ({ pts: pts.map((p) => [...p] as Vec2), ks: ks.slice(), keelK: st.keelK }),
+      at: () => ({
+        pts: pts.map((p) => [...p] as Vec2),
+        ks: ks.slice(),
+        keelK: st.keelK,
+      }),
     };
   }
   const us = sts.map((s) => s.u),
@@ -264,7 +274,11 @@ function buildLoft(model: Model): Loft {
   for (let i = 0; i < n; i++) {
     const vals = sts.map((s): number[] => [s.points[i].n, s.points[i].z]);
     // knot spacing from the 3-D chord: (x along the hull, n, z)
-    const q = sts.map((s, j): number[] => [xs[j], s.points[i].n, s.points[i].z]);
+    const q = sts.map((s, j): number[] => [
+      xs[j],
+      s.points[i].n,
+      s.points[i].z,
+    ]);
     chains.push(crChain(vals, centripetalParams(q), new Array(K).fill(0)));
     const ys = sts.map((s) => s.points[i].k);
     kCurves.push({ ys, m: pchipSlopes(us, ys) });
@@ -290,7 +304,11 @@ function buildLoft(model: Model): Loft {
         pts.push([p[0], p[1]]);
         ks.push(clamp(hermiteEval(us, kCurves[i].ys, kCurves[i].m, uc), 0, 1));
       }
-      return { pts, ks, keelK: clamp(hermiteEval(us, keelYs, keelM, uc), 0, 1) };
+      return {
+        pts,
+        ks,
+        keelK: clamp(hermiteEval(us, keelYs, keelM, uc), 0, 1),
+      };
     },
   };
 }
@@ -362,7 +380,13 @@ export function sectionAt(model: Model, u: number): Section {
       centripetalParams(pts.map((p) => [...p])),
       ks,
     );
-  return { at: (v) => c.at(v) as Vec2, vmax: c.vmax, ks, keelK };
+  return {
+    at: (v) => c.at(v) as Vec2,
+    d: (v) => c.d(v) as Vec2,
+    vmax: c.vmax,
+    ks,
+    keelK,
+  };
 }
 
 // the transom plane in profile: the x of the cut at height z (linear through the two control points, full
@@ -530,7 +554,12 @@ export function addStationPoint(
 
 // The first plan point is pinned at the transom (x = 0); every other point, including the last, moves in x.
 // y may go below the centerline (to yMin) so the plan can cross it and close a tumblehome bow.
-export function movePlanPoint(model: Model, idx: number, mx: number, my: number): void {
+export function movePlanPoint(
+  model: Model,
+  idx: number,
+  mx: number,
+  my: number,
+): void {
   const cp = model.sheerPlan,
     n = cp.length,
     b = bounds(model);
@@ -543,7 +572,12 @@ export function movePlanPoint(model: Model, idx: number, mx: number, my: number)
   cp[idx].y = clamp(my, b.yMin, b.yMax);
 }
 
-export function moveTrim(model: Model, idx: number, mx: number, mz: number): void {
+export function moveTrim(
+  model: Model,
+  idx: number,
+  mx: number,
+  mz: number,
+): void {
   const cp = model.sheerTrim,
     n = cp.length,
     b = bounds(model);
@@ -556,7 +590,12 @@ export function moveTrim(model: Model, idx: number, mx: number, mz: number): voi
   cp[idx].z = clamp(mz, b.zTrimMin, 0); // at or below the flat deck
 }
 
-export function moveTransom(model: Model, idx: number, mx: number, mz: number): void {
+export function moveTransom(
+  model: Model,
+  idx: number,
+  mx: number,
+  mz: number,
+): void {
   const b = bounds(model),
     cp = model.transom[idx];
   cp.x = clamp(mx, 0, loa(model) * 0.45); // the transom stays in the aft region
@@ -612,7 +651,12 @@ export function setKeelK(model: Model, si: number, k: number): void {
   if (si < 0 || si >= model.stations.length) return;
   model.stations[si].keelK = clamp(k, 0, 1);
 }
-export function setStationK(model: Model, si: number, idx: number, k: number): void {
+export function setStationK(
+  model: Model,
+  si: number,
+  idx: number,
+  k: number,
+): void {
   const p = model.stations[si]?.points[idx];
   if (p) p.k = clamp(k, 0, 1);
 }
@@ -629,7 +673,9 @@ export function setUnit(model: Model, unit: Unit, rescale: boolean): void {
     model.sheerPlan.forEach((p) => ((p.x *= s), (p.y *= s)));
     model.sheerTrim.forEach((p) => ((p.x *= s), (p.z *= s)));
     model.transom.forEach((p) => ((p.x *= s), (p.z *= s)));
-    model.stations.forEach((st) => st.points.forEach((p) => ((p.n *= s), (p.z *= s))));
+    model.stations.forEach((st) =>
+      st.points.forEach((p) => ((p.n *= s), (p.z *= s))),
+    );
     model.waterline *= s;
     model.x0 *= s;
   }

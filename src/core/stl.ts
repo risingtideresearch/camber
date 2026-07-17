@@ -1,13 +1,17 @@
 // ---------- STL export: a triangle mesh of the trimmed hull ----------
 //
-// Mirrors the STEP path's geometry (step.ts): take the faired starboard half-grid from trimmedHullGrid,
-// build the full-width grid by reflecting it across the centerline (dropping the duplicate keel point), then
-// triangulate the quad mesh. The stern is closed with a triangle fan over the transom edge; the deck stays
-// open (as in the STEP OPEN_SHELL). Output is ASCII STL in millimetres — the model's native units.
+// Mirrors the STEP path's geometry (step.ts): take the faired full-width grid from trimmedHullGrid (starboard
+// sheer → keel → port sheer, the keel an interior column) and triangulate the quad mesh. The stern is closed
+// with a triangle fan over the transom edge; the deck stays open (as in the STEP OPEN_SHELL).
+//
+// Output is ASCII STL in MILLIMETRES. STL carries no unit of its own and is universally read as mm, so a hull
+// authored in another unit is converted on the way out — the model's coordinates are absolute in `model.unit`
+// now, so "the model's native units" is no longer a synonym for millimetres.
 
 import { type Model, prepare } from "./model";
-import { trimmedHullGrid } from "./step";
-import { mirrorRow, V, type Vec3 } from "./math";
+import { trimmedHullGrid } from "./mesh";
+import { unitScale } from "./json";
+import { V, type Vec3 } from "./math";
 
 function facet(a: Vec3, b: Vec3, c: Vec3): string {
   const n = V.cross(V.sub(b, a), V.sub(c, a));
@@ -26,13 +30,14 @@ function facet(a: Vec3, b: Vec3, c: Vec3): string {
 
 // build an ASCII STL string for the current model (call after resetModel + loadJsonText, as STEP export does)
 export function buildStl(model: Model, name = "camber"): string {
-  prepare(model); // ensure the sheer samplers / faired sections are current
-  const M = 24,
-    { grid: half } = trimmedHullGrid(model, 80, M);
-  if (half.length < 4) throw new Error("hull has too few sections to export");
-  // full-width grid: starboard sheer→keel (cols 0..M), then port keel→sheer as the y-mirror, dropping the
-  // duplicate keel point — so the keel is one interior column rather than a mirrored seam.
-  const grid: Vec3[][] = half.map(mirrorRow);
+  prepare(model); // ensure the derived curves are current
+  // R = 6 on the default 5-point section gives a 24-column half, as v1's M did
+  const { grid: raw } = trimmedHullGrid(model, 80, 6);
+  if (raw.length < 4) throw new Error("hull has too few sections to export");
+  const s = unitScale(model.unit, "mm"),
+    grid: Vec3[][] = raw.map((row) =>
+      row.map((p): Vec3 => [p[0] * s, p[1] * s, p[2] * s]),
+    );
   const NS = grid.length - 1,
     COLS = grid[0].length;
 

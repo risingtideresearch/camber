@@ -2,11 +2,12 @@
 //
 // Builds a small isometric wireframe of the current model as a self-contained SVG string. It's generated in
 // the editor at save time and stored on the design row, so the file view can show it as a plain <img> without
-// ever loading the model. Geometry reuses trimmedHullGrid (the same station×offset point grid the STEP export
-// samples); the projection reproduces the 3D canvas's orthographic camera (see draw3d.ts VERT_SRC).
+// ever loading the model. Geometry reuses trimmedHullGrid (the same full-width station×offset point grid the
+// STEP export samples); the projection reproduces the 3D canvas's orthographic camera (see draw3d.ts VERT_SRC).
+// The drawing is fitted to its own projected bounds, so the model's unit and absolute size are irrelevant here.
 
 import { type Model, prepare } from "./model";
-import { trimmedHullGrid } from "./step";
+import { trimmedHullGrid } from "./mesh";
 import type { Vec3 } from "./math";
 
 // a pleasing fixed 3/4 view (matches the editor's default 3D orientation)
@@ -15,10 +16,12 @@ const YAW = -0.62,
 
 export function buildPreviewSvg(model: Model): string {
   prepare(model);
-  const NS = 36,
-    M = 10;
-  const { grid, creaseCols } = trimmedHullGrid(model, NS, M); // grid[i][j]: i station (transom→bow), j offset (sheer→keel)
+  const NS = 36;
+  // grid[i][j]: i station (transom→bow), j offset — FULL WIDTH, starboard sheer (0) → keel → port sheer
+  const { grid, creaseCols } = trimmedHullGrid(model, NS, 3);
   if (grid.length < 4 || grid[0].length < 2) return "";
+  const NC = grid[0].length - 1,
+    KEEL = NC >> 1;
 
   const c1 = Math.cos(YAW),
     s1 = Math.sin(YAW),
@@ -35,29 +38,27 @@ export function buildPreviewSvg(model: Model): string {
       Y1 = rx * s1 + y * c1;
     return [X1, -(Y1 * s2 + rz * c2)];
   };
-  const mirror = ([x, y, z]: Vec3): Vec3 => [x, -y, z];
-
   const frames: [number, number][][] = [];
   const longs: [number, number][][] = [];
 
-  // transverse frames: a handful of full sections (starboard sheer→keel, then port keel→sheer)
+  // transverse frames: a handful of sections. Each row is already the full section (starboard sheer → keel →
+  // port sheer), so it draws as one polyline — no mirroring.
   const NF = 8;
-  for (let f = 0; f <= NF; f++) {
-    const i = Math.round((NS * f) / NF);
-    const stbd = grid[i].map(proj);
-    const port = grid[i]
-      .map((p) => proj(mirror(p)))
-      .reverse()
-      .slice(1); // drop the duplicate keel point
-    frames.push([...stbd, ...port]);
-  }
+  for (let f = 0; f <= NF; f++)
+    frames.push(grid[Math.round((NS * f) / NF)].map(proj));
 
-  // longitudinals: sheer (0), keel (M), the chine/crease lines, and one mid line — both sides
-  const cols = new Set<number>([0, M, Math.round(M / 2), ...creaseCols]);
-  for (const j of [...cols].sort((a, b) => a - b)) {
+  // longitudinals: both sheers (0, NC), the keel (KEEL), the chine/crease lines (already on both sides), and
+  // a mid line per side
+  const cols = new Set<number>([
+    0,
+    NC,
+    KEEL,
+    KEEL >> 1,
+    NC - (KEEL >> 1),
+    ...creaseCols,
+  ]);
+  for (const j of [...cols].sort((a, b) => a - b))
     longs.push(grid.map((row) => proj(row[j])));
-    if (j !== M) longs.push(grid.map((row) => proj(mirror(row[j])))); // keel (y=0) needs no mirror
-  }
 
   // fit a viewBox to all projected points
   let minX = Infinity,

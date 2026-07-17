@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createDraw3dParams,
   draw3d,
-  MESH_M_DEFAULT,
   MESH_N_DEFAULT,
+  MESH_R_DEFAULT,
   type Draw3dParams,
   type View3DMode,
 } from "../core/draw3d";
@@ -63,13 +63,13 @@ export function View3d({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const svgRef = useRef<SVGSVGElement>(null); // the lines-plan overlay, owned by this instance (no global id lookup)
   const paramsRef = useRef<Draw3dParams>(createDraw3dParams());
-  // the display mode, the Mesh-overlay toggle, the quads/triangles wire choice, and the mesh resolution (M/N)
+  // the display mode, the Mesh-overlay toggle, the quads/triangles wire choice, and the mesh resolution (R/N)
   // are React-owned; the rebuild effect copies them into paramsRef before each draw, so paramsRef's own
-  // view3dMode / showMesh / meshQuads / meshM / meshN are always overwritten and their initial values are irrelevant.
+  // view3dMode / showMesh / meshQuads / meshR / meshN are always overwritten and their initial values are irrelevant.
   const [mode, setMode] = useState<View3DMode>("render");
   const [showMesh, setShowMesh] = useState(false); // overlay the quad-grid wireframe on the shaded GL modes
   const [meshQuads, setMeshQuads] = useState(true); // wire as quads (default) or the raw shaded triangles
-  const [meshM, setMeshM] = useState(MESH_M_DEFAULT); // longitudinals per half-section (girth res.)
+  const [meshR, setMeshR] = useState(MESH_R_DEFAULT); // sub-steps per section segment (girth res.)
   const [meshN, setMeshN] = useState(MESH_N_DEFAULT); // sections along the length (station res.)
   const [meshMenu, setMeshMenu] = useState(false); // the mesh-resolution dropdown open state
 
@@ -103,14 +103,14 @@ export function View3d({
       );
   }, [model]);
 
-  // rebuild + redraw whenever the model, the display mode, the Mesh overlay, the mesh resolution (M/N),
+  // rebuild + redraw whenever the model, the display mode, the Mesh overlay, the mesh resolution (R/N),
   // the curvature overlay, or the STL changes — everything the cached hull tessellation depends on
   useEffect(() => {
     const p = paramsRef.current;
     p.view3dMode = mode;
     p.showMesh = showMesh;
     p.meshQuads = meshQuads;
-    p.meshM = meshM;
+    p.meshR = meshR;
     p.meshN = meshN;
     p.curvature = curvature;
     const cv = canvasRef.current;
@@ -121,7 +121,7 @@ export function View3d({
     mode,
     showMesh,
     meshQuads,
-    meshM,
+    meshR,
     meshN,
     stl,
     curvature,
@@ -232,18 +232,18 @@ export function View3d({
           </label>
           <label
             className="dd-row"
-            title="Number of longitudinal lines per half-section (girth resolution)"
+            title="Sub-steps per section segment (girth resolution). Every station knot must land on a mesh row — that is where a knuckle's crease lives — so the girth is set per segment: a section of S points is (S−1)×R+1 rows wide."
           >
-            <span className="dd-name">Num longitudinals</span>
+            <span className="dd-name">Girth sub-steps</span>
             <input
               type="range"
-              min={4}
-              max={128}
-              step={4}
-              value={meshM}
-              onChange={(e) => setMeshM(+e.target.value)}
+              min={1}
+              max={32}
+              step={1}
+              value={meshR}
+              onChange={(e) => setMeshR(+e.target.value)}
             />
-            <span className="dd-val">{meshM}</span>
+            <span className="dd-val">{meshR}</span>
           </label>
           <label
             className="dd-row"

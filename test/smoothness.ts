@@ -1,14 +1,35 @@
 // Keel-smoothness regression test.
 //
 // The keel/stem/rocker is emergent: it is the locus of points where the swept sections reach the
-// centerline. A bug in how the keel knuckle reshapes those sections used to make that locus STEP — the
-// section's near-keel deadrise jumped from one station to the next, which reads as creases running across
-// the hull up the stem (the keel knuckle's flat-vs-V control re-snapping as the kept knot set changed).
+// centerline. If that locus STEPS — the section's near-keel deadrise jumping from one station to the next —
+// it reads as creases running across the hull up the stem. Version 1 could produce exactly that, because its
+// keel knuckle reshaped the section near the centerline and re-snapped as the kept knot set changed.
 //
-// This test sweeps the bow half of every example hull (plus the built-in default), measures the keel
-// deadrise angle station to station, and fails if it ever jumps by more than THRESHOLD_DEG between adjacent
-// stations — i.e. if the swept keel is no longer smooth. It runs at keel knuckle 0 (flat), 0.5, and 1 (V),
-// since the failure mode lives in the flattening path.
+// Version 2 builds the keel differently: the section is a plain centripetal Catmull-Rom and the keel is
+// simply where it crosses y = 0, with no reshaping at all (mesh.ts deliberately does not read `keelK` yet —
+// honouring it means DEFORMING the section near the centerline, which lands separately). So the specific
+// mechanism this test was written against is gone; the PROPERTY it guards is not. The keel still has to come
+// out smooth, and it now rests on the loft and the trim convergence instead — which is worth a regression
+// test of its own, and is what this is.
+//
+// It sweeps the bow half of every example hull (plus the built-in default), measures the keel deadrise angle
+// station to station, and fails if it ever jumps by more than THRESHOLD_DEG between adjacent stations.
+//
+// The deadrise is read from the section's EXACT tangent at its converged centerline crossing. Version 1
+// least-squares-fitted a band of sampled points near the keel, because it had no better handle on the
+// crossing; that measurement quantises — points enter and leave the band as the station moves, and each
+// entry jolts the fitted slope by a degree or two, which is indistinguishable from the stepping the test is
+// looking for. (On flat-bottom-fade that noise alone reads as a ~2° "jump" that halves as the sampling
+// refines.) v2 converges the crossing by bisection and the section carries its own derivative, so the angle
+// can just be evaluated.
+//
+// ONE JUMP IS REAL AND EXPECTED: where the keel crossing slides across a KNUCKLED station point, the
+// section's tangent breaks there by construction — that is what a chine IS — so the deadrise at the crossing
+// steps as the chine runs into the keel. On the default hull the crossing passes knot 2 at u ≈ 0.896, where
+// the bilge chine (k = 1 aft, fading to 0 forward) still carries k ≈ 0.1, and the angle jumps ~2°; on
+// flat-bottom-fade, ~8°. That is the hull's own crease, not a defect, so those samples are skipped — v1's
+// band fit simply averaged the crease away and never saw it. Everything either side of the crossing stays
+// under test.
 //
 // Run with `npm run test:smooth` (tsx runs this directly under node). Exit code is
 // non-zero on any failure so it can gate CI.
@@ -17,9 +38,11 @@ import {
   createModel,
   resetModel,
   prepare,
-  L,
-  sweptSection,
+  frameAt,
+  sectionAt,
+  stationWorld,
 } from "../src/core/model";
+import { keptSpan } from "../src/core/mesh";
 import { parseDocument, loadHull } from "../src/core/json";
 import { examplesDir } from "./paths";
 import { readFileSync, readdirSync } from "fs";
@@ -27,65 +50,57 @@ import { join } from "path";
 
 const model = createModel();
 
-// the largest jump in keel deadrise (degrees) between adjacent stations we accept as "smooth". The fixed
-// reflected-keel construction lands around 0.3–0.9°; the old stepped one spiked above 20°. 1.5° is a wide
-// margin that still catches any return of the stepping.
-const THRESHOLD_DEG = 1.5; // deadrise is an ANGLE — scale-invariant, unchanged by the unitless rescale
-const DX = 1; // station spacing (units) for the sweep — fine enough to resolve a step as a single jump
-const KEEL_KS = [0, 0.5, 1]; // keel-knuckle settings to exercise (flat → V)
+// the largest jump in keel deadrise (degrees) between adjacent stations we accept as "smooth". A fair keel
+// lands well under 1°; the old stepped construction spiked above 20°. Deadrise is an ANGLE — scale-invariant
+// — so this needs no unit scaling, which is what lets one threshold cover the 1000-long examples and the
+// 5000-long default alike.
+const THRESHOLD_DEG = 1.5;
+const DU = 0.001; // station spacing in the plan's own parameter — fine enough to resolve a step as one jump
+const CHINE_K = 0.02; // a lofted knuckle at or above this is a real crease: its tangent break is not a defect
 
-// keel deadrise at station x: the body-plan angle from horizontal of the section near the keel, as the
-// least-squares slope of the lowest 70 mm of the (half-breadth, depth) points. NaN where there is no keel
-// (open section / above the trim).
-function deadriseDeg(x: number): number {
-  const s = sweptSection(model, x, 200, true);
-  if (!s.keel) return NaN;
-  const p = s.pts,
-    keel = p[p.length - 1],
-    band = p.filter((q) => q[2] <= keel[2] + 18);
-  if (band.length < 3) return NaN;
-  let n = 0,
-    sy = 0,
-    sz = 0,
-    syz = 0,
-    szz = 0;
-  for (const q of band) {
-    const y = Math.abs(q[1] - keel[1]),
-      z = q[2] - keel[2];
-    n++;
-    sy += y;
-    sz += z;
-    syz += y * z;
-    szz += z * z;
-  }
-  const denom = n * szz - sz * sz;
-  if (Math.abs(denom) < 1e-9) return NaN;
-  const slope = (n * syz - sy * sz) / denom; // d(half-breadth)/d(depth)
-  return (Math.atan(1 / Math.abs(slope)) * 180) / Math.PI;
+// The keel of the section at u: the body-plan angle from horizontal (atan|dz/dy|) of the section's tangent
+// where it crosses the centerline, plus which curve segment that crossing is in. Null where this column has
+// no keel — the section was cut by the transom or ran out before reaching y = 0.
+function keelAt(u: number): { deg: number; seg: number; k: number } | null {
+  const fr = frameAt(model, u),
+    sec = sectionAt(model, u),
+    span = keptSpan(model, fr, sec);
+  if (!span) return null;
+  const v = span[1],
+    [n, z] = sec.at(v);
+  if (Math.abs(stationWorld(fr, n, z)[1]) > 1e-6) return null; // not the centerline
+  const [dn, dz] = sec.d(v),
+    dy = dn * fr.n[1], // the tangent's transverse component: n̂ swings as the plan turns
+    deg =
+      Math.abs(dy) < 1e-12
+        ? 90
+        : (Math.atan(Math.abs(dz / dy)) * 180) / Math.PI;
+  // the knot the crossing is nearest, and how creased that knot is: crossing a creased knot breaks the
+  // tangent by design
+  const knot = Math.round(v);
+  return { deg, seg: Math.floor(v), k: sec.ks[knot] ?? 0 };
 }
 
-// worst adjacent-station deadrise jump over the bow half (0.55L → 0.99L), and where it is
-function worstStep(): { jump: number; x: number } {
+// worst adjacent-station deadrise jump over the bow half (u 0.55 → 0.99), and where it is. A step taken
+// while the crossing moves between segments THROUGH a creased knot is the chine, not a defect (see above).
+function worstStep(): { jump: number; u: number } {
   let jump = 0,
-    at = 0,
-    prev = NaN;
-  for (let x = 0.55 * L; x <= 0.99 * L; x += DX) {
-    const d = deadriseDeg(x);
-    if (!Number.isNaN(prev) && !Number.isNaN(d)) {
-      const j = Math.abs(d - prev);
-      if (j > jump) {
+    at = 0;
+  let prev: { deg: number; seg: number; k: number } | null = null;
+  for (let u = 0.55; u <= 0.99; u += DU) {
+    const cur = keelAt(u);
+    if (prev && cur) {
+      const crossedCrease =
+        cur.seg !== prev.seg && Math.max(cur.k, prev.k) >= CHINE_K;
+      const j = Math.abs(cur.deg - prev.deg);
+      if (!crossedCrease && j > jump) {
         jump = j;
-        at = x;
+        at = u;
       }
     }
-    prev = d;
+    prev = cur;
   }
-  return { jump, x: at };
-}
-
-function setKeel(k: number): void {
-  for (let i = 0; i < model.keelK.length; i++) model.keelK[i] = k;
-  prepare(model);
+  return { jump, u: at };
 }
 
 // load a named case into the live model; "default" is the built-in reset model
@@ -110,21 +125,12 @@ function main(): number {
     `Keel smoothness — worst adjacent-station deadrise jump (threshold ${THRESHOLD_DEG}°)\n`,
   );
   for (const name of cases) {
-    const cells: string[] = [];
-    let caseFailed = false;
-    for (const k of KEEL_KS) {
-      loadCase(name);
-      setKeel(k);
-      const { jump, x } = worstStep();
-      const bad = jump > THRESHOLD_DEG;
-      if (bad) caseFailed = true;
-      cells.push(
-        `k=${k}: ${jump.toFixed(2)}°@${Math.round(x)}${bad ? " ✗" : ""}`,
-      );
-    }
-    if (caseFailed) failures++;
+    loadCase(name);
+    const { jump, u } = worstStep();
+    const bad = jump > THRESHOLD_DEG;
+    if (bad) failures++;
     console.log(
-      `  ${caseFailed ? "FAIL" : "ok  "}  ${name.padEnd(26)} ${cells.join("   ")}`,
+      `  ${bad ? "FAIL" : "ok  "}  ${name.padEnd(42)} ${jump.toFixed(2)}° @ u=${u.toFixed(3)}${bad ? " ✗" : ""}`,
     );
   }
   console.log(

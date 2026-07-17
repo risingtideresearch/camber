@@ -143,8 +143,10 @@ function localMaxima(f: (u: number) => number, N = 400): number[] {
     while (j < N && Math.abs(w[j + 1] - w[i]) <= 1e-12) j++;
     const fall = j === N || w[j + 1] < w[i] - 1e-12;
     if (fall) {
-      if (j > i) out.push((i + j) / 2 / N); // plateau → its midpoint
-      else out.push(refineMax(f, Math.max(0, i - 1) / N, Math.min(N, i + 1) / N));
+      if (j > i)
+        out.push((i + j) / 2 / N); // plateau → its midpoint
+      else
+        out.push(refineMax(f, Math.max(0, i - 1) / N, Math.min(N, i + 1) / N));
     }
     i = j + 1;
   }
@@ -225,10 +227,9 @@ export function convertV1ToV2(doc: V1Doc): V2Doc {
 }
 
 // v1's transom was a point plus a depth-step and a rake slope; v2 states both profile points outright
-function decTransomPoints(t: V1Doc["transom"]): [
-  { x: number; z: number },
-  { x: number; z: number },
-] {
+function decTransomPoints(
+  t: V1Doc["transom"],
+): [{ x: number; z: number }, { x: number; z: number }] {
   const top = { x: t.x, z: -t.depthTop },
     z = -(t.depthTop + t.dDepthBot);
   return [top, { x: t.x + (z - top.z) * t.transomRake, z }];

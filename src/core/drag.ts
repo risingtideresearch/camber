@@ -4,11 +4,10 @@
 import { OnModelSelect } from "./modelSelection";
 
 export interface Drag {
-  kind: "slider" | "sheer" | "trim" | "transom" | "stn" | "weight";
+  kind: "slider" | "sheer" | "trim" | "transom" | "stn" | "stationU";
   svg?: SVGGraphicsElement; // the pan/zoom content <g> the drag started in (its CTM maps pointer → content)
   idx?: number;
-  ti?: number; // template index, for a "stn" drag
-  bnd?: number; // boundary index, for a "weight" drag
+  si?: number; // which station, for a "stn" (section-point) drag
 }
 
 let CURRENT_DRAG: Drag | null = null;
@@ -24,8 +23,7 @@ export function setDrag(d: Drag | null): void {
 type DragSpec = {
   kind: Drag["kind"];
   idx?: number;
-  ti?: number;
-  bnd?: number;
+  si?: number;
 };
 
 export function startDrag(
@@ -35,13 +33,13 @@ export function startDrag(
   onSelect: OnModelSelect,
 ): void {
   setDrag({ ...d, svg });
-  // a drag on a control point selects it (persistently); the x-cut slider leaves the selection
+  // a drag on a control point selects it (persistently). The x-cut slider and a station's u-handle move
+  // rather than select: neither is a control point of the shape (the station is chosen by its tab).
   if (d.kind === "sheer") onSelect({ tgt: "plan", idx: d.idx! });
   else if (d.kind === "trim") onSelect({ tgt: "trim", idx: d.idx! });
   else if (d.kind === "transom") onSelect({ tgt: "transom", idx: d.idx! });
   else if (d.kind === "stn")
-    onSelect({ tgt: "template", idx: d.idx!, ti: d.ti! });
-  else if (d.kind === "weight") onSelect({ tgt: "weight", idx: d.idx! });
+    onSelect({ tgt: "station", idx: d.idx!, si: d.si! });
   e.stopPropagation();
   e.preventDefault();
 }

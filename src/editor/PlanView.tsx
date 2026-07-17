@@ -1,9 +1,10 @@
 import { useCallback } from "react";
-import { addSheerPoint, type Model, type Section } from "../core/model";
+import { addPlanPoint, type Model } from "../core/model";
+import type { SectionRow } from "../core/mesh";
 import type { ModelSelection } from "../core/modelSelection";
 import type { CurvatureSettings } from "../core/comb";
 import { drawPlan } from "../core/draw2d";
-import { invX, invY, LH } from "../core/view";
+import { viewOf } from "../core/view";
 import type { RefObject } from "react";
 import { SvgView } from "./SvgView";
 import type { SvgViewSync } from "./svgViewSync";
@@ -17,7 +18,7 @@ interface PlanViewProps {
   model: Model;
   modelVersion: number;
   selection: ModelSelection;
-  sections: Section[];
+  rows: SectionRow[];
   tool: Tool;
   onSelect: (sel: ModelSelection) => void;
   setTool: (t: Tool) => void;
@@ -30,7 +31,7 @@ export function PlanView({
   model,
   modelVersion,
   selection,
-  sections,
+  rows,
   tool,
   onSelect,
   setTool,
@@ -40,17 +41,18 @@ export function PlanView({
 }: PlanViewProps) {
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
-      drawPlan(g, model, selection, sections, onSelect, [sx, sy], curvature);
+      drawPlan(g, model, selection, rows, onSelect, [sx, sy], curvature);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [model, modelVersion, selection, sections, onSelect, curvature],
+    [model, modelVersion, selection, rows, onSelect, curvature],
   );
 
   const onBackgroundClick = (vx: number, vy: number) => {
     if (tool === "add") {
-      const idx = addSheerPoint(model, invX(vx), invY(vy));
+      const v = viewOf(model);
+      const idx = addPlanPoint(model, v.invX(vx), v.invY(vy));
       setTool("select");
-      if (idx < 0) return; // no room at the minimum station spacing — nothing was inserted
+      if (idx < 0) return; // no room at the minimum point spacing — nothing was inserted
       onSelect({ tgt: "plan", idx });
       bumpModel();
     } else {
@@ -58,11 +60,15 @@ export function PlanView({
     }
   };
 
+  // the strip's content box follows the hull's length: the panel geometry is derived from the same bounds
+  // the drag clamps use, so the drawing and the clamps agree by construction
+  const lh = viewOf(model).lh;
+
   return (
     <div className="viewstrip">
       <SvgView
         contentWidth={1000}
-        contentHeight={LH}
+        contentHeight={lh}
         draw={draw}
         sync={sync}
         cursor={tool === "add" ? "crosshair" : "default"}

@@ -7,15 +7,10 @@
 // centerline, with no mirror seam to fold into a welt. The transom is a single planar face sharing the
 // hull's aft edge. Both live in one OPEN_SHELL (the hull is open along the deck/sheer edge).
 
-import { mirrorRow, V, type Vec3 } from "./math";
-import {
-  L,
-  sweptSection,
-  xTransom,
-  type Model,
-  prepare,
-  forwardLimit,
-} from "./model";
+import { V, type Vec3 } from "./math";
+import { prepare, type Model } from "./model";
+import { trimmedHullGrid } from "./mesh";
+import { unitScale } from "./json";
 
 // ---------- B-spline numerics ----------
 
@@ -265,64 +260,6 @@ function compressKnots(U: number[]): { knots: number[]; mults: number[] } {
   return { knots, mults };
 }
 
-// ---------- hull sampling ----------
-
-// A rectangular grid of the starboard hull whose AFT boundary row is exactly the transom intersection
-// curve. Columns are constant depth-fractions (j=0 sheer-trim → j=M keel); for each column we find where
-// that fraction crosses the transom plane and sweep forward from there to the bow. Because the sections
-// are full (sheer→keel, never renormalised to a clipped sliver), the surface stays fair right to the
-// stern, and row 0 lies on the transom plane so the hull and transom share an exact edge.
-export function trimmedHullGrid(
-  model: Model,
-  NS: number,
-  M: number,
-): { grid: Vec3[][]; creaseCols: number[] } {
-  const cols = M + 1,
-    gate = (p: Vec3): number => p[0] - xTransom(model, p[2]),
-    fair = (x: number): Vec3[] => sweptSection(model, x, M, true, false).pts;
-  // per column, locate the aft crossing of the transom plane (first inside transition scanning forward)
-  const SCAN = 240,
-    xaf = new Array<number>(cols).fill(0),
-    found = new Array<boolean>(cols).fill(false);
-  let prev = fair(0);
-  for (let k = 1; k <= SCAN; k++) {
-    const x = (L * k) / SCAN,
-      cur = fair(x);
-    for (let j = 0; j < cols; j++) {
-      if (found[j]) continue;
-      const ga = gate(prev[j]),
-        gb = gate(cur[j]);
-      if (ga < 0 && gb >= 0) {
-        xaf[j] = (L * (k - 1 + ga / (ga - gb))) / SCAN;
-        found[j] = true;
-      }
-    }
-    prev = cur;
-  }
-  const xf = forwardLimit(model); // the hull closes here, not necessarily at L (the fine bow trims away forward)
-  const grid: Vec3[][] = Array.from(
-    { length: NS + 1 },
-    () => new Array<Vec3>(cols),
-  );
-  for (let j = 0; j < cols; j++)
-    for (let i = 0; i <= NS; i++) {
-      // cosine spacing clusters stations at the transom edge and the bow so the fine bow tapers gradually
-      const t = 0.5 * (1 - Math.cos((Math.PI * i) / NS));
-      const x = xaf[j] + (xf - xaf[j]) * t; // sweep forward from the transom edge to the bow closure
-      grid[i][j] = fair(x)[j];
-    }
-  // crease columns (knuckle lines + keel) — consistent along the hull; read from a representative closed section
-  let creaseCols: number[] = [];
-  for (let i = 2; i <= 7; i++) {
-    const s = sweptSection(model, (L * i) / 10, M, true, false);
-    if (!s.aft && s.keel) {
-      creaseCols = s.creaseCols;
-      break;
-    }
-  }
-  return { grid, creaseCols };
-}
-
 // ---------- STEP text builder ----------
 
 function fmt(x: number): string {
@@ -456,7 +393,7 @@ function emitTransomFace(
     o2 = d.add(`ORIENTED_EDGE('',*,*,#${eTop},.T.)`);
   const loop = d.add(`EDGE_LOOP('',(#${o1},#${o2}))`),
     bound = d.add(`FACE_OUTER_BOUND('',#${loop},.T.)`);
-  const [ta, tb] = model.sheer.transom,
+  const [ta, tb] = model.transom,
     slope = (tb.x - ta.x) / (tb.z - ta.z || 1),
     place = d.add(
       `AXIS2_PLACEMENT_3D('',#${d.point(net[0][0])},#${d.dir(V.norm([1, 0, -slope]))},#${d.dir([0, 1, 0])})`,
@@ -469,27 +406,22 @@ function emitTransomFace(
 
 export function buildStep(model: Model, date: string): string {
   DATE = date;
-  prepare(model); // ensure the sheer samplers are current
-  const M = 24,
-    { grid: half, creaseCols: halfCrease } = trimmedHullGrid(model, 48, M);
-  if (half.length < 4) throw new Error("hull has too few sections to export");
-  // full-width grid: starboard sheer→keel (cols 0..M), then port keel→sheer (cols M+1..2M) as the
-  // y-mirror, dropping the duplicate keel point. The keel is therefore an INTERIOR column of one surface
-  // — C² smooth across the centerline — instead of two half-surfaces mirrored at a seam (which only join
-  // smoothly when the keel approach is exactly horizontal, and otherwise fold into a welt: the "pucker").
-  const grid: Vec3[][] = half.map(mirrorRow);
-
-  // full-width crease columns: a chine knuckle at half-col c sits at full-cols c and 2M−c; the keel (half
-  // col M) is the centre col M. Mult-q v-knots there let the one surface carry those creases.
-  const creaseSet = new Set<number>();
-  for (const c of halfCrease) {
-    if (c === M) creaseSet.add(M);
-    else {
-      creaseSet.add(c);
-      creaseSet.add(2 * M - c);
-    }
-  }
-  const creaseCols = [...creaseSet].sort((a, b) => a - b);
+  prepare(model); // ensure the derived curves are current
+  // The grid comes back FULL WIDTH — starboard sheer → keel → port sheer, as one row — so the keel is an
+  // INTERIOR column of one surface (C² across the centerline) rather than a seam between two mirrored
+  // halves, which only joins smoothly when the keel approach is exactly horizontal and otherwise folds
+  // into a welt (the "pucker"). `creaseCols` are already full-width indices, mirrored to both sides.
+  //
+  // R is the sub-steps per section segment: with S station points the half is (S−1)·R columns wide, so
+  // R = 6 on the default 5-point section reproduces v1's 24-column half.
+  const { grid: raw, creaseCols } = trimmedHullGrid(model, 48, 6);
+  if (raw.length < 4) throw new Error("hull has too few sections to export");
+  // the geometric context below declares MILLIMETRES, so a hull authored in another unit is converted on the
+  // way out — v2's coordinates are absolute in `model.unit`, which need not be mm.
+  const s = unitScale(model.unit, "mm"),
+    grid: Vec3[][] = raw.map((row) =>
+      row.map((p): Vec3 => [p[0] * s, p[1] * s, p[2] * s]),
+    );
 
   const d = new StepDoc();
   const faces: number[] = [];

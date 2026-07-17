@@ -38,7 +38,8 @@ export type Bez = [Pt, Pt, Pt, Pt];
 const add = (a: Pt, b: Pt): Pt => a.map((v, i) => v + b[i]);
 const sub = (a: Pt, b: Pt): Pt => a.map((v, i) => v - b[i]);
 const scale = (a: Pt, s: number): Pt => a.map((v) => v * s);
-const lerpPt = (a: Pt, b: Pt, t: number): Pt => a.map((v, i) => lerp(v, b[i], t));
+const lerpPt = (a: Pt, b: Pt, t: number): Pt =>
+  a.map((v, i) => lerp(v, b[i], t));
 
 // Centripetal knot spacing over `pts`: t₀ = 0, tⱼ₊₁ = tⱼ + |Qⱼ₊₁ − Qⱼ|^½. Coincident points would give a
 // zero step and divide by zero in the tangent formula, so each step has a floor.
@@ -54,7 +55,14 @@ export function centripetalParams(pts: Pt[]): number[] {
 // The Catmull-Rom tangent at P₁, scaled to the local [0,1] parameter of the segment P₁→P₂ (so the Bézier
 // control point is P₁ + M/3). This is the non-uniform generalization: with t evenly spaced it reduces to the
 // uniform Catmull-Rom's (P₂ − P₀)/2. `t` are the knots of the four points involved.
-function tangent(p0: Pt, p1: Pt, p2: Pt, t0: number, t1: number, t2: number): Pt {
+function tangent(
+  p0: Pt,
+  p1: Pt,
+  p2: Pt,
+  t0: number,
+  t1: number,
+  t2: number,
+): Pt {
   const a = scale(sub(p1, p0), 1 / (t1 - t0)),
     b = scale(sub(p2, p0), 1 / (t2 - t0)),
     c = scale(sub(p2, p1), 1 / (t2 - t1));
@@ -82,14 +90,16 @@ export function crChain(vals: Pt[], t: number[], ks: number[]): Bez[] {
     const m1 =
       j > 0 ? tangent(vals[j - 1], p, q, t[j - 1], t[j], t[j + 1]) : chord;
     const m2 =
-      j + 2 < n
-        ? tangent(p, q, vals[j + 2], t[j], t[j + 1], t[j + 2])
-        : chord;
+      j + 2 < n ? tangent(p, q, vals[j + 2], t[j], t[j + 1], t[j + 2]) : chord;
     // knuckle: pull each interior control point toward the one that makes this segment straight. k at the
     // point nearest that control point governs it, so a corner at p bends only the sides that touch p.
     const kp = Math.min(Math.max(ks[j] ?? 0, 0), 1),
       kq = Math.min(Math.max(ks[j + 1] ?? 0, 0), 1);
-    const b1 = lerpPt(add(p, scale(m1, 1 / 3)), add(p, scale(chord, 1 / 3)), kp),
+    const b1 = lerpPt(
+        add(p, scale(m1, 1 / 3)),
+        add(p, scale(chord, 1 / 3)),
+        kp,
+      ),
       b2 = lerpPt(sub(q, scale(m2, 1 / 3)), sub(q, scale(chord, 1 / 3)), kq);
     segs.push([p, b1, b2, q]);
   }

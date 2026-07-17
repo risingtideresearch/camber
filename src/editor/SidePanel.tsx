@@ -1,10 +1,5 @@
 import { useState } from "react";
-import {
-  addTemplate,
-  removeTemplate,
-  setKeelK,
-  type Model,
-} from "../core/model";
+import { addStation, removeStation, setKeelK, type Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import type { CurvatureSettings } from "../core/comb";
 import type { Tool } from "./types";
@@ -12,9 +7,9 @@ import { SideTabs } from "./SideTabs";
 import { StationEditor } from "./StationEditor";
 import "./SidePanel.css";
 
-// The section-template editor card: the tab strip, the stacked per-template editors (only the active one
-// shown), and the keel-knuckle slider for the active template. Owns which tab is active; everything else
-// flows from the model passed in from above.
+// The section editor card: the tab strip, the stacked per-station editors (only the active one shown), and
+// the keel-knuckle slider for the active station. Owns which tab is active; everything else flows from the
+// model passed in from above.
 interface SidePanelProps {
   model: Model;
   modelVersion: number;
@@ -37,21 +32,25 @@ export function SidePanel({
   curvature,
 }: SidePanelProps) {
   const [activeTab, setActiveTab] = useState(0);
-  const K = model.templates.length;
-  const active = Math.min(activeTab, K - 1); // clamp in case a template was removed
+  const K = model.stations.length;
+  const active = Math.min(activeTab, K - 1); // clamp in case a station was removed
 
-  const onAddTemplate = () => {
-    if (model.templates.length >= 7) return;
-    addTemplate(model);
+  // A station is added AT THE CUT: it needs a definite position along the sheer (v1's templates had none),
+  // and the cut is where the user is already looking. Its section is read off the loft there, so the hull is
+  // unchanged by the insert — it just gains a handle where the surface already was.
+  const onAddStation = () => {
+    if (K >= 7) return;
+    const idx = addStation(model, model.plan.uAtX(model.x0));
+    if (idx < 0) return; // no room at the minimum station spacing
     onSelect(null);
-    setActiveTab(model.templates.length - 1); // the freshly added template becomes active
+    setActiveTab(idx); // the freshly added station becomes active
     bumpModel();
   };
-  const onRemoveTemplate = (ti: number) => {
-    if (model.templates.length <= 1) return;
-    removeTemplate(model, ti);
+  const onRemoveStation = (si: number) => {
+    if (K <= 1) return;
+    removeStation(model, si);
     onSelect(null);
-    setActiveTab((t) => Math.min(t, model.templates.length - 1));
+    setActiveTab((t) => Math.min(t, model.stations.length - 1));
     bumpModel();
   };
   const onKeel = (k: number) => {
@@ -59,7 +58,7 @@ export function SidePanel({
     bumpModel();
   };
 
-  const keelK = model.keelK[active] ?? 0;
+  const keelK = model.stations[active]?.keelK ?? 0;
 
   return (
     <div className="card sidecard">
@@ -67,18 +66,18 @@ export function SidePanel({
         model={model}
         activeTab={active}
         onSelectTab={setActiveTab}
-        onAddTemplate={onAddTemplate}
-        onRemoveTemplate={onRemoveTemplate}
+        onAddStation={onAddStation}
+        onRemoveStation={onRemoveStation}
       />
       <div className="sidebody">
-        {model.templates.map((_, ti) => (
+        {model.stations.map((_, si) => (
           <StationEditor
-            key={ti}
+            key={si}
             model={model}
             modelVersion={modelVersion}
             selection={selection}
-            ti={ti}
-            active={ti === active}
+            si={si}
+            active={si === active}
             tool={tool}
             onSelect={onSelect}
             setTool={setTool}
@@ -90,7 +89,7 @@ export function SidePanel({
       <div className="keelrow">
         <label
           className="ctl"
-          title="Keel knuckle for the active template — 0 = smooth (C¹ across the centerline), 1 = a hard V"
+          title="Keel knuckle for the active station — 0 = smooth (C¹ across the centerline), 1 = a hard V. Stored and lofted, but not yet meshed: the keel is drawn smooth for now."
         >
           Keel
           <input

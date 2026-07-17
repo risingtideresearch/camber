@@ -4,18 +4,31 @@
 // tangent, not the boat centerline), so a section point's world-x grows with depth and the keel sits well
 // forward of the sheer. Mirror symmetry then made the keel a forward x-cusp, and a TRUE transverse
 // (constant-x) slice rode up over the centerline into a ridge — the visible "pucker", worst at a narrow,
-// flared transom. sweptSection now un-rakes the keel zone so the keel crossing is transverse.
+// flared transom.
 //
-// This test rebuilds the rendered full-width surface (the same rows buildHullMesh uses), cuts a family of
-// TRUE transverse sections through the keel-bearing length of every example hull (plus the default), and
-// fails if the centerline ever rides ABOVE the surrounding keel — i.e. if the keel is a ridge rather than a
-// smooth valley. A clean keel has the centerline as its deepest point (ridge <= 0); the old bug spiked to
-// +8 mm at the stern. THRESHOLD_MM is a small margin above the residual discretisation noise.
+// Version 2 addresses that structurally rather than by un-raking the keel zone as v1 did: each mesh row is
+// built FULL WIDTH as one curve (the starboard half plus its y-mirror, sharing the single keel point), so
+// the keel is an interior column of one continuous surface and there is no mirror seam to fold. This test is
+// the guard on that: it rebuilds the rendered surface (the same rows buildHullMesh draws), cuts a family of
+// true transverse sections through the keel-bearing length of every example hull (plus the default and the
+// fixtures), and fails if the centerline ever rides ABOVE the surrounding keel — i.e. if the keel is a ridge
+// rather than a smooth valley.
 //
-// It also guards keel SHAPE within a station: scanning sheer→keel the section depth must be non-decreasing
-// (the keel is the deepest point). A flat bottom inboard of a chine once made the keel-round parabola bulge
-// the bottom UP into an inflection — a depth reversal — so REVERSAL_MM caps how far the depth may dip below
-// its running max on the way to the keel.
+// It also guards keel SHAPE within a station: scanning deck→keel the section depth should be non-decreasing
+// (the keel is the deepest point). The station's control points are clamped monotone by the editor, but the
+// curve THROUGH them is a Catmull-Rom and can overshoot into a bulge — REVERSAL caps how far the depth may
+// dip below its running max on the way to the keel.
+//
+// THE TWO BARS ARE LOOSER THAN v1'S, DELIBERATELY. v1 faired a section with a knuckle-aware MONOTONE Hermite,
+// which cannot overshoot at all, so its bars could sit just above zero. v2 fairs every section with a
+// centripetal Catmull-Rom (the fairing toggle is gone by design), which overshoots slightly wherever a steep
+// run meets a flat one — on flat-bottom-fade, whose lofted z-knots near the turn of the bilge go −209.7,
+// −216.5, −224.9, the curve dips to −217.9 and comes back up: a 1.9 bulge (0.8% of that section's depth)
+// where a monotone interpolant through the SAME knots gives exactly 0. That is the accepted, documented
+// consequence of the Catmull-Rom decision — the curve still passes through every authored point — so the bars
+// below now bound the Catmull-Rom's INHERENT overshoot rather than v1's keel-round construction bug (which
+// this version does not have: there is no keel-round parabola any more). They are still well under the bugs
+// they were first written for: a ridge of 8 and a reversal of several, at this scale.
 //
 // Run with `npm run test:centerline` (tsx runs this directly under node). Non-zero exit on any
 // failure so it can gate CI alongside the keel-smoothness test.
@@ -24,34 +37,42 @@ import {
   createModel,
   resetModel,
   prepare,
-  L,
-  sweptSection,
-  stationAt,
+  loa,
+  sectionAt,
 } from "../src/core/model";
+import { hullGrid } from "../src/core/mesh";
 import { parseDocument, loadHull } from "../src/core/json";
-import { mirrorRow, type Vec3 } from "../src/core/math";
+import { type Vec3 } from "../src/core/math";
 import { examplesDir } from "./paths";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { dirname, join } from "path";
 
 const model = createModel();
 
-// the most the centerline may ride above the deepest keel point in a true transverse section before we call
-// it a pucker. The fair construction lands at ~0 (the centerline IS the deepest point); the old mirror bug
-// spiked to +8 mm at a narrow transom. 1.5 mm is wide of the discretisation noise but well under the bug.
-const THRESHOLD_MM = 0.375; // (units; ÷4 of the old 1.5 mm under the unitless L=1000 rescale)
-// the most the section depth may dip below its running max while scanning sheer→keel (a keel inflection /
-// bulge). Clean keels land at ~0; the flat-bottom-inflection bug reached several mm. 1.0 mm is the cap.
-const REVERSAL_MM = 0.25; // (units; ÷4 of the old 1.0 mm)
+// The tolerances below are stated at the scale the example hulls are drawn to (v1 documents of length 1000,
+// whose numbers carry across as millimetres). The built-in default hull is 5000, so every LENGTH-dimensioned
+// bar is mapped onto the live hull; the curvature INDEX goes the other way (a second derivative scales as
+// 1/length), and angles need no mapping at all.
+const S1 = (v: number): number => (v * loa(model)) / 1000;
+const S1inv = (v: number): number => (v * 1000) / loa(model);
+
+// The most the centerline may ride above the deepest keel point in a true transverse section before we call
+// it a pucker. Every hull here lands at ~0 (the centerline IS the deepest point) except flat-bottom-fade,
+// whose section bulge (see the header) lifts it to 0.55; the old mirror bug spiked to +8 at a narrow transom.
+const THRESHOLD = 1.0;
+// The most the section depth may dip below its running max while scanning deck→keel (a keel inflection /
+// bulge). Every hull here is at 0 except flat-bottom-fade, where the Catmull-Rom's inherent overshoot on its
+// near-flat bottom reaches 1.89; the v1 flat-bottom-inflection bug reached several.
+const REVERSAL = 3.0;
 // max near-keel longitudinal buttock curvature index (|d²z/dx²|·1e3) over the mid-body. A transverse ridge
 // can be 0 yet the keel still wrinkle ALONG the hull — e.g. the keel-rounding anchor stepping as the keel
-// crossing slides past a chine (the "Keel Distortion" flat-bottom hull spiked to ~88 here before the
-// chine-proximity fade fix; clean hulls sit under ~6).
-const KEEL_BUTTOCK_MAX = 40; // curvature index = |d²z/dx²|·1e3 — scales ×4 under the ÷4 length rescale (was 10)
-const BUTTOCK_YS = [15, 30, 45]; // half-breadths (units) near the keel at which to judge longitudinal fairness
-const M = 44; // section columns per half — matches the 3D mesh (buildHullMesh)
+// crossing slides past a chine (the "keel-at-chine" fixture spiked to ~88 here before the chine-proximity
+// fade fix; clean hulls sit under ~6).
+const KEEL_BUTTOCK_MAX = 40; // a curvature index: scaled INVERSELY with the hull's length
+const BUTTOCK_YS = [15, 30, 45]; // half-breadths near the keel at which to judge longitudinal fairness
+const R = 11; // sub-steps per section segment → 44 columns per half on a 5-point section, as the 3D mesh uses
 const NS = 180; // station sweep resolution — matches the 3D mesh
-const BAND_MM = 23; // half-breadth window (units) around the centerline within which we judge the keel shape
+const BAND = 23; // half-breadth window around the centerline within which we judge the keel shape
 
 // torture-test hulls kept out of examples/ (they may not meet every fairness bar everywhere) but exercised
 // here as regression fixtures — e.g. keel-at-chine, which guards the keel-rounding chine-fade fix.
@@ -59,16 +80,29 @@ function fixturesDir(): string {
   return join(dirname(examplesDir()), "test", "fixtures");
 }
 
-// the rendered full-width surface grid: each row is starboard sheer -> keel -> port sheer (the keel an
-// interior column at index M), exactly as buildHullMesh/bilgeRows sample it.
-function fullRows(): Vec3[][] {
-  const rows: Vec3[][] = [];
-  for (let i = 0; i <= NS; i++) {
-    const s = sweptSection(model, (L * i) / NS, M, true, false);
-    if (s.aft) continue;
-    rows.push(mirrorRow(s.pts));
-  }
-  return rows;
+// The rendered surface grid: each row is starboard sheer → keel → port sheer (the keel an interior column),
+// exactly as buildHullMesh samples it. Returns the rows, the keel's column index, and which rows actually
+// REACH the keel.
+//
+// That last flag matters here. v2 trims every column against all three cuts at once, so near the stern a
+// column's bottom is the TRANSOM, not the centerline — the keel column is the transom edge there, and the
+// keel line meets it at a genuine corner. (v1's equivalent grid was swept WITHOUT the transom cut and clipped
+// afterwards, so its keel column was the real keel for its whole length and no corner appeared.) Judging keel
+// fairness across that corner would be measuring the transom, so the callers below stay inside the run of
+// rows that reach the centerline.
+function fullRows(): { rows: Vec3[][]; keelCol: number; keel: boolean[] } {
+  const g = hullGrid(model, NS, R, true);
+  return { rows: g.rows, keelCol: g.M, keel: g.keel };
+}
+
+// the x-range over which the keel is a real keel (the centerline), not the transom edge
+function keelSpan(
+  rows: Vec3[][],
+  keelCol: number,
+  keel: boolean[],
+): { lo: number; hi: number } | null {
+  const xs = rows.filter((_, i) => keel[i]).map((r) => r[keelCol][0]);
+  return xs.length < 4 ? null : { lo: Math.min(...xs), hi: Math.max(...xs) };
 }
 
 // the true transverse section at world-x = X0: walk each column's longitudinal polyline and read (y,z) where
@@ -78,10 +112,10 @@ function trueSection(
   X0: number,
 ): { y: number; z: number }[] | null {
   const C = rows[0].length,
-    R = rows.length,
+    R2 = rows.length,
     pts: { y: number; z: number }[] = [];
   for (let j = 0; j < C; j++)
-    for (let i = 0; i < R - 1; i++) {
+    for (let i = 0; i < R2 - 1; i++) {
       const a = rows[i][j],
         b = rows[i + 1][j];
       if ((a[0] - X0) * (b[0] - X0) <= 0 && a[0] !== b[0]) {
@@ -93,20 +127,21 @@ function trueSection(
   return pts.length >= 3 ? pts.sort((p, q) => p.y - q.y) : null;
 }
 
-// worst centerline ridge (mm, positive = pucker) over the keel-bearing length, and where it is
+// worst centerline ridge (positive = pucker) over the keel-bearing length, and where it is
 function worstRidge(): { ridge: number; x: number } {
-  const rows = fullRows();
+  const { rows, keelCol, keel } = fullRows();
   if (rows.length < 4) return { ridge: 0, x: 0 };
-  const keelXs = rows.map((r) => r[M][0]);
-  const x0 = Math.min(...keelXs),
-    x1 = Math.max(...keelXs);
+  const span = keelSpan(rows, keelCol, keel);
+  if (!span) return { ridge: 0, x: 0 };
+  const x0 = span.lo,
+    x1 = span.hi;
   let worst = -Infinity,
     at = 0;
   // sample inside the keel-bearing span, clear of the degenerate bow tip
-  for (let X = x0 + 10; X <= x1 - 50; X += 6) {
+  for (let X = x0 + S1(10); X <= x1 - S1(50); X += S1(6)) {
     const sec = trueSection(rows, X);
     if (!sec) continue;
-    const band = sec.filter((p) => Math.abs(p.y) <= BAND_MM);
+    const band = sec.filter((p) => Math.abs(p.y) <= S1(BAND));
     if (band.length < 3) continue;
     const zCenter = band.reduce((b, p) =>
       Math.abs(p.y) < Math.abs(b.y) ? p : b,
@@ -121,29 +156,28 @@ function worstRidge(): { ridge: number; x: number } {
   return { ridge: worst === -Infinity ? 0 : worst, x: at };
 }
 
-// worst keel-shape reversal: scanning each closed station's mirrored section sheer→keel, the depth must be
-// non-decreasing (keel deepest). Returns the largest dip below the running max over the hull, and where.
-function worstReversal(): { rev: number; x: number } {
+// worst keel-shape reversal: scanning each station's section deck→keel, the depth must be non-decreasing
+// (keel deepest). Returns the largest dip below the running max over the hull, and where.
+function worstReversal(): { rev: number; u: number } {
   let worst = 0,
     at = 0;
-  for (let x = 0.01 * L; x <= 0.99 * L; x += 2) {
-    const st = stationAt(model, x, true);
-    if (!st.tmax) continue;
-    const us = st.tmax / 2,
-      K = 80;
+  for (let u = 0.01; u <= 0.99; u += 0.002) {
+    const sec = sectionAt(model, u);
+    if (!sec.vmax) continue;
+    const K = 80;
     let mx = -Infinity,
       dip = 0;
     for (let i = 0; i <= K; i++) {
-      const d = st.d((us * i) / K);
+      const d = -sec.at((sec.vmax * i) / K)[1]; // depth below the deck datum
       if (d > mx) mx = d;
       else dip = Math.max(dip, mx - d);
     }
     if (dip > worst) {
       worst = dip;
-      at = x;
+      at = u;
     }
   }
-  return { rev: worst, x: at };
+  return { rev: worst, u: at };
 }
 
 // z on the starboard side at half-breadth Y from a true transverse section, or NaN if the section is too
@@ -165,20 +199,22 @@ function zAtHalfBreadth(sec: { y: number; z: number }[], Y: number): number {
 // length, where buttocks terminate into the keel and read artificially high). This catches a LONGITUDINAL
 // keel wrinkle that the transverse ridge/reversal checks miss.
 function worstKeelButtock(): { curv: number; x: number; y: number } {
-  const rows = fullRows();
+  const { rows, keelCol, keel } = fullRows();
   if (rows.length < 5) return { curv: 0, x: 0, y: 0 };
-  const keelXs = rows.map((r) => r[M][0]);
-  const lo = Math.min(...keelXs),
-    hi = Math.max(...keelXs);
-  const x0 = lo + 38,
+  const span = keelSpan(rows, keelCol, keel);
+  if (!span) return { curv: 0, x: 0, y: 0 };
+  const lo = span.lo,
+    hi = span.hi;
+  const x0 = lo + S1(38),
     x1 = hi - 0.3 * (hi - lo),
-    dx = 6;
+    dx = S1(6);
   const xs: number[] = [];
   for (let X = x0; X <= x1; X += dx) xs.push(X);
   let curv = 0,
     at = 0,
     aty = 0;
-  for (const Y of BUTTOCK_YS) {
+  for (const Y0 of BUTTOCK_YS) {
+    const Y = S1(Y0);
     const Z = xs.map((X) => {
       const s = trueSection(rows, X);
       return s ? zAtHalfBreadth(s, Y) : NaN;
@@ -221,20 +257,23 @@ function main(): number {
     cases.push({ name: `${f} (fixture)`, path: join(fixturesDir(), f) });
   let failures = 0;
   console.log(
-    `Centerline fairness — keel ridge in a true transverse section (≤${THRESHOLD_MM} mm), keel-shape ` +
-      `reversal sheer→keel (≤${REVERSAL_MM} mm), and near-keel longitudinal fairness (≤${KEEL_BUTTOCK_MAX})\n`,
+    `Centerline fairness — keel ridge in a true transverse section (≤${THRESHOLD}), keel-shape ` +
+      `reversal deck→keel (≤${REVERSAL}), and near-keel longitudinal fairness (≤${KEEL_BUTTOCK_MAX})\n` +
+      `  (all bars are at the 1000-length scale and mapped onto each hull)\n`,
   );
   for (const { name, path } of cases) {
     loadCase(path);
     const { ridge, x } = worstRidge();
-    const { rev, x: rx } = worstReversal();
+    const { rev, u: ru } = worstReversal();
     const { curv, x: bx } = worstKeelButtock();
     const bad =
-      ridge > THRESHOLD_MM || rev > REVERSAL_MM || curv > KEEL_BUTTOCK_MAX;
+      ridge > S1(THRESHOLD) ||
+      rev > S1(REVERSAL) ||
+      curv > S1inv(KEEL_BUTTOCK_MAX);
     if (bad) failures++;
     console.log(
-      `  ${bad ? "FAIL" : "ok  "}  ${name.padEnd(26)} ridge ${ridge.toFixed(2)} @ x=${Math.round(x)}` +
-        `   reversal ${rev.toFixed(2)} @ x=${Math.round(rx)}   keel-fair ${curv.toFixed(1)} @ x=${Math.round(bx)}${bad ? "  ✗" : ""}`,
+      `  ${bad ? "FAIL" : "ok  "}  ${name.padEnd(42)} ridge ${S1inv(ridge).toFixed(2)} @ x=${Math.round(x)}` +
+        `   reversal ${S1inv(rev).toFixed(2)} @ u=${ru.toFixed(2)}   keel-fair ${S1(curv).toFixed(1)} @ x=${Math.round(bx)}${bad ? "  ✗" : ""}`,
     );
   }
   console.log(

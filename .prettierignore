@@ -1,0 +1,9 @@
+# Build output — mirrors the `ignores` list in eslint.config.js.
+#
+# Prettier reads the ROOT .gitignore only, so the generated files under tools/preview (listed in
+# tools/preview/.gitignore) are invisible to it: running the render harness once would otherwise leave its
+# own esbuild bundle behind and make `npm run check` fail on it.
+dist
+**/node_modules
+tools/preview/*.mjs
+tools/preview/out

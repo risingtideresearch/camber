@@ -6,7 +6,7 @@
 // a proportion of that, which is also how `bounds` in model.ts states the editable domain, so the drawn
 // panels and the drag limits agree by construction.
 //
-// The panel sizes that fall out (LH, PH) depend on len; the ones that don't (STW, STH, WH, the paddings) are
+// The panel sizes that fall out (lh, ph) depend on len; the ones that don't (STW, STH, the paddings) are
 // plain constants.
 
 import { bounds, loa, type Model } from "./model";
@@ -94,7 +94,12 @@ export function makeView(len: number): View {
 
 // the editable bounds for a hull of length `l`, without needing a Model to ask
 function boundsOf(l: number): ReturnType<typeof bounds> {
-  return bounds({ sheerPlan: [{ x: 0, y: 0 }, { x: l, y: 0 }] } as Model);
+  return bounds({
+    sheerPlan: [
+      { x: 0, y: 0 },
+      { x: l, y: 0 },
+    ],
+  } as Model);
 }
 
 export const viewOf = (model: Model): View => makeView(loa(model));

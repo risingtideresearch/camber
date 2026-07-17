@@ -4,19 +4,17 @@
 import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { createModel, loa, resetModel, prepare } from "../../src/core/model";
 import {
-  createModel,
-  L,
-  resetModel,
-  prepare,
-  clippedSection,
+  sweptSection,
   forwardLimit,
+  aftLimit,
   transomEdge,
-  type Section,
-} from "../../src/core/model";
+  type SectionRow,
+} from "../../src/core/mesh";
 import { loadJsonText } from "../../src/core/json";
 import type { Vec3 } from "../../src/core/math";
-import { mapX, zScreenP, PH } from "../../src/core/view";
+import { viewOf } from "../../src/core/view";
 
 const model = createModel();
 
@@ -25,6 +23,11 @@ resetModel(model);
 if (doc) loadJsonText(model, readFileSync(doc, "utf8"));
 prepare(model);
 
+// the view transforms follow the hull's own length now, so they come from the model
+const V = viewOf(model),
+  { mapX, zScreenP, ph: PH } = V,
+  L = loa(model);
+
 const poly = (pts: [number, number][]): string =>
   pts
     .map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`)
@@ -32,16 +35,20 @@ const poly = (pts: [number, number][]): string =>
 const path = (d: string, stroke: string, w: number, extra = ""): string =>
   `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round" ${extra}/>`;
 
-// sections to the forward closure, cosine-clustered (same as render.ts)
+// the swept sections over the hull's own span — from the transom cut to the bow closure, in the plan's
+// parameter — cosine-clustered at both ends (same as the editor)
 const NSEC = 80,
-  xFwd = forwardLimit(model),
-  sections: Section[] = [];
+  u0 = aftLimit(model),
+  uFwd = forwardLimit(model),
+  xFwd = model.plan.at(uFwd)[0],
+  sections: SectionRow[] = [];
 for (let i = 0; i <= NSEC; i++)
   sections.push(
-    clippedSection(
+    sweptSection(
       model,
-      (xFwd * (1 - Math.cos((Math.PI * i) / NSEC))) / 2,
-      18,
+      u0 + (uFwd - u0) * ((1 - Math.cos((Math.PI * i) / NSEC)) / 2),
+      4,
+      true,
     ),
   );
 
@@ -61,13 +68,15 @@ const keel = closing.map((s) => s.pts[s.pts.length - 1] as Vec3);
 const te = transomEdge(model);
 if (keel.length) {
   if (te.length) keel.unshift(te[te.length - 1]);
-  const dived = (s: Section) => s.pts[0][2] < model.sheer.zf(s.pts[0][0]) - 3;
+  // the tolerance is a fraction of the hull's own length (it was absolute against v1's fixed L = 1000)
+  const tol = 0.003 * L;
+  const dived = (s: SectionRow) => s.pts[0][2] < model.trimZ(s.pts[0][0]) - tol;
   let b = closing.length;
   while (b > 0 && dived(closing[b - 1])) b--;
   const stem = closing.slice(b).map((s) => s.pts[0] as Vec3);
   if (stem.length)
     for (let i = stem.length - 1; i >= 0; i--) keel.push(stem[i]);
-  else keel.push([xFwd, 0, model.sheer.zf(xFwd)]);
+  else keel.push([xFwd, 0, model.trimZ(xFwd)]);
 }
 body += path(
   poly(keel.map((p) => [mapX(p[0]), zScreenP(p[2])])),
@@ -75,17 +84,20 @@ body += path(
   2.4,
 );
 
-// sheer trim (orange) over [0, L+overhang]
+// sheer trim (orange) over its own x domain — there is no bow overhang to extend past any more: the hull
+// spans exactly the plan, and a tumblehome bow is closed by dragging the plan across the centerline
+const tx0 = model.sheerTrim[0].x,
+  tx1 = model.sheerTrim[model.sheerTrim.length - 1].x;
 const xs: number[] = [];
-for (let i = 0; i <= 110; i++) xs.push(((L + 400) * i) / 110);
+for (let i = 0; i <= 110; i++) xs.push(tx0 + ((tx1 - tx0) * i) / 110);
 body += path(
-  poly(xs.map((x) => [mapX(x), zScreenP(model.sheer.zf(x))])),
+  poly(xs.map((x) => [mapX(x), zScreenP(model.trimZ(x))])),
   "#dd6b20",
   2.4,
 );
 // trim control polygon (faint)
 body += path(
-  poly(model.sheer.trim.map((cp) => [mapX(cp.x), zScreenP(cp.z)])),
+  poly(model.sheerTrim.map((cp) => [mapX(cp.x), zScreenP(cp.z)])),
   "#dd6b20",
   1,
   'opacity="0.4" stroke-dasharray="3 4"',
@@ -107,5 +119,5 @@ const out = process.argv[2] || "out/profile.png";
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, new Resvg(svg).render().asPng());
 console.log(
-  `wrote ${out}  forwardLimit=${xFwd.toFixed(0)}  keelPts=${keel.length}`,
+  `wrote ${out}  loa=${L} ${model.unit}  forwardLimit u=${uFwd.toFixed(3)} (x=${xFwd.toFixed(0)})  keelPts=${keel.length}`,
 );

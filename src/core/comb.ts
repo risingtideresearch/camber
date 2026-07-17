@@ -18,9 +18,9 @@
 //
 // Evaluators must be SMOOTH at the ±ε scale: converge any internal root-find by bisection (see model.ts
 // bisectRoot) — a coarse scan placed with one linear-interpolation step puts its O(h²) noise straight
-// into κ. The trimmed-sheer comb keeps its bespoke converged evaluator in model.ts (its derivative
-// stencils share one expensive sampling pass); combFromSamples3 turns those samples into a comb here so
-// the auto-scaling matches everywhere.
+// into κ. Every hull curve now has a converged evaluator of its own in mesh.ts (sheerPointAt, keelPointAt,
+// longitudinalPointAt, dwlPointAt), so they all come through the builders below; v1 needed a bespoke
+// shared-pass variant for the sheer only because its crossing was not converged.
 
 import { clamp, type Vec2, type Vec3 } from "./math";
 
@@ -260,39 +260,11 @@ export function curveCombs3(
   }));
 }
 
-// a comb from precomputed converged samples (root, κ, unit principal normal) — the trimmed-sheer comb's
-// bespoke evaluator (model.ts trimmedSheerViz) produces these on one shared expensive pass — with the
-// same percentile auto-scale as the evaluator-based combs, so every overlay reads on one footing.
-export function combFromSamples3(
-  samples: { p: Vec3; kappa: number; nrm: Vec3 }[],
-  combLen: number,
-): Comb3 {
-  const hairs: [Vec3, Vec3][] = [],
-    env: Vec3[] = [];
-  const kaps = samples
-    .map((s) => s.kappa)
-    .filter((k) => isFinite(k))
-    .sort((a, b) => a - b);
-  const kref = kaps.length ? kaps[Math.floor(0.9 * (kaps.length - 1))] : 0;
-  if (kref > 1e-12)
-    for (const s of samples) {
-      const len = Math.min(s.kappa / kref, 1) * combLen || 0,
-        tip: Vec3 = [
-          s.p[0] - s.nrm[0] * len,
-          s.p[1] - s.nrm[1] * len,
-          s.p[2] - s.nrm[2] * len,
-        ];
-      hairs.push([s.p, tip]);
-      env.push(tip);
-    }
-  return { hairs, env };
-}
-
 // ---------- the editor-wide curvature-overlay settings ----------
 // Owned by EditorApp (the "Curvature" app-bar control), read by every view's draw routine. `on` is the
 // master toggle (the Curvature button); the booleans pick which combs are shown per view; the four counts
 // set the comb / hair density. Longitudinal counts drive the fore-aft curves (sheer, waterline, centerline,
-// 3D longitudinals); section counts drive the transverse curves (templates, cut sections, 3D sections).
+// 3D longitudinals); section counts drive the transverse curves (stations, cut sections, 3D sections).
 
 export interface CurvatureSettings {
   on: boolean; // master toggle — nothing draws unless this is true
@@ -303,12 +275,11 @@ export interface CurvatureSettings {
   profSheer: boolean; // the sheer-trim curve (the real sheer in side view)
   profCenterline: boolean; // the keel / rocker + stem outline
   profCut: boolean; // the live cut station's profile trace
-  // Station templates
-  tplSelected: boolean; // the active template's section curve
-  tplUnselected: boolean; // the ghosted (inactive) templates' section curves
+  // Stations
+  stnSelected: boolean; // the active station's section curve
+  stnUnselected: boolean; // the ghosted (inactive) stations' section curves
   // Cut section
-  cutRaw: boolean; // the raw interpolated half-section (before the keel mirror/round)
-  cutMirrored: boolean; // the mirrored + keel-rounded section (what survives into the hull)
+  cutSection: boolean; // the lofted section at the cut
   // 3D view
   d3Sheer: boolean; // the trimmed sheer edge
   d3Centerline: boolean; // the keel / centerline curve
@@ -329,10 +300,9 @@ export function defaultCurvature(): CurvatureSettings {
     profSheer: true,
     profCenterline: false,
     profCut: false,
-    tplSelected: true,
-    tplUnselected: false,
-    cutRaw: false,
-    cutMirrored: true,
+    stnSelected: true,
+    stnUnselected: false,
+    cutSection: true,
     d3Sheer: true,
     d3Centerline: false,
     d3Longitudinals: false,
