@@ -25,6 +25,7 @@
 // at once.
 
 import { clamp, mirrorRow, type Vec2, type Vec3 } from "./math";
+import { perfAdd, perfMark, PERF_MESH } from "./perf";
 import {
   bisectRoot,
   frameAt,
@@ -112,18 +113,31 @@ function anchorsFor(
 
 // The trimmed starboard half-section at u, as (S−1)·R + 1 world points from the sheer edge down to the keel.
 // With `trim` off it is the raw swept sheet instead: the whole section, deck to the last point, uncut.
+//
+// This is the hull's inner loop — the mesh calls it once per column — so it is where the performance
+// readout's mesh sub-steps are measured. The three phases are the real ones, in the order they run: loft
+// the section at u, trim it to find the span that survives, then sweep the sheet's rows inside that span.
+// (The sheet is sampled AFTER the trim rather than swept whole and cut, which is why there is no separate
+// "trimming the sheet" phase to time: the trim is what tells the sweep where to start and stop.) They are
+// reported through `perfAdd`, which discards them unless the hull rebuild's own pass is the open one — the
+// 2D views call this too, and there the caller's step is already being timed as a whole.
 export function sweptSection(
   model: Model,
   u: number,
   R = R_DEFAULT,
   trim = true,
 ): SectionRow {
-  const fr = frameAt(model, u),
+  const t0 = perfMark(),
+    fr = frameAt(model, u),
     sec = sectionAt(model, u),
     S = sec.vmax + 1;
+  const t1 = perfMark();
   const span = trim
     ? keptSpan(model, fr, sec)
     : ([0, sec.vmax] as [number, number]);
+  const t2 = perfMark();
+  perfAdd(PERF_MESH, "Lofting the sections", t1 - t0);
+  perfAdd(PERF_MESH, "Trimming (kept spans)", t2 - t1);
   if (!span)
     return { pts: [], empty: true, keel: false, creaseRows: [], creaseK: [] };
   const [vTop, vBot] = span,
@@ -158,6 +172,7 @@ export function sweptSection(
   const last = pts[pts.length - 1],
     keel = trim && Math.abs(last[1]) < 1e-6;
   if (keel) last[1] = 0;
+  perfAdd(PERF_MESH, "Sweeping the sheet (rows)", perfMark() - t2, pts.length);
   return { pts, empty: false, keel, creaseRows, creaseK };
 }
 

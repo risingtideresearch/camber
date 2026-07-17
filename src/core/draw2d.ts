@@ -30,9 +30,28 @@ import {
   selStationIdx,
 } from "./modelSelection";
 import { curveCombs2, type Comb2, type CurvatureSettings } from "./comb";
+import {
+  perfBegin,
+  perfEnd,
+  perfStep,
+  perfStation,
+  PERF_CUT,
+  PERF_PLAN,
+  PERF_PROFILE,
+} from "./perf";
 import { viewOf, PXpad, Ptop, type View } from "./view";
 
 const SVGNS = "http://www.w3.org/2000/svg";
+
+// ---------- sizes for the performance readout ----------
+// Each draw* below opens a pass and times the generation of its curves; these say how big the result was, so
+// a cost can be read against the work it did. A comb spans one existence run per stretch of curve, so its
+// size is the hairs across all of them; the partial evaluators (the waterline footprint, the cusp runs) come
+// back as runs of points for the same reason.
+const combHairs = (cs: Comb2[]): number =>
+  cs.reduce((n, c) => n + c.hairs.length, 0);
+const runPts = (runs: { length: number }[]): number =>
+  runs.reduce((n, r) => n + r.length, 0);
 
 export function el(
   tag: string,
@@ -219,7 +238,13 @@ export function cutTrace(
   proj: Proj,
   row?: SectionRow,
 ): void {
-  const cut = row ?? sweptSection(model, cutU(model), 10, true);
+  const cut = row
+    ? row
+    : perfStep(
+        "Cut section",
+        () => sweptSection(model, cutU(model), 10, true),
+        (s) => s.pts.length,
+      );
   if (cut.empty) return;
   svg.append(
     el("path", {
@@ -319,6 +344,7 @@ export function drawPlan(
   sc: [number, number],
   curv?: CurvatureSettings,
 ): void {
+  perfBegin(PERF_PLAN);
   const v = viewOf(model);
   setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
@@ -371,11 +397,14 @@ export function drawPlan(
   );
   // the sheer plan curve (the deck-edge half-breadth), sampled in its own parameter — it is a parametric
   // curve, not a graph, so that it can be drawn crossing the centerline at a tumblehome bow.
-  const pl: Vec2[] = [];
-  for (let i = 0; i <= 160; i++) {
-    const [x, y] = model.plan.at(i / 160);
-    pl.push([v.mapX(x), v.yPlan(y)]);
-  }
+  const pl = perfStep("Sheer plan curve", () => {
+    const out: Vec2[] = [];
+    for (let i = 0; i <= 160; i++) {
+      const [x, y] = model.plan.at(i / 160);
+      out.push([v.mapX(x), v.yPlan(y)]);
+    }
+    return out;
+  });
   svg.append(
     el("path", {
       d: poly(pl),
@@ -391,13 +420,16 @@ export function drawPlan(
   // widest-point (max-beam) longitudinal: the locus of each section's widest point. On a tumblehome hull it
   // lies OUTBOARD of the sheer (deck edge), and where it reaches the centerline is the true bow closure — so
   // it is the line to watch when shaping a tumblehome bow (the deck can close while the body is still open).
-  const beam: Vec3[] = [];
-  for (const s of rows) {
-    if (s.empty || !s.pts.length) continue;
-    let p = s.pts[0];
-    for (const q of s.pts) if (q[1] > p[1]) p = q;
-    beam.push(p);
-  }
+  const beam = perfStep("Max-beam line", () => {
+    const out: Vec3[] = [];
+    for (const s of rows) {
+      if (s.empty || !s.pts.length) continue;
+      let p = s.pts[0];
+      for (const q of s.pts) if (q[1] > p[1]) p = q;
+      out.push(p);
+    }
+    return out;
+  });
   if (beam.length > 1)
     svg.append(
       el("path", {
@@ -410,7 +442,7 @@ export function drawPlan(
       }),
     );
   // transom footprint in plan (centerline → sheer at the stern)
-  const te = transomEdge(model);
+  const te = perfStep("Transom footprint", () => transomEdge(model));
   if (te.length > 1) {
     svg.append(
       el("path", {
@@ -424,7 +456,8 @@ export function drawPlan(
     );
   }
   // design-waterline footprint (where the hull meets the WL plane)
-  for (const run of dwlContour(model)) {
+  const dwl = perfStep("Waterline footprint", () => dwlContour(model), runPts);
+  for (const run of dwl) {
     svg.append(
       el("path", {
         d: poly(run.map((p): Vec2 => [v.mapX(p[0]), v.yPlan(p[1])])),
@@ -439,7 +472,8 @@ export function drawPlan(
   }
   // cusp marker: where the plan curvature is too tight for the beam the swept surface folds. Shade the whole
   // folded area — from the cuspidal edge (offset R) inboard to the deepest swept point — in red.
-  for (const run of cuspRuns(model)) {
+  const cusps = perfStep("Cusp (fold) check", () => cuspRuns(model), runPts);
+  for (const run of cusps) {
     const ring = run
       .map((s): Vec2 => [v.mapX(s.outer[0]), v.yPlan(s.outer[1])])
       .concat(
@@ -469,8 +503,13 @@ export function drawPlan(
         const [x, y] = model.plan.at(u);
         return [v.mapX(x), v.yPlan(y)];
       };
-      for (const c of curveCombs2(f, 0, 1, curv.nLongHairs, COMB_LEN_STRIP))
-        drawComb2(svg, c, COL.sheer);
+      const cs = perfStep(
+        "Comb — sheer plan",
+        () => curveCombs2(f, 0, 1, curv.nLongHairs, COMB_LEN_STRIP),
+        combHairs,
+        "hairs",
+      );
+      for (const c of cs) drawComb2(svg, c, COL.sheer);
     }
     if (curv.planWaterline) {
       // partial: null wherever the section has no waterline crossing (dry, or fully wet) — each existing
@@ -479,8 +518,13 @@ export function drawPlan(
         const p = dwlPointAt(model, u);
         return p && [v.mapX(p[0]), v.yPlan(p[1])];
       };
-      for (const c of curveCombs2(f, 0, 1, curv.nLongHairs, COMB_LEN_STRIP))
-        drawComb2(svg, c, COL.wl);
+      const cs = perfStep(
+        "Comb — waterline",
+        () => curveCombs2(f, 0, 1, curv.nLongHairs, COMB_LEN_STRIP),
+        combHairs,
+        "hairs",
+      );
+      for (const c of cs) drawComb2(svg, c, COL.wl);
     }
   }
   // cut station — true plan heading (the fan angle)
@@ -496,6 +540,7 @@ export function drawPlan(
     const [sx, sy] = model.plan.at(st.u);
     stationHandle(svg, si, v.mapX(sx), v.yPlan(sy), onSelect);
   });
+  perfEnd(PERF_PLAN);
 }
 
 export function drawProfile(
@@ -507,6 +552,7 @@ export function drawProfile(
   sc: [number, number],
   curv?: CurvatureSettings,
 ): void {
+  perfBegin(PERF_PROFILE);
   const v = viewOf(model);
   setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
@@ -534,7 +580,10 @@ export function drawProfile(
   );
   // design waterline: horizontal in world ⇒ a raked line in this deck-frame profile (slope = the rake).
   // Runs from the transom to the hull's closure (forwardLimit, in u → its x on the plan).
-  const xFwd = model.plan.at(forwardLimit(model))[0],
+  const xFwd = perfStep(
+      "Hull forward limit",
+      () => model.plan.at(forwardLimit(model))[0],
+    ),
     wlS = Math.sin(model.deckRake),
     wlC = Math.cos(model.deckRake),
     zWL = (x: number): number => (-model.waterline - x * wlS) / wlC;
@@ -565,7 +614,7 @@ export function drawProfile(
   const closing = rows.filter((s) => s.keel && s.pts.length > 1);
   const keel = closing.map((s) => s.pts[s.pts.length - 1]);
   if (keel.length) {
-    const te0 = transomEdge(model);
+    const te0 = perfStep("Transom edge", () => transomEdge(model));
     if (te0.length) keel.unshift(te0[te0.length - 1]); // transom keel: deepest point of the transom outline
 
     // the bow stem: the CONTIGUOUS run of forwardmost sections whose top has dived below the authored trim
@@ -610,11 +659,14 @@ export function drawProfile(
       "stroke-dasharray": "3 4",
     }),
   );
-  const tpts: Vec2[] = [];
-  for (let i = 0; i <= 160; i++) {
-    const x = tx0 + ((tx1 - tx0) * i) / 160;
-    tpts.push([v.mapX(x), v.zScreenP(model.trimZ(x))]);
-  }
+  const tpts = perfStep("Sheer trim curve", () => {
+    const out: Vec2[] = [];
+    for (let i = 0; i <= 160; i++) {
+      const x = tx0 + ((tx1 - tx0) * i) / 160;
+      out.push([v.mapX(x), v.zScreenP(model.trimZ(x))]);
+    }
+    return out;
+  });
   svg.append(
     el("path", {
       d: poly(tpts),
@@ -639,7 +691,7 @@ export function drawProfile(
       "stroke-dasharray": "5 4",
     }),
   );
-  const te = transomEdge(model);
+  const te = perfStep("Transom edge", () => transomEdge(model));
   if (te.length > 1)
     svg.append(
       el("path", {
@@ -660,7 +712,8 @@ export function drawProfile(
   );
   // cusp marker: shade the folded depth band (offset = R down to the deepest swept point) at the cusping
   // stations, in red — the same folded region the plan view shades.
-  for (const run of cuspRuns(model)) {
+  const cusps = perfStep("Cusp (fold) check", () => cuspRuns(model), runPts);
+  for (const run of cusps) {
     const top = run.map((s): Vec2 => [v.mapX(s.x), v.zScreenP(s.zTop)]),
       bot = run.map((s): Vec2 => [v.mapX(s.x), v.zScreenP(s.zBot)]).reverse();
     svg.append(
@@ -676,15 +729,24 @@ export function drawProfile(
   }
   // the cut station's trimmed section, computed once and shared by the trace and the keel dot
   const cu = cutU(model),
-    cut = sweptSection(model, cu, 10, true);
+    cut = perfStep(
+      "Cut section",
+      () => sweptSection(model, cu, 10, true),
+      (s) => s.pts.length,
+    );
   // curvature combs: the sheer-trim curve and the keel / centerline outline (both fore-aft, so the
   // longitudinal hair count), and the live cut station's profile trace (transverse, so the section count).
   // Each comb evaluates the curve's ORIGINAL definition (see comb.ts), never the drawn polyline.
   if (curv?.on) {
     if (curv.profSheer) {
       const f = (x: number): Vec2 => [v.mapX(x), v.zScreenP(model.trimZ(x))];
-      for (const c of curveCombs2(f, tx0, tx1, curv.nLongHairs, COMB_LEN_STRIP))
-        drawComb2(svg, c, COL.sheer);
+      const cs = perfStep(
+        "Comb — sheer trim",
+        () => curveCombs2(f, tx0, tx1, curv.nLongHairs, COMB_LEN_STRIP),
+        combHairs,
+        "hairs",
+      );
+      for (const c of cs) drawComb2(svg, c, COL.sheer);
     }
     // the keel/rocker run of the outline (converged keelPointAt over the plan's parameter). The short
     // emergent-stem branch at a tumblehome bow is a different branch of the outline and carries no comb.
@@ -693,8 +755,13 @@ export function drawProfile(
         const p = keelPointAt(model, u);
         return p && [v.mapX(p[0]), v.zScreenP(p[2])];
       };
-      for (const c of curveCombs2(f, 0, 1, curv.nLongHairs, COMB_LEN_STRIP))
-        drawComb2(svg, c, COL.keel);
+      const cs = perfStep(
+        "Comb — centerline",
+        () => curveCombs2(f, 0, 1, curv.nLongHairs, COMB_LEN_STRIP),
+        combHairs,
+        "hairs",
+      );
+      for (const c of cs) drawComb2(svg, c, COL.keel);
     }
     if (curv.profCut) {
       // the cut station's kept span in profile, null wherever the section is trimmed away — `keepAt` is the
@@ -707,14 +774,13 @@ export function drawProfile(
         const p = stationWorld(fr, nz[0], nz[1]);
         return [v.mapX(p[0]), v.zScreenP(p[2])];
       };
-      for (const c of curveCombs2(
-        f,
-        0,
-        sec.vmax,
-        curv.nSectHairs,
-        COMB_LEN_STRIP,
-      ))
-        drawComb2(svg, c, "var(--slider)");
+      const cs = perfStep(
+        "Comb — cut section",
+        () => curveCombs2(f, 0, sec.vmax, curv.nSectHairs, COMB_LEN_STRIP),
+        combHairs,
+        "hairs",
+      );
+      for (const c of cs) drawComb2(svg, c, "var(--slider)");
     }
   }
   // cut station — true profile rake (the fan shifts x as the section runs inboard to the keel)
@@ -743,6 +809,7 @@ export function drawProfile(
   model.transom.forEach((cp, idx) =>
     transomDot(selection, svg, idx, v.mapX(cp.x), v.zScreenP(cp.z), onSelect),
   );
+  perfEnd(PERF_PROFILE);
 }
 
 // ---------- the station editors ----------
@@ -769,6 +836,8 @@ function stnEval(
   };
 }
 
+// Every station's curve is drawn in every station editor (this one solid, the rest as ghosts), so the step
+// is timed here rather than at the call site: it reports the whole fan under one label, with the call count.
 export function stnCurve(
   v: View,
   svg: SVGGElement,
@@ -776,10 +845,13 @@ export function stnCurve(
   c: string,
   op: number,
 ): void {
-  const { f, vmax } = stnEval(v, pts),
-    out: Vec2[] = [],
-    N = 600;
-  for (let i = 0; i <= N; i++) out.push(f((vmax * i) / N));
+  const out = perfStep("Section curves", () => {
+    const { f, vmax } = stnEval(v, pts),
+      o: Vec2[] = [],
+      N = 600;
+    for (let i = 0; i <= N; i++) o.push(f((vmax * i) / N));
+    return o;
+  });
   svg.append(
     el("path", {
       d: poly(out),
@@ -834,6 +906,7 @@ export function drawStation(
   sc: [number, number],
   curv?: CurvatureSettings,
 ): void {
+  perfBegin(perfStation(si));
   const v = viewOf(model),
     b = bounds(model);
   setMarkerScale(sc[0], sc[1]);
@@ -851,8 +924,13 @@ export function drawStation(
   if (curv?.on) {
     const comb = (pts: StationPointCP[], c: string, op: number): void => {
       const { f, vmax } = stnEval(v, pts);
-      for (const cb of curveCombs2(f, 0, vmax, curv.nSectHairs, COMB_LEN_STN))
-        drawComb2(svg, cb, c, op);
+      const cs = perfStep(
+        "Combs — sections",
+        () => curveCombs2(f, 0, vmax, curv.nSectHairs, COMB_LEN_STN),
+        combHairs,
+        "hairs",
+      );
+      for (const cb of cs) drawComb2(svg, cb, c, op);
     };
     if (curv.stnUnselected)
       model.stations.forEach((st, j) => {
@@ -895,6 +973,7 @@ export function drawStation(
       if (j !== si)
         redX(svg, v.snX(st.points[sIdx].n), v.snY(st.points[sIdx].z));
     });
+  perfEnd(perfStation(si));
 }
 
 // ---------- the live cut station ----------
@@ -913,6 +992,7 @@ export function drawCutStation(
   sc: [number, number],
   curv?: CurvatureSettings,
 ): void {
+  perfBegin(PERF_CUT);
   const v = viewOf(model),
     b = bounds(model);
   setMarkerScale(sc[0], sc[1]);
@@ -921,18 +1001,29 @@ export function drawCutStation(
 
   const u = cutU(model),
     fr = frameAt(model, u),
-    sec = sectionAt(model, u),
-    span = keptSpan(model, fr, sec);
+    sec = perfStep(
+      "Lofting the section",
+      () => sectionAt(model, u),
+      () => null,
+    ),
+    span = perfStep(
+      "Trimming (kept span)",
+      () => keptSpan(model, fr, sec),
+      () => null,
+    );
   const xAt = (n: number): number => fr.p[0] + n * fr.n[0]; // world x at inboard offset n
   const ncl = Math.abs(fr.n[1]) > 1e-6 ? -fr.p[1] / fr.n[1] : b.nMax; // offset where the section meets y=0
 
   // the full swept section, faint and dashed: the sheet before the trims cut it
-  const full: Vec2[] = [],
-    N = 300;
-  for (let i = 0; i <= N; i++) {
-    const p = sec.at((sec.vmax * i) / N);
-    full.push([v.snX(p[0]), v.snY(p[1])]);
-  }
+  const full = perfStep("Full section curve", () => {
+    const out: Vec2[] = [],
+      N = 300;
+    for (let i = 0; i <= N; i++) {
+      const p = sec.at((sec.vmax * i) / N);
+      out.push([v.snX(p[0]), v.snY(p[1])]);
+    }
+    return out;
+  });
   svg.append(
     el("path", {
       d: poly(full),
@@ -953,18 +1044,26 @@ export function drawCutStation(
       const p = sec.at(t);
       return [v.snX(p[0]), v.snY(p[1])];
     };
-    for (const c of curveCombs2(f, 0, sec.vmax, curv.nSectHairs, COMB_LEN_STN))
-      drawComb2(svg, c, COL.station);
+    const cs = perfStep(
+      "Comb — section",
+      () => curveCombs2(f, 0, sec.vmax, curv.nSectHairs, COMB_LEN_STN),
+      combHairs,
+      "hairs",
+    );
+    for (const c of cs) drawComb2(svg, c, COL.station);
   }
 
   // the kept arc, bold: sheer trim → keel (or the transom / the open bottom)
   if (span) {
-    const kept: Vec2[] = [],
-      KN = 240;
-    for (let i = 0; i <= KN; i++) {
-      const p = sec.at(span[0] + ((span[1] - span[0]) * i) / KN);
-      kept.push([v.snX(p[0]), v.snY(p[1])]);
-    }
+    const kept = perfStep("Kept arc", () => {
+      const out: Vec2[] = [],
+        KN = 240;
+      for (let i = 0; i <= KN; i++) {
+        const p = sec.at(span[0] + ((span[1] - span[0]) * i) / KN);
+        out.push([v.snX(p[0]), v.snY(p[1])]);
+      }
+      return out;
+    });
     svg.append(
       el("path", {
         d: poly(kept),
@@ -978,11 +1077,14 @@ export function drawCutStation(
   }
 
   // the sheer trim across the section, + the point where the kept arc starts on it
-  const trimLine: Vec2[] = [];
-  for (let i = 0; i <= 48; i++) {
-    const n = b.nMin + ((b.nMax - b.nMin) * i) / 48;
-    trimLine.push([v.snX(n), v.snY(model.trimZ(xAt(n)))]);
-  }
+  const trimLine = perfStep("Sheer-trim line", () => {
+    const out: Vec2[] = [];
+    for (let i = 0; i <= 48; i++) {
+      const n = b.nMin + ((b.nMax - b.nMin) * i) / 48;
+      out.push([v.snX(n), v.snY(model.trimZ(xAt(n)))]);
+    }
+    return out;
+  });
   svg.append(
     el("path", {
       d: poly(trimLine),
@@ -1064,6 +1166,7 @@ export function drawCutStation(
     const p = model.loft.at(u).pts[selIdx];
     linkDot(svg, v.snX(p[0]), v.snY(p[1]), COL.station);
   }
+  perfEnd(PERF_CUT);
 }
 
 // a fixed-size white dot with a colored ring: the non-draggable "computed point" markers (the cut sheer /

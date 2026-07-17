@@ -51,7 +51,18 @@ import { Toolbar } from "./Toolbar";
 import { SelectionInfo } from "./SelectionInfo";
 import { TrimControls } from "./TrimControls";
 import { CurvatureControls } from "./CurvatureControls";
+import { PerfControls } from "./PerfControls";
+import { PerfPanel } from "./PerfPanel";
 import { defaultCurvature } from "../core/comb";
+import {
+  defaultPerf,
+  perfBegin,
+  perfEnd,
+  perfStep,
+  setPerfOn,
+  PERF_SECTIONS,
+  type PerfSettings,
+} from "../core/perf";
 import { DesignBar } from "./DesignBar";
 import { View3d } from "../components/View3d";
 import { PlanView } from "./PlanView";
@@ -85,6 +96,17 @@ export function EditorApp() {
   const [tool, setTool] = useState<Tool>("select");
   const [curvature, setCurvature] = useState(defaultCurvature);
   const [selection, setSelection] = useState<ModelSelection>(null);
+  // The performance readout. Its `on` drives the core's recording switch — a module-level flag rather than
+  // state, because the draws that report into it are imperative and must not re-render anything — so the
+  // toggle is pushed there and the views are bumped to redraw, which is what fills the panel.
+  const [perf, setPerf] = useState<PerfSettings>(defaultPerf);
+  const onPerf = (next: PerfSettings) => {
+    if (next.on !== perf.on) {
+      setPerfOn(next.on);
+      bumpModel();
+    }
+    setPerf(next);
+  };
 
   const [name, setName] = useState("");
   const [save, setSave] = useState<SaveView>(INITIAL_SAVE);
@@ -142,15 +164,27 @@ export function EditorApp() {
   // the bow closure — in the plan's own parameter. Cosine spacing clusters the samples at both ends, where a
   // fine bow or a raked transom changes the section fastest.
   const rows = useMemo<SectionRow[]>(() => {
-    prepare(model);
+    perfBegin(PERF_SECTIONS);
+    perfStep("prepare (derived curves)", () => prepare(model));
     const NSEC = 80,
-      u0 = aftLimit(model),
-      u1 = forwardLimit(model),
-      out: SectionRow[] = [];
-    for (let i = 0; i <= NSEC; i++) {
-      const t = (1 - Math.cos((Math.PI * i) / NSEC)) / 2;
-      out.push(sweptSection(model, u0 + (u1 - u0) * t, 4, true));
-    }
+      [u0, u1] = perfStep(
+        "Hull limits (aft / forward)",
+        (): [number, number] => [aftLimit(model), forwardLimit(model)],
+        () => null,
+      ),
+      out = perfStep(
+        "Swept sections",
+        () => {
+          const rs: SectionRow[] = [];
+          for (let i = 0; i <= NSEC; i++) {
+            const t = (1 - Math.cos((Math.PI * i) / NSEC)) / 2;
+            rs.push(sweptSection(model, u0 + (u1 - u0) * t, 4, true));
+          }
+          return rs;
+        },
+        (rs) => rs.reduce((n, r) => n + r.pts.length, 0),
+      );
+    perfEnd(PERF_SECTIONS);
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, modelVersion]);
@@ -401,6 +435,7 @@ export function EditorApp() {
           onUnit={onUnit}
         />
         <CurvatureControls value={curvature} onChange={setCurvature} />
+        <PerfControls value={perf} onChange={onPerf} />
         <DesignBar
           name={name}
           saveKind={save.kind}
@@ -428,6 +463,18 @@ export function EditorApp() {
           // the blend-weights strip below the section editor; v2 has no blend, so the section editor takes
           // the column: a station's position along the hull is now its own handle on the plan curve.)
           <AreaGroup className="areagroup" orientation="horizontal">
+            {/* The performance readout takes a column of its own rather than floating over a view: its
+                numbers are read WHILE dragging something in another view, so it must not cover one. The
+                column exists only while the toggle is on, and the other columns' sizes are relative, so
+                they simply give up a proportional share of the width to it and take it back afterwards. */}
+            {perf.on && (
+              <>
+                <Area className="area" defaultSize="22%" minSize="240px">
+                  <PerfPanel settings={perf} />
+                </Area>
+                <AreaSeparator className="areasep" />
+              </>
+            )}
             <Area className="area" defaultSize="50%">
               <AreaGroup className="areagroup" orientation="vertical">
                 <Area className="area" defaultSize="50%">

@@ -22,6 +22,14 @@ import {
 } from "./mesh";
 import { ModelSelection, selStationIdx } from "./modelSelection";
 import {
+  perfAdd,
+  perfBegin,
+  perfEnd,
+  perfMark,
+  perfStep,
+  PERF_MESH,
+} from "./perf";
+import {
   curveCombs3,
   defaultCurvature,
   type Comb3,
@@ -636,8 +644,11 @@ function buildHullMesh(
       )
         tEdge.push(p);
     }
-  const nrmC = rows.map((_, i) =>
-    rows[i].map((_, j) => gridNormal(rows, i, j)),
+  const nrmC = perfStep(
+    "Vertex normals",
+    () => rows.map((_, i) => rows[i].map((_, j) => gridNormal(rows, i, j))),
+    (ns) => ns.length * (ns[0]?.length ?? 0),
+    "normals",
   );
   // the normal at vertex (i,j) as seen from the strip on side `dir` (+1 = the strip to its right, −1 left).
   // On a crease column the two sides use one-sided normals (the crease's two faces), blended toward the
@@ -663,37 +674,51 @@ function buildHullMesh(
       wireEdge(c.p, a.p);
     }
   };
-  for (let i = 0; i < R - 1; i++)
-    for (let j = 0; j < C - 1; j++) {
-      // the keel sits at column M of a full-width row; where the section is open there is no surface
-      // across the centerline, so don't bridge the strip just inboard of the open bottom on the port side.
-      if (trimmed && j === M && (open[i] || open[i + 1])) continue;
-      // cols j / j+1 bound this strip: col j sees the strip on its right (+1), col j+1 on its left (−1)
-      const quad: PN[] = [
-        { p: rows[i][j], n: vN(i, j, +1) },
-        { p: rows[i + 1][j], n: vN(i + 1, j, +1) },
-        { p: rows[i + 1][j + 1], n: vN(i + 1, j + 1, -1) },
-        { p: rows[i][j + 1], n: vN(i, j + 1, -1) },
-      ];
-      emit(quad[0], quad[1], quad[2]);
-      emit(quad[0], quad[2], quad[3]);
-    }
-  return {
-    hull: {
-      pos: new Float32Array(P),
-      nrm: new Float32Array(Nn),
-      count: P.length / 3,
+  const hull = perfStep(
+    "Triangles",
+    () => {
+      for (let i = 0; i < R - 1; i++)
+        for (let j = 0; j < C - 1; j++) {
+          // the keel sits at column M of a full-width row; where the section is open there is no surface
+          // across the centerline, so don't bridge the strip just inboard of the open bottom on the port side.
+          if (trimmed && j === M && (open[i] || open[i + 1])) continue;
+          // cols j / j+1 bound this strip: col j sees the strip on its right (+1), col j+1 on its left (−1)
+          const quad: PN[] = [
+            { p: rows[i][j], n: vN(i, j, +1) },
+            { p: rows[i + 1][j], n: vN(i + 1, j, +1) },
+            { p: rows[i + 1][j + 1], n: vN(i + 1, j + 1, -1) },
+            { p: rows[i][j + 1], n: vN(i, j + 1, -1) },
+          ];
+          emit(quad[0], quad[1], quad[2]);
+          emit(quad[0], quad[2], quad[3]);
+        }
+      return {
+        pos: new Float32Array(P),
+        nrm: new Float32Array(Nn),
+        count: P.length / 3,
+      };
     },
+    (m) => m.count / 3,
+    "tris",
+  );
+  return {
+    hull,
     transomEdge: tEdge,
     wire: !wantWire
       ? null
-      : wireQuads
-        ? buildWireMesh(rows, open, M, trimmed)
-        : {
-            pos: new Float32Array(wireP),
-            nrm: new Float32Array(wireP.length),
-            count: wireP.length / 3,
-          },
+      : perfStep(
+          "Wireframe",
+          () =>
+            wireQuads
+              ? buildWireMesh(rows, open, M, trimmed)
+              : {
+                  pos: new Float32Array(wireP),
+                  nrm: new Float32Array(wireP.length),
+                  count: wireP.length / 3,
+                },
+          (m) => m.count / 2,
+          "lines",
+        ),
   };
 }
 
@@ -1267,16 +1292,29 @@ export function draw3d(
   rebuild?: boolean,
   stl?: StlState | null,
 ): void {
+  // Only a REBUILD opens the performance pass: a rotate / zoom frame redraws the cached mesh without
+  // rebuilding it, and opening a pass for one would stamp every mesh sub-step as "didn't run" and blank the
+  // readout's mesh rows the moment the hull was spun.
+  const build = rebuild !== false;
+  if (build) perfBegin(PERF_MESH);
   // the curvature-comb overlay geometry is world-space (rotation-independent), so rebuild it only when the
   // model / settings change (rebuild !== false) and reuse the cache on rotate / zoom / resize (rebuild false).
-  if (rebuild !== false)
+  if (build)
     curvCache = params.curvature.on
-      ? buildCurvature3(model, params.curvature)
+      ? perfStep(
+          "Curvature combs",
+          () => buildCurvature3(model, params.curvature),
+          (cs) => cs.reduce((n, c) => n + c.hairs.length, 0),
+          "hairs",
+        )
       : null;
   // lines-plan style: draw the SVG overlay and skip the WebGL surface entirely
   if (LINES_MODES.includes(params.view3dMode) && lines) {
     lines.style.display = "";
-    drawLines(model, selection, params, lines, rebuild !== false, curvCache);
+    perfStep("Lines plan (SVG)", () =>
+      drawLines(model, selection, params, lines, build, curvCache),
+    );
+    if (build) perfEnd(PERF_MESH);
     return;
   }
   if (lines) lines.style.display = "none";
@@ -1286,7 +1324,7 @@ export function draw3d(
   // new context; the cached meshes are CPU-side arrays re-uploaded every drawMesh, so they stay valid.
   if (!GL || GL.canvas !== cv3d || GL.isContextLost()) initGL(cv3d);
   const trimmed = params.view3dMode !== "sheet";
-  if (rebuild !== false || !meshHull) {
+  if (build || !meshHull) {
     const built = buildHullMesh(
       model,
       trimmed,
@@ -1296,10 +1334,22 @@ export function draw3d(
       params.meshN,
     );
     meshHull = built.hull;
-    meshTrans = trimmed ? buildTransomMesh(model, built.transomEdge) : null;
-    meshBBox = computeBBox(meshHull.pos);
+    meshTrans = trimmed
+      ? perfStep(
+          "Transom panel",
+          () => buildTransomMesh(model, built.transomEdge),
+          (m) => m.count / 3,
+          "tris",
+        )
+      : null;
+    meshBBox = perfStep(
+      "Mesh bounding box",
+      () => computeBBox(built.hull.pos),
+      () => null,
+    );
     meshWire = built.wire;
   }
+  const tGL = perfMark();
   const gl = GL!,
     cv = gl.canvas as HTMLCanvasElement,
     dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -1442,4 +1492,8 @@ export function draw3d(
     }
     gl.uniform1i(loc.uFlat, 0); // restore lit shading for the next frame's hull draw
   }
+  // the GL half of the pass, timestamped rather than wrapped: every drawMesh re-uploads its whole buffer,
+  // so what this costs (and that it is paid again on every rotate frame) is worth seeing next to the build
+  perfAdd(PERF_MESH, "GL upload + draw", perfMark() - tGL);
+  if (build) perfEnd(PERF_MESH);
 }
