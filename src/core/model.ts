@@ -313,42 +313,30 @@ function buildLoft(model: Model): Loft {
   };
 }
 
-// ---------- a Catmull-Rom curve read as a function of its first coordinate ----------
-// The sheer trim is authored in profile as (x, z) and has to answer "z at this x". The curve is parametric,
-// so this inverts the x component: the knots' x strictly increase, which brackets the segment by scan, and
-// the cubic inside it is bisected. Used only against x-authored curves; everything swept is parameterized
-// in u and never needs this.
-function graphOfX(pts: Vec2[], ks: number[]): (x: number) => number {
-  const segs = crChain(
-    pts.map((p) => [...p]),
-    centripetalParams(pts.map((p) => [...p])),
-    ks,
-  );
-  const n = segs.length,
-    x0 = pts[0][0],
-    x1 = pts[pts.length - 1][0];
-  if (n === 0) return () => pts[0]?.[1] ?? 0;
-  return (x: number) => {
-    const xc = clamp(x, x0, x1);
-    let j = 0;
-    while (j < n - 1 && xc > pts[j + 1][0]) j++;
-    let lo = 0,
-      hi = 1;
-    for (let it = 0; it < 32; it++) {
-      const m = (lo + hi) / 2;
-      if (evalChain(segs, j + m)[0] < xc) lo = m;
-      else hi = m;
-    }
-    return evalChain(segs, j + (lo + hi) / 2)[1];
-  };
+// ---------- the sheer trim as a graph z(x) ----------
+// The sheer trim is authored in profile and has to answer "z at this x" — and it answers it constantly, once
+// per hull column in the mesh sweep. A parametric (x, z) curve would have to invert its x component (a
+// bisection) on every one of those calls; a graph does not. So the trim is a MONOTONE-x PCHIP: its control
+// points' x strictly increase (the editor enforces the gap), so z is a plain 1-D Hermite function of x with
+// no inversion. This drops the trim out of the sweep's hot path entirely.
+//
+// The trade: the control points are read as PCHIP knots, not as a parametric Catmull-Rom, so the curve's
+// exact shape shifts slightly from the old fit and a trim point's knuckle `k` no longer bends the curve
+// (PCHIP is shape-preserving, with no corner to author). The 2-D profile view draws the trim through this
+// same `trimZ`, so what is cut and what is drawn stay identical.
+function trimGraph(pts: TrimCP[]): (x: number) => number {
+  const xs = pts.map((p) => p.x),
+    zs = pts.map((p) => p.z),
+    x0 = xs[0],
+    x1 = xs[xs.length - 1];
+  if (xs.length < 2) return () => zs[0] ?? 0;
+  const m = pchipSlopes(xs, zs);
+  return (x: number) => hermiteEval(xs, zs, m, clamp(x, x0, x1));
 }
 
 export function prepare(model: Model): void {
   model.plan = planCurve(model.sheerPlan.map((p): Vec2 => [p.x, p.y]));
-  model.trimZ = graphOfX(
-    model.sheerTrim.map((p): Vec2 => [p.x, p.z]),
-    model.sheerTrim.map((p) => p.k),
-  );
+  model.trimZ = trimGraph(model.sheerTrim);
   model.loft = buildLoft(model);
 }
 

@@ -15,12 +15,7 @@ import {
   setX0,
   type Model,
 } from "../core/model";
-import {
-  aftLimit,
-  forwardLimit,
-  sweptSection,
-  type SectionRow,
-} from "../core/mesh";
+import { computeHullSampling, type HullSampling } from "../core/mesh";
 import type { Unit } from "../core/document";
 import type { ModelSelection } from "../core/modelSelection";
 import {
@@ -156,38 +151,23 @@ export function EditorApp() {
     nameRef.current = name;
   }, [name]);
 
-  // prepare() the model and sample the swept sections the plan / profile strips draw (the max-beam line, the
-  // keel / stem outline). Runs during render (before the child views' draw effects) whenever the model
-  // changes, so every view sees a prepared model.
-  //
-  // The sweep spans [aftLimit, forwardLimit] — where the hull actually exists, between the transom cut and
-  // the bow closure — in the plan's own parameter. Cosine spacing clusters the samples at both ends, where a
-  // fine bow or a raked transom changes the section fastest.
-  const rows = useMemo<SectionRow[]>(() => {
+  // prepare() the model, then compute the ONE hull sampling every view shares (mesh.ts): the swept sheet and
+  // its three trims, sampled at the Performance control's resolution. Runs during render (before the child
+  // views' draw effects) whenever the model or that resolution changes, so every view sees a prepared model
+  // and the same lattice — nothing re-sweeps the hull for itself. The 2D strips read its trimmedSections for
+  // the outline, the 3D view stitches them into the surface.
+  const sampling = useMemo<HullSampling>(() => {
     perfBegin(PERF_SECTIONS);
     perfStep("prepare (derived curves)", () => prepare(model));
-    const NSEC = 80,
-      [u0, u1] = perfStep(
-        "Hull limits (aft / forward)",
-        (): [number, number] => [aftLimit(model), forwardLimit(model)],
-        () => null,
-      ),
-      out = perfStep(
-        "Swept sections",
-        () => {
-          const rs: SectionRow[] = [];
-          for (let i = 0; i <= NSEC; i++) {
-            const t = (1 - Math.cos((Math.PI * i) / NSEC)) / 2;
-            rs.push(sweptSection(model, u0 + (u1 - u0) * t, 4, true));
-          }
-          return rs;
-        },
-        (rs) => rs.reduce((n, r) => n + r.pts.length, 0),
-      );
+    const out = perfStep(
+      "Hull sampling",
+      () => computeHullSampling(model, perf.numSections, perf.girthSteps),
+      (s) => s.trimmedSections.reduce((n, r) => n + r.pts.length, 0),
+    );
     perfEnd(PERF_SECTIONS);
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, modelVersion]);
+  }, [model, modelVersion, perf.numSections, perf.girthSteps]);
 
   // ---------- window-level drag (2D control points) ----------
   // Drags are begun on the SVG nodes (draw2d's startDrag sets the shared drag + selects); the move is applied
@@ -482,7 +462,7 @@ export function EditorApp() {
                     model={model}
                     modelVersion={modelVersion}
                     selection={selection}
-                    rows={rows}
+                    sampling={sampling}
                     tool={tool}
                     onSelect={setSelection}
                     setTool={setTool}
@@ -497,7 +477,7 @@ export function EditorApp() {
                     model={model}
                     modelVersion={modelVersion}
                     selection={selection}
-                    rows={rows}
+                    sampling={sampling}
                     tool={tool}
                     onSelect={setSelection}
                     setTool={setTool}
@@ -529,6 +509,7 @@ export function EditorApp() {
                     model={model}
                     modelVersion={modelVersion}
                     selection={selection}
+                    sampling={sampling}
                     stl={stl}
                     curvature={curvature}
                   />

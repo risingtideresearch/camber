@@ -12,13 +12,12 @@ import {
   worldZ,
 } from "./model";
 import {
-  R_DEFAULT,
-  hullGrid,
   keelPointAt,
   longitudinalPointAt,
   sheerPointAt,
   sweptSection,
   trimmedHullGrid,
+  type HullSampling,
 } from "./mesh";
 import { ModelSelection, selStationIdx } from "./modelSelection";
 import {
@@ -57,18 +56,13 @@ export interface Draw3dParams {
   view3dMode: View3DMode; // mutually-exclusive 3D display mode (render / body / buttocks / waterline / zebra / sheet)
   showMesh: boolean; // overlay the hull's quad-grid wireframe on the shaded GL modes (render / zebra / sheet)
   meshQuads: boolean; // wireframe as quads (true) or as the raw triangles the shaded hull renders (false)
-  // Girth resolution, as sub-steps per SECTION SEGMENT (the R fed to the mesh). It is not a plain count of
-  // longitudinals because the rows are not free: every station knot must land exactly on a row (that is where
-  // a knuckle's crease lives), so each of the section's S−1 segments gets the same R sub-steps and the half
-  // ends up (S−1)·R + 1 rows wide. On the default 5-point section R = 16 gives the same 64 as before.
-  meshR: number;
-  meshN: number; // sampled sections along the length — the N fed to hullGrid (station resolution)
+  // The hull sampling the surface is built from — the ONE lattice EditorApp computes and every view shares
+  // (mesh.ts). Its resolution now lives in the Performance control, not here. The mesh is derived from its
+  // trimmedSections (render / zebra) or sheetSections (sheet). Null until a sampling is supplied.
+  sampling: HullSampling | null;
   curvature: CurvatureSettings; // the editor-wide curvature-comb overlay (which 3D combs, and how dense) —
   // a curvature-analysis overlay independent of the mode; only its d3* / count fields are read here
 }
-
-export const MESH_R_DEFAULT = R_DEFAULT; // default sub-steps per section segment (girth resolution)
-export const MESH_N_DEFAULT = 256; // default sections along the length (station resolution)
 
 export function createDraw3dParams(): Draw3dParams {
   return {
@@ -77,8 +71,7 @@ export function createDraw3dParams(): Draw3dParams {
     view3dMode: "render", // shaded trimmed hull by default
     showMesh: false, // wireframe overlay off by default
     meshQuads: true, // wireframe shows quads by default
-    meshR: MESH_R_DEFAULT,
-    meshN: MESH_N_DEFAULT,
+    sampling: null,
     curvature: defaultCurvature(),
   };
 }
@@ -519,24 +512,6 @@ function buildCurvature3(model: Model, s: CurvatureSettings): CurvCurve3[] {
   return out;
 }
 
-// per-vertex grid normal (orientation irrelevant — shader is two-sided). side = 0 uses the central
-// transverse difference (smooth); side = +1/−1 uses a ONE-SIDED difference (toward the next/previous
-// column) — the two faces of a crease column, so a knuckle/keel-V reads as a hard edge.
-function gridNormal(rows: Vec3[][], i: number, j: number, side = 0): Vec3 {
-  const R = rows.length,
-    C = rows[0].length;
-  const a = rows[Math.min(i + 1, R - 1)][j],
-    b = rows[Math.max(i - 1, 0)][j];
-  const c = side < 0 ? rows[i][j] : rows[i][Math.min(j + 1, C - 1)],
-    d = side > 0 ? rows[i][j] : rows[i][Math.max(j - 1, 0)];
-  const n = V.cross(V.sub(c, d), V.sub(a, b));
-  // On the centerline (the keel, y = 0) a smooth keel's normal must have no transverse component. The
-  // central difference is one-sided in y here, tilting it; zero the y-component so the two halves join
-  // smoothly. (A V keel reads from its off-centerline faces via the one-sided side ≠ 0 normals.)
-  if (side === 0 && Math.abs(rows[i][j][1]) < 1e-6) n[1] = 0;
-  return V.norm(n);
-}
-
 function pushTri(
   P: number[],
   Nn: number[],
@@ -551,147 +526,198 @@ function pushTri(
   Nn.push(n0[0], n0[1], n0[2], n1[0], n1[1], n1[2], n2[0], n2[1], n2[2]);
 }
 
-interface PN {
-  p: Vec3;
-  n: Vec3;
-}
-
-// the hull's quad grid as a GL_LINES segment soup, for the Mesh wireframe overlay: girth (row) edges and
-// station (column) edges, at the EXACT hull-grid positions (no geometric offset). It is built once at
-// rebuild and reused across rotate/zoom like the hull mesh itself. Staying superimposed on the shaded skin
-// is handled at draw time by a polygon-offset on the FILL (the classic wireframe-over-solid trick) rather
-// than a world-space nudge, so there is no visible gap between hull and wire and the grid reads from both
-// sides of the surface (a back-face section shows its wire too).
-// It mirrors buildHullMesh's one remaining structural skip — the open-section centre column — so the
-// wireframe never bridges a gap the surface itself doesn't bridge.
-// This is the quad-grid wire; the raw-triangle wire is captured from the emitted triangle soup in buildHullMesh.
 const WIRE_RGB = [0.04, 0.05, 0.07]; // near-black grid lines, for contrast against the lit hull
-function buildWireMesh(
-  rows: Vec3[][],
-  open: boolean[],
-  M: number,
-  trimmed: boolean,
-): Mesh {
-  const R = rows.length,
-    C = rows[0]?.length ?? 0,
-    P: number[] = [],
-    push = (a: Vec3, b: Vec3): void => {
-      P.push(a[0], a[1], a[2], b[0], b[1], b[2]);
-    };
-  for (let i = 0; i < R; i++)
-    for (let j = 0; j < C - 1; j++) push(rows[i][j], rows[i][j + 1]); // girth edges
-  for (let j = 0; j < C; j++)
-    for (let i = 0; i < R - 1; i++) {
-      if (trimmed && j === M && (open[i] || open[i + 1])) continue; // no bridge over an open gap
-      push(rows[i][j], rows[i + 1][j]); // station edges
-    }
-  return {
-    pos: new Float32Array(P),
-    nrm: new Float32Array(P.length),
-    count: P.length / 3,
-  };
+const wireEdge = (arr: number[], a: Vec3, b: Vec3): void => {
+  arr.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+};
+
+// ---------- the hull mesh, stitched from the shared sampling's trimmed columns ----------
+//
+// The sampling (mesh.ts) trimmed each column into a variable-length row of world points, each tagged with the
+// sheet index it came from. Two neighbouring columns are stitched into the surface by MATCHING those indices:
+// where both carry the same integer index the strip between them is a quad; where a column's trimmed end is a
+// fractional index the other lacks, the gap closes with a triangle. So the mesh rides the real trim edges
+// with no constant-width padding — that is the whole point of the index tags.
+//
+// Only the STARBOARD half is built; the port half is its exact y-mirror (positions and normals negated), so
+// the two halves are guaranteed to meet seamlessly on the centerline. A closing column ends on the keel
+// (y = 0), and there the vertex normal's y-component is zeroed so the mirror joins smoothly (a round bottom
+// reads round; the mirror of an (x,0,z) normal is itself). An OPEN column ends above the centerline, so
+// starboard and port simply don't meet there — the correct gap, with no special case.
+
+// a column laid out for stitching: world points, their sheet indices, and the crease strength at each point
+// (non-zero only on a knuckled station knot). vBase is where its vertices start in the shared flat arrays.
+interface Col {
+  p: Vec3[];
+  idx: number[];
+  vBase: number;
 }
 
-// Build the hull triangle soup from the trimmed grid, and pick out the edge the transom panel is built on.
-//
-// The grid arrives ALREADY TRIMMED: each column was cut against the sheer trim, the centerline and the
-// transom plane at once, and its ends converged by bisection (mesh.ts). So there is nothing left to clip
-// here — v1 swept an untrimmed sheet and cut every quad against the transom plane, which is what produced
-// the cut segments it then built the transom from. The equivalent edge is now simply the grid's own: where
-// the TRANSOM is what stopped a column, that column's last row (the centre column M of the full-width row)
-// sits exactly on the transom plane. Reading the panel off the grid rather than re-deriving it (mesh.ts's
-// transomEdge samples u independently) keeps the panel's edge byte-identical to the hull's, so they meet
-// with no gap or overlap.
-//
-// trimmed ⇒ the rows are FULL-WIDTH (starboard sheer → keel → port sheer), one continuous skin whose keel
-// is an interior column with no mirror seam to fold.
-// Untrimmed ⇒ the raw swept sheet as-is: one side, no trims, no mirror.
+// stitch two adjacent columns by walking their sheet indices together (a monotone merge): a matching integer
+// rung emits the two triangles of a quad; wherever one column's next index runs ahead (a fractional trimmed
+// end, or a rung the other column lost to the trim) a single triangle closes the gap.
+function stitch(
+  A: Col,
+  B: Col,
+  addTri: (a: number, b: number, c: number) => void,
+): void {
+  const na = A.idx.length,
+    nb = B.idx.length;
+  let i = 0,
+    j = 0;
+  while (i + 1 < na || j + 1 < nb) {
+    const ai = i + 1 < na ? A.idx[i + 1] : Infinity,
+      bj = j + 1 < nb ? B.idx[j + 1] : Infinity;
+    if (Math.abs(ai - bj) < 1e-9) {
+      addTri(A.vBase + i, A.vBase + i + 1, B.vBase + j);
+      addTri(A.vBase + i + 1, B.vBase + j + 1, B.vBase + j);
+      i++;
+      j++;
+    } else if (ai < bj) {
+      addTri(A.vBase + i, A.vBase + i + 1, B.vBase + j);
+      i++;
+    } else {
+      addTri(A.vBase + i, B.vBase + j + 1, B.vBase + j);
+      j++;
+    }
+  }
+}
+
 function buildHullMesh(
   model: Model,
+  sampling: HullSampling,
   trimmed: boolean,
   wantWire: boolean,
   wireQuads: boolean, // wire as quads (true) or the raw shaded triangles (false); ignored unless wantWire
-  subR: number, // sub-steps per section segment (girth resolution)
-  N: number, // sampled sections along the length (station resolution)
 ): { hull: Mesh; transomEdge: Vec3[]; wire: Mesh | null } {
-  const g = hullGrid(model, N, subR, trimmed),
-    rows = g.rows,
-    // a trimmed row is FULL WIDTH (starboard sheer → keel → port sheer) with the keel at column M; an
-    // untrimmed row is the raw sheet, one side only. `open` is per row: the section never reached the
-    // centerline, so there is no port half to join and the centre strip must stay unbridged.
-    M = g.M,
-    open = g.keel.map((k) => !k),
-    creaseS = g.creaseS,
-    R = rows.length,
-    C = rows[0]?.length ?? 0,
-    P: number[] = [],
-    Nn: number[] = [];
-  if (R < 2 || C < 2)
-    return {
-      hull: { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 },
-      transomEdge: [],
-      wire: null,
-    };
-  // the transom edge: the column bottoms the TRANSOM stopped (rather than the centerline, which snaps y to
-  // 0, or an open section, which reaches no trim at all). Columns run forward, so these run top → bottom.
+  const sections = trimmed ? sampling.trimmedSections : sampling.sheetSections;
+
+  // lay every non-empty column's vertices into shared flat arrays, carrying each vertex's sheet index and
+  // crease strength (looked up from the column's crease knots; only exact-integer indices can be a knot)
+  const cols: Col[] = [],
+    verts: Vec3[] = [],
+    vg: number[] = [], // per-vertex sheet index
+    vk: number[] = []; // per-vertex crease strength
+  for (const s of sections) {
+    const idx = s.sheetIndex;
+    if (s.empty || s.pts.length < 2 || !idx) continue;
+    const cm = new Map<number, number>();
+    for (let t = 0; t < s.creaseRows.length; t++)
+      cm.set(s.creaseRows[t], s.creaseK[t]);
+    const vBase = verts.length;
+    for (let k = 0; k < s.pts.length; k++) {
+      verts.push(s.pts[k]);
+      vg.push(idx[k]);
+      const r = Math.round(idx[k]);
+      vk.push(Math.abs(idx[k] - r) < 1e-6 ? (cm.get(r) ?? 0) : 0);
+    }
+    cols.push({ p: s.pts, idx, vBase });
+  }
+  if (cols.length < 2)
+    return { hull: emptyMesh(), transomEdge: [], wire: null };
+
+  // the transom edge: the trimmed bottom of each column the TRANSOM stopped (not the centerline, which snaps
+  // y to 0, and not an open section, which reaches no trim). Ordered top → bottom for the panel fan.
   const tEdge: Vec3[] = [];
   if (trimmed)
-    for (let i = 0; i < R; i++) {
-      const p = rows[i][M];
-      if (
-        Math.abs(p[1]) > 1e-6 &&
-        Math.abs(p[0] - xTransom(model, p[2])) < 1e-6
-      )
-        tEdge.push(p);
+    for (const s of sampling.trimmedSections) {
+      if (s.empty || s.keel || s.pts.length < 2) continue;
+      const p = s.pts[s.pts.length - 1];
+      if (Math.abs(p[0] - xTransom(model, p[2])) < 1e-6) tEdge.push(p);
     }
-  const nrmC = perfStep(
-    "Vertex normals",
-    () => rows.map((_, i) => rows[i].map((_, j) => gridNormal(rows, i, j))),
-    (ns) => ns.length * (ns[0]?.length ?? 0),
-    "normals",
+  tEdge.sort((a, b) => b[2] - a[2]);
+
+  // face-normal accumulation, split by girth side: nLo gathers faces centred below a vertex's index, nHi
+  // above. A smooth vertex uses nLo + nHi; a crease vertex blends toward its own side so a knuckle reads as
+  // an edge and a faded knuckle stays smooth. Unnormalized cross products area-weight the average.
+  const nLo = verts.map((): Vec3 => [0, 0, 0]),
+    nHi = verts.map((): Vec3 => [0, 0, 0]);
+  interface Tri {
+    a: number;
+    b: number;
+    c: number;
+    g: number; // the triangle's centroid index, for the crease-side test
+  }
+  const tris: Tri[] = [];
+  const addTri = (a: number, b: number, c: number): void => {
+    const fn = V.cross(V.sub(verts[b], verts[a]), V.sub(verts[c], verts[a])),
+      g = (vg[a] + vg[b] + vg[c]) / 3;
+    for (const v of [a, b, c]) {
+      const bk = g >= vg[v] ? nHi[v] : nLo[v];
+      bk[0] += fn[0];
+      bk[1] += fn[1];
+      bk[2] += fn[2];
+    }
+    tris.push({ a, b, c, g });
+  };
+  perfStep(
+    "Stitching columns",
+    () => {
+      for (let c = 0; c + 1 < cols.length; c++)
+        stitch(cols[c], cols[c + 1], addTri);
+      return tris;
+    },
+    (t) => t.length,
+    "tris",
   );
-  // the normal at vertex (i,j) as seen from the strip on side `dir` (+1 = the strip to its right, −1 left).
-  // On a crease column the two sides use one-sided normals (the crease's two faces), blended toward the
-  // smooth central normal by the local crease strength — so a hard knuckle reads as an edge and a faded
-  // one stays smooth. Off a crease column both sides return the shared central normal (no seam).
-  const vN = (i: number, j: number, dir: number): Vec3 => {
-    const s = creaseS[i]?.[j] ?? 0;
-    if (s <= 1e-6) return nrmC[i][j];
-    return V.norm(V.lerp(nrmC[i][j], gridNormal(rows, i, j, dir), s));
+
+  // resolve each vertex's smooth normal (both sides), zeroing y on the keel of the trimmed hull so the mirror
+  // joins with no transverse tilt (a smooth round bottom). The one-sided crease normals are formed at emit.
+  const keelY = trimmed;
+  const smoothN = verts.map((_, v): Vec3 => {
+    const n: Vec3 = [
+      nLo[v][0] + nHi[v][0],
+      nLo[v][1] + nHi[v][1],
+      nLo[v][2] + nHi[v][2],
+    ];
+    if (keelY && Math.abs(verts[v][1]) < 1e-6) n[1] = 0;
+    return V.norm(n);
+  });
+  const nrmAt = (v: number, g: number): Vec3 => {
+    if (vk[v] <= 1e-6) return smoothN[v];
+    const side = g >= vg[v] ? nHi[v] : nLo[v],
+      hn: Vec3 = [side[0], side[1], side[2]];
+    if (keelY && Math.abs(verts[v][1]) < 1e-6) hn[1] = 0;
+    return V.norm(V.lerp(smoothN[v], V.norm(hn), vk[v]));
   };
-  // for the raw-triangle wire, capture the three edges of every emitted triangle as a GL_LINES soup, so the
-  // overlay is byte-for-byte the shaded surface's own triangulation.
-  const wantTriWire = wantWire && !wireQuads;
-  const wireP: number[] = [];
-  const wireEdge = (p: Vec3, q: Vec3): void => {
-    wireP.push(p[0], p[1], p[2], q[0], q[1], q[2]);
-  };
-  const emit = (a: PN, b: PN, c: PN): void => {
-    pushTri(P, Nn, a.p, a.n, b.p, b.n, c.p, c.n);
-    if (wantTriWire) {
-      wireEdge(a.p, b.p);
-      wireEdge(b.p, c.p);
-      wireEdge(c.p, a.p);
-    }
-  };
+
+  // emit the starboard triangles (and the raw-triangle wire, if asked), then the port y-mirror
+  const P: number[] = [],
+    Nn: number[] = [],
+    wantTriWire = wantWire && !wireQuads,
+    triWireP: number[] = [];
   const hull = perfStep(
     "Triangles",
     () => {
-      for (let i = 0; i < R - 1; i++)
-        for (let j = 0; j < C - 1; j++) {
-          // the keel sits at column M of a full-width row; where the section is open there is no surface
-          // across the centerline, so don't bridge the strip just inboard of the open bottom on the port side.
-          if (trimmed && j === M && (open[i] || open[i + 1])) continue;
-          // cols j / j+1 bound this strip: col j sees the strip on its right (+1), col j+1 on its left (−1)
-          const quad: PN[] = [
-            { p: rows[i][j], n: vN(i, j, +1) },
-            { p: rows[i + 1][j], n: vN(i + 1, j, +1) },
-            { p: rows[i + 1][j + 1], n: vN(i + 1, j + 1, -1) },
-            { p: rows[i][j + 1], n: vN(i, j + 1, -1) },
-          ];
-          emit(quad[0], quad[1], quad[2]);
-          emit(quad[0], quad[2], quad[3]);
+      for (const t of tris) {
+        pushTri(
+          P,
+          Nn,
+          verts[t.a],
+          nrmAt(t.a, t.g),
+          verts[t.b],
+          nrmAt(t.b, t.g),
+          verts[t.c],
+          nrmAt(t.c, t.g),
+        );
+        if (wantTriWire) {
+          wireEdge(triWireP, verts[t.a], verts[t.b]);
+          wireEdge(triWireP, verts[t.b], verts[t.c]);
+          wireEdge(triWireP, verts[t.c], verts[t.a]);
         }
+      }
+      if (trimmed) {
+        // the port half: the same triangles y-mirrored (positions and normals). Winding is irrelevant — the
+        // shader is two-sided — so the y-negated copy is the whole port skin, meeting starboard at the keel.
+        const nStar = P.length;
+        for (let i = 0; i < nStar; i += 3) {
+          P.push(P[i], -P[i + 1], P[i + 2]);
+          Nn.push(Nn[i], -Nn[i + 1], Nn[i + 2]);
+        }
+        const wStar = triWireP.length;
+        for (let i = 0; i < wStar; i += 3)
+          triWireP.push(triWireP[i], -triWireP[i + 1], triWireP[i + 2]);
+      }
       return {
         pos: new Float32Array(P),
         nrm: new Float32Array(Nn),
@@ -701,6 +727,36 @@ function buildHullMesh(
     (m) => m.count / 3,
     "tris",
   );
+
+  // the quad-grid wire: girth edges (consecutive points within a column) plus longitudinal edges (matching
+  // sheet indices across adjacent columns), starboard then y-mirrored — the raw-triangle wire is the emitted
+  // triangle soup captured above.
+  const buildQuadWire = (): number[] => {
+    const w: number[] = [];
+    for (const c of cols)
+      for (let k = 0; k + 1 < c.p.length; k++) wireEdge(w, c.p[k], c.p[k + 1]);
+    for (let ci = 0; ci + 1 < cols.length; ci++) {
+      const A = cols[ci],
+        B = cols[ci + 1];
+      let i = 0,
+        j = 0;
+      while (i < A.idx.length && j < B.idx.length) {
+        const d = A.idx[i] - B.idx[j];
+        if (Math.abs(d) < 1e-9) {
+          wireEdge(w, A.p[i], B.p[j]);
+          i++;
+          j++;
+        } else if (d < 0) i++;
+        else j++;
+      }
+    }
+    if (trimmed) {
+      const nStar = w.length;
+      for (let i = 0; i < nStar; i += 3) w.push(w[i], -w[i + 1], w[i + 2]);
+    }
+    return w;
+  };
+
   return {
     hull,
     transomEdge: tEdge,
@@ -708,14 +764,14 @@ function buildHullMesh(
       ? null
       : perfStep(
           "Wireframe",
-          () =>
-            wireQuads
-              ? buildWireMesh(rows, open, M, trimmed)
-              : {
-                  pos: new Float32Array(wireP),
-                  nrm: new Float32Array(wireP.length),
-                  count: wireP.length / 3,
-                },
+          () => {
+            const wp = wireQuads ? buildQuadWire() : triWireP;
+            return {
+              pos: new Float32Array(wp),
+              nrm: new Float32Array(wp.length),
+              count: wp.length / 3,
+            };
+          },
           (m) => m.count / 2,
           "lines",
         ),
@@ -1324,14 +1380,13 @@ export function draw3d(
   // new context; the cached meshes are CPU-side arrays re-uploaded every drawMesh, so they stay valid.
   if (!GL || GL.canvas !== cv3d || GL.isContextLost()) initGL(cv3d);
   const trimmed = params.view3dMode !== "sheet";
-  if (build || !meshHull) {
+  if ((build || !meshHull) && params.sampling) {
     const built = buildHullMesh(
       model,
+      params.sampling,
       trimmed,
       params.showMesh,
       params.meshQuads,
-      params.meshR,
-      params.meshN,
     );
     meshHull = built.hull;
     meshTrans = trimmed
@@ -1438,7 +1493,7 @@ export function draw3d(
     gl.enable(gl.POLYGON_OFFSET_FILL);
     gl.polygonOffset(1.0, 1.0);
   }
-  drawMesh(gl, meshHull, [0.3, 0.5, 0.72]);
+  if (meshHull) drawMesh(gl, meshHull, [0.3, 0.5, 0.72]);
   if (meshTrans) {
     gl.uniform1i(loc.uZebra, 0);
     drawMesh(gl, meshTrans, [0.74, 0.55, 0.37]);

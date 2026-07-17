@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { addTrimPoint, type Model } from "../core/model";
-import type { SectionRow } from "../core/mesh";
+import type { HullSampling } from "../core/mesh";
 import type { ModelSelection } from "../core/modelSelection";
 import type { CurvatureSettings } from "../core/comb";
 import { drawProfile } from "../core/draw2d";
@@ -17,7 +17,7 @@ interface ProfileViewProps {
   model: Model;
   modelVersion: number;
   selection: ModelSelection;
-  rows: SectionRow[];
+  sampling: HullSampling; // the shared hull sampling; the keel / stem outline is drawn from its trimmedSections
   tool: Tool;
   onSelect: (sel: ModelSelection) => void;
   setTool: (t: Tool) => void;
@@ -30,7 +30,7 @@ export function ProfileView({
   model,
   modelVersion,
   selection,
-  rows,
+  sampling,
   tool,
   onSelect,
   setTool,
@@ -40,10 +40,18 @@ export function ProfileView({
 }: ProfileViewProps) {
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
-      drawProfile(g, model, selection, rows, onSelect, [sx, sy], curvature);
+      drawProfile(
+        g,
+        model,
+        selection,
+        sampling.trimmedSections,
+        onSelect,
+        [sx, sy],
+        curvature,
+      );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [model, modelVersion, selection, rows, onSelect, curvature],
+    [model, modelVersion, selection, sampling, onSelect, curvature],
   );
 
   const onBackgroundClick = (vx: number, vy: number) => {

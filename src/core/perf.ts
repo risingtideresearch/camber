@@ -20,11 +20,22 @@ export interface PerfSettings {
   on: boolean;
   smooth: boolean; // show each step's running average rather than the last pass's raw time
   sort: boolean; // order each pass's steps slowest-first rather than in draw order
+  // The hull-sampling resolution. These used to live in the 3D view's Mesh dropdown, but they set the cost of
+  // the ONE sampling every view now shares (`computeHullSampling`), so they belong next to the readout that
+  // shows what that costs. numSections is N (columns along the hull); girthSteps is R (longitudinals per
+  // station knot — sub-steps per section segment, so a section of S points is (S−1)·R + 1 rows wide).
+  numSections: number;
+  girthSteps: number;
 }
+// N and R defaults (256 sections, 16 girth steps — the same resolution the 3D view defaulted to before).
+export const PERF_N_DEFAULT = 256;
+export const PERF_R_DEFAULT = 16;
 export const defaultPerf = (): PerfSettings => ({
   on: false,
   smooth: true,
   sort: false,
+  numSections: PERF_N_DEFAULT,
+  girthSteps: PERF_R_DEFAULT,
 });
 
 // The pass names. Exported where two modules must agree on one: mesh.ts reports the hull's sub-steps into

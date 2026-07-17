@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createDraw3dParams,
   draw3d,
-  MESH_N_DEFAULT,
-  MESH_R_DEFAULT,
   type Draw3dParams,
   type View3DMode,
 } from "../core/draw3d";
 import type { Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import type { StlState } from "../core/stlImport";
+import { computeHullSampling, type HullSampling } from "../core/mesh";
+import { PERF_N_DEFAULT, PERF_R_DEFAULT } from "../core/perf";
 import { defaultCurvature, type CurvatureSettings } from "../core/comb";
 import { clamp } from "../core/math";
 import { Button } from "./Button";
@@ -46,6 +46,10 @@ interface View3dProps {
   modelVersion: number;
   selection: ModelSelection;
   stl?: StlState | null; // optional imported reference mesh, drawn translucent over the hull
+  // the shared hull sampling the surface is built from. EditorApp computes it once (at the Performance
+  // resolution) and passes it in; hosts that don't (the interpolation app) omit it and get a default-
+  // resolution sampling computed here, so the 3D view always has a lattice to tessellate.
+  sampling?: HullSampling;
   // the editor-wide curvature-comb overlay (owned by EditorApp's Curvature control); omitted by hosts that
   // don't drive it (the interpolation app), where it defaults to all-off
   curvature?: CurvatureSettings;
@@ -56,6 +60,7 @@ export function View3d({
   model,
   modelVersion,
   selection,
+  sampling,
   curvature = CURVATURE_OFF,
   stl,
   title,
@@ -63,15 +68,25 @@ export function View3d({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const svgRef = useRef<SVGSVGElement>(null); // the lines-plan overlay, owned by this instance (no global id lookup)
   const paramsRef = useRef<Draw3dParams>(createDraw3dParams());
-  // the display mode, the Mesh-overlay toggle, the quads/triangles wire choice, and the mesh resolution (R/N)
-  // are React-owned; the rebuild effect copies them into paramsRef before each draw, so paramsRef's own
-  // view3dMode / showMesh / meshQuads / meshR / meshN are always overwritten and their initial values are irrelevant.
+  // the display mode, the Mesh-overlay toggle, and the quads/triangles wire choice are React-owned; the
+  // rebuild effect copies them into paramsRef before each draw, so paramsRef's own view3dMode / showMesh /
+  // meshQuads are always overwritten and their initial values are irrelevant.
   const [mode, setMode] = useState<View3DMode>("render");
   const [showMesh, setShowMesh] = useState(false); // overlay the quad-grid wireframe on the shaded GL modes
   const [meshQuads, setMeshQuads] = useState(true); // wire as quads (default) or the raw shaded triangles
-  const [meshR, setMeshR] = useState(MESH_R_DEFAULT); // sub-steps per section segment (girth res.)
-  const [meshN, setMeshN] = useState(MESH_N_DEFAULT); // sections along the length (station res.)
-  const [meshMenu, setMeshMenu] = useState(false); // the mesh-resolution dropdown open state
+  const [meshMenu, setMeshMenu] = useState(false); // the Mesh overlay dropdown open state
+
+  // the sampling to tessellate: the one passed in, or a default-resolution fallback computed here for hosts
+  // that don't supply one (the interpolation app). Only computed when no sampling is given.
+  const fallback = useMemo(
+    () =>
+      sampling
+        ? null
+        : computeHullSampling(model, PERF_N_DEFAULT, PERF_R_DEFAULT),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sampling, model, modelVersion],
+  );
+  const effSampling = sampling ?? fallback;
 
   // latest model / selection / STL for the ref-reading redraws (rotate / zoom / resize / selection) so they
   // need not re-subscribe
@@ -103,15 +118,14 @@ export function View3d({
       );
   }, [model]);
 
-  // rebuild + redraw whenever the model, the display mode, the Mesh overlay, the mesh resolution (R/N),
-  // the curvature overlay, or the STL changes — everything the cached hull tessellation depends on
+  // rebuild + redraw whenever the model, the display mode, the Mesh overlay, the shared hull sampling, the
+  // curvature overlay, or the STL changes — everything the cached hull tessellation depends on
   useEffect(() => {
     const p = paramsRef.current;
     p.view3dMode = mode;
     p.showMesh = showMesh;
     p.meshQuads = meshQuads;
-    p.meshR = meshR;
-    p.meshN = meshN;
+    p.sampling = effSampling;
     p.curvature = curvature;
     const cv = canvasRef.current;
     if (cv) draw3d(cv, svgRef.current, model, selRef.current, p, true, stl);
@@ -121,8 +135,7 @@ export function View3d({
     mode,
     showMesh,
     meshQuads,
-    meshR,
-    meshN,
+    effSampling,
     stl,
     curvature,
   ]);
@@ -216,8 +229,8 @@ export function View3d({
           onToggle={() => setShowMesh((v) => !v)}
           open={meshMenu}
           onOpenChange={setMeshMenu}
-          title="Overlay the hull's quad grid as a wireframe (works in Render, Zebra, and Sheet)"
-          menuLabel="Mesh resolution"
+          title="Overlay the hull's quad grid as a wireframe (works in Render, Zebra, and Sheet). Its resolution is set by the Performance control's hull-sampling sliders."
+          menuLabel="Mesh overlay"
         >
           <label
             className="dd-row dd-check"
@@ -229,36 +242,6 @@ export function View3d({
               onChange={(e) => setMeshQuads(e.target.checked)}
             />
             <span className="dd-name">As quads</span>
-          </label>
-          <label
-            className="dd-row"
-            title="Sub-steps per section segment (girth resolution). Every station knot must land on a mesh row — that is where a knuckle's crease lives — so the girth is set per segment: a section of S points is (S−1)×R+1 rows wide."
-          >
-            <span className="dd-name">Girth sub-steps</span>
-            <input
-              type="range"
-              min={1}
-              max={32}
-              step={1}
-              value={meshR}
-              onChange={(e) => setMeshR(+e.target.value)}
-            />
-            <span className="dd-val">{meshR}</span>
-          </label>
-          <label
-            className="dd-row"
-            title="Number of sampled sections along the length (station resolution)"
-          >
-            <span className="dd-name">Num sections</span>
-            <input
-              type="range"
-              min={8}
-              max={512}
-              step={8}
-              value={meshN}
-              onChange={(e) => setMeshN(+e.target.value)}
-            />
-            <span className="dd-val">{meshN}</span>
           </label>
         </Dropdown>
         <div className="view3dmodes">

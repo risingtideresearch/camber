@@ -13,7 +13,7 @@
 
 import { lerp, V, type Vec3 } from "./math";
 import { type Model, immersion, loa, worldZ } from "./model";
-import { aftLimit, forwardLimit, sweptSection } from "./mesh";
+import { computeHullSampling, sweptSection } from "./mesh";
 
 export interface Hydro {
   // principal dimensions (model units)
@@ -139,16 +139,14 @@ export function hydrostatics(
   ns: number = NS,
   m: number = M,
 ): Hydro | null {
-  // Sample along the plan's parameter, not along x: u is where the hull is actually defined, and the
-  // transom / bow closure are found in u. Each strip still records its own x — the plan's x is monotone in
-  // u, so the strips stay ordered and the trapezoid integration below is unaffected.
-  const uA = aftLimit(model),
-    uF = forwardLimit(model);
-  if (!(uF > uA)) return null;
+  // Integrate over the SHARED hull sampling (mesh.ts) rather than a private sweep: the same bisection-free
+  // trimmed sections every view uses, at hydro's own resolution (ns columns, m girth sub-steps). The empty
+  // columns past the bow/stern closure fall out; each surviving column records its own x (the plan's x is
+  // monotone in u, so the strips stay ordered for the trapezoid integration below).
+  const hs = computeHullSampling(model, ns, m);
   const strips: Strip[] = [];
-  for (let k = 0; k <= ns; k++) {
-    const u = uA + ((uF - uA) * k) / ns,
-      sec = sweptSection(model, u, m, true);
+  for (let i = 0; i < hs.trimmedSections.length; i++) {
+    const sec = hs.trimmedSections[i];
     if (sec.empty) continue;
     let dmax = 0;
     for (const q of sec.pts)
@@ -156,7 +154,12 @@ export function hydrostatics(
     if (dmax <= 0) continue; // dry section (above the waterline)
     const s = stripOf(model, sec);
     if (s.area <= 0) continue;
-    strips.push({ x: model.plan.at(u)[0], ...s, draft: dmax, keel: sec.keel });
+    strips.push({
+      x: model.plan.at(hs.uParams[i])[0],
+      ...s,
+      draft: dmax,
+      keel: sec.keel,
+    });
   }
   if (strips.length < 3) return null;
 

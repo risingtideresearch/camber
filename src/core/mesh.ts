@@ -24,7 +24,7 @@
 // clamped into the kept span with a small spread that keeps them strictly ordered even when several clamp
 // at once.
 
-import { clamp, mirrorRow, type Vec2, type Vec3 } from "./math";
+import { clamp, mirrorRow, V, type Vec2, type Vec3 } from "./math";
 import { perfAdd, perfMark, PERF_MESH } from "./perf";
 import {
   bisectRoot,
@@ -32,6 +32,7 @@ import {
   keepAt,
   sectionAt,
   sectionWorld,
+  xTransom,
   type Frame,
   type Model,
   type Section,
@@ -48,6 +49,11 @@ export interface SectionRow {
   // `creaseK`; a faded knuckle (low k) on a crease row stays smooth, so sharpness stays data-driven.
   creaseRows: number[];
   creaseK: number[];
+  // The provenance of each point in the UNTRIMMED sheet: point k of a sheet row has sheetIndex k, and a
+  // trim's crossing point carries the fractional index of the segment it split. Two adjacent trimmed rows are
+  // stitched into the mesh by matching these indices — equal integers make a quad, a fractional end a
+  // triangle. Only the sampling (`computeHullSampling`) sets it; `sweptSection` leaves it undefined.
+  sheetIndex?: number[];
 }
 
 // The kept span of the section at u: [vTop, vBot], or null where the column has no hull.
@@ -174,6 +180,248 @@ export function sweptSection(
   if (keel) last[1] = 0;
   perfAdd(PERF_MESH, "Sweeping the sheet (rows)", perfMark() - t2, pts.length);
   return { pts, empty: false, keel, creaseRows, creaseK };
+}
+
+// ---------- the hull sampling: one lattice, sheet then trims, shared by every view ----------
+//
+// This is the whole hull sampled ONCE and handed to every view, so nothing re-sweeps it. It is deliberately
+// bisection-free: `sweptSection`/`keptSpan` above converge each column's trim ends by bisection (still used
+// by the curvature combs, which second-difference the result and need that precision); here the trims are
+// intersected against the SHEET LATTICE by one linear crossing each, which is all a rendered mesh or a drawn
+// outline needs. The four stages compose the way the hull is defined:
+//
+//   sheet          — the raw swept sheet: uniform u × uniform-per-segment v, every node a world point.
+//   sheerTrimmed   — the sheet minus the deck (points above the sheer trim's z at this column).
+//   centerTrimmed  — minus the far side of the centerline (y < 0), re-entered exactly on the keel (y = 0).
+//   trimmed        — minus the far side of the transom plane. What the mesh and the outlines are built from.
+//
+// Every point keeps a `sheetIndex` recording which sheet row it came from (a crossing point gets a fractional
+// index), so two neighbouring trimmed columns can be stitched by matching indices — see the mesh builder.
+
+export interface HullSampling {
+  R: number; // sub-steps per section segment (girth resolution)
+  M: number; // the keel's sheet index in a full untrimmed row: (S−1)·R
+  uParams: number[]; // the u of each column — uniform, plus one linearly-placed column at each closing end
+  vParams: number[]; // the v of each sheet row: vParams[k] = k / R, running 0 → vmax
+  sheetSections: SectionRow[]; // aligned with uParams; the trimmed stages carry `empty` where the hull is gone
+  sheerTrimmedSections: SectionRow[];
+  centerTrimmedSections: SectionRow[];
+  trimmedSections: SectionRow[];
+}
+
+// the interior station knots that carry a knuckle, as sheet indices (knot i sits at i·R) with their blended
+// strength — the crease rows the mesh gives a tangent break. The deck point (0) and the keel (S−1) never
+// crease, so they are skipped. Shared by reference across a column's four stages (read-only).
+function creasesOf(
+  sec: Section,
+  R: number,
+): { creaseRows: number[]; creaseK: number[] } {
+  const S = sec.vmax + 1,
+    creaseRows: number[] = [],
+    creaseK: number[] = [];
+  for (let i = 1; i < S - 1; i++) {
+    const k = sec.ks[i] ?? 0;
+    if (k > 1e-6) {
+      creaseRows.push(i * R);
+      creaseK.push(clamp(k, 0, 1));
+    }
+  }
+  return { creaseRows, creaseK };
+}
+
+interface Work {
+  pts: Vec3[];
+  idx: number[];
+}
+const emptyRow = (cr: number[], ck: number[]): SectionRow => ({
+  pts: [],
+  sheetIndex: [],
+  empty: true,
+  keel: false,
+  creaseRows: cr,
+  creaseK: ck,
+});
+
+// Drop the row's LEADING points where f < 0 (above the sheer trim), and re-enter it with the exact f = 0
+// crossing of the last dropped segment. f is linear-crossed, and the crossing's sheet index is the same
+// linear blend, so the stitched mesh knows the new point came from between two sheet rows.
+function cutFront(row: Work, f: (p: Vec3) => number): Work | null {
+  const { pts, idx } = row,
+    n = pts.length;
+  let k = 0;
+  while (k < n && f(pts[k]) < 0) k++;
+  if (k >= n) return null; // the whole column is above the trim — no hull here
+  const outP: Vec3[] = [],
+    outI: number[] = [];
+  if (k > 0) {
+    const fa = f(pts[k - 1]),
+      fb = f(pts[k]),
+      t = fa / (fa - fb);
+    outP.push(V.lerp(pts[k - 1], pts[k], t));
+    outI.push(idx[k - 1] + t * (idx[k] - idx[k - 1]));
+  }
+  for (let i = k; i < n; i++) {
+    outP.push(pts[i]);
+    outI.push(idx[i]);
+  }
+  return { pts: outP, idx: outI };
+}
+
+// Drop the row's TRAILING points where f < 0, re-entering at the exact f = 0 crossing of the last dropped
+// segment. `snapY` (the centerline) forces the crossing's y to exactly 0 so the two hull halves MEET there
+// rather than nearly meet. Returns whether it actually cut (so the caller can tell a keel/transom edge from
+// an untouched open bottom).
+function cutBack(
+  row: Work,
+  f: (p: Vec3) => number,
+  snapY: boolean,
+): { work: Work; cut: boolean } | null {
+  const { pts, idx } = row,
+    n = pts.length;
+  let j = n - 1;
+  while (j >= 0 && f(pts[j]) < 0) j--;
+  if (j < 0) return null; // the whole column is past the cut
+  const outP = pts.slice(0, j + 1),
+    outI = idx.slice(0, j + 1);
+  if (j < n - 1) {
+    const fa = f(pts[j]),
+      fb = f(pts[j + 1]),
+      t = fa / (fa - fb),
+      cp = V.lerp(pts[j], pts[j + 1], t);
+    if (snapY) cp[1] = 0;
+    outP.push(cp);
+    outI.push(idx[j] + t * (idx[j + 1] - idx[j]));
+    return { work: { pts: outP, idx: outI }, cut: true };
+  }
+  return { work: { pts: outP, idx: outI }, cut: false };
+}
+
+interface HullColumn {
+  u: number;
+  margin: number; // > 0 where the hull survives all three trims, < 0 where erased; ~0 at a closing end
+  sheet: SectionRow;
+  sheer: SectionRow;
+  center: SectionRow;
+  trimmed: SectionRow;
+}
+
+// One column of the sampling: the sheet row at u, then the three trims in turn.
+function buildColumn(
+  model: Model,
+  u: number,
+  vParams: number[],
+  R: number,
+): HullColumn {
+  const fr = frameAt(model, u),
+    sec = sectionAt(model, u);
+  const { creaseRows, creaseK } = creasesOf(sec, R);
+  const mk = (w: Work | null, keel: boolean): SectionRow =>
+    !w || w.pts.length < 2
+      ? emptyRow(creaseRows, creaseK)
+      : {
+          pts: w.pts,
+          sheetIndex: w.idx,
+          empty: false,
+          keel,
+          creaseRows,
+          creaseK,
+        };
+
+  // (a) the untrimmed sheet, and the smooth existence margin used to place the end-refinement columns
+  const sPts: Vec3[] = [],
+    sIdx: number[] = [];
+  let margin = -Infinity;
+  for (let k = 0; k < vParams.length; k++) {
+    const p = sectionWorld(fr, sec, vParams[k]);
+    sPts.push(p);
+    sIdx.push(k);
+    // the three-constraint keep test as one signed number (min), maxed over the column: > 0 ⇔ some point
+    // survives all three ⇔ the hull exists here. Smooth in u, crossing 0 exactly where a bow/stern closes.
+    const m = Math.min(
+      model.trimZ(p[0]) - p[2],
+      p[1],
+      p[0] - xTransom(model, p[2]),
+    );
+    if (m > margin) margin = m;
+  }
+  const sheet: SectionRow = {
+    pts: sPts,
+    sheetIndex: sIdx,
+    empty: false,
+    keel: false,
+    creaseRows,
+    creaseK,
+  };
+
+  // (b) sheer trim: everything above the trim is deck, not hull. The trim is a cheap 1-D graph z(x) now
+  // (model.trimGraph), so it is evaluated per point — the cut follows the authored trim exactly across the
+  // fanned station plane, rather than being flattened to one z per column.
+  const sheerW = cutFront(
+    { pts: sPts, idx: sIdx },
+    (p) => model.trimZ(p[0]) - p[2],
+  );
+  const sheer = mk(sheerW, false);
+  // (c) centerline: past y = 0 is the other half; re-enter on the keel. keel ⇔ the bottom reached y = 0.
+  const centerR = sheerW ? cutBack(sheerW, (p) => p[1], true) : null;
+  const center = mk(centerR?.work ?? null, centerR?.cut ?? false);
+  // (d) transom: aft of the transom plane is cut away. It is linear in z, so one linear crossing is exact.
+  // If it cut anything the bottom is a transom edge (not the keel), so keel becomes false there.
+  const trimR = centerR
+    ? cutBack(centerR.work, (p) => p[0] - xTransom(model, p[2]), false)
+    : null;
+  const trimmed = mk(
+    trimR?.work ?? null,
+    trimR ? (trimR.cut ? false : (centerR?.cut ?? false)) : false,
+  );
+
+  return { u, margin, sheet, sheer, center, trimmed };
+}
+
+// Compute the whole sampling: N+1 columns uniform in u, then ONE linearly-placed column at each end that is
+// still closing, so the drawn outline reaches the true bow/stern within a linear step rather than being
+// quantized to 1/N. numSections is N (segments), numLongitudinalsPerKnot is R (girth sub-steps per segment).
+export function computeHullSampling(
+  model: Model,
+  numSections: number,
+  numLongitudinalsPerKnot: number,
+): HullSampling {
+  const N = Math.max(1, Math.round(numSections)),
+    R = Math.max(1, Math.round(numLongitudinalsPerKnot)),
+    S = model.loft.S,
+    M = (S - 1) * R;
+  const vParams: number[] = [];
+  for (let k = 0; k <= M; k++) vParams.push(k / R);
+
+  const cols: HullColumn[] = [];
+  for (let i = 0; i <= N; i++) cols.push(buildColumn(model, i / N, vParams, R));
+
+  // end refinement: at each end, if the last surviving column sits next to an erased one, place one more
+  // column at the linear (false-position) estimate of where the margin crosses 0 — the hull's true closure.
+  const refine = (a: HullColumn, b: HullColumn): HullColumn => {
+    const t = a.margin / (a.margin - b.margin);
+    return buildColumn(model, a.u + (b.u - a.u) * clamp(t, 0, 1), vParams, R);
+  };
+  const alive = (c: HullColumn): boolean => !c.trimmed.empty;
+  // forward: first index (from the end) whose column has hull, and the erased one just beyond it
+  let f = cols.length - 1;
+  while (f >= 0 && !alive(cols[f])) f--;
+  if (f >= 0 && f < cols.length - 1)
+    cols.splice(f + 1, 0, refine(cols[f], cols[f + 1]));
+  // aft: first index with hull, and the erased one just before it
+  let a = 0;
+  while (a < cols.length && !alive(cols[a])) a++;
+  if (a > 0 && a < cols.length) cols.splice(a, 0, refine(cols[a], cols[a - 1]));
+
+  return {
+    R,
+    M,
+    uParams: cols.map((c) => c.u),
+    vParams,
+    sheetSections: cols.map((c) => c.sheet),
+    sheerTrimmedSections: cols.map((c) => c.sheer),
+    centerTrimmedSections: cols.map((c) => c.center),
+    trimmedSections: cols.map((c) => c.trimmed),
+  };
 }
 
 // ---------- the hull grid ----------
