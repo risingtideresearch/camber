@@ -1,385 +1,385 @@
 // ---------- the parametric hull model + the constant-camber sweep ----------
+//
+// The hull is a sheet swept along the sheer plan, then trimmed. Reading the pieces in the order they
+// compose:
+//
+//   SHEER PLAN — the outline seen from above, a clamped cubic B-spline. Its own parameter u ∈ [0,1] is the
+//   hull's longitudinal coordinate: everything else is positioned in u, not in x, so the sweep never has to
+//   invert the plan to find out where it is. (The sheer trim and the transom are the exceptions — they are
+//   authored in profile, against x — so they are read through `plan.uAtX`.)
+//
+//   STATIONS — authored sections, each at a definite u. Point i of every station is one longitudinal curve
+//   (the LOFT), which is why every station carries the same number of points: the section at an arbitrary u
+//   is those curves read at u, and a section curve drawn through the results.
+//
+//   THE FRAME — at u the plan gives a point and a heading. The station plane is vertical and normal to that
+//   heading, so the planes fan out as the plan turns. A station point's `n` is its offset along the plane's
+//   inboard normal and `z` is simply world z: the deck is flat at z = 0 and the hull hangs below it.
+//
+//   TRIMMING — the swept sheet is cut by the sheer trim (above it is not hull), the centerline (y = 0, where
+//   the two halves meet at the keel) and the transom plane. That happens in `mesh.ts`.
+//
+// Coordinates are ABSOLUTE, in the model's `unit`. There is no unitless scale: a 5 m hull in mm runs x from
+// 0 to 5000. The editable bounds are therefore fractions of the hull's own length (see `bounds`), not the
+// fixed constants a normalized model could afford.
 
-import { clamp, lerp, V, type Vec3 } from "./math";
+import { clamp, lerp, type Vec2, type Vec3 } from "./math";
+import { pchipSlopes, hermiteEval } from "./pchip";
+import { planCurve, type PlanCurve } from "./bspline";
 import {
-  knuckleSlopes,
-  hermiteEvalLR,
-  pchipSlopes,
-  hermiteEval,
-  naturalCubicSlopes,
-} from "./pchip";
-import { clampedBSplineSamplerX } from "./bspline";
+  centripetalParams,
+  crChain,
+  crCurve,
+  evalChain,
+  type Bez,
+  type Curve,
+} from "./spline";
+import { UNIT_MM, type Unit } from "./document";
 
 // ---------- types ----------
-// A longitudinal control STATION: it carries both the plan half-breadth y AND the blend weight w (the
-// barycentric template mix) at this x. The two used to be separate arrays (sheer cps + weight cps) at nearly
-// the same x's; unified here so one station drives both curves. w has length = template count, in the simplex.
-export interface SheerCP {
+export interface PlanCP {
   x: number;
   y: number;
-  w: number[];
 }
 export interface TrimCP {
   x: number;
   z: number;
-  k: number; // knuckle ∈ [0,1]: 0 = smooth, 1 = hard corner — same as the template points
+  k: number; // knuckle ∈ [0,1]: 0 = smooth, 1 = hard corner
 }
 export interface TransomCP {
   x: number;
   z: number;
 }
+export interface StationPointCP {
+  n: number; // inboard offset along the station plane's normal
+  z: number; // world height (≤ 0, below the deck datum)
+  k: number; // knuckle ∈ [0,1]; blends along the hull, so a chine can fade
+}
 export interface StationCP {
-  n: number;
-  d: number;
-  k: number; // knuckle ∈ [0,1]: 0 = smooth, 1 = hard corner; blends. (point 0, the pinned sheer, is left smooth)
-}
-// {x, w} shape of a blend control point — used by the weight sampler and when migrating old documents that
-// stored the blend as its own array. The live model now carries w on SheerCP (the unified station).
-export interface WeightCP {
-  x: number;
-  w: number[]; // length = template count K; in the simplex
-}
-export interface Sheer {
-  cp: SheerCP[];
-  trim: TrimCP[];
-  transom: TransomCP[];
-  yf: (x: number) => number; // plan half-breadth y(x)
-  zf: (x: number) => number; // profile sheer-trim z(x) ≤ 0
+  u: number; // [0,1] along the sheer plan
+  keelK: number; // keel crease ∈ [0,1]: 0 = smooth round bottom, 1 = hard V
+  points: StationPointCP[]; // S ≥ 2, the same S for every station
 }
 
+// The station plane at u: origin on the plan curve, `n` its inboard normal, `T` the plan heading.
 export interface Frame {
   p: Vec3;
   T: Vec3;
   n: Vec3;
-  d: Vec3;
-}
-export interface Station {
-  tmax: number;
-  n: (u: number) => number;
-  d: (u: number) => number;
-  ts?: number[]; // the template points' parameters in this station's u-scale (for knuckle-column alignment)
-  keelV?: number; // keel crease strength ∈ [0,1]: 0 = flat/round, 1 = hard V (mirrored-keel station only)
-}
-export interface Section {
-  pts: Vec3[];
-  open: boolean;
-  aft: boolean;
-  keel: boolean;
-  // column indices (into pts) that sit on a crease line — a template-point knuckle and (when keel) the
-  // keel itself. The columns are placed exactly on those lines so a hard edge has somewhere to live; the
-  // surface/mesh builders give them a tangent break (knot multiplicity / per-side normals). Empty unless
-  // trimmed. The actual sharpness is data-driven: a faded knuckle (low k) on a crease column stays smooth.
-  creaseCols: number[];
-  creaseK: number[]; // crease strength ∈ [0,1] parallel to creaseCols (blended knuckle k; keel V-ness)
 }
 
-// ---------- geometric domain constants ----------
-export const L = 1000; // length overall, UNITLESS (x: 0 = transom, L = bow). All coordinates are in these units.
-// Forward room past the LOA shown in the plan/profile editors. The boat length stays L, but a tumblehome bow
-// closes a little past it (the emergent stem), so the sheer-TRIM line is allowed to carry control points into
-// [L, L+XFWD] to shape that overhang; the 2D strips reserve this much extra x so those points are reachable.
-export const XFWD = 100;
-// station coordinate bounds: n from NMIN (outboard → tumblehome) to NMAX (inboard); d down from the sheer
-export const NMIN = -113,
-  NMAX = 338,
-  DMAX = 338;
-// plan / profile editable coordinate bounds — the ranges control points may be dragged within (the 2D editor
-// view transforms in view.ts mirror them). Kept here with the other domain bounds so the model-space edit
-// operations below can clamp to them without importing the view layer (which would be a circular dependency).
-export const YMAX = 275, // plan half-breadth upper bound
-  YMIN = -55, // room below the centerline for a tumblehome bow's centerline crossing
-  ZTRIMMIN = -275; // sheer trim must stay below the deck: z ∈ [ZTRIMMIN, 0]
+// A section: the (n, z) curve of the station at some u, plus the knuckles that shaped it. `at(v)` runs
+// v ∈ [0, vmax] with station point i at v = i exactly.
+export interface Section {
+  at: (v: number) => Vec2;
+  vmax: number; // = S − 1
+  ks: number[]; // the blended knuckle at each point
+  keelK: number; // the blended keel crease
+}
+
+export interface Model {
+  name: string;
+  unit: Unit;
+  sheerPlan: PlanCP[];
+  sheerTrim: TrimCP[];
+  transom: TransomCP[]; // exactly 2: [top, bottom]
+  stations: StationCP[]; // K ≥ 1, strictly increasing in u
+  waterline: number; // depth (≥ 0) of the design waterline below the deck datum
+  deckRake: number; // deck rake (rad, +ve = bow up): a rigid rotation about y through the sheer origin.
+  // Everything is built deck-flat (z = 0); the boat floats at this rake.
+  x0: number; // the cut-station scrubber's position, in x
+
+  // ---- derived by prepare(); never authored ----
+  plan: PlanCurve; // P(u) = (x, y) and dP/du
+  trimZ: (x: number) => number; // the sheer trim's z at x
+  loft: Loft;
+}
 
 // ---------- defaults ----------
-const SHEER_DEF: [number, number][] = [
+// A 5 m hull in millimetres. The v1 defaults at their original numbers, reading the old unitless 1000-long
+// scale as millimetres and scaling ×5 to a believable boat — the same shape at a size the unit makes sense
+// of. Stations sit where v1's two templates had their weight peaks: the ends.
+const DEF_LEN = 5000;
+const S = (v: number): number => (v * DEF_LEN) / 1000; // v1 units → this default's millimetres
+
+const PLAN_DEF: [number, number][] = [
   [0, 205],
   [250, 225],
   [500, 220],
   [750, 160],
   [1000, 0],
-]; // 2D plan curve, flat deck z=0 (meets CL fwd)
-// sheer trim line in profile (x, z): the real sheer, constrained below the flat deck (z ≤ 0). The strip
-// of swept sheet between the deck (z=0) and this line is trimmed off the final shape. Lowest amidships.
-const SHEER_TRIM_DEF: [number, number][] = [
+];
+const TRIM_DEF: [number, number][] = [
   [0, -15],
   [333, -70],
   [667, -65],
   [1000, -10],
 ];
-// transom: a raked plane at the stern, given by two profile points (x, z) — top (near the sheer) and
-// bottom (near the keel). The hull keeps the forward side (x ≥ xTransom(z)); the cut is a solid face.
 const TRANSOM_DEF: [number, number][] = [
   [38, -14],
   [95, -180],
 ];
-// station sections in the local frame: d = down from the sheer, n = inboard offset. Point 0 = sheer,
-// pinned at the origin. The curve descends from the sheer; the centerline clip closes the bottom.
-// [n, d, k] — k is the knuckle at that point (point 0, the pinned sheer, is left smooth; the last point's
-// knuckle bends the final segment, so a hard chine can run into the keel). The bilge point
-// (index 2) is a hard chine aft (k=1) that fades to a round bilge forward (k=0): a hard-chine planing
-// stern blending into a soft bow along the length of the one hull.
-// the default family of section templates (the old aft → fore pair). Each is one template; the weight
-// curve below blends them along the hull. More templates can be added in the editor.
-const TEMPLATE_DEFS: [number, number, number][][] = [
+// [n, z, k] per point, aft station then forward. The bilge (index 2) is a hard chine aft (k=1) fading to a
+// round bilge forward (k=0): a hard-chine planing stern blending into a soft bow along the one hull.
+const STATION_DEFS: { u: number; keelK: number; pts: [number, number, number][] }[] =
   [
-    [0, 0, 0],
-    [23, 80, 0],
-    [65, 160, 1],
-    [140, 220, 0],
-    [245, 250, 0],
-  ], // fuller (transom), hard chine at the bilge
-  [
-    [0, 0, 0],
-    [38, 108, 0],
-    [100, 210, 0],
-    [180, 280, 0],
-    [255, 305, 0],
-  ], // deeper / finer (bow), round bilge
-];
-// the default straight blend path: full weight on template 0 at the transom, handing off linearly to the
-// last template at the bow — i.e. exactly the old linear aft→fore tween (a straight edge of the simplex).
-export function linearPath(k: number, length: number): WeightCP[] {
-  const e = (j: number) =>
-    Array.from({ length: k }, (_, i) => (i === j ? 1 : 0));
-  return [
-    { x: 0, w: e(0) },
-    { x: length, w: e(k - 1) },
+    {
+      u: 0,
+      keelK: 0,
+      pts: [
+        [0, 0, 0],
+        [23, -80, 0],
+        [65, -160, 1],
+        [140, -220, 0],
+        [245, -250, 0],
+      ],
+    },
+    {
+      u: 1,
+      keelK: 0,
+      pts: [
+        [0, 0, 0],
+        [38, -108, 0],
+        [100, -210, 0],
+        [180, -280, 0],
+        [255, -305, 0],
+      ],
+    },
   ];
-}
-
-// curve fairing: "pchip" = C¹ monotone, shape-preserving (the default, guarantees the invariants);
-// "c2" = C² natural cubic (curvature-continuous, interpolating — but can overshoot); "bspline" = an
-// approximating clamped cubic B-spline (C² and variation-diminishing, so no overshoot — the control points
-// become a polygon the section is pulled inside of). Both c2 and bspline are experimental and drop the
-// per-point knuckles (no chines); the weight curve only honors c2 (in logit space) and ignores bspline.
-export type Fairing = "pchip" | "c2" | "bspline";
-
-// Represents a specific hull
-export interface Model {
-  sheer: Sheer;
-  templates: StationCP[][]; // K ≥ 1 section templates, index-aligned (all share the section count)
-  keelK: number[]; // per-template keel (centerline) knuckle ∈ [0,1]: 0 = C¹-smooth keel across the
-  // centerline, 1 = a hard V. Blended along the hull like the point knuckles. Index-aligned with templates.
-  weightFn: (x: number) => number[]; // evaluated weight curve x → simplex; rebuilt by prepare() from sheer.cp
-  x0: number;
-  waterline: number; // depth (≥0) of the design waterline below the sheer origin (deck datum at x=0, z=0)
-  deckRake: number; // deck rake angle (rad, +ve = bow up): a rigid rotation of the whole hull about the
-  // transverse (y) axis through the sheer origin. Everything is built deck-flat (z=0); the boat floats at this rake.
-  fairing: Fairing; // which curve fairing to use (session toggle; not part of the saved model)
-}
 
 export function createModel(): Model {
-  const model: Model = {
-    sheer: { cp: [], trim: [], transom: [], yf: () => 0, zf: () => 0 },
-    templates: [],
-    keelK: [],
-    weightFn: () => [1],
-    x0: 500,
-    waterline: 150,
+  const model = {
+    name: "",
+    unit: "mm",
+    sheerPlan: [],
+    sheerTrim: [],
+    transom: [],
+    stations: [],
+    waterline: 0,
     deckRake: 0,
-    fairing: "pchip", // C¹ shape-preserving (keeps the chines); "c2"/"bspline" are code-toggle experiments
-  };
+    x0: 0,
+  } as unknown as Model;
   resetModel(model); // a fresh model IS the default hull — never a half-initialized shell
   return model;
 }
 
 export function resetModel(model: Model): void {
-  model.templates = TEMPLATE_DEFS.map((t) =>
-    t.map((c) => ({ n: c[0], d: c[1], k: c[2] })),
-  );
-  model.keelK = model.templates.map(() => 0); // keels default to C¹-smooth across the centerline
-  // each station carries its blend w, sampled here from the default linear aft→fore handoff
-  const wf0 = buildWeightSampler(model, linearPath(model.templates.length, L));
-  model.sheer = {
-    cp: SHEER_DEF.map((c) => ({ x: c[0], y: c[1], w: wf0(c[0]) })),
-    trim: SHEER_TRIM_DEF.map((c) => ({ x: c[0], z: c[1], k: 0 })),
-    transom: TRANSOM_DEF.map((c) => ({ x: c[0], z: c[1] })),
-    yf: () => 0,
-    zf: () => 0,
-  };
-  model.x0 = 500;
-  model.waterline = 150;
+  model.name = "";
+  model.unit = "mm";
+  model.sheerPlan = PLAN_DEF.map(([x, y]) => ({ x: S(x), y: S(y) }));
+  model.sheerTrim = TRIM_DEF.map(([x, z]) => ({ x: S(x), z: S(z), k: 0 }));
+  model.transom = TRANSOM_DEF.map(([x, z]) => ({ x: S(x), z: S(z) }));
+  model.stations = STATION_DEFS.map((st) => ({
+    u: st.u,
+    keelK: st.keelK,
+    points: st.pts.map(([n, z, k]) => ({ n: S(n), z: S(z), k })),
+  }));
+  model.waterline = S(150);
   model.deckRake = 0;
+  model.x0 = S(500);
+  prepare(model);
+}
+
+// ---------- the hull's own scale ----------
+// The plan's first control point is pinned at the transom (x = 0), so its last one is the length overall.
+export const loa = (model: Model): number =>
+  model.sheerPlan[model.sheerPlan.length - 1].x - model.sheerPlan[0].x;
+
+// The editable domain — the ranges a control point may be dragged within, and the minimum spacing between
+// neighbours. A normalized model could hard-code these; an absolute one can't, so they are fractions of the
+// hull's own length, chosen to reproduce the original bounds on a 1000-long hull.
+export interface Bounds {
+  yMax: number; // plan half-breadth upper bound
+  yMin: number; // room below the centerline for a tumblehome bow's crossing
+  nMin: number; // outboard (tumblehome) limit of a station point
+  nMax: number; // inboard limit
+  zMin: number; // deepest a station point may go
+  zTrimMin: number; // the sheer trim stays in [zTrimMin, 0] — at or below the deck
+  gap: number; // minimum x-spacing between neighbouring control points
+}
+export function bounds(model: Model): Bounds {
+  const len = loa(model) || 1;
+  return {
+    yMax: 0.275 * len,
+    yMin: -0.055 * len,
+    nMin: -0.113 * len,
+    nMax: 0.338 * len,
+    zMin: -0.338 * len,
+    zTrimMin: -0.275 * len,
+    gap: 0.08 * len,
+  };
 }
 
 // ---------- deck rake (world frame) ----------
 // The hull is built deck-flat (deck = z = 0). The deck rake is a rigid rotation of the whole hull by
-// model.deckRake about the transverse (y) axis through the sheer origin (x=0, z=0). worldZ is the true
-// vertical height of a deck-frame point once floated at that rake; the waterline is the horizontal plane
-// at worldZ = −waterline, so immersion(x,z) > 0 means the point is submerged.
+// model.deckRake about the transverse (y) axis through the sheer origin (x = 0, z = 0). worldZ is the true
+// vertical height of a deck-frame point once floated at that rake; the waterline is the horizontal plane at
+// worldZ = −waterline, so immersion(x, z) > 0 means the point is submerged.
 export const worldZ = (model: Model, x: number, z: number): number =>
   x * Math.sin(model.deckRake) + z * Math.cos(model.deckRake);
 
 export const immersion = (model: Model, x: number, z: number): number =>
   -model.waterline - worldZ(model, x, z);
 
-export function prepare(model: Model): void {
-  const sheer = model.sheer;
-  // the plan half-breadth y(x): a clamped cubic B-spline over the plan control points — C² and
-  // variation-diminishing, so it can't overshoot the control polygon (the plan points are handles, the curve
-  // interpolating only the first and last). Evaluated directly as y(x), so the swept frame's heading is smooth.
-  // Past the forward end (x > last cp) it is EXTRAPOLATED linearly (continuing the end slope) so a tumblehome
-  // bow can let the sheer guide cross the centerline (y < 0) and the surface taper to a closed stem. Aft is
-  // left clamped.
-  const yfRaw = clampedBSplineSamplerX(sheer.cp.map((p) => [p.x, p.y]));
-  const xEnd = sheer.cp[sheer.cp.length - 1].x,
-    slopeEnd = yfRaw(xEnd) - yfRaw(xEnd - 1);
-  sheer.yf = (x: number) =>
-    x <= xEnd ? yfRaw(x) : yfRaw(xEnd) + (x - xEnd) * slopeEnd;
-  // profile sheer-trim z(x) ≤ 0: the same knuckle-aware fairing the templates use (interpolating, with
-  // per-point knuckles), parameterized by x — so a hard sheer-line corner is possible, like a chine.
-  sheer.zf = fairEval(
-    model,
-    sheer.trim.map((p) => p.x),
-    sheer.trim.map((p) => p.z),
-    sheer.trim.map((p) => p.k),
-  );
-  model.weightFn = buildWeightSampler(model, model.sheer.cp); // the blend path, read from the unified stations
+// ---------- the longitudinal loft ----------
+// Point i of every station traces one curve along the hull; the section at an arbitrary u is those curves
+// read at u. Three things are lofted, and they do not all want the same interpolant:
+//
+//   • (n, z) — a centripetal Catmull-Rom. The knots sit at the stations' u, so the curve is a function of u
+//     and no inversion is needed to section at a given u; the SHAPE comes from Bézier control points built
+//     with centripetal spacing, which is legitimate because those control points are geometric (see
+//     spline.ts). The spacing is measured on the 3-D position (x(u), n, z), not on (n, z) alone: two
+//     stations far apart along the hull must not be treated as neighbours merely because their section
+//     points happen to land close together.
+//
+//   • k — PCHIP. A knuckle is a strength in [0,1] and must stay there; Catmull-Rom overshoots, and an
+//     overshoot here would either invent a crease past hard or push k negative. PCHIP is shape-preserving,
+//     so a chine fading from 1 to 0 fades monotonically and stops.
+//
+//   • keelK — PCHIP, for the same reason.
+interface Loft {
+  S: number; // points per station
+  at: (u: number) => { pts: Vec2[]; ks: number[]; keelK: number };
 }
 
-// ---------- the weight curve: a shape-preserving interpolation through the simplex ----------
-// The longitudinal blend weights w(x) ∈ Δ^{K−1}. Control points carry (x, w). Each barycentric component
-// wⱼ(x) is interpolated across the control x's with the same monotone PCHIP fairing the section templates
-// use: it passes through the authored values and, being shape-preserving, never overshoots, so each
-// component stays in [0,1]. Renormalizing the vector to Σ = 1 lands it back on the simplex. The curve thus
-// hits every control point exactly (at a control station the components already sum to 1, so the
-// renormalization is the identity there) yet stays valid and C¹ — and tracks the control points tightly,
-// unlike an approximating B-spline that would smooth past the interior ones.
-
-// project a vector onto the simplex the cheap way: clamp negatives (float noise) away, renormalize to Σ=1
-export function normSimplex(w: number[]): number[] {
-  let s = 0;
-  const c = w.map((v) => {
-    const x = v > 0 ? v : 0;
-    s += x;
-    return x;
-  });
-  return s > 0 ? c.map((v) => v / s) : c.map(() => 1 / c.length);
-}
-
-export function buildWeightSampler(
-  model: Model,
-  weights: WeightCP[],
-): (x: number) => number[] {
-  const cps = weights.length;
-  if (cps <= 1) {
-    const w = cps ? normSimplex(weights[0].w) : [1];
-    return () => w.slice();
-  }
-  const K = weights[0].w.length,
-    xs = weights.map((c) => c.x),
-    xLo = xs[0],
-    xHi = xs[cps - 1];
-  if (model.fairing === "c2") {
-    // C² path: interpolate the softmax pre-image (log-weights) with a natural cubic — overshoot there is
-    // harmless — then softmax back, so the curve is curvature-continuous and always in the (open) simplex.
-    // A pure-template control point (a 0 weight) is clamped to ε, so corners sit a hair inside the simplex.
-    const eps = 1e-4,
-      logs: { ys: number[]; m: number[] }[] = [];
-    for (let j = 0; j < K; j++) {
-      const ys = weights.map((c) => Math.log(Math.max(c.w[j], eps)));
-      logs.push({ ys, m: naturalCubicSlopes(xs, ys) });
-    }
-    return (x: number) => {
-      const xc = clamp(x, xLo, xHi),
-        u = logs.map((c) => hermiteEval(xs, c.ys, c.m, xc)),
-        mx = Math.max(...u);
-      let s = 0;
-      const e = u.map((v) => {
-        const ev = Math.exp(v - mx);
-        s += ev;
-        return ev;
-      });
-      return e.map((v) => v / s); // softmax → open simplex
+function buildLoft(model: Model): Loft {
+  const sts = model.stations,
+    K = sts.length,
+    n = sts[0].points.length;
+  // one station: the section is the same everywhere, so there is nothing to interpolate
+  if (K === 1) {
+    const st = sts[0],
+      pts = st.points.map((p): Vec2 => [p.n, p.z]),
+      ks = st.points.map((p) => p.k);
+    return {
+      S: n,
+      at: () => ({ pts: pts.map((p) => [...p] as Vec2), ks: ks.slice(), keelK: st.keelK }),
     };
   }
-  // C¹ default: per-component shape-preserving (PCHIP) interpolation, renormalized onto the simplex
-  const comps: { ys: number[]; m: number[] }[] = [];
-  for (let j = 0; j < K; j++) {
-    const ys = weights.map((c) => c.w[j]);
-    comps.push({ ys, m: pchipSlopes(xs, ys) });
+  const us = sts.map((s) => s.u),
+    xs = us.map((u) => model.plan.at(u)[0]);
+  // per point index: the (n, z) chain over the station u's, and the PCHIP slopes for k
+  const chains: Bez[][] = [],
+    kCurves: { ys: number[]; m: number[] }[] = [];
+  for (let i = 0; i < n; i++) {
+    const vals = sts.map((s): number[] => [s.points[i].n, s.points[i].z]);
+    // knot spacing from the 3-D chord: (x along the hull, n, z)
+    const q = sts.map((s, j): number[] => [xs[j], s.points[i].n, s.points[i].z]);
+    chains.push(crChain(vals, centripetalParams(q), new Array(K).fill(0)));
+    const ys = sts.map((s) => s.points[i].k);
+    kCurves.push({ ys, m: pchipSlopes(us, ys) });
   }
-  return (x: number) => {
-    const xc = clamp(x, xLo, xHi);
-    return normSimplex(comps.map((c) => hermiteEval(xs, c.ys, c.m, xc)));
+  const keelYs = sts.map((s) => s.keelK),
+    keelM = pchipSlopes(us, keelYs);
+  // u → the chain's parameter: knot j sits at parameter j, so this is the piecewise-linear index of u in us
+  const param = (u: number): number => {
+    const c = clamp(u, us[0], us[K - 1]);
+    let j = 0;
+    while (j < K - 2 && c > us[j + 1]) j++;
+    return j + (c - us[j]) / (us[j + 1] - us[j] || 1);
+  };
+  return {
+    S: n,
+    at: (u: number) => {
+      const t = param(u),
+        uc = clamp(u, us[0], us[K - 1]);
+      const pts: Vec2[] = [],
+        ks: number[] = [];
+      for (let i = 0; i < n; i++) {
+        const p = evalChain(chains[i], t);
+        pts.push([p[0], p[1]]);
+        ks.push(clamp(hermiteEval(us, kCurves[i].ys, kCurves[i].m, uc), 0, 1));
+      }
+      return { pts, ks, keelK: clamp(hermiteEval(us, keelYs, keelM, uc), 0, 1) };
+    },
   };
 }
 
-// fair a station-curve component (n or d) through its points, parameterized by the chord position t. The
-// C¹ knuckle-aware monotone Hermite by default; in "c2" mode a curvature-continuous natural cubic; in
-// "bspline" mode an approximating clamped cubic B-spline of the component over t (C², no overshoot — the
-// points are a control polygon, not interpolated except at the ends). The c2 and bspline modes ignore the
-// knuckles; they are for comparing fairness, not for guaranteed validity.
-export function fairEval(
-  model: Model,
-  ts: number[],
-  fs: number[],
-  ks: number[],
-): (u: number) => number {
-  if (model.fairing === "bspline")
-    return clampedBSplineSamplerX(ts.map((t, i) => [t, fs[i]]));
-  if (model.fairing === "c2") {
-    const m = naturalCubicSlopes(ts, fs),
-      t0 = ts[0],
-      t1 = ts[ts.length - 1];
-    return (u: number) => hermiteEval(ts, fs, m, clamp(u, t0, t1));
-  }
-  return knuckleEval(ts, fs, ks);
+// ---------- a Catmull-Rom curve read as a function of its first coordinate ----------
+// The sheer trim is authored in profile as (x, z) and has to answer "z at this x". The curve is parametric,
+// so this inverts the x component: the knots' x strictly increase, which brackets the segment by scan, and
+// the cubic inside it is bisected. Used only against x-authored curves; everything swept is parameterized
+// in u and never needs this.
+function graphOfX(pts: Vec2[], ks: number[]): (x: number) => number {
+  const segs = crChain(
+    pts.map((p) => [...p]),
+    centripetalParams(pts.map((p) => [...p])),
+    ks,
+  );
+  const n = segs.length,
+    x0 = pts[0][0],
+    x1 = pts[pts.length - 1][0];
+  if (n === 0) return () => pts[0]?.[1] ?? 0;
+  return (x: number) => {
+    const xc = clamp(x, x0, x1);
+    let j = 0;
+    while (j < n - 1 && xc > pts[j + 1][0]) j++;
+    let lo = 0,
+      hi = 1;
+    for (let it = 0; it < 32; it++) {
+      const m = (lo + hi) / 2;
+      if (evalChain(segs, j + m)[0] < xc) lo = m;
+      else hi = m;
+    }
+    return evalChain(segs, j + (lo + hi) / 2)[1];
+  };
 }
 
-// the blend weights at station x, a point in the (K−1)-simplex
-export function weightsAt(model: Model, x: number): number[] {
-  return model.weightFn(x);
+export function prepare(model: Model): void {
+  model.plan = planCurve(model.sheerPlan.map((p): Vec2 => [p.x, p.y]));
+  model.trimZ = graphOfX(
+    model.sheerTrim.map((p): Vec2 => [p.x, p.z]),
+    model.sheerTrim.map((p) => p.k),
+  );
+  model.loft = buildLoft(model);
 }
 
-// ---------- the constant-camber sweep ----------
-// Frame at station x: tangent T along the (flat) sheer; d (depth) = straight down; n (inboard) = d × T.
-// The station plane is vertical, rotating about z as the sheer heading turns, so stations fan out.
-export function frameAt(model: Model, x: number): Frame {
-  const sheer = model.sheer;
-  const p: Vec3 = [x, sheer.yf(x), 0];
-  // The finite-difference span is floored at 0 but NOT capped at L: past the LOA the sheer is extrapolated
-  // linearly (see prepare()), and the bow extension needs a real tangent there — capping at L would collapse
-  // xa==xb==L into a zero (degenerate) tangent.
-  const e = 2,
-    xa = Math.max(x - e, 0),
-    xb = x + e;
-  const T = V.norm([xb - xa, sheer.yf(xb) - sheer.yf(xa), 0]);
-  const dn: Vec3 = [0, 0, -1];
-  const d = V.norm(V.sub(dn, V.scale(T, V.dot(dn, T))));
-  const n = V.norm(V.cross(d, T));
-  return { p, T, n, d };
+// ---------- the sweep ----------
+// The frame at u: the plan gives the origin and the heading; the station plane is vertical and normal to it.
+// n̂ = d̂ × T̂ with d̂ = (0,0,−1) straight down, i.e. (Ty, −Tx, 0) — inboard for a hull whose sheer lies to
+// starboard.
+export function frameAt(model: Model, u: number): Frame {
+  const [x, y] = model.plan.at(u),
+    [dx, dy] = model.plan.d(u),
+    l = Math.hypot(dx, dy) || 1;
+  const T: Vec3 = [dx / l, dy / l, 0];
+  return { p: [x, y, 0], T, n: [T[1], -T[0], 0] };
 }
 
-// the world point of station parameter u, in the station's frame: P = p + n(u)·n̂ + d(u)·d̂
-export function stationWorld(fr: Frame, st: Station, u: number): Vec3 {
-  const nn = st.n(u),
-    dd = st.d(u);
-  return [
-    fr.p[0] + nn * fr.n[0] + dd * fr.d[0],
-    fr.p[1] + nn * fr.n[1] + dd * fr.d[1],
-    fr.p[2] + nn * fr.n[2] + dd * fr.d[2],
-  ];
+// the world point of a station-frame offset: z is world z, so only n is carried by the frame
+export const stationWorld = (fr: Frame, n: number, z: number): Vec3 => [
+  fr.p[0] + n * fr.n[0],
+  fr.p[1] + n * fr.n[1],
+  z,
+];
+
+// The section at u: the lofted points, drawn through with a centripetal Catmull-Rom in the (n, z) plane and
+// creased by the lofted knuckles. Station point i sits at parameter i.
+export function sectionAt(model: Model, u: number): Section {
+  const { pts, ks, keelK } = model.loft.at(u),
+    c: Curve = crCurve(
+      pts.map((p) => [...p]),
+      centripetalParams(pts.map((p) => [...p])),
+      ks,
+    );
+  return { at: (v) => c.at(v) as Vec2, vmax: c.vmax, ks, keelK };
 }
 
-// cumulative chord-length parameter for a set of (n,d) points
-export function chordParam(ns: number[], ds: number[]): number[] {
-  const ts = [0];
-  for (let i = 1; i < ns.length; i++) {
-    const h = Math.hypot(ns[i] - ns[i - 1], ds[i] - ds[i - 1]);
-    ts.push(ts[i - 1] + Math.max(h, 1e-3));
-  }
-  return ts;
+// the transom plane in profile: the x of the cut at height z (linear through the two control points, full
+// breadth). The hull keeps the forward side, x ≥ xTransom(z).
+export function xTransom(model: Model, z: number): number {
+  const [a, b] = model.transom;
+  return a.x + (b.x - a.x) * ((z - a.z) / (b.z - a.z || 1));
 }
 
-// Refine a bracketed sign change of g on [a,b] by bisection (ga = g(a); the root stays bracketed with
-// g(a) on ga's side). The coarse scans below detect a crossing between two samples and used to place it
-// with ONE linear-interpolation step — fine for a drawn line, but the O(h²) placement error (~1e-2 world
-// units) is pure NOISE to anything that differentiates the result: the sheer curvature comb second-
-// differences these points, and jittered visibly. 40 halvings converge the crossing to ~1e-12·span, so
-// the swept geometry is smooth in x down to float precision.
-function bisectRoot(
-  g: (u: number) => number,
+// ---------- bisection ----------
+// Refine a bracketed sign change of g on [a,b] (ga = g(a); the root stays bracketed with g(a) on ga's side).
+// A coarse scan finds the crossing between two samples; placing it with one linear-interpolation step leaves
+// an O(h²) error that is pure NOISE to anything that differentiates the result — the curvature combs second-
+// difference these points and jitter visibly. 40 halvings converge to ~1e-12·span, so the swept geometry is
+// smooth down to float precision.
+export function bisectRoot(
+  g: (v: number) => number,
   a: number,
   b: number,
   ga: number,
@@ -392,1072 +392,274 @@ function bisectRoot(
   return 0.5 * (a + b);
 }
 
-// knuckle-aware monotone-Hermite evaluator: one continuous Hermite chain with per-point left/right
-// tangents blended toward the secants by k. k=0 is plain (smooth) PCHIP; an isolated k=1 is a knuckle; two
-// adjacent k=1 points bound a perfectly straight segment. Replaces the old run-splitting corner model.
-export function knuckleEval(
-  ts: number[],
-  fs: number[],
-  ks: number[],
-): (u: number) => number {
-  const { L: lo, R: hi } = knuckleSlopes(ts, fs, ks),
-    t0 = ts[0],
-    t1 = ts[ts.length - 1];
-  return (u: number) => hermiteEvalLR(ts, fs, lo, hi, clamp(u, t0, t1));
-}
-
-// the blended keel (centerline) knuckle at station x: Σⱼ w[j]·keelK[j] — the per-template keel knuckle
-// faired along the hull just like the point knuckles, so a hard-V keel can fade to a smooth one.
-export function keelKAt(model: Model, x: number): number {
-  const w = weightsAt(model, x),
-    kk = model.keelK;
-  let k = 0;
-  for (let j = 0; j < w.length; j++) k += w[j] * (kk[j] ?? 0);
-  return k;
-}
-
-// fraction of the half-section parameter (up from the keel toward the sheer) over which the keel is rounded
-// — a small fillet near the centerline crossing, so it slides smoothly with the keel and a broad round of a
-// straight panel never builds up into a migrating bump. Small enough to leave a flat/panel bottom above it.
-const KEEL_FLAT_ZONE = 0.28;
-// Blended-knuckle strength at/above which the grid columns are FULLY chine-anchored (so the chine line has no
-// drift); below it the alignment relaxes toward the even grid as the chine fades to nothing. See sweptSection.
-const KNUCKLE_PIN = 0.35;
-// A flat/round keel is only FAIR where the section meets the centerline near-perpendicular in plan. Where
-// the sheer flares, the station planes fan (n̂ ⟂ the sheer tangent, not the centerline) and a flat keel
-// rides up into a centerline ridge in true transverse sections (the "pucker") — only a V crosses such an
-// oblique meeting cleanly. So a flat keel is eased toward its natural V as the plan FLARE (the sheer
-// tangent's heading off the x-axis) rises: honored as authored below KEEL_FLAT_FLARE, fully a V above
-// KEEL_V_FLARE, smoothstep between. keelK is a floor — keelK = 1 is always a V regardless of flare.
-const KEEL_FLAT_FLARE = 12 * (Math.PI / 180),
-  KEEL_V_FLARE = 45 * (Math.PI / 180);
-
-// Build the section as a curve continuous across the boat centerline, the keel knuckle kc controlling the
-// keel: 0 = flat (C¹-smooth round bottom), 1 = a hard V. An earlier version rebuilt this from a discrete
-// knot set — the authored points inboard of the y=0 crossing, plus a keel knot, mirrored. But which points
-// fell inboard CHANGED one at a time as n_cl slid up the stem, and each such change stepped the keel shape:
-// the visible deadrise creases. This version never rebuilds from moving knots. The starboard half IS the
-// authored half-section curve itself (chines preserved, and it varies smoothly with x), reflected about the
-// centerline to make the port half; the only keel control is a smooth flattening of the depth near the
-// crossing. Both the reflection point (n_cl, d*) and the flattening vary smoothly in x, so the swept keel
-// is smooth. The keel knuckle kc sets the character (0 = flat/round, 1 = hard V), eased toward a V where
-// the plan flare would make a flat keel unfair (see KEEL_FLAT_FLARE/KEEL_V_FLARE). Returns null for an
-// open section (the curve never reaches the centerline) or a degenerate frame.
-function mirrorKeelStation(
-  model: Model,
-  x: number,
-  ns: number[],
-  ds: number[],
-  ks: number[],
-  kc: number,
-): Station | null {
-  const fr = frameAt(model, x),
-    ny = fr.n[1],
-    py = fr.p[1];
-  if (Math.abs(ny) < 1e-6) return null; // station plane parallel to the centerline — no clean crossing
-  const ncl = -py / ny; // inboard offset where world y = 0
-  const ts = chordParam(ns, ds),
-    nf = fairEval(model, ts, ns, ks),
-    df = fairEval(model, ts, ds, ks),
-    tmax = ts[ts.length - 1];
-  // The STARBOARD span between the section's two world-centerline crossings: uA (the up-crossing, where the
-  // section first reaches y ≥ 0) and ustar (the down-crossing — the keel). For a normal hull the deck (u=0)
-  // is already to starboard, so uA = 0 and this is the whole half-section. For a tumblehome bow past the LOA
-  // the sheer guide is to PORT (py < 0), so uA > 0 and we drop the deck→centerline part — which lets this same
-  // keel-symmetric construction close the bow, no special lens case.
-  const yAt = (u: number) => py + nf(u) * ny;
-  let pu = 0,
-    py0 = yAt(0),
-    uA = py0 >= 0 ? 0 : -1,
-    ustar = -1;
-  const FN = 240;
-  for (let i = 1; i <= FN; i++) {
-    const u = (tmax * i) / FN,
-      y = yAt(u);
-    if (uA < 0) {
-      if (py0 < 0 && y >= 0) uA = bisectRoot(yAt, pu, u, py0); // up-crossing into starboard
-    } else if (py0 >= 0 && y < 0) {
-      ustar = bisectRoot(yAt, pu, u, py0); // down-crossing: the keel
-      break;
-    }
-    pu = u;
-    py0 = y;
-  }
-  if (uA < 0 || ustar <= uA + 1e-6) return null; // open: no starboard span reaching the centerline
-  const half = ustar - uA, // u-length of the kept starboard half
-    dstar = df(ustar);
-  // Round the keel over a SMALL fillet just inboard of the centerline crossing — a zone whose width is a
-  // fixed fraction (KEEL_FLAT_ZONE) of the starboard span, so it slides smoothly WITH the keel crossing. A
-  // constant fillet running along the keel approach stays longitudinally fair even where that approach is a
-  // straight chine/deadrise panel. (An earlier version made the zone broad and anchored z0 to an inboard
-  // chine; the zone then stepped in size as the crossing slid past a chine — a longitudinal blister. And a
-  // broad round of a straight panel is itself a big bump that migrates.) The fillet is small, so it rounds
-  // only near the keel and leaves a flat/panel bottom above it alone (no inflection / reversal).
-  const z0 = ustar - half * KEEL_FLAT_ZONE;
-  // plan flare = the sheer tangent's heading off the x-axis (n̂ = (Ty,−Tx,0) ⇒ flare = atan2(|Ty|,|Tx|)).
-  // Ease a flat keel toward its natural V as flare rises, so an oblique centerline meeting becomes a fair V
-  // instead of a ridge (the narrow-flared-transom pucker). keelK is the floor: flatten f = (1−kc)·(1−flareV).
-  const flare = Math.atan2(Math.abs(fr.n[0]), Math.abs(fr.n[1]));
-  let flareV = clamp(
-    (flare - KEEL_FLAT_FLARE) / (KEEL_V_FLARE - KEEL_FLAT_FLARE),
-    0,
-    1,
-  );
-  flareV = flareV * flareV * (3 - 2 * flareV); // smoothstep
-  const f = (1 - clamp(kc, 0, 1)) * (1 - flareV); // flatten amount: 1 = round keel, 0 = natural V
-  // reflected symmetric section over U ∈ [0, 2·ustar], keel at the midpoint U = ustar. The keel character is
-  // set by the depth's SLOPE at the crossing: the reflection turns a zero slope into a smooth keel and a
-  // nonzero slope into a V (corner). Over the zone [z0, ustar] the depth is blended (by f, via a C² weight)
-  // toward a target depth profile; the smootherstep weight has zero value AND slope at z0, so the blend joins
-  // the section C² there with no shoulder, and uses only df VALUES (continuous across chines) so it stays
-  // robust. The target is a fair PARABOLA with its vertex (zero slope) at the keel and passing through the
-  // section at z0 — constant curvature, spread evenly, so f=1 gives a gently ROUNDED keel rather than a flat
-  // strip with sharp shoulders (the old failure). f=0 leaves the natural slope ⇒ the reflected V.
-  const span = ustar - z0,
-    d0z = df(z0),
-    c = (dstar - d0z) / (span * span); // parabola curvature: vertex at the keel, through (z0, d0z)
-  const warp = (u: number) => {
-    const d0 = df(u);
-    if (f <= 0 || u <= z0) return d0;
-    const t = Math.min((u - z0) / span, 1),
-      g = t * t * t * (t * (t * 6 - 15) + 10), // smootherstep (C²) blend weight
-      v = ustar - u,
-      target = dstar - c * v * v; // fair parabolic round to a flat keel tangent
-    return d0 + f * g * (target - d0);
-  };
-  // U ∈ [0, 2·half]: the starboard half [0,half] maps to the original span [uA,ustar], the keel sits at the
-  // midpoint U = half, and the port half reflects the starboard one about the centerline offset n_cl.
-  const umap = (U: number): number => uA + (U <= half ? U : 2 * half - U);
-  return {
-    tmax: 2 * half,
-    n: (U: number) => (U <= half ? nf(umap(U)) : 2 * ncl - nf(umap(U))),
-    d: (U: number) => warp(umap(U)),
-    ts: ts.map((t) => t - uA), // template points shifted into the [0,half] starboard span (uA=0 ⇒ unchanged)
-    keelV: 1 - f, // keel crease strength: 0 = flat/round (smooth), 1 = hard V (for shading the keel crease)
-  };
-}
-
-// the blended station section at x, as continuous n(u)/d(u) over u in [0,tmax]. At each station the
-// templates are mixed by the weight curve w(x) — section(x)[i] = Σⱼ w[j]·templates[j][i] — componentwise
-// in (n, d, k). The knuckle k is blended along the hull just like n and d, so a chine can fade from hard
-// to soft as the weight curve hands off between a creased template and a smooth one. With mirrorKeel set
-// (the trimmed hull), the curve is reflected about the centerline so the keel knuckle applies — see
-// mirrorKeelStation; the parameter then runs sheer→keel→port-sheer and the keel sits at the midpoint.
-export function stationAt(
-  model: Model,
-  x: number,
-  mirrorKeel = false,
-): Station {
-  // Past the LOA (the bow extension for a tumblehome bow) freeze the section SHAPE at x = L — the templates and
-  // weight curve are only defined on [0, L] — but keep building it through mirrorKeelStation, which now handles
-  // the sheer guide having crossed the centerline (it reflects the starboard span [uA, ustar]). So the bow
-  // closes through the same keel-symmetric construction as the rest of the hull, swept along the extrapolated
-  // sheer, with no special case.
-  const xw = Math.min(x, L),
-    w = weightsAt(model, xw),
-    tpl = model.templates,
-    K = tpl.length,
-    m = tpl[0].length,
-    ns: number[] = [],
-    ds: number[] = [],
-    ks: number[] = [];
-  for (let i = 0; i < m; i++) {
-    let n = 0,
-      d = 0,
-      k = 0;
-    for (let j = 0; j < K; j++) {
-      const p = tpl[j][i];
-      n += w[j] * p.n;
-      d += w[j] * p.d;
-      k += w[j] * p.k;
-    }
-    ns.push(n);
-    ds.push(d);
-    ks.push(k);
-  }
-  if (mirrorKeel) {
-    // null ⇒ the section never reaches the centerline (an open bow station, or past the bow closure where the
-    // swept lens has vanished). For the trimmed hull that means NO hull here — return a degenerate (tmax 0)
-    // station so sweptSection reports `aft`. (Falling back to the raw, un-mirrored half-section instead would
-    // resurrect the full deep section past the closure — the "wings".)
-    return (
-      mirrorKeelStation(model, x, ns, ds, ks, keelKAt(model, xw)) ?? {
-        tmax: 0,
-        n: () => 0,
-        d: () => 0,
-        ts: [0],
-      }
-    );
-  }
-  const ts = chordParam(ns, ds);
-  return {
-    tmax: ts[m - 1],
-    n: fairEval(model, ts, ns, ks),
-    d: fairEval(model, ts, ds, ks),
-    ts,
-  };
-}
-
-// the transom plane in profile: longitudinal position x of the cut at height z (linear through the two
-// control points, full breadth). The hull keeps the forward side, x ≥ xTransom(z).
-export function xTransom(model: Model, z: number): number {
-  const [a, b] = model.sheer.transom;
-  return a.x + (b.x - a.x) * ((z - a.z) / (b.z - a.z || 1));
-}
-
-// the swept half-section at x as M+1 world points resampled along the station. When `trim` is set it
-// runs from the sheer-trim line (top: the strip above it, between deck and trim, is cut off) down to the
-// centerline (y ≥ 0; the keel point, last, y = 0, emerges from the clip) and reports `open` if it never
-// reaches the centerline. Untrimmed, it runs the full station from the deck — the raw swept sheet.
-// Because the flat sheer makes the station's d-axis point straight down, z = -d(u): the sheer trim at
-// z = z_s(x) is simply the station depth d = -z_s(x).
-export function sweptSection(
-  model: Model,
-  x: number,
-  M: number,
-  trim: boolean,
-  clipTransom = true,
-): Section {
-  const fr = frameAt(model, x),
-    st = stationAt(model, x, trim); // trimmed hull: the keel-knuckle symmetric section; sheet: the raw half
-  const W = (u: number): Vec3 => stationWorld(fr, st, u);
-  // Bow extension: where the sheer guide has crossed the centerline (yf < 0, forward of the LOA via the
-  // extrapolation in prepare) the station straddles the centerline. mirrorKeelStation builds the same keel-
-  // symmetric, keel-rounded section it does everywhere (reflecting the starboard span [uA, ustar]), and the
-  // normal trim + centerline + transom clipping below closes the bow — no special case.
-  let umin = 0,
-    umax = st.tmax,
-    open = true,
-    empty = false;
-  if (trim) {
-    const dtrim = -model.sheer.zf(x), // depth of the sheer line below the deck
-      FN = 160;
-    if (dtrim > 0) {
-      // sheer trim: first depth reaching dtrim — top of section.
-      umin = st.tmax; // scan the WHOLE station (not stopped by the keel below)
-      for (let i = 1; i <= FN; i++) {
-        const u = (st.tmax * i) / FN;
-        if (st.d(u) >= dtrim) {
-          const da = st.d((st.tmax * (i - 1)) / FN);
-          // clamp ≥ 0: at a bow lens the very top of the section already sits below the trim (da ≥ dtrim), so
-          // the interpolation would go negative — keep the whole section from its top instead of crossing the
-          // centerline to port. (For a normal section the top is the deck at d=0 < dtrim, so this is a no-op.)
-          umin = Math.max(
-            0,
-            (st.tmax * (i - 1 + (dtrim - da) / (st.d(u) - da || 1))) / FN,
-          );
-          break;
-        }
-      }
-    }
-    let prev = W(0); // centerline crossing: first u where half-breadth < 0 → keel
-    for (let i = 1; i <= FN; i++) {
-      const u = (st.tmax * i) / FN,
-        w = W(u);
-      if (prev[1] >= 0 && w[1] < 0) {
-        umax = (st.tmax * (i - 1 + prev[1] / (prev[1] - w[1]))) / FN;
-        open = false;
-        break;
-      }
-      prev = w;
-    }
-    // if the keel is reached shallower than the sheer trim, the entire section is above the trim ⇒ no hull here
-    if (umin >= umax - 1e-6) empty = true;
-  }
-  // transom clip: keep the largest u-interval that is forward of the raked transom plane. A vertical
-  // section meets the raked plane cleanly, so the cut trims either the top or the bottom of the section.
-  let ua = umin,
-    ub = umax,
-    aft = empty,
-    keel = trim && !open && !empty;
-  if (empty) ua = ub = umax;
-  if (trim && !empty && clipTransom) {
-    const SN = 200,
-      g = (u: number) => {
-        const w = W(u);
-        return w[0] - xTransom(model, w[2]);
-      };
-    let pg = g(umin),
-      pu = umin,
-      s: number | null = pg >= 0 ? umin : null;
-    let best: [number, number] | null = null;
-    const add = (a: number, b: number) => {
-      if (!best || b - a > best[1] - best[0]) best = [a, b];
-    };
-    for (let i = 1; i <= SN; i++) {
-      const u = umin + ((umax - umin) * i) / SN,
-        cg = g(u);
-      if (pg < 0 !== cg < 0) {
-        const uc = pu + (u - pu) * (pg / (pg - cg)); // forward/aft crossing
-        if (cg >= 0) s = uc;
-        else {
-          if (s !== null) add(s, uc);
-          s = null;
-        }
-      }
-      pg = cg;
-      pu = u;
-    }
-    if (s !== null) add(s, umax);
-    if (!best) {
-      aft = true;
-      ua = ub = umax;
-      keel = false;
-    } else {
-      ua = best[0];
-      ub = best[1];
-      keel = ub >= umax - 1e-6 && !open;
-    }
-  }
-  const { colU, creaseCols, creaseK } = sectionColumns(
-    model,
-    x,
-    st,
-    ua,
-    ub,
-    M,
-    trim,
-  );
-  const pts: Vec3[] = colU.map(W);
-  if (keel) {
-    pts[M][1] = 0;
-    creaseCols.push(M); // the keel is a crease line too (a V keel; flat keels stay smooth, data-driven)
-    creaseK.push(clamp(st.keelV ?? 0, 0, 1));
-  }
-  return { pts, open, aft, keel, creaseCols, creaseK };
-}
-
-// column parameters across the kept span [ua, ub]. With `anchor` (the trimmed hull), PIN a column on each
-// potential-knuckle template point (one that is a knuckle in some template, so a crease may run through it).
-// The anchor is at a fixed column index (even fills between anchors), so the chine line is one consistent
-// grid column the surface / mesh can crease along. The anchor's POSITION blends from the even-grid spot
-// toward the knuckle param by the local blended knuckle strength: where the chine is strong it sits on the
-// chine; where it fades (the fine bow, or it leaves the kept span) the columns relax to even — matching the
-// chineless hull, so the sweep stays fair with no resampling step. Sharpness is data-driven; the crease
-// column is just a home. Exported so the exact longitudinal evaluator (longitudinalPointAt) places its
-// point on the very same column curve the hull grid samples.
-export function sectionColumns(
-  model: Model,
-  x: number,
-  st: Station,
-  ua: number,
-  ub: number,
-  M: number,
-  anchor: boolean,
-): { colU: number[]; creaseCols: number[]; creaseK: number[] } {
-  const creaseCols: number[] = [],
-    creaseK: number[] = [];
-  let colU: number[];
-  const evenU = (j: number) => ua + ((ub - ua) * j) / M;
-  const pots =
-    anchor && st.ts
-      ? st.ts
-          .map((_, i) => i)
-          .filter((i) => model.templates.some((t) => (t[i]?.k ?? 0) > 0))
-      : [];
-  if (pots.length) {
-    const w = weightsAt(model, x),
-      margin = (ub - ua) * 0.04;
-    const kn = pots
-      .map((i) => ({
-        u: clamp(st.ts![i], ua + margin, ub - margin), // clamp so the anchor count is constant along the hull
-        k: clamp(
-          model.templates.reduce((s, t, j) => s + w[j] * (t[i]?.k ?? 0), 0),
-          0,
-          1,
-        ),
-      }))
-      .sort((a, b) => a.u - b.u);
-    // The crease column itself always SITS ON the chine (the template point's swept locus), so the drawn /
-    // exported chine line tracks the real chine regardless of how hard the knuckle is. The FILL columns
-    // between anchors still relax from knuckle-aligned toward the even grid by the blended knuckle strength
-    // (wK) — where the chine softens the interior spacing eases back to even, which keeps the keel deadrise
-    // fair; only the crease line is pinned. (Earlier the crease column too was lerped toward even, dragging
-    // the drawn chine away from its true line where the knuckle faded.)
-    // Blend the WHOLE column distribution between the even grid and the chine-anchored grid by wK (so there is
-    // never an isolated column — that breaks the surface). But wK SATURATES: once the blended knuckle is past
-    // ~KNUCKLE_PIN the columns are fully chine-anchored, so the drawn/exported chine sits on its true line with
-    // no drift; only as the chine genuinely fades toward nothing does the grid relax to even (which keeps the
-    // keel fair where the chine crowds it near a fine bow). A plain-linear wK drifted the chine even at
-    // moderate strength; full pinning roughened the keel where the chine faded — this does neither.
-    let wK = clamp(Math.max(...kn.map((a) => a.k)) / KNUCKLE_PIN, 0, 1);
-    wK = wK * wK * (3 - 2 * wK); // smoothstep
-    const anchors = [ua, ...kn.map((a) => a.u), ub],
-      segs = anchors.length - 1;
-    colU = [ua];
-    let col = 0;
-    for (let s = 0; s < segs; s++) {
-      const cnt = Math.floor(M / segs) + (s < M % segs ? 1 : 0); // deterministic ⇒ stable column indices
-      for (let t = 1; t <= cnt; t++) {
-        const aligned = anchors[s] + ((anchors[s + 1] - anchors[s]) * t) / cnt,
-          e = evenU(col + t);
-        colU.push(e + wK * (aligned - e)); // even grid → chine-anchored grid, by the (saturating) wK
-      }
-      col += cnt;
-      if (s < segs - 1) {
-        creaseCols.push(col); // a consistent crease column (the export puts a knot here)
-        creaseK.push(kn[s].k); // its blended knuckle strength (kn is sorted to match the anchor order)
-      }
-    }
-  } else {
-    colU = Array.from({ length: M + 1 }, (_, j) => evenU(j));
-  }
-  return { colU, creaseCols, creaseK };
-}
-
-export function clippedSection(model: Model, x: number, M: number): Section {
-  return sweptSection(model, x, M, true);
-}
-
-// The forward limit of the hull: the largest x where a trimmed section still exists, but NEVER past the
-// plan's last control point — the hull is not extrapolated beyond what the user drew. The bow closes where
-// the sections vanish (the forefoot rises above the sheer trim, or a tumblehome lens shrinks to nothing) if
-// that happens at or before the last cp; otherwise the hull ends at the last cp (a blunt bow, the cue to
-// extend the sheer plan further). Near the bow the forefoot rises above the trim, so sections go empty.
-export function forwardLimit(model: Model): number {
-  const exists = (x: number): boolean =>
-    !sweptSection(model, x, 4, true, false).aft;
-  const xEnd = model.sheer.cp[model.sheer.cp.length - 1].x; // the plan's last control point: the hard forward bound
-  if (exists(xEnd)) return xEnd; // still a section at the last cp — the hull ends there (blunt, or just closing)
-  let lo = xEnd * 0.5,
-    hi = xEnd;
-  if (!exists(lo)) return xEnd; // section already gone amidships (degenerate model) — don't clamp shorter
-  for (let k = 0; k < 24; k++) {
-    const m = (lo + hi) / 2;
-    if (exists(m)) lo = m;
-    else hi = m;
-  }
-  return lo; // the last x with a (vanishingly small) section ⇒ the bow closes here
-}
-
-// ---------- converged exact evaluators (for the curvature combs) ----------
-// The overlays' combs finite-difference these, so every internal crossing is CONVERGED by bisection
-// instead of read off a coarse scan with one linear-interpolation step — that scan's O(h²) placement
-// noise (~1e-2 world units) is pure noise to anything that differentiates the result.
-
-// The sheer-trim crossing (top of the kept span) of the keel-mirrored station at x, converged by
-// bisection. Returns null where the trimmed hull has no section here: the whole station above the trim,
-// or an empty section (trim crossing at or below the keel — sweptSection's `empty` test). The centerline
-// crossing that bounds the span below needs no scan: the keel-mirrored station puts the keel exactly at
-// the parameter MIDPOINT (mirrorKeelStation reflects the starboard span about its converged centerline
-// crossing), with y > 0 strictly inside it.
-function trimCrossU(model: Model, x: number, st: Station): number | null {
-  if (st.tmax <= 0) return null; // no keel-mirrored section here
-  const dtrim = -model.sheer.zf(x), // depth of the sheer line below the deck
-    FN = 160;
-  let umin = 0;
-  if (dtrim > 0 && st.d(0) < dtrim) {
-    // sheer trim: first depth reaching dtrim, scanning the WHOLE station (not stopped by the keel below).
-    // (A bow lens whose top already sits below the trim keeps umin = 0, as sweptSection's clamp does.)
-    umin = -1;
-    let pu = 0,
-      pd = st.d(0) - dtrim;
-    for (let i = 1; i <= FN; i++) {
-      const u = (st.tmax * i) / FN,
-        d = st.d(u) - dtrim;
-      if (d >= 0) {
-        umin = bisectRoot((v) => st.d(v) - dtrim, pu, u, pd);
-        break;
-      }
-      pu = u;
-      pd = d;
-    }
-    if (umin < 0) return null; // the whole station is above the sheer trim ⇒ no hull at this x
-  }
-  return umin >= st.tmax / 2 - 1e-6 ? null : umin; // at/below the keel ⇒ empty section, no hull here
-}
-
-// The trimmed-sheer point at x — the hull's 3D top edge: the top point (the sheer-trim depth) of the
-// keel-mirrored station, the same construction sweptSection builds its first row from, but with the trim
-// crossing converged (trimCrossU). This makes the evaluator smooth in x to ~1e-9 world units, so the
-// curvature comb can finite-difference it directly (trimmedSheerViz) — differencing the coarse-scanned
-// polyline instead put the scan's O(h²) placement noise straight into κ and the comb was visibly
-// unstable. No transom clip here (trimmedSheerViz applies that plane), so the point is smooth ACROSS the
-// transom crossing and the aft endpoint's curvature stencil can reach behind it. Returns null where the
-// trimmed hull has no section (aft of the bow closure, an open section, or entirely above the sheer trim).
-export function sheerPointAt(model: Model, x: number): Vec3 | null {
-  const st = stationAt(model, x, true),
-    umin = trimCrossU(model, x, st);
-  if (umin === null) return null;
-  return stationWorld(frameAt(model, x), st, umin);
-}
-
-// The keel (centerline) point of the trimmed hull at x — the parameter midpoint of the keel-mirrored
-// station (see trimCrossU) — or null where there is no trimmed section, or the keel point lies aft of the
-// transom plane (matching the drawn keel, which starts where the transom outline reaches the centerline).
-// Smooth in x to converged precision, so the profile / 3D centerline combs finite-difference it directly.
-export function keelPointAt(model: Model, x: number): Vec3 | null {
-  const st = stationAt(model, x, true);
-  if (trimCrossU(model, x, st) === null) return null;
-  const p = stationWorld(frameAt(model, x), st, st.tmax / 2);
-  return p[0] - xTransom(model, p[2]) >= 0 ? p : null;
-}
-
-// The exact point of hull-grid longitudinal j (of M columns) at station x — the same column curve
-// trimmedHullGrid samples (colU over the kept span, chine-anchored via sectionColumns), but with the
-// span's trim crossing converged (trimCrossU) instead of read off sweptSection's coarse scan. Null where
-// the trimmed hull has no section, or aft of the transom plane (the grid columns start on it). Column M
-// is the keel — keelPointAt is that case.
-export function longitudinalPointAt(
-  model: Model,
-  x: number,
-  M: number,
-  j: number,
-): Vec3 | null {
-  const st = stationAt(model, x, true),
-    utop = trimCrossU(model, x, st);
-  if (utop === null) return null;
-  const { colU } = sectionColumns(model, x, st, utop, st.tmax / 2, M, true);
-  const p = stationWorld(frameAt(model, x), st, colU[j]);
-  return p[0] - xTransom(model, p[2]) >= 0 ? p : null;
-}
-
-// The design-waterline crossing of the trimmed section at station x, in world space — the same footprint
-// dwlContour polylines from the sampled sections, but evaluated from the original definition: scan the
-// kept starboard span (trim crossing → keel) for the immersion sign change and converge it by bisection.
-// Null when the span never crosses the waterline (fully dry, or fully wet — a submerged rail's crossing
-// sits above the sheer trim and is not hull), or when the crossing lies aft of the transom plane.
-export function dwlPointAt(model: Model, x: number): Vec3 | null {
-  const st = stationAt(model, x, true),
-    utop = trimCrossU(model, x, st);
-  if (utop === null) return null;
-  const fr = frameAt(model, x),
-    g = (u: number): number => {
-      const p = stationWorld(fr, st, u);
-      return immersion(model, p[0], p[2]);
-    };
-  const ukeel = st.tmax / 2,
-    FN = 48;
-  let pu = utop,
-    pg = g(utop);
-  for (let i = 1; i <= FN; i++) {
-    const u = utop + ((ukeel - utop) * i) / FN,
-      gu = g(u);
-    if (pg < 0 !== gu < 0) {
-      const p = stationWorld(fr, st, bisectRoot(g, pu, u, pg));
-      return p[0] - xTransom(model, p[2]) >= 0 ? p : null;
-    }
-    pu = u;
-    pg = gu;
-  }
-  return null;
-}
-
-// ---------- the trimmed sheer curve + its curvature comb ----------
-export interface SheerCombSample {
-  p: Vec3; // point on the trimmed sheer (the hair's root)
-  kappa: number; // curvature magnitude |P′×P″| / |P′|³
-  nrm: Vec3; // unit principal normal (toward the centre of curvature); [0,0,0] where κ ≈ 0
-}
-
-// Σ cᵢ·qᵢ — the finite-difference stencils below, applied componentwise
-function stencil(cs: number[], qs: Vec3[]): Vec3 {
-  const r: Vec3 = [0, 0, 0];
-  for (let i = 0; i < cs.length; i++)
-    for (let j = 0; j < 3; j++) r[j] += cs[i] * qs[i][j];
-  return r;
-}
-
-// a comb sample from the parametric derivatives: κ = |P′×P″|/|P′|³, and the principal normal is the
-// component of P″ perpendicular to P′ (P is regular here — |P′| ≥ 1 since P_x ≈ x — so this is exact)
-function combSample(p: Vec3, d1: Vec3, d2: Vec3): SheerCombSample {
-  const v = Math.hypot(d1[0], d1[1], d1[2]);
-  if (v < 1e-9) return { p, kappa: 0, nrm: [0, 0, 0] };
-  const cr = V.cross(d1, d2),
-    kappa = Math.hypot(cr[0], cr[1], cr[2]) / (v * v * v),
-    t = V.scale(d1, 1 / v),
-    perp = V.sub(d2, V.scale(t, V.dot(d2, t))),
-    pl = Math.hypot(perp[0], perp[1], perp[2]);
-  return { p, kappa, nrm: pl > 1e-12 ? V.scale(perp, 1 / pl) : [0, 0, 0] };
-}
-
-// central differences at parameter step h: qs = [P(x−h), P(x), P(x+h)]
-function combCentral(qs: [Vec3, Vec3, Vec3], h: number): SheerCombSample {
-  return combSample(
-    qs[1],
-    stencil([-1 / (2 * h), 1 / (2 * h)], [qs[0], qs[2]]),
-    stencil([1 / (h * h), -2 / (h * h), 1 / (h * h)], qs),
+// ---------- the trim test ----------
+// How far inside the hull a section point is, as one signed number: the hull keeps a point iff it is at or
+// below the sheer trim, at or inboard of the centerline, and forward of the transom plane. Taking the MIN of
+// the three makes "kept" a single sign test, so one bisection converges whichever constraint happens to bind
+// — the sheer trim at the top, the centerline or the transom at the bottom — with no case analysis.
+export function keepAt(model: Model, fr: Frame, nz: Vec2): number {
+  const p = stationWorld(fr, nz[0], nz[1]);
+  return Math.min(
+    model.trimZ(p[0]) - p[2], // at or below the sheer trim
+    p[1], // at or inboard of the centerline
+    p[0] - xTransom(model, p[2]), // forward of the transom
   );
 }
 
-// one-sided 4-point stencils (O(h³) for P′, O(h²) for P″) for the sheer's ENDPOINTS, where only one side
-// exists: qs = [P(x), P(x+s·h), P(x+2s·h), P(x+3s·h)], s = +1 sampling forward / −1 backward
-function combOneSided(
-  qs: [Vec3, Vec3, Vec3, Vec3],
-  h: number,
-  s: number,
-): SheerCombSample {
-  const c1 = s / (6 * h),
-    c2 = 1 / (h * h);
-  return combSample(
-    qs[0],
-    stencil([-11 * c1, 18 * c1, -9 * c1, 2 * c1], qs),
-    stencil([2 * c2, -5 * c2, 4 * c2, -1 * c2], qs),
-  );
+// ---------- world-space queries on a section ----------
+export const sectionWorld = (fr: Frame, sec: Section, v: number): Vec3 => {
+  const [n, z] = sec.at(v);
+  return stationWorld(fr, n, z);
+};
+
+// a uniform sampling of the plan's parameter, for the 2D sweep curves
+export function sampleU(N = 160): number[] {
+  return Array.from({ length: N + 1 }, (_, i) => i / N);
 }
 
-// The trimmed SHEER curve (starboard) — the hull's 3D top edge: the locus where the sheer-trim line meets
-// the swept surface, forward of the transom plane — PLUS its curvature comb, from ONE shared pass of
-// converged samples (sheerPointAt is the expensive call; the comb's differencing is free on top of it).
+// ---------- edit operations ----------
+// These all take MODEL-space coordinates (the editor maps a pointer's inverse-view coordinates to model
+// space before calling them), so they depend only on the core and live here with the other mutations. They
+// clamp to the editable domain (`bounds`), which is relative to the hull's own length.
 //
-// The curve: each sample is sheerPointAt (no transom clip in the point; that plane is applied here), so
-// it rides on the hull's actual sheer edge and stops at the bow closure (forwardLimit). Where consecutive
-// samples straddle the transom plane the exact crossing is inserted, so the curve starts cleanly at the
-// transom's top corner.
-//
-// The comb: κ and the principal normal at every combEvery-th sample, by central differences of the
-// sample's uniform neighbours. A closed-form κ was considered and rejected: P(x) composes the B-spline
-// sweep frame, the weight-blended knuckle-Hermite station (whose chord parameterization and Hermite
-// slopes are themselves x-dependent), the keel mirror's root-found crossings, and an IMPLICIT root (the
-// trim crossing st.d(u) = −z_s(x)) — hand derivatives of all of that would be enormous and fragile.
-// Differencing the CONVERGED evaluator at h = xMax/N ≈ 4 gives κ to ~1e-5 relative — far below anything
-// the comb can show — where the old comb, differencing the coarse-scanned polyline, put the scans' O(h²)
-// placement noise straight into κ and flickered. The comb also carries a hair AT each endpoint: the
-// transom corner by the same central stencil (the unclipped evaluator is smooth ACROSS the plane, so
-// straddling it is legitimate — both one-sided κ limits agree there), and the bow closure by a one-sided
-// backward stencil. Returns empty arrays if the hull has no sections.
-export function trimmedSheerViz(
-  model: Model,
-  N = 240,
-  combEvery = 4,
-): { curve: Vec3[]; comb: SheerCombSample[] } {
-  const xMax = forwardLimit(model),
-    h = xMax / N,
-    curve: Vec3[] = [],
-    comb: SheerCombSample[] = [];
-  if (!(h > 0)) return { curve, comb };
-  const pts: (Vec3 | null)[] = [];
-  for (let i = 0; i <= N; i++) pts.push(sheerPointAt(model, i * h));
-  const gates = pts.map((p) => (p ? p[0] - xTransom(model, p[2]) : NaN)); // ≥ 0 ⇒ forward of the transom plane
-  // the drawn curve: the kept (gate ≥ 0) samples, with the exact corner crossing inserted on entry
-  let prevPt: Vec3 | null = null,
-    prevIn = false,
-    xCorner = -1; // x of the transom-plane crossing (the curve's aft corner), for the comb's aft hair
-  for (let i = 0; i <= N; i++) {
-    const p = pts[i];
-    if (!p) {
-      prevPt = null; // no hull here — break the run so it can't bridge a gap
-      prevIn = false;
-      continue;
-    }
-    const inside = gates[i] >= 0;
-    // entering the kept span across the transom plane: begin the curve exactly at the crossing (clean corner)
-    if (inside && !prevIn && prevPt && gates[i - 1] < 0) {
-      const t = gates[i - 1] / (gates[i - 1] - gates[i]);
-      curve.push([
-        prevPt[0] + (p[0] - prevPt[0]) * t,
-        prevPt[1] + (p[1] - prevPt[1]) * t,
-        prevPt[2] + (p[2] - prevPt[2]) * t,
-      ]);
-      xCorner = (i - 1 + t) * h;
-    }
-    if (inside) curve.push(p);
-    prevPt = p;
-    prevIn = inside;
-  }
-  if (curve.length < 2) return { curve, comb };
-  // the comb's forward endpoint: the last existing sample (the bow closure), one-sided backward
-  let m = N;
-  while (m > 0 && !pts[m]) m--;
-  // the comb's aft endpoint: the transom corner if the curve starts there, else its first drawn sample
-  const iFirst = gates.findIndex((g) => g >= 0);
-  if (xCorner >= 0) {
-    const q0 = xCorner - h >= 0 ? sheerPointAt(model, xCorner - h) : null,
-      q1 = sheerPointAt(model, xCorner),
-      q2 = sheerPointAt(model, xCorner + h);
-    if (q0 && q1 && q2) comb.push(combCentral([q0, q1, q2], h));
-  } else if (iFirst === 0 && pts[0] && pts[1] && pts[2] && pts[3]) {
-    comb.push(combOneSided([pts[0], pts[1], pts[2], pts[3]], h, 1));
-  }
-  // interior hairs: every combEvery-th sample strictly between the endpoint hairs
-  for (let i = 1; i < m; i++) {
-    if (i % combEvery !== 0 || !(gates[i] >= 0) || i * h <= xCorner) continue;
-    const a = pts[i - 1],
-      p = pts[i],
-      b = pts[i + 1];
-    if (a && p && b) comb.push(combCentral([a, p, b], h));
-  }
-  if (m >= 3) {
-    const q0 = pts[m],
-      q1 = pts[m - 1],
-      q2 = pts[m - 2],
-      q3 = pts[m - 3];
-    if (q0 && q1 && q2 && q3) comb.push(combOneSided([q0, q1, q2, q3], h, -1));
-  }
-  return { curve, comb };
-}
+// Every one of them leaves the model's derived curves stale; the caller re-runs `prepare`.
 
-// the transom face outline (starboard, top→bottom): walk down the transom plane and read the hull's
-// half-breadth at each depth, bounded above by the sheer trim and below by the centerline (keel).
-export function transomEdge(model: Model): Vec3[] {
-  const out: Vec3[] = [],
-    DN = 90;
-  for (let i = 0; i <= DN; i++) {
-    const d = (DMAX * i) / DN,
-      z = -d,
-      x = xTransom(model, z);
-    if (x < 0 || x > L) continue;
-    if (d < -model.sheer.zf(x)) continue; // above the sheer trim → not yet hull
-    const st = stationAt(model, x, true), // match the trimmed hull's keel-knuckle section
-      fr = frameAt(model, x);
-    if (d > st.tmax) break;
-    let u = st.tmax;
-    const K = 160; // invert st.d(u)=d
-    for (let k = 1; k <= K; k++) {
-      const uu = (st.tmax * k) / K,
-        dd = st.d(uu);
-      if (dd >= d) {
-        const d0 = st.d((st.tmax * (k - 1)) / K);
-        u = (st.tmax * (k - 1 + (d - d0) / (dd - d0 || 1))) / K;
-        break;
-      }
-    }
-    const y = fr.p[1] + st.n(u) * fr.n[1];
-    if (y < 0) break; // crossed the centerline → keel reached
-    out.push([x, y, z]);
-  }
-  return out;
-}
+// ---- add (return the inserted index, or −1 when the segment has no room at the minimum spacing) ----
 
-// ---------- design waterline (the horizontal world plane at worldZ = −model.waterline) ----------
-// immersion stats for a cut section: draft = deepest point below the WL, beam = breadth at the WL.
-
-export function waterlineStats(
-  model: Model,
-  sec: Section,
-): {
-  draft: number;
-  beam: number;
-  wet: boolean;
-} {
-  let draft = 0,
-    beam = 0,
-    wet = false;
-  for (let i = 0; i < sec.pts.length; i++) {
-    const p = sec.pts[i],
-      imm = immersion(model, p[0], p[2]);
-    if (imm > 0) wet = true;
-    if (imm > draft) draft = imm;
-    if (i > 0) {
-      const a = sec.pts[i - 1],
-        ai = immersion(model, a[0], a[2]);
-      if (ai < 0 !== imm < 0 && ai !== imm) {
-        const t = (0 - ai) / (imm - ai);
-        beam = Math.max(beam, 2 * Math.abs(lerp(a[1], p[1], t)));
-      }
-    }
-  }
-  return { draft, beam, wet };
-} // the design-waterline contour in plan (x,y): where each section crosses worldZ = −waterline
-export function dwlContour(
-  model: Model,
-  sections: Section[],
-): [number, number][][] {
-  const runs: [number, number][][] = [];
-  let run: [number, number][] = [];
-  for (const s of sections) {
-    if (s.aft) {
-      if (run.length > 1) runs.push(run);
-      run = [];
-      continue;
-    }
-    let f: [number, number] | null = null;
-    for (let j = 0; j < s.pts.length - 1; j++) {
-      const a = s.pts[j],
-        b = s.pts[j + 1],
-        ia = immersion(model, a[0], a[2]),
-        ib = immersion(model, b[0], b[2]);
-      if (ia < 0 !== ib < 0 && ia !== ib) {
-        const t = (0 - ia) / (ib - ia);
-        f = [lerp(a[0], b[0], t), lerp(a[1], b[1], t)];
-        break;
-      }
-    }
-    if (f) run.push(f);
-    else {
-      if (run.length > 1) runs.push(run);
-      run = [];
-    }
-  }
-  if (run.length > 1) runs.push(run);
-  return runs;
-} // a uniform sampling of x across the hull length, used by the plan/profile sweep curves. Runs to L+XFWD so
-// the sheer-trim curve (which may carry control points over the bow overhang) is drawn out there too.
-
-export function sampleX(): number[] {
-  const a: number[] = [],
-    N = 110;
-  for (let i = 0; i <= N; i++) a.push(((L + XFWD) * i) / N);
-  return a;
-}
-
-// ---------- edit operations (drag-move + add-point) ----------
-// These all take MODEL-space coordinates (the editor maps a pointer's inverse-view coordinates to model space
-// before calling them), so they depend only on the core and live here with the other model mutations. They
-// clamp to the editable domain bounds (YMIN/YMAX/ZTRIMMIN and the ±80 minimum station spacing).
-
-// ---------- add stations / points ---------- (add* return the inserted index, or −1 when the
-// clicked segment has no room for another point at the ±80 minimum spacing — nothing is inserted)
-// Add a unified station at x: its plan y and its blend w are both read off the CURRENT curves there, so the
-// insert changes neither curve — it just adds a handle. (yGiven is the dragged y when adding in the plan
-// view; the blend strip passes the plan curve's own y so the station lands on the curve.)
-export function addStation(model: Model, x: number, yGiven: number): number {
-  const cp = model.sheer.cp,
-    n = cp.length;
-  // may land anywhere forward of the transom, including the bow overhang to L + XFWD, and below the centerline
-  x = clamp(x, cp[0].x + 80, L + XFWD);
+// Insert a plan control point at x. The plan is a B-spline control polygon, so the new point is placed where
+// the caller asks rather than on the curve — there is no "on the curve" to land on.
+export function addPlanPoint(model: Model, x: number, y: number): number {
+  const cp = model.sheerPlan,
+    n = cp.length,
+    b = bounds(model);
   let k = cp.findIndex((p) => p.x > x);
-  if (k < 0) k = n; // past every existing point → append at the bow end
-  // clamp against the ACTUAL insertion neighbors so the 80-unit spacing invariant survives the insert
-  const lo = cp[k - 1].x + 80,
-    hi = k < n ? cp[k].x - 80 : L + XFWD;
-  if (lo > hi) return -1; // the segment can't fit another station
-  x = clamp(x, lo, hi);
-  cp.splice(k, 0, { x, y: clamp(yGiven, YMIN, YMAX), w: weightsAt(model, x) });
+  if (k < 0) k = n;
+  if (k === 0) return -1; // the first point is pinned at the transom; nothing goes before it
+  const lo = cp[k - 1].x + b.gap,
+    hi = k < n ? cp[k].x - b.gap : cp[n - 1].x + b.gap * 4;
+  if (lo > hi) return -1;
+  cp.splice(k, 0, { x: clamp(x, lo, hi), y: clamp(y, b.yMin, b.yMax) });
   return k;
 }
-
-export const addSheerPoint = (model: Model, x: number, y: number): number =>
-  addStation(model, x, y);
 
 export function addTrimPoint(model: Model, x: number, z: number): number {
-  const cp = model.sheer.trim,
-    n = cp.length;
-  // a new trim point may land anywhere forward of the transom, including the bow overhang up to L + XFWD
-  x = clamp(x, cp[0].x + 80, L + XFWD);
+  const cp = model.sheerTrim,
+    n = cp.length,
+    b = bounds(model);
   let k = cp.findIndex((p) => p.x > x);
-  if (k < 0) k = n; // past every existing point → append at the bow end
-  // clamp against the ACTUAL insertion neighbors so the 80-unit spacing invariant survives the insert
-  const lo = cp[k - 1].x + 80,
-    hi = k < n ? cp[k].x - 80 : L + XFWD;
-  if (lo > hi) return -1; // the segment can't fit another point
-  x = clamp(x, lo, hi);
-  cp.splice(k, 0, { x, z: clamp(z, ZTRIMMIN, 0), k: 0 });
+  if (k < 0) k = n;
+  if (k === 0) return -1;
+  const lo = cp[k - 1].x + b.gap,
+    hi = k < n ? cp[k].x - b.gap : loa(model);
+  if (lo > hi) return -1;
+  cp.splice(k, 0, { x: clamp(x, lo, hi), z: clamp(z, b.zTrimMin, 0), k: 0 });
   return k;
 }
 
-// add a station from the blend strip: x as given, plan y read off the current plan curve so the station
-// lands on it (stations are unified, so this adds the plan handle too).
-export const addWeightPoint = (model: Model, x: number): number =>
-  addStation(model, x, model.sheer.yf(x));
+// Insert a station at u. Its points are read off the LOFT there, so the hull is unchanged by the insert —
+// it just gains a handle, exactly where the surface already was.
+export const U_GAP = 0.02; // minimum spacing between stations, in the plan's parameter
 
-// ---------- drag-move handlers ---------- (mx / my / mz / mn / md are model-space coordinates)
-// Map a drag's model point to the selected control point and mutate it.
-export function moveSheer(
-  model: Model,
-  idx: number,
-  mx: number,
-  my: number,
-): void {
-  const cp = model.sheer.cp[idx],
-    n = model.sheer.cp.length;
-  // The first point is pinned at the transom (x = 0); every other point — including the LAST — is movable in
-  // x, the last running forward to L + XFWD so the plan can be drawn over the bow overhang. y may go below the
-  // centerline (down to YMIN) so the sheer plan can cross it to close a tumblehome bow.
-  if (idx > 0) {
-    const hiX = idx < n - 1 ? model.sheer.cp[idx + 1].x - 80 : L + XFWD;
-    const nx = clamp(mx, model.sheer.cp[idx - 1].x + 80, hiX);
-    // resample the station's blend onto the current curve at its new x, so moving the plan handle along x
-    // barely disturbs the blend (the point stays on the curve it helped define)
-    if (nx !== cp.x) cp.w = weightsAt(model, nx);
-    cp.x = nx;
-  }
-  cp.y = clamp(my, YMIN, YMAX);
-}
-
-export function moveTrim(
-  model: Model,
-  idx: number,
-  mx: number,
-  mz: number,
-): void {
-  const cp = model.sheer.trim[idx],
-    n = model.sheer.trim.length;
-  // The first point is pinned at the transom (x = 0); every other point — including the LAST — is movable in
-  // x. The last point may run forward to L + XFWD so the sheer trim can extend over the bow overhang.
-  if (idx > 0) {
-    const hiX = idx < n - 1 ? model.sheer.trim[idx + 1].x - 80 : L + XFWD;
-    cp.x = clamp(mx, model.sheer.trim[idx - 1].x + 80, hiX);
-  }
-  cp.z = clamp(mz, ZTRIMMIN, 0); // constrained at or below the flat deck (z ≤ 0)
-}
-
-export function moveTransom(
-  model: Model,
-  idx: number,
-  mx: number,
-  mz: number,
-): void {
-  const cp = model.sheer.transom[idx];
-  cp.x = clamp(mx, 0, L * 0.45); // transom stays in the aft region
-  cp.z = clamp(mz, ZTRIMMIN, 0);
-}
-
-// drag a template point: n across (clamped to the section bounds), d down (kept between its neighbors so the
-// section never curls back up). Negative n is outboard of the sheer (tumblehome).
-export function moveStationPoint(
-  model: Model,
-  ti: number,
-  idx: number,
-  mn: number,
-  md: number,
-): void {
-  const arr = model.templates[ti],
-    cp = arr[idx];
-  cp.n = clamp(mn, NMIN, NMAX);
-  const lo = arr[idx - 1].d,
-    hi = idx < arr.length - 1 ? arr[idx + 1].d : DMAX;
-  cp.d = clamp(md, lo, hi);
-}
-
-// drag a station's blend boundary in the weight strip (val ∈ [0,1]): only the simplex split (the band
-// boundary). x is shared with the plan curve and edited there, so the blend strip has no x-handle.
-export function moveWeightBoundary(
-  model: Model,
-  idx: number,
-  bnd: number,
-  val: number,
-): void {
-  setWeightBoundary(model.sheer.cp[idx], bnd, clamp(val, 0, 1));
-}
-
-// The weight CP carries a barycentric vector w ∈ Δ^{K−1}. We edit it through its cumulative boundaries
-// C[m] = Σ_{j≤m} w[j] (a stacked-band view): setting boundary b sets C[b], clamped to keep the order
-// 0 ≤ C[0] ≤ … ≤ C[K−2] ≤ 1, then w is recovered as consecutive differences — always back in the simplex.
-export function setWeightBoundary(cp: WeightCP, b: number, val: number): void {
-  const K = cp.w.length;
-  if (K < 2) return;
-  const C: number[] = [];
-  let s = 0;
-  for (let j = 0; j < K; j++) {
-    s += cp.w[j];
-    C.push(s);
-  }
-  const eps = 1e-3,
-    lo = b > 0 ? C[b - 1] : 0,
-    hi = b < K - 2 ? C[b + 1] : 1;
-  C[b] = clamp(val, lo + eps, hi - eps);
-  const w: number[] = [];
-  let prev = 0;
-  for (let j = 0; j < K - 1; j++) {
-    w.push(Math.max(0, C[j] - prev));
-    prev = C[j];
-  }
-  w.push(Math.max(0, 1 - prev));
-  cp.w = normSimplex(w);
-}
-
-// the cut-station scrubber position (the red slider shared by the plan / profile / blend strips)
-export function setX0(model: Model, x: number): void {
-  model.x0 = x;
-}
-
-// the design waterline depth (mm below the sheer origin) and the deck rake (given in degrees)
-export function setWaterline(model: Model, mm: number): void {
-  model.waterline = mm;
-}
-export function setDeckRake(model: Model, deg: number): void {
-  model.deckRake = (deg * Math.PI) / 180;
-}
-
-// the keel (centerline) knuckle for one template — the active tab's keel slider drives this
-export function setKeelK(model: Model, ti: number, k: number): void {
-  if (ti < 0 || ti >= model.keelK.length) return;
-  model.keelK[ti] = clamp(k, 0, 1);
-}
-
-// ---------- add / remove whole templates ----------
-// a new template starts as a copy of the last and enters every weight CP at zero weight, so the hull is
-// unchanged on add; raise its weight in the blend editor to bring it into the mix.
-export function addTemplate(model: Model): void {
-  if (model.templates.length >= 7) return; // palette / UI cap
-  const last = model.templates[model.templates.length - 1];
-  model.templates.push(last.map((p) => ({ n: p.n, d: p.d, k: p.k })));
-  model.keelK.push(model.keelK[model.keelK.length - 1] ?? 0); // copy the last template's keel knuckle
-  model.sheer.cp.forEach((cp) => cp.w.push(0));
-}
-
-export function removeTemplate(model: Model, ti: number): void {
-  if (model.templates.length <= 1) return;
-  model.templates.splice(ti, 1);
-  model.keelK.splice(ti, 1);
-  model.sheer.cp.forEach((cp) => {
-    cp.w.splice(ti, 1);
-    cp.w = normSimplex(cp.w);
+export function addStation(model: Model, u: number): number {
+  const sts = model.stations,
+    n = sts.length;
+  let k = sts.findIndex((s) => s.u > u);
+  if (k < 0) k = n;
+  const lo = k > 0 ? sts[k - 1].u + U_GAP : 0,
+    hi = k < n ? sts[k].u - U_GAP : 1;
+  if (lo > hi) return -1;
+  const uu = clamp(u, lo, hi),
+    { pts, ks, keelK } = model.loft.at(uu);
+  sts.splice(k, 0, {
+    u: uu,
+    keelK,
+    points: pts.map((p, i) => ({ n: p[0], z: p[1], k: ks[i] })),
   });
+  return k;
 }
 
-// ---------- remove stations / points ----------
-
-// removeStation / removeTrimPoint / removeStationPoint back deleteSelected below (a core selection action).
-function removeStation(model: Model, idx: number): void {
-  const cp = model.sheer.cp;
-  if (cp.length <= 3 || idx <= 0 || idx >= cp.length - 1) return; // keep both ends and a minimum of 3
-  cp.splice(idx, 1);
-}
-
-export const removeSheerPoint = removeStation;
-
-export function removeTrimPoint(model: Model, idx: number): void {
-  const cp = model.sheer.trim;
-  if (cp.length <= 3 || idx <= 0 || idx >= cp.length - 1) return; // keep both ends and a minimum of 3
-  cp.splice(idx, 1);
-}
-
-// add a section point: pick the segment of template `ti` nearest the click, insert there, and insert the
-// matching index into EVERY template (at the same param along its own segment) so they stay index-aligned.
-export function addTemplatePoint(
+// Insert a section point into EVERY station at the same place along each one's own curve, so the stations
+// stay index-aligned — the loft is built across matching indices, so a point that existed in only some of
+// them would have no curve to ride.
+export function addStationPoint(
   model: Model,
-  ti: number,
+  si: number,
   n: number,
-  d: number,
+  z: number,
 ): number {
-  const arr = model.templates[ti];
+  const arr = model.stations[si].points,
+    b = bounds(model);
+  // the segment nearest the click, and how far along it
   let best = 1,
     bt = 0.5,
     bd = Infinity;
   for (let i = 0; i < arr.length - 1; i++) {
-    const ax = arr[i].n,
-      ay = arr[i].d,
-      vx = arr[i + 1].n - ax,
-      vy = arr[i + 1].d - ay,
-      L2 = vx * vx + vy * vy || 1;
-    const t = clamp(((n - ax) * vx + (d - ay) * vy) / L2, 0, 1),
-      px = ax + vx * t,
-      py = ay + vy * t,
-      dist = Math.hypot(n - px, d - py);
-    if (dist < bd) {
-      bd = dist;
+    const an = arr[i].n,
+      az = arr[i].z,
+      vn = arr[i + 1].n - an,
+      vz = arr[i + 1].z - az,
+      l2 = vn * vn + vz * vz || 1,
+      t = clamp(((n - an) * vn + (z - az) * vz) / l2, 0, 1),
+      d = Math.hypot(n - (an + vn * t), z - (az + vz * t));
+    if (d < bd) {
+      bd = d;
       best = i + 1;
       bt = t;
     }
   }
-  model.templates.forEach((tpl, j) => {
-    const a = tpl[best - 1],
-      b = tpl[best];
-    if (j === ti) {
-      const dlo = Math.min(a.d, b.d),
-        dhi = Math.max(a.d, b.d);
-      tpl.splice(best, 0, {
-        n: clamp(n, NMIN, NMAX),
-        d: clamp(d, dlo, dhi),
+  model.stations.forEach((st, j) => {
+    const a = st.points[best - 1],
+      c = st.points[best];
+    if (j === si)
+      st.points.splice(best, 0, {
+        n: clamp(n, b.nMin, b.nMax),
+        z: clamp(z, Math.min(a.z, c.z), Math.max(a.z, c.z)),
         k: 0,
       });
-    } else {
-      tpl.splice(best, 0, {
-        n: lerp(a.n, b.n, bt),
-        d: lerp(a.d, b.d, bt),
-        k: lerp(a.k, b.k, bt),
+    else
+      st.points.splice(best, 0, {
+        n: lerp(a.n, c.n, bt),
+        z: lerp(a.z, c.z, bt),
+        k: lerp(a.k, c.k, bt),
       });
-    }
   });
   return best;
 }
 
-export function removeStationPoint(model: Model, idx: number): void {
-  const len = model.templates[0].length;
-  if (len <= 3 || idx <= 0 || idx >= len - 1) return; // keep the sheer point and the deepest point
-  model.templates.forEach((t) => t.splice(idx, 1));
+// ---- move ----
+
+// The first plan point is pinned at the transom (x = 0); every other point, including the last, moves in x.
+// y may go below the centerline (to yMin) so the plan can cross it and close a tumblehome bow.
+export function movePlanPoint(model: Model, idx: number, mx: number, my: number): void {
+  const cp = model.sheerPlan,
+    n = cp.length,
+    b = bounds(model);
+  if (idx > 0)
+    cp[idx].x = clamp(
+      mx,
+      cp[idx - 1].x + b.gap,
+      idx < n - 1 ? cp[idx + 1].x - b.gap : Infinity,
+    );
+  cp[idx].y = clamp(my, b.yMin, b.yMax);
 }
 
-export const removeWeightPoint = removeStation;
+export function moveTrim(model: Model, idx: number, mx: number, mz: number): void {
+  const cp = model.sheerTrim,
+    n = cp.length,
+    b = bounds(model);
+  if (idx > 0)
+    cp[idx].x = clamp(
+      mx,
+      cp[idx - 1].x + b.gap,
+      idx < n - 1 ? cp[idx + 1].x - b.gap : loa(model),
+    );
+  cp[idx].z = clamp(mz, b.zTrimMin, 0); // at or below the flat deck
+}
+
+export function moveTransom(model: Model, idx: number, mx: number, mz: number): void {
+  const b = bounds(model),
+    cp = model.transom[idx];
+  cp.x = clamp(mx, 0, loa(model) * 0.45); // the transom stays in the aft region
+  // keep the two points ordered in z — the top must stay above the bottom, or the plane inverts
+  cp.z =
+    idx === 0
+      ? clamp(mz, model.transom[1].z + 1e-3, 0)
+      : clamp(mz, b.zTrimMin, model.transom[0].z - 1e-3);
+}
+
+// Drag a station along the sheer. This is the edit v1 had no way to express: a template had no position,
+// only a weight curve, so "where does this section apply" could only be said indirectly.
+export function moveStationU(model: Model, idx: number, u: number): void {
+  const sts = model.stations,
+    lo = idx > 0 ? sts[idx - 1].u + U_GAP : 0,
+    hi = idx < sts.length - 1 ? sts[idx + 1].u - U_GAP : 1;
+  sts[idx].u = clamp(u, Math.min(lo, hi), Math.max(lo, hi));
+}
+
+// Drag a section point: n across the section, z down — kept between its neighbours so the section never
+// curls back up on itself.
+export function moveStationPoint(
+  model: Model,
+  si: number,
+  idx: number,
+  mn: number,
+  mz: number,
+): void {
+  const arr = model.stations[si].points,
+    b = bounds(model),
+    cp = arr[idx];
+  cp.n = clamp(mn, b.nMin, b.nMax);
+  const hi = idx > 0 ? arr[idx - 1].z : 0,
+    lo = idx < arr.length - 1 ? arr[idx + 1].z : b.zMin;
+  cp.z = clamp(mz, lo, hi);
+}
+
+// ---- scalars ----
+export const setX0 = (model: Model, x: number): void => {
+  model.x0 = clamp(x, 0, loa(model));
+};
+export const setWaterline = (model: Model, d: number): void => {
+  model.waterline = d;
+};
+export const setDeckRake = (model: Model, deg: number): void => {
+  model.deckRake = (deg * Math.PI) / 180;
+};
+export const setName = (model: Model, name: string): void => {
+  model.name = name;
+};
+// The keel crease of one station — the active tab's keel slider drives this.
+export function setKeelK(model: Model, si: number, k: number): void {
+  if (si < 0 || si >= model.stations.length) return;
+  model.stations[si].keelK = clamp(k, 0, 1);
+}
+export function setStationK(model: Model, si: number, idx: number, k: number): void {
+  const p = model.stations[si]?.points[idx];
+  if (p) p.k = clamp(k, 0, 1);
+}
+export function setTrimK(model: Model, idx: number, k: number): void {
+  const p = model.sheerTrim[idx];
+  if (p) p.k = clamp(k, 0, 1);
+}
+
+// Change the document's unit. `rescale` keeps the hull the same PHYSICAL size by converting the numbers
+// (2000 mm → 2 m); without it the numbers stand and the hull is reinterpreted at the new unit's size.
+export function setUnit(model: Model, unit: Unit, rescale: boolean): void {
+  if (rescale && model.unit !== unit) {
+    const s = UNIT_MM[model.unit] / UNIT_MM[unit];
+    model.sheerPlan.forEach((p) => ((p.x *= s), (p.y *= s)));
+    model.sheerTrim.forEach((p) => ((p.x *= s), (p.z *= s)));
+    model.transom.forEach((p) => ((p.x *= s), (p.z *= s)));
+    model.stations.forEach((st) => st.points.forEach((p) => ((p.n *= s), (p.z *= s))));
+    model.waterline *= s;
+    model.x0 *= s;
+  }
+  model.unit = unit;
+}
+
+// ---- remove ----
+// Each keeps enough of the structure for the hull to remain well-formed: the plan and trim keep both ends
+// and a minimum of three points; a station's points keep the deck point and the deepest one.
+
+export function removePlanPoint(model: Model, idx: number): void {
+  const cp = model.sheerPlan;
+  if (cp.length <= 3 || idx <= 0 || idx >= cp.length - 1) return;
+  cp.splice(idx, 1);
+}
+
+export function removeTrimPoint(model: Model, idx: number): void {
+  const cp = model.sheerTrim;
+  if (cp.length <= 3 || idx <= 0 || idx >= cp.length - 1) return;
+  cp.splice(idx, 1);
+}
+
+// A hull needs at least one station; below that there is no section to sweep at all.
+export function removeStation(model: Model, idx: number): void {
+  if (model.stations.length <= 1) return;
+  model.stations.splice(idx, 1);
+}
+
+export function removeStationPoint(model: Model, idx: number): void {
+  const len = model.stations[0].points.length;
+  if (len <= 3 || idx <= 0 || idx >= len - 1) return;
+  model.stations.forEach((st) => st.points.splice(idx, 1));
+}

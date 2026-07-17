@@ -12,14 +12,8 @@
 // approximation (exact in the limit).
 
 import { lerp, V, type Vec3 } from "./math";
-import {
-  type Model,
-  L,
-  clippedSection,
-  forwardLimit,
-  immersion,
-  worldZ,
-} from "./model";
+import { type Model, immersion, loa, worldZ } from "./model";
+import { aftLimit, forwardLimit, sweptSection } from "./mesh";
 
 export interface Hydro {
   // principal dimensions (model units)
@@ -57,7 +51,7 @@ export interface Hydro {
   validWaterplane: boolean; // false when the waterline sits above the sheer (no WL crossing) → coeffs are NaN
 }
 
-const M = 48; // default section columns
+const M = 10; // default sub-steps per section segment (the section's girth resolution)
 const NS = 240; // default longitudinal sampling (coarser is fine for the heatmap — see hydrostatics args)
 
 interface Strip {
@@ -114,11 +108,11 @@ function stripOf(
 
 // deadrise (deg) of a section near the keel: least-squares slope of (half-breadth, depth) over the lowest
 // ~7% of the model depth, as an angle from horizontal
-function deadriseAt(sec: { pts: Vec3[]; keel: boolean }): number {
+function deadriseAt(sec: { pts: Vec3[]; keel: boolean }, len: number): number {
   if (!sec.keel) return NaN;
   const p = sec.pts,
     keel = p[p.length - 1],
-    band = p.filter((q) => q[2] <= keel[2] + 0.02 * L); // lowest ~2% of length above the keel
+    band = p.filter((q) => q[2] <= keel[2] + 0.02 * len); // lowest ~2% of length above the keel
   if (band.length < 3) return NaN;
   let n = 0,
     sy = 0,
@@ -145,20 +139,24 @@ export function hydrostatics(
   ns: number = NS,
   m: number = M,
 ): Hydro | null {
-  const xf = forwardLimit(model);
-  if (!(xf > 0)) return null;
+  // Sample along the plan's parameter, not along x: u is where the hull is actually defined, and the
+  // transom / bow closure are found in u. Each strip still records its own x — the plan's x is monotone in
+  // u, so the strips stay ordered and the trapezoid integration below is unaffected.
+  const uA = aftLimit(model),
+    uF = forwardLimit(model);
+  if (!(uF > uA)) return null;
   const strips: Strip[] = [];
   for (let k = 0; k <= ns; k++) {
-    const x = (xf * k) / ns,
-      sec = clippedSection(model, x, m);
-    if (sec.aft) continue;
+    const u = uA + ((uF - uA) * k) / ns,
+      sec = sweptSection(model, u, m, true);
+    if (sec.empty) continue;
     let dmax = 0;
     for (const q of sec.pts)
       dmax = Math.max(dmax, immersion(model, q[0], q[2]));
     if (dmax <= 0) continue; // dry section (above the waterline)
     const s = stripOf(model, sec);
     if (s.area <= 0) continue;
-    strips.push({ x, ...s, draft: dmax, keel: sec.keel });
+    strips.push({ x: model.plan.at(u)[0], ...s, draft: dmax, keel: sec.keel });
   }
   if (strips.length < 3) return null;
 
@@ -253,7 +251,10 @@ export function hydrostatics(
     cm,
     cw,
     cvp,
-    deadrise: deadriseAt(clippedSection(model, amid, m)),
+    deadrise: deadriseAt(
+      sweptSection(model, model.plan.uAtX(amid), m, true),
+      loa(model),
+    ),
     halfEntrance,
     xAft,
     xFwd,

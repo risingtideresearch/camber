@@ -1,40 +1,41 @@
 import type { Model } from "./model";
 
-// selection also carries which template (state.selected.ti); a "weight" selection is a weight CP.
-export type ModelSelectionTarget =
-  "plan" | "trim" | "transom" | "template" | "weight";
+// What a click selected. "station" is a point of a station's section — `si` says which station, `idx` which
+// point of it. (Version 1 also had a "weight" target, for a control point of the template-blend curve; v2
+// has no blend, so a station's position is edited as the station itself.)
+export type ModelSelectionTarget = "plan" | "trim" | "transom" | "station";
 
 export type ModelSelection = {
   tgt: ModelSelectionTarget;
   idx: number;
-  ti?: number;
+  si?: number; // which station, for a "station" selection
 } | null;
 
 export type OnModelSelect = (selection: ModelSelection) => void;
 
-// the selected template-point index, or null when the selection isn't a template point
+// the selected section-point index, or null when the selection isn't one
 export function selStationIdx(
   model: Model,
   selection: ModelSelection,
 ): number | null {
   return selection &&
-    selection.tgt === "template" &&
-    selection.idx < model.templates[0].length
+    selection.tgt === "station" &&
+    selection.idx < model.stations[0].points.length
     ? selection.idx
     : null;
 }
 
-// is the given point the current selection? (for templates, the template index `ti` must match too)
+// is the given point the current selection? (for a station point, `si` must match too)
 export function isSelected(
   selection: ModelSelection,
   tgt: ModelSelectionTarget,
   idx: number,
-  ti?: number,
+  si?: number,
 ): boolean {
   return (
     !!selection &&
     selection.tgt === tgt &&
     selection.idx === idx &&
-    (ti === undefined || selection.ti === ti)
+    (si === undefined || selection.si === si)
   );
 }

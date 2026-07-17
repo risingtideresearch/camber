@@ -1,56 +1,88 @@
 // ---------- the on-disk hull-document format ----------
 //
-// One document = one hull
+// One document = one hull.
 //
-// It is increment-encoded — sheer/trim points carry a forward step `dx` (point
-// 0 holds the anchor x₀), section points carry a depth step `dd` (point 0 is
-// the pinned sheer point), and the transom is `{x, depthTop, dDepthBot,
-// transomRake}`. Increments are what make any convex blend valid. `length` is
-// the document's unitless scale (the current model's L).
+// Coordinates are ABSOLUTE and in the document's own `unit` — what you read is what you get, with no
+// increment encoding and no unitless scale to divide out. (Version 1 was increment-encoded against a
+// unitless `length`; see `src/legacy/v1` for that format and the conversion out of it.)
 //
-// This module is the format's declaration only: the types, the version tag, and
-// the version test. The encode / decode between these structures and the live
-// model's absolute coordinates lives in `json.ts`.
+// The coordinate frame: x runs aft → forward, y is the half-breadth off the centerline, z is up with the
+// deck datum at z = 0 (so the hull lives at z ≤ 0). A station's points are given in the frame the sheer
+// plan sweeps: `n` is the inboard offset along the plan curve's normal, and `z` is simply world z.
+//
+// This module is the format's declaration only: the types, the version tag, and the version test. The
+// encode / decode between these structures and the live model lives in `json.ts`.
 
 // The format version this build writes, and the newest it can read. Bump it when a change to the structures
 // below is not readable by an older build; documents that declare a higher version are ones this build must
 // refuse rather than misread.
-export const VERSION = 1;
+export const VERSION = 2;
 
-// Lengths are in the document's own `length` units; `k` and `keelK` are optional on read and default to 0
-// (smooth).
+// The document's length unit. Every coordinate below is a number of these.
+export type Unit = "mm" | "cm" | "m" | "in" | "ft";
+
+export const UNITS: Unit[] = ["mm", "cm", "m", "in", "ft"];
+
+// millimetres per unit — the common ground any two documents can be compared in
+export const UNIT_MM: Record<Unit, number> = {
+  mm: 1,
+  cm: 10,
+  m: 1000,
+  in: 25.4,
+  ft: 304.8,
+};
+
+// A control point of the sheer plan: the hull's outline seen from above. These are the control polygon of a
+// clamped cubic B-spline, NOT points on the curve — the curve interpolates only the first and last, and is
+// pulled toward the interior ones. x must strictly increase, which is what makes the curve's own parameter
+// u ∈ [0,1] a well-defined position along the hull.
 export interface PlanPoint {
-  dx: number; // forward step from the previous station; point 0 holds the anchor x₀
-  y: number;
-  w: number[]; // the station's blend weights over the templates: barycentric, length K, in the simplex
-}
-export interface TrimPoint {
-  dx: number;
-  depth: number; // below the deck datum (z = −depth)
-  k?: number;
-}
-export interface SectionPoint {
-  dd: number; // depth step from the previous point; point 0 is the pinned sheer point
-  n: number;
-  k?: number;
-}
-export interface Transom {
   x: number;
-  depthTop: number;
-  dDepthBot: number; // top-to-bottom depth step; > 0, the bottom edge is deeper
-  transomRake: number; // run-over-rise dx/dz; 0 is upright
+  y: number;
 }
+
+// A control point of the sheer trim: the real sheer line in profile, at or below the deck datum (z ≤ 0).
+// The strip of swept surface above it is cut away. Interpolated (centripetal Catmull-Rom), so the curve
+// passes through these exactly; k creases it.
+export interface TrimPoint {
+  x: number;
+  z: number;
+  k: number;
+}
+
+// A point of a station's section curve, in the station's swept frame.
+export interface StationPoint {
+  z: number;
+  n: number; // along the normal of the sheer plan
+  k?: number;
+}
+
+// A station: one authored section, positioned at u along the sheer plan. Sections between stations are
+// lofted from these — point i of every station is one longitudinal curve — which is why all stations must
+// carry the same number of points.
+export interface Station {
+  u: number; // [0, 1] parameter space along the sheer plan
+  keelK: number; // Keel knuckle at this station
+  points: StationPoint[]; // all stations have the same number of points S ≥ 2
+}
+
+// The transom: a raked plane at the stern given by two profile points, top and bottom. The hull keeps the
+// forward side; the cut is a solid face.
+export interface TransomPoint {
+  x: number;
+  z: number;
+}
+
 export interface HullDocument {
-  version?: number; // format version; absent means 1 — the original format predates the tag
-  name?: string;
-  length: number; // the document's unitless scale
-  waterline?: number; // depth below the sheer origin
-  deckRakeDeg?: number;
-  sheerPlan: PlanPoint[]; // ≥ 2 stations; each carries its blend weights
+  version?: number; // format version; absent means 1
+  name: string;
+  unit: Unit;
+  waterline: number;
+  deckRakeDeg: number;
+  sheerPlan: PlanPoint[]; // ≥ 2 points
   sheerTrim: TrimPoint[]; // ≥ 2 points
-  transom: Transom;
-  templates: SectionPoint[][]; // K ≥ 1 templates, index-aligned, all of the same length S ≥ 2
-  keelK?: number[]; // length K; per-template keel knuckle
+  transom: TransomPoint[]; // = 2 points
+  stations: Station[]; // K ≥ 1 stations
 }
 
 // The version a document declares, read without parsing the rest of it (the version test has to work on a
