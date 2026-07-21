@@ -19,12 +19,17 @@ void main() {
 }`;
 
 // Per-pixel half-Lambert diffuse + a broad, soft specular; a "zebra" mode bands the surface by the reflected
-// eye direction so unfair (non-smooth) spots show as kinked lines. The design waterline is NOT shaded here —
-// the hull used to wear darker bottom paint below it, but the view now draws it as a real curve on the
-// surface (hullLines3d.ts) in every shading mode, which reads the same whichever way the hull is shaded. V is
-// the TRUE per-fragment view direction (three's built-in `cameraPosition` uniform, free) rather than the old
-// single camera-basis constant — that was an orthographic-only approximation; this is simpler and more
-// correct now that the camera can be a close-up perspective view.
+// eye direction so unfair (non-smooth) spots show as kinked lines. The shaded skin stays deliberately close to
+// its base colour — the diffuse only swings it between 0.78x and 1.06x, and the highlight is a whisper — so
+// the curves and the mesh drawn ON it read as clearly in a shadowed area as in a lit one, and so Smooth sits
+// in the same light key as Flat rather than being a much darker mode.
+//
+// The design waterline is NOT shaded here — the hull used to wear darker bottom paint below it, but the view
+// now draws it as a real curve on the surface (hullLines3d.ts) in every shading mode, which reads the same
+// whichever way the hull is shaded. V is the TRUE per-fragment view direction (three's built-in
+// `cameraPosition` uniform, free) rather than the old single camera-basis constant — that was an
+// orthographic-only approximation; this is simpler and more correct now that the camera can be a close-up
+// perspective view.
 export const HULL_FRAGMENT_SRC = `
 precision highp float;
 varying vec3 vNormalW;
@@ -46,7 +51,7 @@ void main() {
     vec3 col = mix(vec3(0.07, 0.09, 0.15), vec3(0.97, 0.98, 1.0), s) * (0.66 + 0.34 * diff);
     gl_FragColor = vec4(col, uAlpha);
   } else {
-    vec3 col = uBase * 0.34 + uBase * diff * 0.80 + vec3(1.0) * spec * 0.40;
+    vec3 col = uBase * (0.78 + 0.28 * diff) + vec3(1.0) * spec * 0.12;
     gl_FragColor = vec4(clamp(col, 0.0, 1.0), uAlpha);
   }
 }`;

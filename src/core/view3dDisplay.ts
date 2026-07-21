@@ -1,6 +1,6 @@
 // What the 3D view draws, as two independent choices rather than one mutually-exclusive "view mode".
 //
-// `ShadingMode` picks how the SURFACE is shaded: "flat" = the plain white skin the lines plan is drawn over,
+// `ShadingMode` picks how the SURFACE is shaded: "flat" = the plain unlit skin the lines plan is drawn over,
 // "smooth" = the lit, shaded hull, "zebra" = zebra-striped (a fairness check). `LineToggles` picks which
 // CURVES are laid over it — each family independently, whatever the shading is: the surface's own feature
 // edges, and the three classic lines-plan families (stations / constant-y cuts / constant-z cuts). The design
@@ -20,7 +20,7 @@ export interface LineToggles {
 }
 
 // what the view starts with: the surface's own edges, which read well under any shading and keep the flat
-// skin from opening as a featureless white silhouette — but none of the three families, which are the ones
+// skin from opening as a featureless silhouette — but none of the three families, which are the ones
 // you go looking for
 export const DEFAULT_LINES: LineToggles = {
   edges: true,

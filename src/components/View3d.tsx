@@ -43,7 +43,7 @@ const SHADINGS: { shading: ShadingMode; label: string; title: string }[] = [
   {
     shading: "flat",
     label: "Flat",
-    title: "Plain white skin — the lines plan's classic backdrop",
+    title: "Plain unlit skin — the lines plan's classic backdrop",
   },
   { shading: "smooth", label: "Smooth", title: "Shaded hull" },
   {

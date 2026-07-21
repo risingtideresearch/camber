@@ -39,7 +39,13 @@ function meshToGeometry(m: {
   return g;
 }
 
-const HULL_BASE: [number, number, number] = [0.3, 0.5, 0.72];
+// A pale blue skin, light enough that the near-black mesh and the lines plan drawn over it stay legible. It is
+// also what Flat paints (unlit — see flatMaterial), so the two shading modes are the same colour by
+// construction: the shader's gentle diffuse (hullShader.ts) swings the lit hull only a few percent either side
+// of it, and switching shading changes how the form is modelled, not how bright the boat is. The transom keeps
+// its own sand tone to read as a separate panel — its LIT face is unchanged by the flatter shading; only its
+// shadowed side comes up.
+const HULL_BASE: [number, number, number] = [0.64, 0.74, 0.87];
 const TRANSOM_BASE: [number, number, number] = [0.74, 0.55, 0.37];
 
 interface SceneProps {
@@ -89,11 +95,18 @@ export function Scene({
     () => createHullMaterial(uLight, { base: TRANSOM_BASE, offset: true }),
     [uLight],
   );
-  // the flat shading mode's plain white skin — the lines plan's classic occluder
-  const whiteMaterial = useMemo(
+  // The flat shading mode's unlit skin — the lines plan's classic occluder, and in flat mode the transom's
+  // too, so the whole boat reads as one silhouette behind the curves. It paints HULL_BASE itself, i.e. the
+  // shaded hull with the lighting taken out, rather than a hex hand-matched to it by eye.
+  const flatMaterial = useMemo(
     () =>
       new THREE.MeshBasicMaterial({
-        color: 0xffffff,
+        color: new THREE.Color().setRGB(...HULL_BASE, THREE.SRGBColorSpace),
+        // The hull's ShaderMaterial writes gl_FragColor straight to the framebuffer — three only injects the
+        // tone-mapping chunk into materials it generates, not a raw custom shader — so its uBase IS a display
+        // colour. This one has to opt out of tone mapping to be read the same way; left on, the same numbers
+        // come out visibly paler and greyer than the shaded hull.
+        toneMapped: false,
         side: THREE.DoubleSide,
         polygonOffset: true,
         polygonOffsetFactor: 1,
@@ -101,18 +114,26 @@ export function Scene({
       }),
     [],
   );
+  // The mesh is a reading aid over the surface, not part of it: drawn semi-transparent so it tells you where
+  // the lattice is without tiling the hull into a black grid, and so the curves crossing it stay dominant.
+  // depthWrite stays on — the lines still occlude each other by depth, they just let the skin through.
   const wireMaterial = useMemo(
-    () => new THREE.LineBasicMaterial({ color: new THREE.Color(...WIRE_RGB) }),
+    () =>
+      new THREE.LineBasicMaterial({
+        color: new THREE.Color(...WIRE_RGB),
+        transparent: true,
+        opacity: 0.4,
+      }),
     [],
   );
   useEffect(() => {
     return () => {
       hullMaterial.dispose();
       transomMaterial.dispose();
-      whiteMaterial.dispose();
+      flatMaterial.dispose();
       wireMaterial.dispose();
     };
-  }, [hullMaterial, transomMaterial, whiteMaterial, wireMaterial]);
+  }, [hullMaterial, transomMaterial, flatMaterial, wireMaterial]);
 
   // a live uniform, cheap enough to just re-set on every render (the r3f way to sync a plain value onto a
   // persistent three.js object) rather than tracking whether the shading mode actually changed
@@ -218,17 +239,17 @@ export function Scene({
 
   return (
     <group rotation={[0, -model.deckRake, 0]}>
-      {/* the shading mode only picks the material: one geometry, drawn white, lit, or zebra-striped */}
+      {/* the shading mode only picks the material: one geometry, drawn unlit, lit, or zebra-striped */}
       {hullGeometry && (
         <mesh
           geometry={hullGeometry}
-          material={flat ? whiteMaterial : hullMaterial}
+          material={flat ? flatMaterial : hullMaterial}
         />
       )}
       {transomGeometry && (
         <mesh
           geometry={transomGeometry}
-          material={flat ? whiteMaterial : transomMaterial}
+          material={flat ? flatMaterial : transomMaterial}
         />
       )}
       {showMesh && wireGeometry && (
