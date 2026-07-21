@@ -46,17 +46,11 @@ export const emptyMesh = (): Mesh => ({
 // rides exactly on the swept sheet (it is the keel line when idx is the keel point, a chine line at a
 // knuckle, etc.). Each sample is trimmed exactly as the hull is — `keepAt` is the same signed min of the
 // sheer trim, the centerline and the transom plane the mesh uses — so the line stops where the hull does (an
-// overshooting keel point, for instance, only shows where it actually reaches the centerline). Drawn as a
-// thin camera-facing ribbon, starboard plus its port mirror, nudged toward the eye by BIAS so it sits just
-// proud of the surface without z-fighting.
-export function buildLongitudinalMesh(
-  model: Model,
-  idx: number,
-  view: Vec3,
-): Mesh {
-  if (idx < 0 || idx >= model.loft.S) return emptyMesh();
-  const N = 160,
-    len = loa(model);
+// overshooting keel point, for instance, only shows where it actually reaches the centerline). Returned as
+// starboard plus its port mirror, each broken across trimmed-away spans; the view draws them as ribbons.
+export function buildLongitudinalCurve(model: Model, idx: number): Vec3[][] {
+  if (idx < 0 || idx >= model.loft.S) return [];
+  const N = 160;
   const W: Vec3[] = [],
     keep: boolean[] = []; // each sample trimmed the same way the hull surface is
   for (let i = 0; i <= N; i++) {
@@ -66,7 +60,6 @@ export function buildLongitudinalMesh(
     W.push(stationWorld(fr, nz[0], nz[1]));
     keep.push(keepAt(model, fr, nz) >= 0);
   }
-  // starboard plus its port mirror, each broken across trimmed-away spans, as thin camera-facing ribbons
   const runs: Vec3[][] = [];
   for (const sgn of [1, -1])
     for (const run of keptRuns(
@@ -74,7 +67,7 @@ export function buildLongitudinalMesh(
       keep,
     ))
       runs.push(run);
-  return ribbonMesh(runs, view, 0.00125 * len, 0.006 * len); // half-width + bias toward the eye
+  return runs;
 }
 
 // split a sampled polyline into maximal runs of consecutive KEPT points (a trimmed-away span breaks the run)
@@ -92,54 +85,72 @@ export function keptRuns(pts: Vec3[], keep: boolean[]): Vec3[][] {
   return runs;
 }
 
-// Build a camera-facing ribbon mesh (a thin flat tube) tracing each polyline, so 3D guide curves render at a
-// reliable width and float just proud of the surface (BIAS toward the eye, so they don't z-fight). Each
-// polyline becomes one connected ribbon; a 2-point polyline is a single segment (used for the curvature-comb
-// hairs). Normals are set to `view` — the caller's material for these is unlit, so the normal is unused, but
-// kept so every Mesh has the same shape.
-export function ribbonMesh(
-  polylines: Vec3[][],
-  view: Vec3,
-  HW: number,
-  BIAS: number,
-): Mesh {
-  const off = V.scale(view, BIAS),
-    P: number[] = [],
-    Nn: number[] = [];
+// ---------- ribbon geometry: the view-independent half of a camera-facing ribbon ----------
+//
+// A guide curve has to read at a reliable width, which WebGL's own one-pixel lines can't give it, so each is
+// drawn as a thin flat ribbon turned to face the camera. The widening axis depends on the view, and building
+// it here meant rewriting every vertex on every frame the camera moved — at the lines plan's density, several
+// milliseconds of every orbit frame. So the widening now happens in the vertex shader (ribbonShader.ts) and
+// this builds only what the camera can't change: two vertices per polyline point, one for each side, each
+// carrying the curve's unit tangent there, plus the indices that stitch consecutive points into quads.
+export interface RibbonAttributes {
+  position: Float32Array; // the curve point itself — the shader offsets it sideways from here
+  tangent: Float32Array; // the curve's unit tangent there (a point's two vertices share it)
+  side: Float32Array; // −1 / +1: which edge of the ribbon this vertex is
+  index: Uint16Array | Uint32Array;
+  count: number; // vertices
+}
+
+export function ribbonAttributes(polylines: Vec3[][]): RibbonAttributes {
+  let nPts = 0,
+    nSeg = 0;
+  for (const line of polylines)
+    if (line.length >= 2) {
+      nPts += line.length;
+      nSeg += line.length - 1;
+    }
+  const position = new Float32Array(nPts * 6),
+    tangent = new Float32Array(nPts * 6),
+    side = new Float32Array(nPts * 2),
+    count = nPts * 2,
+    // a 16-bit index buffer is the cheaper upload, but the lines plan's families run well past 65,535
+    // vertices — three would silently draw a wrapped-around mess rather than complain
+    index =
+      count > 65535 ? new Uint32Array(nSeg * 6) : new Uint16Array(nSeg * 6);
+  let v = 0,
+    ii = 0;
   for (const line of polylines) {
     const m = line.length;
     if (m < 2) continue;
-    const Ls: Vec3[] = [],
-      Rs: Vec3[] = [];
+    const base = v;
     for (let i = 0; i < m; i++) {
+      // the central difference, one-sided at the ends — the same tangent the CPU widening used
       const t = V.norm(
-        V.sub(line[Math.min(i + 1, m - 1)], line[Math.max(i - 1, 0)]),
-      );
-      let w = V.cross(t, view); // ribbon width axis ⟂ tangent and the eye ⇒ always faces the camera
-      if (V.dot(w, w) < 1e-9) w = V.cross(t, [0, 0, 1]);
-      const wn = V.scale(V.norm(w), HW),
+          V.sub(line[Math.min(i + 1, m - 1)], line[Math.max(i - 1, 0)]),
+        ),
         c = line[i];
-      Ls.push([
-        c[0] + wn[0] + off[0],
-        c[1] + wn[1] + off[1],
-        c[2] + wn[2] + off[2],
-      ]);
-      Rs.push([
-        c[0] - wn[0] + off[0],
-        c[1] - wn[1] + off[1],
-        c[2] - wn[2] + off[2],
-      ]);
+      for (const s of [-1, 1]) {
+        position[v * 3] = c[0];
+        position[v * 3 + 1] = c[1];
+        position[v * 3 + 2] = c[2];
+        tangent[v * 3] = t[0];
+        tangent[v * 3 + 1] = t[1];
+        tangent[v * 3 + 2] = t[2];
+        side[v] = s;
+        v++;
+      }
     }
-    for (let i = 0; i < m - 1; i++) {
-      pushTri(P, Nn, Ls[i], view, Rs[i], view, Rs[i + 1], view);
-      pushTri(P, Nn, Ls[i], view, Rs[i + 1], view, Ls[i + 1], view);
+    for (let i = 0; i + 1 < m; i++) {
+      const a = base + 2 * i; // this point's pair is (a, a+1); the next point's is (a+2, a+3)
+      index[ii++] = a;
+      index[ii++] = a + 1;
+      index[ii++] = a + 3;
+      index[ii++] = a;
+      index[ii++] = a + 3;
+      index[ii++] = a + 2;
     }
   }
-  return {
-    pos: new Float32Array(P),
-    nrm: new Float32Array(Nn),
-    count: P.length / 3,
-  };
+  return { position, tangent, side, index, count };
 }
 
 // ---------- 3D curvature combs (curvature-analysis overlay) ----------
