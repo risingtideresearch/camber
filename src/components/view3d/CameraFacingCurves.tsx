@@ -29,6 +29,13 @@ interface Job {
   polylines: Vec3[][];
   color: THREE.Color;
   halfWidthPx: number;
+  // Does the polyline already lie exactly on the rendered hull (the lines-plan curves, which are read off
+  // the very triangles and edges the GPU rasterizes)? Then it gets NO nudge toward the eye — a bias big
+  // enough to clear the surface everywhere is also big enough to float a curve visibly off it, and to let a
+  // curve on the far side leak through a near-tangent silhouette. Those stay put and the hull is pushed
+  // back by a polygon offset instead (Scene.tsx). The curvature overlay is not on the surface (it rides its
+  // own converged evaluators, and its hairs stand off it), so it keeps the bias.
+  onSurface?: boolean;
 }
 
 // a persistent Mesh + growable BufferGeometry per job slot, reused frame to frame rather than reallocated —
@@ -165,18 +172,21 @@ export function CameraFacingCurves({
           polylines: lines.bold,
           color: black,
           halfWidthPx: LINES_BOLD_HALF_PX,
+          onSurface: true,
         });
       if (lines.family.length)
         out.push({
           polylines: lines.family,
           color: black,
           halfWidthPx: LINES_FAMILY_HALF_PX,
+          onSurface: true,
         });
       if (lines.dwl.length)
         out.push({
           polylines: lines.dwl,
           color: new THREE.Color(COL.wl),
           halfWidthPx: LINES_DWL_HALF_PX,
+          onSurface: true,
         });
     }
     return out;
@@ -226,7 +236,12 @@ export function CameraFacingCurves({
     jobs.forEach((job, i) => {
       writeRibbon(
         slots[i].geometry,
-        ribbonMesh(job.polylines, view, job.halfWidthPx * pxToWorld, bias),
+        ribbonMesh(
+          job.polylines,
+          view,
+          job.halfWidthPx * pxToWorld,
+          job.onSurface ? 0 : bias,
+        ),
       );
     });
     if (guideIdx !== null)

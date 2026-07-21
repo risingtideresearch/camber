@@ -8,6 +8,7 @@ import {
   buildTransomMesh,
   WIRE_RGB,
   type CurvCurve3,
+  type Mesh,
 } from "../../core/hullGeometry";
 import {
   createHullMaterial,
@@ -79,9 +80,20 @@ export function Scene({
     () => createHullMaterial(uLight, { base: TRANSOM_BASE }),
     [uLight],
   );
+  // the lines-plan modes' occluder. The curves drawn over it are ON the surface — the very triangles and
+  // edges of this mesh (hullLines3d.ts) — so the skin is pushed back by a polygon offset to let them show
+  // through, the same wireframe-over-solid trick the Mesh overlay uses below. `factor` is what makes it work
+  // where it is needed most: it scales with the polygon's own depth slope, so a face seen nearly edge-on (at
+  // the silhouette, where a curve's screen width sweeps the most depth) is pushed back the most.
   const whiteMaterial = useMemo(
     () =>
-      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }),
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        side: THREE.DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+      }),
     [],
   );
   const wireMaterial = useMemo(
@@ -133,7 +145,8 @@ export function Scene({
     perfBegin(PERF_MESH);
     let hullGeometry: THREE.BufferGeometry | null = null,
       transomGeometry: THREE.BufferGeometry | null = null,
-      wireGeometry: THREE.BufferGeometry | null = null;
+      wireGeometry: THREE.BufferGeometry | null = null,
+      hullMesh: Mesh | null = null; // the raw triangle soup, kept for the lines-plan curves below
     if (sampling) {
       const trimmed = mode !== "sheet";
       const built = buildHullMesh(
@@ -143,6 +156,7 @@ export function Scene({
         showMesh,
         meshQuads,
       );
+      hullMesh = built.hull;
       hullGeometry = meshToGeometry(built.hull);
       if (trimmed) {
         const transomMesh = perfStep(
@@ -163,14 +177,17 @@ export function Scene({
           "hairs",
         )
       : null;
-    const linesPlanCurves: LinesPlanCurves | null = LINES_MODES.includes(mode)
-      ? perfStep(
-          "Lines plan curves",
-          () => buildLinesPlanCurves(model, mode),
-          (c) => c.bold.length + c.family.length + c.dwl.length,
-          "segs",
-        )
-      : null;
+    // the lines-plan curves are read off the geometry just built — the sampling's own columns and the
+    // triangles stitched from them — so they need both, and there is nothing to draw without them
+    const linesPlanCurves: LinesPlanCurves | null =
+      LINES_MODES.includes(mode) && sampling && hullMesh
+        ? perfStep(
+            "Lines plan curves",
+            () => buildLinesPlanCurves(model, mode, sampling, hullMesh!),
+            (c) => c.bold.length + c.family.length + c.dwl.length,
+            "curves",
+          )
+        : null;
     perfEnd(PERF_MESH);
     return {
       hullGeometry,
