@@ -164,19 +164,13 @@ export function Scene({
       hullMesh: Mesh | null = null; // the raw triangle soup, kept for the lines-plan curves below
     if (sampling) {
       const trimmed = !sheet;
-      const built = buildHullMesh(
-        model,
-        sampling,
-        trimmed,
-        showMesh,
-        meshQuads,
-      );
+      const built = buildHullMesh(sampling, trimmed, showMesh, meshQuads);
       hullMesh = built.hull;
       hullGeometry = meshToGeometry(built.hull);
       if (trimmed) {
         const transomMesh = perfStep(
           "Transom panel",
-          () => buildTransomMesh(model, built.transomEdge),
+          () => buildTransomMesh(model, sampling),
           (m) => m.count / 3,
           "tris",
         );

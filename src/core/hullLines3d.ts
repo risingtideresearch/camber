@@ -115,13 +115,32 @@ export function buildLinesPlanCurves(
     return out;
   };
 
+  // The bottom boundary chain: each column's last point, joined column to column by real mesh edges — plus
+  // the transom's FOOT, which is a vertex of that boundary belonging to no column. The mesh builder splices
+  // it into the one edge that spans it, so a chain that skipped it would cut the corner the surface goes
+  // round, by as much as a whole lattice step's worth of half-breadth.
+  const bottomChain = (): Vec3[] => {
+    const out: Vec3[] = [];
+    for (let i = 0; i < cols.length; i++) {
+      out.push(cols[i].pts[cols[i].pts.length - 1]);
+      if (
+        trimmed &&
+        sampling.transomFoot &&
+        cols[i].transom &&
+        cols[i + 1]?.keel
+      )
+        out.push(sampling.transomFoot);
+    }
+    return out;
+  };
+
   const bold: Vec3[][] = [];
   if (lines.edges) {
     // the mesh's boundary chains: the first and last point of every column are joined column-to-column by
     // real mesh edges (the stitch always pairs the two columns' first points, and their last)
     bold.push(
       ...bothSides(cols.map((s) => s.pts[0])), // the sheer edge (untrimmed: the sheet's deck edge)
-      ...bothSides(cols.map((s) => s.pts[s.pts.length - 1])), // the keel, or the transom cut
+      ...bothSides(bottomChain()), // the keel, or the transom cut
       // both end columns, which close that pair of chains into the surface's whole outline: the aft edge
       // (the transom cut, or wherever the sweep starts) and the fore one. On the trimmed hull the fore
       // column is the bow closure, so it is short — the two chains have all but met there. On the sheet it
@@ -199,11 +218,14 @@ export function buildLinesPlanCurves(
     // On the hull that same profile is the KEEL, which the surface ends on rather than crosses: |y| touches 0
     // there without changing sign, so no march can catch it however many levels it is given. It is read off
     // the columns instead — the bottom point of each one the centerline, rather than the transom, cut — and
-    // left to `edges` where those draw it bold as part of the keel chain.
-    if (trimmed && !lines.edges)
-      family.push(
-        ...runsAlong((s) => (s.keel ? s.pts[s.pts.length - 1] : null)),
-      );
+    // left to `edges` where those draw it bold as part of the keel chain. Its aft-most run starts at the
+    // transom's foot, which no column carries, so that point is put back on the front of it.
+    if (trimmed && !lines.edges) {
+      const runs = runsAlong((s) => (s.keel ? s.pts[s.pts.length - 1] : null));
+      if (runs.length && sampling.transomFoot)
+        runs[0].unshift(sampling.transomFoot);
+      family.push(...runs);
+    }
   }
 
   return { bold, family, dwl };

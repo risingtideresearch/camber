@@ -19,7 +19,8 @@ import {
   keelPointAt,
   keptSpan,
   sweptSection,
-  transomEdge,
+  transomOutline,
+  type HullSampling,
   type SectionRow,
 } from "./mesh";
 import { crCurveAuto } from "./spline";
@@ -339,13 +340,14 @@ export function drawPlan(
   svg: SVGGElement, // the SvgView content group
   model: Model,
   selection: ModelSelection,
-  rows: SectionRow[],
+  sampling: HullSampling,
   onSelect: OnModelSelect,
   sc: [number, number],
   curv?: CurvatureSettings,
 ): void {
   perfBegin(PERF_PLAN);
-  const v = viewOf(model);
+  const rows = sampling.trimmedSections,
+    v = viewOf(model);
   setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
   gridX(v, svg, 8, v.lh - 8);
@@ -441,8 +443,10 @@ export function drawPlan(
         "stroke-linecap": "round",
       }),
     );
-  // transom footprint in plan (centerline → sheer at the stern)
-  const te = perfStep("Transom footprint", () => transomEdge(model));
+  // The transom's footprint in plan: its outline seen from above, head at the sheer → foot on the centerline.
+  // Read off the same sampling the outline above was drawn from, so the 2D strips and the 3D panel are three
+  // projections of ONE curve rather than three curves that ought to agree.
+  const te = transomOutline(sampling);
   if (te.length > 1) {
     svg.append(
       el("path", {
@@ -547,13 +551,14 @@ export function drawProfile(
   svg: SVGGElement, // the SvgView content group
   model: Model,
   selection: ModelSelection,
-  rows: SectionRow[],
+  sampling: HullSampling,
   onSelect: OnModelSelect,
   sc: [number, number],
   curv?: CurvatureSettings,
 ): void {
   perfBegin(PERF_PROFILE);
-  const v = viewOf(model);
+  const rows = sampling.trimmedSections,
+    v = viewOf(model);
   setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
   gridX(v, svg, Ptop - 4, v.pzBase);
@@ -606,7 +611,10 @@ export function drawProfile(
     "DWL",
   );
   // emergent keel + stem, drawn as one continuous outline from transom to bow so it MATCHES the 3D mesh:
-  //  • aft: start at the transom's deepest point (where the transom outline reaches the centerline);
+  //  • aft: the transom's foot, where the keel meets the cut. It belongs to no column — it lies between two —
+  //    so it has to be prepended, exactly as the mesh splices it into the surface's own bottom edge. Without
+  //    it the keel would start at the first closing section, up to a whole lattice step forward of the
+  //    transom, and the two lines would visibly fail to meet;
   //  • bottom: the keel/rocker — the deepest point of each closing section (s.pts[last]) — rising to the bow;
   //  • stem: at a tumblehome bow the deck tucks to the centerline, so the section TOP (s.pts[0]) dives below
   //    the authored trim and meets the keel at the forefoot. Trace that diving top edge back from the forefoot
@@ -614,8 +622,7 @@ export function drawProfile(
   const closing = rows.filter((s) => s.keel && s.pts.length > 1);
   const keel = closing.map((s) => s.pts[s.pts.length - 1]);
   if (keel.length) {
-    const te0 = perfStep("Transom edge", () => transomEdge(model));
-    if (te0.length) keel.unshift(te0[te0.length - 1]); // transom keel: deepest point of the transom outline
+    if (sampling.transomFoot) keel.unshift(sampling.transomFoot);
 
     // the bow stem: the CONTIGUOUS run of forwardmost sections whose top has dived below the authored trim
     // (the tumblehome lens). Only the forward run — a section's top can also drop below the trim near the
@@ -691,7 +698,10 @@ export function drawProfile(
       "stroke-dasharray": "5 4",
     }),
   );
-  const te = perfStep("Transom edge", () => transomEdge(model));
+  // the cut edge itself: the outline in side view. Every point of it is on the transom plane by construction,
+  // so it lies along the dashed construction line above — between the head at the sheer and the foot on the
+  // keel, which is the stretch of that line the hull actually reaches.
+  const te = transomOutline(sampling);
   if (te.length > 1)
     svg.append(
       el("path", {

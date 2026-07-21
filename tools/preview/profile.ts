@@ -6,10 +6,9 @@ import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createModel, loa, resetModel, prepare } from "../../src/core/model";
 import {
-  sweptSection,
+  computeHullSampling,
   forwardLimit,
-  aftLimit,
-  transomEdge,
+  transomOutline,
   type SectionRow,
 } from "../../src/core/mesh";
 import { loadJsonText } from "../../src/core/json";
@@ -35,22 +34,14 @@ const poly = (pts: [number, number][]): string =>
 const path = (d: string, stroke: string, w: number, extra = ""): string =>
   `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round" ${extra}/>`;
 
-// the swept sections over the hull's own span — from the transom cut to the bow closure, in the plan's
-// parameter — cosine-clustered at both ends (same as the editor)
+// the hull, sampled exactly the way the editor samples it — one shared lattice, trimmed, with a column placed
+// at each end closure and at the transom's foot. Everything below is read off those columns, so this picture
+// is of the same geometry the app draws rather than of a second sampling that merely resembles it.
 const NSEC = 80,
-  u0 = aftLimit(model),
   uFwd = forwardLimit(model),
   xFwd = model.plan.at(uFwd)[0],
-  sections: SectionRow[] = [];
-for (let i = 0; i <= NSEC; i++)
-  sections.push(
-    sweptSection(
-      model,
-      u0 + (uFwd - u0) * ((1 - Math.cos((Math.PI * i) / NSEC)) / 2),
-      4,
-      true,
-    ),
-  );
+  sampling = computeHullSampling(model, NSEC, 4),
+  sections: SectionRow[] = sampling.trimmedSections;
 
 let body = "";
 // deck reference z=0
@@ -62,12 +53,13 @@ const wlS = Math.sin(model.deckRake),
 const zWL = (x: number) => (-model.waterline - x * wlS) / wlC;
 body += `<line x1="${mapX(0)}" y1="${zScreenP(zWL(0))}" x2="${mapX(xFwd)}" y2="${zScreenP(zWL(xFwd))}" stroke="#0ea5e9" stroke-width="1.8"/>`;
 
-// keel + stem (green), matching the mesh: keel rises to the forefoot, then the diving top edge back to the trim
+// keel + stem (green), matching the mesh: keel rises to the forefoot, then the diving top edge back to the
+// trim. The transom's foot is prepended — it lies between two columns, so no closing section carries it.
 const closing = sections.filter((s) => s.keel && s.pts.length > 1);
 const keel = closing.map((s) => s.pts[s.pts.length - 1] as Vec3);
-const te = transomEdge(model);
+const te = transomOutline(sampling);
 if (keel.length) {
-  if (te.length) keel.unshift(te[te.length - 1]);
+  if (sampling.transomFoot) keel.unshift(sampling.transomFoot);
   // the tolerance is a fraction of the hull's own length (it was absolute against v1's fixed L = 1000)
   const tol = 0.003 * L;
   const dived = (s: SectionRow) => s.pts[0][2] < model.trimZ(s.pts[0][0]) - tol;

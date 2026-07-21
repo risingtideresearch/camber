@@ -40,15 +40,7 @@ export function ProfileView({
 }: ProfileViewProps) {
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
-      drawProfile(
-        g,
-        model,
-        selection,
-        sampling.trimmedSections,
-        onSelect,
-        [sx, sy],
-        curvature,
-      );
+      drawProfile(g, model, selection, sampling, onSelect, [sx, sy], curvature);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [model, modelVersion, selection, sampling, onSelect, curvature],

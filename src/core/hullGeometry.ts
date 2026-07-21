@@ -15,7 +15,6 @@ import {
   loa,
   sectionAt,
   stationWorld,
-  xTransom,
 } from "./model";
 import {
   computeHullSampling,
@@ -23,6 +22,7 @@ import {
   longitudinalPointAt,
   sheerPointAt,
   sweptSection,
+  transomOutline,
   trimmedHullGrid,
   type HullSampling,
 } from "./mesh";
@@ -379,45 +379,80 @@ interface Col {
   p: Vec3[];
   idx: number[];
   vBase: number;
+  transom: boolean; // this column's bottom is on the transom plane
+  keel: boolean; // ...or on the centerline
 }
 
 // stitch two adjacent columns by walking their sheet indices together (a monotone merge): a matching integer
 // rung emits the two triangles of a quad; wherever one column's next index runs ahead (a fractional trimmed
 // end, or a rung the other column lost to the trim) a single triangle closes the gap.
+//
+// `foot` is the transom's foot corner, given only for the ONE strip that spans it (−1 everywhere else). It is
+// a vertex the lattice cannot hold — it lies between the two columns — so rather than bend the lattice around
+// it, the strip is stitched exactly as any other and then its bottom edge alone is split across it. That edge
+// always belongs to the LAST triangle stitch emits: every path through the walk ends having just laid down
+// A's last point against B's last. So the last triangle is held back, and released as the two triangles that
+// run A_last → foot → B_last instead. One vertex, one extra triangle, and the quad grid is untouched.
 function stitch(
   A: Col,
   B: Col,
   addTri: (a: number, b: number, c: number) => void,
+  foot = -1,
 ): void {
   const na = A.idx.length,
     nb = B.idx.length;
   let i = 0,
-    j = 0;
+    j = 0,
+    held: [number, number, number] | null = null;
+  // with a foot to splice, emit one triangle behind so the last one is still in hand at the end
+  const out =
+    foot < 0
+      ? addTri
+      : (a: number, b: number, c: number): void => {
+          if (held) addTri(...held);
+          held = [a, b, c];
+        };
   while (i + 1 < na || j + 1 < nb) {
     const ai = i + 1 < na ? A.idx[i + 1] : Infinity,
       bj = j + 1 < nb ? B.idx[j + 1] : Infinity;
     if (Math.abs(ai - bj) < 1e-9) {
-      addTri(A.vBase + i, A.vBase + i + 1, B.vBase + j);
-      addTri(A.vBase + i + 1, B.vBase + j + 1, B.vBase + j);
+      out(A.vBase + i, A.vBase + i + 1, B.vBase + j);
+      out(A.vBase + i + 1, B.vBase + j + 1, B.vBase + j);
       i++;
       j++;
     } else if (ai < bj) {
-      addTri(A.vBase + i, A.vBase + i + 1, B.vBase + j);
+      out(A.vBase + i, A.vBase + i + 1, B.vBase + j);
       i++;
     } else {
-      addTri(A.vBase + i, B.vBase + j + 1, B.vBase + j);
+      out(A.vBase + i, B.vBase + j + 1, B.vBase + j);
       j++;
     }
   }
+  if (!held) return;
+  // find the bottom edge in the held triangle and split it, keeping the winding: (p, q, r) with the edge p→q
+  // becomes (p, foot, r) + (foot, q, r)
+  const t = held as [number, number, number],
+    lo = A.vBase + na - 1,
+    hi = B.vBase + nb - 1;
+  const e = [0, 1, 2].find((k) => {
+    const p = t[k],
+      q = t[(k + 1) % 3];
+    return (p === lo && q === hi) || (p === hi && q === lo);
+  });
+  if (e === undefined) return addTri(...t); // no bottom edge to split — leave the triangle as stitched
+  addTri(t[e], foot, t[(e + 2) % 3]);
+  addTri(foot, t[(e + 1) % 3], t[(e + 2) % 3]);
 }
 
+// The mesh is built from the SAMPLING alone — it takes no model, because there is nothing left in the model
+// for it to consult: the trims have all been applied already, and where the hull ends is recorded in the
+// columns themselves.
 export function buildHullMesh(
-  model: Model,
   sampling: HullSampling,
   trimmed: boolean,
   wantWire: boolean,
   wireQuads: boolean, // wire as quads (true) or the raw shaded triangles (false); ignored unless wantWire
-): { hull: Mesh; transomEdge: Vec3[]; wire: Mesh | null } {
+): { hull: Mesh; wire: Mesh | null } {
   const sections = trimmed ? sampling.trimmedSections : sampling.sheetSections;
 
   // lay every non-empty column's vertices into shared flat arrays, carrying each vertex's sheet index and
@@ -439,21 +474,38 @@ export function buildHullMesh(
       const r = Math.round(idx[k]);
       vk.push(Math.abs(idx[k] - r) < 1e-6 ? (cm.get(r) ?? 0) : 0);
     }
-    cols.push({ p: s.pts, idx, vBase });
+    cols.push({
+      p: s.pts,
+      idx,
+      vBase,
+      transom: !!s.transom,
+      keel: s.keel,
+    });
   }
-  if (cols.length < 2)
-    return { hull: emptyMesh(), transomEdge: [], wire: null };
+  if (cols.length < 2) return { hull: emptyMesh(), wire: null };
 
-  // the transom edge: the trimmed bottom of each column the TRANSOM stopped (not the centerline, which snaps
-  // y to 0, and not an open section, which reaches no trim). Ordered top → bottom for the panel fan.
-  const tEdge: Vec3[] = [];
-  if (trimmed)
-    for (const s of sampling.trimmedSections) {
-      if (s.empty || s.keel || s.pts.length < 2) continue;
-      const p = s.pts[s.pts.length - 1];
-      if (Math.abs(p[0] - xTransom(model, p[2])) < 1e-6) tEdge.push(p);
-    }
-  tEdge.sort((a, b) => b[2] - a[2]);
+  // The transom's foot: one vertex, on the boundary edge between the last column the transom cut and the
+  // first the keel does. It belongs to no column (it sits between two), so it goes in as a loose vertex and
+  // `stitch` splits that one edge across it — the alternative, a column of its own, would lay a hair-thin
+  // edge loop across the whole girth to place a single point at the bottom of it.
+  let footStrip = -1,
+    footV = -1;
+  if (trimmed && sampling.transomFoot)
+    for (let c = 0; c + 1 < cols.length; c++)
+      if (cols[c].transom && cols[c + 1].keel) {
+        footStrip = c;
+        footV = verts.length;
+        verts.push(sampling.transomFoot);
+        // a boundary vertex on the centerline: no crease, and its girth index only has to sort with the two
+        // ends it sits between, which it does at their mean
+        vg.push(
+          (cols[c].idx[cols[c].idx.length - 1] +
+            cols[c + 1].idx[cols[c + 1].idx.length - 1]) /
+            2,
+        );
+        vk.push(0);
+        break;
+      }
 
   // face-normal accumulation, split by girth side: nLo gathers faces centred below a vertex's index, nHi
   // above. A smooth vertex uses nLo + nHi; a crease vertex blends toward its own side so a knuckle reads as
@@ -482,7 +534,7 @@ export function buildHullMesh(
     "Stitching columns",
     () => {
       for (let c = 0; c + 1 < cols.length; c++)
-        stitch(cols[c], cols[c + 1], addTri);
+        stitch(cols[c], cols[c + 1], addTri, c === footStrip ? footV : -1);
       return tris;
     },
     (t) => t.length,
@@ -579,7 +631,12 @@ export function buildHullMesh(
       // half is stitched here: the mirror below lays the port copy straight over it, so the centerline reads as
       // a drawn line rather than as the interior edge it becomes once the two halves are joined.
       wireEdge(w, A.p[0], B.p[0]);
-      wireEdge(w, A.p[na - 1], B.p[nb - 1]);
+      // the bottom one runs through the transom's foot on the one strip that spans it, exactly as the
+      // triangles do — the wire is meant to be the surface's own edges, foot included
+      if (ci === footStrip && footV >= 0) {
+        wireEdge(w, A.p[na - 1], verts[footV]);
+        wireEdge(w, verts[footV], B.p[nb - 1]);
+      } else wireEdge(w, A.p[na - 1], B.p[nb - 1]);
       let i = 0,
         j = 0;
       while (i < na && j < nb) {
@@ -604,7 +661,6 @@ export function buildHullMesh(
 
   return {
     hull,
-    transomEdge: tEdge,
     wire: !wantWire
       ? null
       : perfStep(
@@ -623,27 +679,42 @@ export function buildHullMesh(
   };
 }
 
-// The flat transom panel, built from the hull's OWN aft edge (buildHullMesh reads it off the trimmed grid)
-// so the two meet with no gap or overlap. The edge already runs top (at the sheer) → bottom, one point per
-// column and all on the starboard side; the last point is snapped onto the centerline so the panel closes
-// cleanly where the transom plane crosses it.
-export function buildTransomMesh(model: Model, edge: Vec3[]): Mesh {
-  if (edge.length < 2)
-    return { pos: new Float32Array(0), nrm: new Float32Array(0), count: 0 };
-  const e = edge.slice();
-  e[e.length - 1] = [e[e.length - 1][0], 0, e[e.length - 1][2]];
+// The flat transom panel: the plane's own face, closing the hull aft.
+//
+// It is built on NOTHING BUT the hull's own aft edge — `transomOutline` hands back the very vertices the mesh
+// stitched its bottom boundary from, in the same order — so the panel and the skin share their whole common
+// border vertex for vertex. There is no tolerance to tune and no seam to close: a gap could only appear if
+// the two disagreed about where the hull ends, and they cannot, because there is only one answer and both
+// read it.
+//
+// The outline is the starboard half, running from the sheer corner down to the foot on the centerline, and
+// the panel is the region between it and its port mirror. That region is spanned as a ladder: each pair of
+// consecutive outline points and their two mirrors make a quad. The rungs never cross (the outline descends
+// monotonically away from the sheer), so the ladder tiles the panel exactly — the top rung is the straight
+// line across the breadth at the sheer, which is the transom's top edge, and the bottom one degenerates to a
+// point at the foot, where starboard and port meet on y = 0.
+//
+// The panel is planar by construction: every outline point but the foot is a linear crossing of a plane
+// affine in (x, z), and the foot is a bisected corner that sits on the same plane to ~1e-3 of a lattice step.
+// So one constant normal serves the whole face.
+export function buildTransomMesh(model: Model, sampling: HullSampling): Mesh {
+  const e = transomOutline(sampling);
+  if (e.length < 2) return emptyMesh();
   const [ta, tb] = model.transom,
     slope = (tb.x - ta.x) / (tb.z - ta.z || 1),
     nt = V.norm([-1, 0, slope]), // outward (aft-facing)
     P: number[] = [],
     Nn: number[] = [];
-  for (let i = 0; i < e.length - 1; i++) {
+  for (let i = 0; i + 1 < e.length; i++) {
     const a = e[i],
       b = e[i + 1],
       ap: Vec3 = [a[0], -a[1], a[2]],
       bp: Vec3 = [b[0], -b[1], b[2]];
-    pushTri(P, Nn, a, nt, ap, nt, bp, nt);
-    pushTri(P, Nn, a, nt, bp, nt, b, nt);
+    // a rung standing on the centerline is its own mirror, so the quad there is really a triangle: the half
+    // of it that would span the point to itself has no area. That is the foot, and it is where the ladder
+    // closes — emitting the empty half anyway would leave a degenerate triangle on the seam.
+    if (a[1] !== 0) pushTri(P, Nn, a, nt, ap, nt, bp, nt);
+    if (b[1] !== 0) pushTri(P, Nn, a, nt, bp, nt, b, nt);
   }
   return {
     pos: new Float32Array(P),

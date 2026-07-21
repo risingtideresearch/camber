@@ -41,10 +41,19 @@ import {
 // sub-steps per section segment: the mesh's girth resolution, S−1 segments × R + 1 rows
 export const R_DEFAULT = 16;
 
+// root-find steps used to place each of the transom's two corners (see computeHullSampling). Each costs one
+// built column, so the budget is small; Illinois regula falsi on a near-linear d gets to float precision well
+// inside it, and the two corners together add ~6% to a default sampling's several hundred columns.
+const CORNER_STEPS = 8;
+
 export interface SectionRow {
   pts: Vec3[]; // starboard: the sheer edge → the keel (or wherever the trim ended it)
   empty: boolean; // no hull at this u at all
   keel: boolean; // the last point sits on the centerline, so the port half joins it there
+  // the last point sits ON the transom plane — this column's bottom is a piece of the hull's aft edge, not of
+  // the keel. Mutually exclusive with `keel`, and both are false where the section simply ran out (an open
+  // bottom, which reaches no trim at all). Like `sheetIndex`, only the sampling sets it.
+  transom?: boolean;
   // rows that sit on a station knot and carry a crease. The mesh gives these a tangent break scaled by
   // `creaseK`; a faded knuckle (low k) on a crease row stays smooth, so sharpness stays data-driven.
   creaseRows: number[];
@@ -191,19 +200,23 @@ export function sweptSection(
 // outline needs. The four stages compose the way the hull is defined:
 //
 //   sheet          — the raw swept sheet: uniform u × uniform-per-segment v, every node a world point. It
-//                    depends on no trim at all, so it is empty on the end-refinement columns, which are
-//                    placed off the uniform u lattice by where the trimmed hull closes.
+//                    depends on no trim at all, so it is empty on the REFINEMENT columns, which are placed
+//                    off the uniform u lattice by where the trimmed hull closes or changes trim.
 //   sheerTrimmed   — the sheet minus the deck (points above the sheer trim's z at this column).
 //   centerTrimmed  — minus the far side of the centerline (y < 0), re-entered exactly on the keel (y = 0).
 //   trimmed        — minus the far side of the transom plane. What the mesh and the outlines are built from.
 //
 // Every point keeps a `sheetIndex` recording which sheet row it came from (a crossing point gets a fractional
-// index), so two neighbouring trimmed columns can be stitched by matching indices — see the mesh builder.
+// index), so two neighbouring trimmed columns can be stitched by matching indices — see the mesh builder. Each
+// trimmed column also records WHICH trim ended it — `keel` or `transom` — which is what lets the hull's aft
+// edge be told from its keel and read straight off the columns (see `transomOutline`).
 
 export interface HullSampling {
   R: number; // sub-steps per section segment (girth resolution)
   M: number; // the keel's sheet index in a full untrimmed row: (S−1)·R
-  uParams: number[]; // the u of each column — uniform, plus one linearly-placed column at each closing end
+  // the u of each column: the uniform lattice, plus a refinement column at each closing end and one more at
+  // the transom's foot
+  uParams: number[];
   vParams: number[]; // the v of each sheet row: vParams[k] = k / R, running 0 → vmax
   // aligned with uParams; the trimmed stages carry `empty` where the hull is gone, the sheet where the column
   // is an end refinement (off the uniform lattice, so not part of the sheet)
@@ -211,6 +224,10 @@ export interface HullSampling {
   sheerTrimmedSections: SectionRow[];
   centerTrimmedSections: SectionRow[];
   trimmedSections: SectionRow[];
+  // The transom's FOOT: the corner where the aft edge hands the hull's bottom over to the keel. It lies
+  // between two columns, so it is not any column's point — the mesh builder splices it into the single
+  // boundary edge that spans it. Null where the transom never reaches the keel.
+  transomFoot: Vec3 | null;
 }
 
 // the interior station knots that carry a knuckle, as sheet indices (knot i sits at i·R) with their blended
@@ -303,6 +320,13 @@ function cutBack(
 interface HullColumn {
   u: number;
   margin: number; // > 0 where the hull survives all three trims, < 0 where erased; ~0 at a closing end
+  // How far FORWARD of the transom plane the two ENDS of this column's centre-trimmed span are — its top (on
+  // the sheer trim) and its bottom (on the centerline), null where that end doesn't exist. These are exactly
+  // the numbers the transom cut tests, so each one's sign says whether the transom reaches that end, and each
+  // one's ZERO is a corner of the transom's outline: `topD` at the head, where the cut meets the sheer, and
+  // `keelD` at the foot, where it meets the keel. computeHullSampling finds both by root-finding on these.
+  topD: number | null;
+  keelD: number | null;
   sheet: SectionRow;
   sheer: SectionRow;
   center: SectionRow;
@@ -319,7 +343,7 @@ function buildColumn(
   const fr = frameAt(model, u),
     sec = sectionAt(model, u);
   const { creaseRows, creaseK } = creasesOf(sec, R);
-  const mk = (w: Work | null, keel: boolean): SectionRow =>
+  const mk = (w: Work | null, keel: boolean, transom = false): SectionRow =>
     !w || w.pts.length < 2
       ? emptyRow(creaseRows, creaseK)
       : {
@@ -327,6 +351,7 @@ function buildColumn(
           sheetIndex: w.idx,
           empty: false,
           keel,
+          transom,
           creaseRows,
           creaseK,
         };
@@ -368,6 +393,12 @@ function buildColumn(
   // (c) centerline: past y = 0 is the other half; re-enter on the keel. keel ⇔ the bottom reached y = 0.
   const centerR = sheerW ? cutBack(sheerW, (p) => p[1], true) : null;
   const center = mk(centerR?.work ?? null, centerR?.cut ?? false);
+  // Both ends' distance forward of the transom plane, read BEFORE the transom cut — the very numbers the cut
+  // below tests as it walks in from the bottom. Kept for the corner root-finds in computeHullSampling.
+  const dOf = (p: Vec3): number => p[0] - xTransom(model, p[2]);
+  const cw = centerR?.work.pts;
+  const topD = cw?.length ? dOf(cw[0]) : null;
+  const keelD = centerR?.cut && cw?.length ? dOf(cw[cw.length - 1]) : null;
   // (d) transom: aft of the transom plane is cut away. It is linear in z, so one linear crossing is exact.
   // If it cut anything the bottom is a transom edge (not the keel), so keel becomes false there.
   const trimR = centerR
@@ -376,14 +407,18 @@ function buildColumn(
   const trimmed = mk(
     trimR?.work ?? null,
     trimR ? (trimR.cut ? false : (centerR?.cut ?? false)) : false,
+    trimR?.cut ?? false,
   );
 
-  return { u, margin, sheet, sheer, center, trimmed };
+  return { u, margin, topD, keelD, sheet, sheer, center, trimmed };
 }
 
-// Compute the whole sampling: N+1 columns uniform in u, then ONE linearly-placed column at each end that is
+// Compute the whole sampling: N+1 columns uniform in u, then the refinement columns — one at each end that is
 // still closing, so the drawn outline reaches the true bow/stern within a linear step rather than being
-// quantized to 1/N. numSections is N (segments), numLongitudinalsPerKnot is R (girth sub-steps per segment).
+// quantized to 1/N, and one at the transom's foot, where the hull's bottom edge changes which trim it rides.
+// Each is placed by the trim, at a u the lattice has no reason to visit, and each buys the drawn boundary a
+// corner it would otherwise have to round off.
+// numSections is N (segments), numLongitudinalsPerKnot is R (girth sub-steps per segment).
 export function computeHullSampling(
   model: Model,
   numSections: number,
@@ -413,17 +448,101 @@ export function computeHullSampling(
     return { ...c, sheet: emptyRow(c.sheet.creaseRows, c.sheet.creaseK) };
   };
   const alive = (c: HullColumn): boolean => !c.trimmed.empty;
+
+  // THE TRANSOM'S TWO CORNERS. Both are found the same way, because they are the same kind of thing: a u at
+  // which one END of a column lands exactly on the transom plane. `topD` = 0 is the HEAD, where the cut meets
+  // the sheer trim; `keelD` = 0 is the FOOT, where it meets the keel. Neither falls on the uniform lattice, so
+  // both need a root-find — and the drawn transom is bounded by exactly these two points, so an outline that
+  // stops at the nearest column instead visibly falls short at that end.
+  //
+  // Regula falsi with the Illinois twist (halve the stale side's value whenever the same side is retained), so
+  // the bracket always shrinks and a smooth, near-linear d converges in a handful of steps rather than the
+  // dozen-plus plain bisection would need — these cost a built column each. Returns the column on the POSITIVE
+  // side, the one that still has hull on it.
+  const refineCrossing = (
+    neg: HullColumn,
+    pos: HullColumn,
+    d: (c: HullColumn) => number | null,
+    steps = CORNER_STEPS,
+  ): HullColumn | null => {
+    let un = neg.u,
+      up = pos.u,
+      dn = d(neg)!,
+      dp = d(pos)!,
+      best: HullColumn | null = null,
+      held = 0;
+    for (let k = 0; k < steps; k++) {
+      const t = clamp(dn / (dn - dp), 0.01, 0.99),
+        c = buildColumn(model, un + (up - un) * t, vParams, R),
+        dm = d(c);
+      if (dm === null) break; // the end we are chasing stopped existing — keep the best bracket we have
+      if (dm > 0) {
+        up = c.u;
+        dp = dm;
+        best = c;
+        if (held > 0) dn /= 2;
+        held = 1;
+      } else {
+        un = c.u;
+        dn = dm;
+        if (held < 0) dp /= 2;
+        held = -1;
+      }
+    }
+    return best;
+  };
+
   // forward: first index (from the end) whose column has hull, and the erased one just beyond it
   let f = cols.length - 1;
   while (f >= 0 && !alive(cols[f])) f--;
   if (f >= 0 && f < cols.length - 1)
     cols.splice(f + 1, 0, refine(cols[f], cols[f + 1]));
-  // aft: first index with hull, and the erased one just before it
+  // Aft: first index with hull, and the erased one just before it. Where the transom is what erased it — the
+  // usual case, and the one `topD` brackets — the closing column is placed on the HEAD rather than by the
+  // `margin` estimate the bow uses. That matters more than it sounds: as topD → 0 the transom cut closes on
+  // the column's own top, so the column collapses onto the corner and the sheer chain and the transom outline
+  // START AT THE SAME POINT. Placed by the margin estimate it instead stops a fraction of a hull-length short,
+  // and the panel hangs visibly below the sheer. Any other kind of stern closure still falls back to `refine`.
   let a = 0;
   while (a < cols.length && !alive(cols[a])) a++;
-  if (a > 0 && a < cols.length) cols.splice(a, 0, refine(cols[a], cols[a - 1]));
+  if (a > 0 && a < cols.length) {
+    const p = cols[a],
+      q = cols[a - 1],
+      head =
+        p.topD !== null && q.topD !== null && p.topD > 0 && q.topD < 0
+          ? refineCrossing(q, p, (c) => c.topD)
+          : null;
+    cols.splice(
+      a,
+      0,
+      head ? { ...head, sheet: emptyRow([], []) } : refine(p, q),
+    );
+  }
+
+  // The FOOT is a single POINT, not a column. The hull's bottom edge changes hands there — transom aft of it,
+  // keel forward — and the corner itself falls between two columns, so the edge steps across it as one
+  // chamfered rung lying on neither the plane nor the centerline. But a whole extra column would be a wholly
+  // disproportionate answer: a hair-thin edge loop across the ENTIRE girth, wedged against its neighbour, to
+  // fix one point at the very bottom of it. So only the point is computed here; the mesh builder splices it
+  // into the one boundary edge that needs it and leaves the lattice alone (see buildHullMesh).
+  let transomFoot: Vec3 | null = null;
+  for (let i = 0; i + 1 < cols.length; i++) {
+    const p = cols[i],
+      q = cols[i + 1];
+    if (p.trimmed.empty || q.trimmed.empty) continue;
+    if (p.keelD === null || q.keelD === null) continue;
+    if (!(p.keelD < 0 && q.keelD > 0)) continue; // no handover across this pair
+    // the keel point of the converged column: on y = 0 exactly (the centre trim snaps it there) and on the
+    // transom plane to the root-find's precision — the one point both edges can end on. Falling back to `q`
+    // keeps the outline closed on the centerline even if the root-find bails.
+    const c = refineCrossing(p, q, (x) => x.keelD) ?? q;
+    const pts = c.trimmed.pts;
+    if (c.trimmed.keel && pts.length) transomFoot = pts[pts.length - 1];
+    break; // the aft-most crossing is the transom's; there is only one foot
+  }
 
   return {
+    transomFoot,
     R,
     M,
     uParams: cols.map((c) => c.u),
@@ -637,30 +756,31 @@ export function aftLimit(model: Model): number {
   return hi;
 }
 
-// ---------- the transom face ----------
-// The starboard transom edge, top → bottom: the bottom points of the columns that the transom (rather than
-// the centerline) cut. Each such point was converged onto the transom plane by the same bisection the grid
-// uses, so the face meets the hull on exactly the hull's own edge.
-export function transomEdge(model: Model, N = 120): Vec3[] {
+// ---------- the transom outline ----------
+//
+// Where the swept surface meets the raked transom plane: bounded above by the sheer trim and below by the
+// emergent keel. It is NOT sampled — it is READ OFF the trimmed columns, as the aft run of the very points
+// the mesh stitches its bottom boundary from, in the mesh's own column order (aft first, so the outline runs
+// top → bottom). So whatever is built on it — the 3D panel, the plan footprint, the profile edge — rides the
+// hull's own aft edge exactly rather than a second, independent approximation of the same curve.
+//
+// Every point is on the transom plane: the cut solves a function affine in (x, z) by one linear crossing, so
+// the crossing point satisfies it to float precision, and the two ends are the corners computeHullSampling
+// root-finds onto the plane. Those ends are what make the outline reach as far as the hull does — the HEAD is
+// the aft closing column's own bottom, which that column is placed to collapse onto, and the FOOT is the
+// spliced-in corner point on the centerline.
+export function transomOutline(sampling: HullSampling): Vec3[] {
   const out: Vec3[] = [];
-  for (let i = 0; i <= N; i++) {
-    const u = i / N,
-      fr = frameAt(model, u),
-      sec = sectionAt(model, u),
-      span = keptSpan(model, fr, sec);
-    if (!span) continue;
-    const p = sectionWorld(fr, sec, span[1]);
-    if (Math.abs(p[1]) < 1e-6) continue; // the centerline cut this one, not the transom
-    if (Math.abs(p[0] - xTransomOf(model, p[2])) > 1e-6) continue;
-    out.push(p);
+  for (const s of sampling.trimmedSections) {
+    if (s.empty || s.pts.length < 2) continue;
+    if (!s.transom) break; // past the foot: the bottom edge is the keel's from here forward
+    out.push(s.pts[s.pts.length - 1]);
   }
-  return out.sort((a, b) => b[2] - a[2]);
+  // the foot closes the outline on y = 0. Without one (a hull the transom cuts clean off the bottom, reaching
+  // no keel) it simply ends in the air, exactly as the hull's own edge does.
+  if (out.length && sampling.transomFoot) out.push(sampling.transomFoot);
+  return out.length > 1 ? out : [];
 }
-
-const xTransomOf = (model: Model, z: number): number => {
-  const [a, b] = model.transom;
-  return a.x + (b.x - a.x) * ((z - a.z) / (b.z - a.z || 1));
-};
 
 // ---------- waterline ----------
 export function waterlineStats(
