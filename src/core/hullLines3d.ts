@@ -97,6 +97,23 @@ export function buildLinesPlanCurves(
   // surface itself has
   const station = (s: SectionRow): Vec3[][] =>
     !trimmed ? [s.pts] : s.keel ? [mirrorRow(s.pts)] : [s.pts, s.pts.map(mir)];
+  // a curve traced along the surface by one point per column, broken into runs wherever a column hasn't got
+  // one — which is how a chine that the trim kept for only part of the hull, or a keel the transom cuts in on,
+  // comes out as the several curves it really is rather than one that leaps the gap
+  const runsAlong = (pick: (s: SectionRow) => Vec3 | null): Vec3[][] => {
+    const out: Vec3[][] = [];
+    let run: Vec3[] = [];
+    for (const s of cols) {
+      const p = pick(s);
+      if (p) run.push(p);
+      else {
+        if (run.length > 1) out.push(run);
+        run = [];
+      }
+    }
+    if (run.length > 1) out.push(run);
+    return out;
+  };
 
   const bold: Vec3[][] = [];
   if (lines.edges) {
@@ -117,18 +134,9 @@ export function buildLinesPlanCurves(
     // a real edge of the surface. A chine only exists where the trim kept its row, hence the runs.
     const creases = new Set<number>();
     for (const s of cols) for (const c of s.creaseRows) creases.add(c);
-    for (const c of [...creases].sort((a, b) => a - b)) {
-      let run: Vec3[] = [];
-      for (const s of cols) {
-        const p = atSheetIndex(s, c);
-        if (p) run.push(p);
-        else {
-          if (run.length > 1) bold.push(...bothSides(run));
-          run = [];
-        }
-      }
-      if (run.length > 1) bold.push(...bothSides(run));
-    }
+    for (const c of [...creases].sort((a, b) => a - b))
+      for (const run of runsAlong((s) => atSheetIndex(s, c)))
+        bold.push(...bothSides(run));
   }
 
   const family: Vec3[][] = [];
@@ -183,9 +191,19 @@ export function buildLinesPlanCurves(
     // so the span to divide is [0, the sheet's widest point], which puts the innermost line one full spacing
     // off the centerline and the outermost one clear of the sheet's widest column.
     const half = spread(0, rangeIn(sheetCols, ay)[1], N_BUTTOCKS);
-    const levels = trimmed ? half : [...half, ...half.map((v) => -v)];
+    // y = 0 is the family's middle member — the profile — and on the sheet it is an interior curve like any
+    // other, so the signed march finds it there along with the rest.
+    const levels = trimmed ? half : [0, ...half, ...half.map((v) => -v)];
     for (const runs of contours(hull, trimmed ? ay : (_x, y) => y, levels))
       family.push(...runs);
+    // On the hull that same profile is the KEEL, which the surface ends on rather than crosses: |y| touches 0
+    // there without changing sign, so no march can catch it however many levels it is given. It is read off
+    // the columns instead — the bottom point of each one the centerline, rather than the transom, cut — and
+    // left to `edges` where those draw it bold as part of the keel chain.
+    if (trimmed && !lines.edges)
+      family.push(
+        ...runsAlong((s) => (s.keel ? s.pts[s.pts.length - 1] : null)),
+      );
   }
 
   return { bold, family, dwl };
