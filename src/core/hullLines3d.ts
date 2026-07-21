@@ -17,8 +17,10 @@
 // So the curves are coplanar with the surface by construction, and nothing is nudged toward the eye to stay
 // visible: the view keeps them on top with a polygon offset on the hull instead (see Scene.tsx).
 //
-// WHICH members the family has is a separate question from where they are drawn, and it is always answered by
-// the trimmed hull — see `trimmed` on buildLinesPlanCurves.
+// WHICH members a family has is a separate question from where they are drawn, and it is always answered by
+// the SHEET: the whole raw sweep, before any trim. So toggling Sheet only ever adds or takes away surface
+// under one fixed set of curves — the same stations, the same buttock and waterline planes either way, each
+// showing wherever the surface that is up happens to reach it.
 
 import { mirrorRow, type Vec3 } from "./math";
 import type { Model } from "./model";
@@ -26,7 +28,12 @@ import type { HullSampling, SectionRow } from "./mesh";
 import type { Mesh } from "./hullGeometry";
 import type { LineToggles } from "./view3dDisplay";
 
-const N_STATIONS = 26, // how many transverse stations "sections" draws — the hull's columns, decimated to this
+// How many members each family has. The stations are counted in SPACINGS rather than in lines, because a
+// station has to land on a column of the sheet's lattice: 32 divides the default sampling's 256 columns
+// exactly, so each of the 33 stations is a lattice column outright, at exactly the u it wants, with nothing
+// to snap. (Change the Performance panel's section count to something 32 does not divide and the snap comes
+// back — by up to half a column, which is the most it can ever be.)
+const N_STATION_STEPS = 32,
   N_BUTTOCKS = 8,
   N_WATERLINES = 12;
 
@@ -57,20 +64,21 @@ export function buildLinesPlanCurves(
   trimmed: boolean,
   hull: Mesh,
 ): LinesPlanCurves {
-  // The TRIMMED hull's own columns, whichever surface is being drawn on. This is the lines plan's frame of
-  // reference: which columns are stations, and which levels the buttocks and waterlines sit at, are both
-  // chosen from these — never from the drawn surface — so toggling Sheet redraws the SAME lines untrimmed
-  // rather than respacing the family over the sweep's larger extent. The sampling's stages are index-aligned
-  // (one entry per column of the one lattice), so a hull column's index names the same u in the sheet.
-  const hullIdx: number[] = [],
-    hullCols: SectionRow[] = [];
-  sampling.trimmedSections.forEach((s, i) => {
+  // The SHEET's own columns — the uniform u lattice, which is all the sheet is. This is the lines plan's
+  // frame of reference, whichever surface is being drawn on: which columns are stations, and which levels the
+  // buttocks and waterlines sit at, are both chosen from these — never from the drawn surface, and never from
+  // a trim — so toggling Sheet redraws the SAME lines on more or less surface rather than respacing the whole
+  // family over whatever extent is left after trimming. The sampling's stages are index-aligned (one entry per
+  // column of the one lattice), so a sheet column's index names the same u in the trimmed hull.
+  const sheetIdx: number[] = [],
+    sheetCols: SectionRow[] = [];
+  sampling.sheetSections.forEach((s, i) => {
     if (drawableCol(s)) {
-      hullIdx.push(i);
-      hullCols.push(s);
+      sheetIdx.push(i);
+      sheetCols.push(s);
     }
   });
-  if (hullIdx.length < 2 || hull.count < 3) return EMPTY; // no hull ⇒ nothing to lay a lines plan out from
+  if (sheetIdx.length < 2 || hull.count < 3) return EMPTY; // nothing to lay a lines plan out from
 
   // the columns the mesh was actually stitched from: the same stage buildHullMesh used
   const sections = trimmed ? sampling.trimmedSections : sampling.sheetSections,
@@ -125,22 +133,24 @@ export function buildLinesPlanCurves(
 
   const family: Vec3[][] = [];
   if (lines.sections) {
-    // decimated over the HULL's columns, then drawn on the selected surface's column of the same index — so
-    // the stations keep their u when the sheet contributes columns fore and aft of where the hull exists
-    const n = hullIdx.length,
-      step = Math.max(1, Math.round(n / N_STATIONS));
-    for (let i = 0; i < n; i++)
-      if (i % step === 0 || i === n - 1) {
-        const s = sections[hullIdx[i]];
-        // the hull's end columns can be refinement columns, which the sheet has no row for: on the sheet
-        // that station simply isn't drawn, exactly as the surface there isn't
-        if (!drawableCol(s)) continue;
-        // skip the ones the edges already draw bold as the surface's end columns — but only when they are
-        // drawn. On the hull those are always the first and last stations; the sheet usually reaches further
-        // fore and aft than the hull does, and there both are interior lines like any other.
-        if (!lines.edges || (s !== cols[0] && s !== cols[cols.length - 1]))
-          family.push(...station(s));
-      }
+    // Spread over the WHOLE SHEET, end to end: equal steps in u from the sheet's aft edge to its fore one, so
+    // the sheet's span is a whole number of station spacings and the outermost stations land ON its end
+    // columns rather than a hair inside them. A station IS a column, so each of those u's is then taken to the
+    // nearest lattice column — which at the default resolution is the column it already sits on.
+    const n = sheetIdx.length,
+      steps = Math.min(N_STATION_STEPS, n - 1);
+    for (let j = 0; j <= steps; j++) {
+      // the same u on whichever surface is drawn: the sheet's column, or the trimmed hull's column of that
+      // index. Where the trim erased the hull at that u there is simply no station, exactly as there is no
+      // surface — which is how the family stays put as Sheet is toggled instead of being redealt.
+      const s = sections[sheetIdx[Math.round((j * (n - 1)) / steps)]];
+      if (!drawableCol(s)) continue;
+      // skip the ones the edges already draw bold as the surface's end columns — but only when they are
+      // drawn. On the sheet those are the first and last stations; the hull's end columns are refinement
+      // columns, off the lattice, so no station is ever one of them.
+      if (!lines.edges || (s !== cols[0] && s !== cols[cols.length - 1]))
+        family.push(...station(s));
+    }
   }
 
   // The design waterline shares the waterline family's field, so both are marched in one pass over the
@@ -150,9 +160,11 @@ export function buildLinesPlanCurves(
   const sr = Math.sin(model.deckRake),
     cr = Math.cos(model.deckRake),
     wz: Field = (x, _y, z) => x * sr + z * cr;
-  const wzLevels = lines.waterlines
-    ? levelsIn(hullCols, wz, N_WATERLINES)
-    : ([] as number[]);
+  const wzLevels: number[] = [];
+  if (lines.waterlines) {
+    const [lo, hi] = rangeIn(sheetCols, wz);
+    wzLevels.push(...spread(lo, hi, N_WATERLINES));
+  }
   wzLevels.push(-model.waterline);
   const wzRuns = contours(hull, wz, wzLevels);
   const dwl = wzRuns.pop() ?? [];
@@ -161,13 +173,17 @@ export function buildLinesPlanCurves(
   if (lines.buttocks) {
     // A buttock is the pair of planes y = ±level, and the trimmed hull is drawn mirrored, so |y| picks up
     // both halves of each in one march. The sheet is starboard skin only — the part of it below y = 0 is the
-    // overhang the centerline trim removes, NOT the port half — so there the plain signed y draws the same
-    // buttock and nothing else. |y| would instead fold across y = 0: it is not linear within a triangle that
-    // straddles the centerline, so the march's linear edge crossings would stop landing on the level and
-    // scatter a few spurious near-centerline curves over the overhang.
+    // overhang the centerline trim removes, NOT the port half — so there the plain signed y is marched
+    // instead, and it draws one plane per level, so the mirror planes have to be asked for by name. |y| would
+    // instead fold across y = 0: it is not linear within a triangle that straddles the centerline, so the
+    // march's linear edge crossings would stop landing on the level and scatter a few spurious
+    // near-centerline curves over the overhang.
     const ay: Field = (_x, y) => Math.abs(y);
-    // levels off the hull's own starboard columns, where y ≥ 0 makes the two fields agree
-    const levels = levelsIn(hullCols, ay, N_BUTTOCKS);
+    // Spaced out from the CENTERLINE, not across the sheet's range of |y|: buttocks are a family about y = 0,
+    // so the span to divide is [0, the sheet's widest point], which puts the innermost line one full spacing
+    // off the centerline and the outermost one clear of the sheet's widest column.
+    const half = spread(0, rangeIn(sheetCols, ay)[1], N_BUTTOCKS);
+    const levels = trimmed ? half : [...half, ...half.map((v) => -v)];
     for (const runs of contours(hull, trimmed ? ay : (_x, y) => y, levels))
       family.push(...runs);
   }
@@ -187,26 +203,31 @@ function atSheetIndex(s: SectionRow, k: number): Vec3 | null {
   return null;
 }
 
-// n evenly spaced levels strictly inside the TRIMMED HULL's range of `field` — the lines plan's classic
-// spacing. Taken from the hull's columns rather than from the drawn mesh's position buffer precisely so that
-// it is the hull's range either way: the untrimmed sheet reaches well past the hull in both |y| and z, and
-// scanning it would respace the whole family the moment Sheet was toggled. Both fields here are unchanged by
-// the port mirror (z ignores y; |y| is symmetric in it), so the starboard columns give the full range.
-function levelsIn(hullCols: SectionRow[], field: Field, n: number): number[] {
+// The range of `field` over the SHEET's columns. Read off the columns rather than off the drawn mesh's
+// position buffer precisely so that it is the sheet's range either way: the trimmed hull reaches nowhere near
+// as far in either |y| or z, and scanning it would respace the whole family the moment Sheet was toggled.
+// Both fields used here are unchanged by the port mirror (z ignores y; |y| is symmetric in it), so the
+// starboard sheet gives the full range of the mirrored hull too.
+function rangeIn(cols: SectionRow[], field: Field): [number, number] {
   let lo = Infinity,
     hi = -Infinity;
-  for (const s of hullCols)
+  for (const s of cols)
     for (const p of s.pts) {
       const f = field(p[0], p[1], p[2]);
       if (f < lo) lo = f;
       if (f > hi) hi = f;
     }
-  if (!(hi > lo)) return [];
-  return Array.from(
-    { length: n },
-    (_, k) => lo + ((hi - lo) * (k + 1)) / (n + 1),
-  );
+  return [lo, hi];
 }
+
+// n levels across [lo, hi] at a spacing of exactly (hi − lo) / (n + 1) — the lines plan's classic spacing.
+// The span is a whole number of spacings, so the first and last level stand one full spacing clear of the
+// ends: a family fitted to the sheet this way never leaves a member crowding the sheet's drawn edge, which is
+// what a spacing chosen against some other extent, with the remainder falling where it may, always risks.
+const spread = (lo: number, hi: number, n: number): number[] =>
+  hi > lo
+    ? Array.from({ length: n }, (_, k) => lo + ((hi - lo) * (k + 1)) / (n + 1))
+    : [];
 
 // March each of `levels` across the hull's triangles, chaining the crossings into polylines: one list of
 // polylines per level, in the order the levels were given.
