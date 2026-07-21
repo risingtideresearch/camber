@@ -558,21 +558,37 @@ export function buildHullMesh(
   );
 
   // the quad-grid wire: girth edges (consecutive points within a column) plus longitudinal edges (matching
-  // sheet indices across adjacent columns), starboard then y-mirrored — the raw-triangle wire is the emitted
-  // triangle soup captured above.
+  // sheet indices across adjacent columns) and the surface's own boundary, starboard then y-mirrored — the
+  // raw-triangle wire is the emitted triangle soup captured above.
   const buildQuadWire = (): number[] => {
     const w: number[] = [];
+    // the girth edges — and, on the first and last columns, the fore and aft ends of the boundary
     for (const c of cols)
       for (let k = 0; k + 1 < c.p.length; k++) wireEdge(w, c.p[k], c.p[k + 1]);
     for (let ci = 0; ci + 1 < cols.length; ci++) {
       const A = cols[ci],
-        B = cols[ci + 1];
+        B = cols[ci + 1],
+        na = A.idx.length,
+        nb = B.idx.length;
+      // The rest of the boundary is the two ends of the strip between these columns, and those are exactly the
+      // hull's trim edges: the sheer along the top, and along the bottom the keel or whatever the trim cut the
+      // column short with. The rung walk below can't reach them — a trimmed column ends on a FRACTIONAL sheet
+      // index its neighbour doesn't share, so nothing matches there — yet stitch() closes the strip across both
+      // regardless (its first triangle carries A[0]–B[0], its last A[na−1]–B[nb−1]). They are the outline the
+      // eye reads the wireframe by, so draw them explicitly. The keel is among them because only the STARBOARD
+      // half is stitched here: the mirror below lays the port copy straight over it, so the centerline reads as
+      // a drawn line rather than as the interior edge it becomes once the two halves are joined.
+      wireEdge(w, A.p[0], B.p[0]);
+      wireEdge(w, A.p[na - 1], B.p[nb - 1]);
       let i = 0,
         j = 0;
-      while (i < A.idx.length && j < B.idx.length) {
+      while (i < na && j < nb) {
         const d = A.idx[i] - B.idx[j];
         if (Math.abs(d) < 1e-9) {
-          wireEdge(w, A.p[i], B.p[j]);
+          // the strip's own two ends went in above — where nothing was trimmed away (the sheet, or an untrimmed
+          // keel) they are matching rungs like any other, and would otherwise be drawn twice
+          if (!(i === 0 && j === 0) && !(i === na - 1 && j === nb - 1))
+            wireEdge(w, A.p[i], B.p[j]);
           i++;
           j++;
         } else if (d < 0) i++;
