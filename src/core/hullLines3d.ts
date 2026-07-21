@@ -31,7 +31,7 @@ const N_STATIONS = 26, // how many transverse stations "sections" draws — the 
   N_WATERLINES = 12;
 
 export interface LinesPlanCurves {
-  bold: Vec3[][]; // sheer / keel / chines / the transom edge — heavy weight (the `edges` toggle)
+  bold: Vec3[][]; // sheer / keel / chines / both end columns — heavy weight (the `edges` toggle)
   family: Vec3[][]; // the enabled non-chine families: stations / buttocks / waterlines — light weight
   dwl: Vec3[][]; // the design-waterline crossing — blue, always drawn
 }
@@ -97,7 +97,12 @@ export function buildLinesPlanCurves(
     bold.push(
       ...bothSides(cols.map((s) => s.pts[0])), // the sheer edge (untrimmed: the sheet's deck edge)
       ...bothSides(cols.map((s) => s.pts[s.pts.length - 1])), // the keel, or the transom cut
-      ...station(cols[0]), // the aft-most surviving column — the mesh's aft edge
+      // both end columns, which close that pair of chains into the surface's whole outline: the aft edge
+      // (the transom cut, or wherever the sweep starts) and the fore one. On the trimmed hull the fore
+      // column is the bow closure, so it is short — the two chains have all but met there. On the sheet it
+      // is the sweep's full stem section, the fourth side of the patch.
+      ...station(cols[0]),
+      ...station(cols[cols.length - 1]),
     );
 
     // the chines: every station knot carrying a knuckle, which the mesh gives a tangent break, so it reads as
@@ -127,10 +132,11 @@ export function buildLinesPlanCurves(
     for (let i = 0; i < n; i++)
       if (i % step === 0 || i === n - 1) {
         const s = sections[hullIdx[i]];
-        // skip the one the edges already draw bold as the surface's aft edge — but only when they are drawn.
-        // On the hull that is always the first station; the sheet usually reaches further aft than the hull
-        // does, and there this station is an interior line like any other.
-        if (!lines.edges || s !== cols[0]) family.push(...station(s));
+        // skip the ones the edges already draw bold as the surface's end columns — but only when they are
+        // drawn. On the hull those are always the first and last stations; the sheet usually reaches further
+        // fore and aft than the hull does, and there both are interior lines like any other.
+        if (!lines.edges || (s !== cols[0] && s !== cols[cols.length - 1]))
+          family.push(...station(s));
       }
   }
 
