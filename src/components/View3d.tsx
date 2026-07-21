@@ -25,11 +25,15 @@ const CURVATURE_OFF = defaultCurvature();
 const CANVAS_BG = "#e6ecf3";
 
 // The 3D viewport: a Canvas3D (polymorph-ui / react-three-fiber) with its built-in orbit navigation and
-// perspective/orthographic toggle. It owns the display mode / Mesh-overlay / perspective toggle (nothing
-// upstream needs them) and hands the model / selection / sampling / curvature down to <Scene>, which builds
-// and renders the actual hull geometry. There is no SVG overlay any more — every mode, including the
+// perspective/orthographic toggle. It owns the display mode / Sheet / Mesh-overlay / perspective toggles
+// (nothing upstream needs them) and hands the model / selection / sampling / curvature down to <Scene>, which
+// builds and renders the actual hull geometry. There is no SVG overlay any more — every mode, including the
 // body/buttocks/waterline "lines plan" modes, is real 3D geometry sharing the one Canvas3D camera, so
 // switching modes never moves the camera.
+//
+// The mode picks HOW the surface is drawn; the Sheet toggle picks WHICH surface — the trimmed, mirrored hull
+// or the raw swept sheet it is cut from — so the two compose: the lines plan and the zebra stripes can be
+// inspected on the untrimmed sheet as readily as on the finished hull.
 const MODES: { mode: View3DMode; label: string; title: string }[] = [
   { mode: "render", label: "Render", title: "Shaded hull" },
   { mode: "body", label: "Body", title: "Lines plan — body (stations)" },
@@ -44,7 +48,6 @@ const MODES: { mode: View3DMode; label: string; title: string }[] = [
     title: "Lines plan — waterlines (constant-z cuts)",
   },
   { mode: "zebra", label: "Zebra", title: "Zebra-stripe fairness check" },
-  { mode: "sheet", label: "Sheet", title: "Untrimmed swept sheet (one side)" },
 ];
 
 interface View3dProps {
@@ -72,6 +75,7 @@ export function View3d({
   title,
 }: View3dProps) {
   const [mode, setMode] = useState<View3DMode>("render");
+  const [sheet, setSheet] = useState(false); // draw the mode on the untrimmed sweep instead of the hull
   const [showMesh, setShowMesh] = useState(false); // overlay the quad-grid wireframe on the shaded GL modes
   const [meshQuads, setMeshQuads] = useState(true); // wire as quads (default) or the raw shaded triangles
   const [meshMenu, setMeshMenu] = useState(false); // the Mesh overlay dropdown open state
@@ -99,6 +103,7 @@ export function View3d({
           modelVersion={modelVersion}
           selection={selection}
           mode={mode}
+          sheet={sheet}
           showMesh={showMesh}
           meshQuads={meshQuads}
           sampling={effSampling}
@@ -123,7 +128,7 @@ export function View3d({
           onToggle={() => setShowMesh((v) => !v)}
           open={meshMenu}
           onOpenChange={setMeshMenu}
-          title="Overlay the hull's quad grid as a wireframe (works in Render, Zebra, and Sheet). Its resolution is set by the Performance control's hull-sampling sliders."
+          title="Overlay the hull's quad grid as a wireframe (works in the shaded modes, Render and Zebra). Its resolution is set by the Performance control's hull-sampling sliders."
           menuLabel="Mesh overlay"
         >
           <label
@@ -138,6 +143,13 @@ export function View3d({
             <span className="dd-name">As quads</span>
           </label>
         </Dropdown>
+        <Button
+          active={sheet}
+          title="Draw the current mode on the raw untrimmed sweep (one side, no trims or mirror) instead of the finished hull"
+          onClick={() => setSheet((v) => !v)}
+        >
+          Sheet
+        </Button>
         <div className="view3dmodes">
           {MODES.map((m) => (
             <Button

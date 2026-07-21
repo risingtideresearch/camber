@@ -47,6 +47,7 @@ interface SceneProps {
   modelVersion: number;
   selection: ModelSelection;
   mode: View3DMode;
+  sheet: boolean; // draw the mode on the raw untrimmed sweep (one side, no trims/mirror) instead of the hull
   showMesh: boolean;
   meshQuads: boolean;
   sampling: HullSampling | null;
@@ -59,6 +60,7 @@ export function Scene({
   modelVersion,
   selection,
   mode,
+  sheet,
   showMesh,
   meshQuads,
   sampling,
@@ -128,8 +130,8 @@ export function Scene({
   const isLinesMode = LINES_MODES.includes(mode);
 
   // The hull's own tessellation (the lattice every mode shares — mesh.ts) plus the curvature-comb curves and
-  // the lines-plan curves, rebuilt together in one pass whenever the model, the display mode, the Mesh
-  // overlay, the shared sampling, or the curvature settings change. Bundled into ONE perfBegin/perfEnd
+  // the lines-plan curves, rebuilt together in one pass whenever the model, the display mode, the Sheet or
+  // Mesh toggle, the shared sampling, or the curvature settings change. Bundled into ONE perfBegin/perfEnd
   // bracket (matching the old orchestration) rather than split across independent useMemos: perf.ts's
   // snapshot only keeps the steps from a group's MOST RECENT pass, so two separate brackets in the same
   // render would silently drop whichever ran first from the Performance panel. Deliberately not keyed on
@@ -148,7 +150,7 @@ export function Scene({
       wireGeometry: THREE.BufferGeometry | null = null,
       hullMesh: Mesh | null = null; // the raw triangle soup, kept for the lines-plan curves below
     if (sampling) {
-      const trimmed = mode !== "sheet";
+      const trimmed = !sheet;
       const built = buildHullMesh(
         model,
         sampling,
@@ -183,7 +185,8 @@ export function Scene({
       LINES_MODES.includes(mode) && sampling && hullMesh
         ? perfStep(
             "Lines plan curves",
-            () => buildLinesPlanCurves(model, mode, sampling, hullMesh!),
+            () =>
+              buildLinesPlanCurves(model, mode, sampling, !sheet, hullMesh!),
             (c) => c.bold.length + c.family.length + c.dwl.length,
             "curves",
           )
@@ -197,7 +200,16 @@ export function Scene({
       linesPlanCurves,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, modelVersion, sampling, mode, showMesh, meshQuads, curvature]);
+  }, [
+    model,
+    modelVersion,
+    sampling,
+    mode,
+    sheet,
+    showMesh,
+    meshQuads,
+    curvature,
+  ]);
 
   // dispose the PREVIOUS geometry set whenever it's about to be replaced (or on unmount) — every model edit
   // rebuilds these, so without this the GPU buffers would leak across a session

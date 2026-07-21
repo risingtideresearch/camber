@@ -39,35 +39,42 @@ type Field = (x: number, y: number, z: number) => number;
 
 const EMPTY: LinesPlanCurves = { bold: [], family: [], dwl: [] };
 
-// The lines-plan curves for `mode`, as world-space 3D polylines. `sampling` and `hull` must be the very ones
-// the view is rendering (mesh.ts's shared sampling and the triangle soup buildHullMesh stitched from it) —
-// the curves are only exactly on the surface because they are read from that same geometry.
+// The lines-plan curves for `mode`, as world-space 3D polylines. `sampling`, `trimmed` and `hull` must be the
+// very ones the view is rendering (mesh.ts's shared sampling, the Sheet toggle's choice of stage, and the
+// triangle soup buildHullMesh stitched from them) — the curves are only exactly on the surface because they
+// are read from that same geometry. With `trimmed` off the surface is the raw starboard sweep, so there are
+// no trim edges to ride and no port half to mirror onto: every curve here is simply one-sided.
 export function buildLinesPlanCurves(
   model: Model,
   mode: View3DMode,
   sampling: HullSampling,
+  trimmed: boolean,
   hull: Mesh,
 ): LinesPlanCurves {
-  // the columns the mesh was actually stitched from: non-empty, index-tagged trimmed sections
-  const cols = sampling.trimmedSections.filter(
-    (s) => !s.empty && s.pts.length >= 2 && s.sheetIndex,
-  );
+  // the columns the mesh was actually stitched from: the same stage buildHullMesh used, non-empty and
+  // index-tagged
+  const cols = (
+    trimmed ? sampling.trimmedSections : sampling.sheetSections
+  ).filter((s) => !s.empty && s.pts.length >= 2 && s.sheetIndex);
   if (cols.length < 2 || hull.count < 3) return EMPTY;
 
   const mir = (p: Vec3): Vec3 => [p[0], -p[1], p[2]];
-  // a starboard curve and its port mirror — unless it rides the centerline, where the two coincide
+  // a starboard curve and its port mirror — unless it rides the centerline, where the two coincide, or the
+  // surface is the untrimmed sheet, which has no port half
   const bothSides = (line: Vec3[]): Vec3[][] =>
-    line.some((p) => Math.abs(p[1]) > 1e-9) ? [line, line.map(mir)] : [line];
+    trimmed && line.some((p) => Math.abs(p[1]) > 1e-9)
+      ? [line, line.map(mir)]
+      : [line];
   // one full-width station: the column joined to its mirror through the keel where the section closes there,
   // and left as two open curves where the transom (or an open bottom) cut it instead — exactly the gap the
   // surface itself has
   const station = (s: SectionRow): Vec3[][] =>
-    s.keel ? [mirrorRow(s.pts)] : [s.pts, s.pts.map(mir)];
+    !trimmed ? [s.pts] : s.keel ? [mirrorRow(s.pts)] : [s.pts, s.pts.map(mir)];
 
   // the mesh's boundary chains: the first and last point of every column are joined column-to-column by real
   // mesh edges (the stitch always pairs the two columns' first points, and their last)
   const bold: Vec3[][] = [
-    ...bothSides(cols.map((s) => s.pts[0])), // the sheer edge
+    ...bothSides(cols.map((s) => s.pts[0])), // the sheer edge (untrimmed: the sheet's deck edge)
     ...bothSides(cols.map((s) => s.pts[s.pts.length - 1])), // the keel, or the transom cut
     ...station(cols[0]), // the aft-most surviving column — the mesh's aft edge
   ];
