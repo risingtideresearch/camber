@@ -132,6 +132,9 @@ export function buildLinesPlanCurves(
     for (let i = 0; i < n; i++)
       if (i % step === 0 || i === n - 1) {
         const s = sections[hullIdx[i]];
+        // the hull's end columns can be refinement columns, which the sheet has no row for: on the sheet
+        // that station simply isn't drawn, exactly as the surface there isn't
+        if (!drawableCol(s)) continue;
         // skip the ones the edges already draw bold as the surface's end columns — but only when they are
         // drawn. On the hull those are always the first and last stations; the sheet usually reaches further
         // fore and aft than the hull does, and there both are interior lines like any other.

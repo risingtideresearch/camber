@@ -190,7 +190,9 @@ export function sweptSection(
 // intersected against the SHEET LATTICE by one linear crossing each, which is all a rendered mesh or a drawn
 // outline needs. The four stages compose the way the hull is defined:
 //
-//   sheet          — the raw swept sheet: uniform u × uniform-per-segment v, every node a world point.
+//   sheet          — the raw swept sheet: uniform u × uniform-per-segment v, every node a world point. It
+//                    depends on no trim at all, so it is empty on the end-refinement columns, which are
+//                    placed off the uniform u lattice by where the trimmed hull closes.
 //   sheerTrimmed   — the sheet minus the deck (points above the sheer trim's z at this column).
 //   centerTrimmed  — minus the far side of the centerline (y < 0), re-entered exactly on the keel (y = 0).
 //   trimmed        — minus the far side of the transom plane. What the mesh and the outlines are built from.
@@ -203,7 +205,9 @@ export interface HullSampling {
   M: number; // the keel's sheet index in a full untrimmed row: (S−1)·R
   uParams: number[]; // the u of each column — uniform, plus one linearly-placed column at each closing end
   vParams: number[]; // the v of each sheet row: vParams[k] = k / R, running 0 → vmax
-  sheetSections: SectionRow[]; // aligned with uParams; the trimmed stages carry `empty` where the hull is gone
+  // aligned with uParams; the trimmed stages carry `empty` where the hull is gone, the sheet where the column
+  // is an end refinement (off the uniform lattice, so not part of the sheet)
+  sheetSections: SectionRow[];
   sheerTrimmedSections: SectionRow[];
   centerTrimmedSections: SectionRow[];
   trimmedSections: SectionRow[];
@@ -397,9 +401,16 @@ export function computeHullSampling(
 
   // end refinement: at each end, if the last surviving column sits next to an erased one, place one more
   // column at the linear (false-position) estimate of where the margin crosses 0 — the hull's true closure.
+  // A refinement column is placed by the TRIM, at whatever u the hull happens to close at, so it is off the
+  // uniform lattice — and the sheet is nothing but that lattice. It therefore contributes no sheet row: were
+  // it to carry one, the raw sweep would show a sliver of a section wedged against its last uniform column,
+  // a stripe of the trim's business showing through on a surface that is meant to know nothing about it.
+  // Leaving the row `empty` (rather than dropping the column) keeps the four stages index-aligned, which is
+  // what lets the lines plan name a column in the sheet by its index in the hull.
   const refine = (a: HullColumn, b: HullColumn): HullColumn => {
-    const t = a.margin / (a.margin - b.margin);
-    return buildColumn(model, a.u + (b.u - a.u) * clamp(t, 0, 1), vParams, R);
+    const t = a.margin / (a.margin - b.margin),
+      c = buildColumn(model, a.u + (b.u - a.u) * clamp(t, 0, 1), vParams, R);
+    return { ...c, sheet: emptyRow(c.sheet.creaseRows, c.sheet.creaseK) };
   };
   const alive = (c: HullColumn): boolean => !c.trimmed.empty;
   // forward: first index (from the end) whose column has hull, and the erased one just beyond it
