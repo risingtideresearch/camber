@@ -1,9 +1,9 @@
 // ---------- the shaded-hull material: GLSL + the "headlight" that follows the camera ----------
 //
-// Three auto-injects position/normal/modelMatrix/modelViewMatrix/viewMatrix/projectionMatrix/cameraPosition
-// into a ShaderMaterial, so there is no manual attribute/uniform-location bookkeeping the old raw-WebGL
-// program needed. Deck rake is NOT part of this shader — it is a rigid rotation baked into the scene's own
-// <group> transform (see hullGeometry.ts's header comment), so modelMatrix already carries it and
+// Three auto-injects position/normal/modelMatrix/modelViewMatrix/viewMatrix/projectionMatrix/cameraPosition/
+// isOrthographic into a ShaderMaterial, so there is no manual attribute/uniform-location bookkeeping the old
+// raw-WebGL program needed. Deck rake is NOT part of this shader — it is a rigid rotation baked into the
+// scene's own <group> transform (see hullGeometry.ts's header comment), so modelMatrix already carries it and
 // mat3(modelMatrix) is exact for normals (rotation only, no scale — no inverse-transpose needed).
 
 import * as THREE from "three";
@@ -26,10 +26,20 @@ void main() {
 //
 // The design waterline is NOT shaded here — the hull used to wear darker bottom paint below it, but the view
 // now draws it as a real curve on the surface (hullLines3d.ts) in every shading mode, which reads the same
-// whichever way the hull is shaded. V is the TRUE per-fragment view direction (three's built-in
-// `cameraPosition` uniform, free) rather than the old single camera-basis constant — that was an
-// orthographic-only approximation; this is simpler and more correct now that the camera can be a close-up
-// perspective view.
+// whichever way the hull is shaded.
+//
+// V is the direction to the eye, and it is taken per PROJECTION, not per fragment. Under perspective it is the
+// ray from the fragment back to `cameraPosition`. Under an orthographic camera every view ray is parallel and
+// `cameraPosition` lies on none of them, so V is the camera's own view axis — its world +Z, which is the third
+// ROW of viewMatrix (that matrix is the inverse of the camera's rigid world transform, so its rows are the
+// camera basis, already unit length). Both `isOrthographic` and `cameraPosition` are three's own auto-injected
+// uniforms, so this costs nothing to ask.
+//
+// Reading the ortho case off `cameraPosition` anyway is only benign while the eye is far away, and it is not:
+// Canvas3DOrbitControls dollies the orthographic camera in as it zooms (the projection is invariant to that
+// translation, so it moves the clipping planes with the zoom rather than the image). Zoomed in, the eye sits
+// on the hull, and a fragment-to-eye V then fans across the whole hemisphere within a few screen pixels —
+// which sent the two-sided flip below off across entire regions and painted them a flat, wrong-side shade.
 export const HULL_FRAGMENT_SRC = `
 precision highp float;
 varying vec3 vNormalW;
@@ -38,7 +48,10 @@ uniform vec3 uLight, uBase;
 uniform float uStripes, uAlpha;
 uniform int uZebra;
 void main() {
-  vec3 N = normalize(vNormalW), V = normalize(cameraPosition - vWorld);
+  vec3 V = isOrthographic
+    ? normalize(vec3(viewMatrix[0][2], viewMatrix[1][2], viewMatrix[2][2]))
+    : normalize(cameraPosition - vWorld);
+  vec3 N = normalize(vNormalW);
   if (dot(N, V) < 0.0) N = -N; // two-sided
   vec3 Lc = normalize(uLight);
   float diff = dot(N, Lc) * 0.5 + 0.5; diff *= diff; // half-Lambert: the terminator stays soft
