@@ -1,11 +1,10 @@
 // ---------- lines-plan curves, as real 3D polylines ON the rendered hull ----------
 //
-// The "body" / "buttocks" / "waterline" 3D-view modes used to be an SVG hidden-line-removal overlay: project
-// every hull facet, sort by depth, paint white occluding polygons, then draw line segments on top (see git
-// history). That whole painter's-algorithm pass is gone — the 3D view renders the actual trimmed hull mesh
-// (flat white, depth-tested) as the occluder and these curves on top of it, so hidden-line removal falls out
-// of the GPU depth buffer for free. This module only does the first half of the old job: picking which 3D
-// curves to draw.
+// The lines plan used to be an SVG hidden-line-removal overlay: project every hull facet, sort by depth,
+// paint white occluding polygons, then draw line segments on top (see git history). That whole painter's-
+// algorithm pass is gone — the 3D view renders the actual hull mesh (depth-tested) as the occluder and these
+// curves on top of it, so hidden-line removal falls out of the GPU depth buffer for free. This module only
+// does the first half of the old job: picking which 3D curves to draw.
 //
 // Every curve here is read off the RENDERED geometry, not off a second, coarser lattice of its own:
 //
@@ -25,16 +24,16 @@ import { mirrorRow, type Vec3 } from "./math";
 import type { Model } from "./model";
 import type { HullSampling, SectionRow } from "./mesh";
 import type { Mesh } from "./hullGeometry";
-import type { View3DMode } from "./view3dMode";
+import type { LineToggles } from "./view3dDisplay";
 
-const N_STATIONS = 26, // how many transverse stations "body" draws — the sampling's columns, decimated to this
+const N_STATIONS = 26, // how many transverse stations "sections" draws — the hull's columns, decimated to this
   N_BUTTOCKS = 8,
   N_WATERLINES = 12;
 
 export interface LinesPlanCurves {
-  bold: Vec3[][]; // sheer / keel / chines / the transom edge — heavy weight, drawn in every mode
-  family: Vec3[][]; // the mode's own non-chine family: stations / buttocks / waterlines — light weight
-  dwl: Vec3[][]; // the design-waterline crossing — blue, drawn in every mode
+  bold: Vec3[][]; // sheer / keel / chines / the transom edge — heavy weight (the `edges` toggle)
+  family: Vec3[][]; // the enabled non-chine families: stations / buttocks / waterlines — light weight
+  dwl: Vec3[][]; // the design-waterline crossing — blue, always drawn
 }
 
 // a scalar field of a mesh vertex, read straight off the position buffer (no Vec3 per vertex)
@@ -46,14 +45,14 @@ const EMPTY: LinesPlanCurves = { bold: [], family: [], dwl: [] };
 const drawableCol = (s: SectionRow): boolean =>
   !s.empty && s.pts.length >= 2 && !!s.sheetIndex;
 
-// The lines-plan curves for `mode`, as world-space 3D polylines. `sampling`, `trimmed` and `hull` must be the
-// very ones the view is rendering (mesh.ts's shared sampling, the Sheet toggle's choice of stage, and the
-// triangle soup buildHullMesh stitched from them) — the curves are only exactly on the surface because they
-// are read from that same geometry. With `trimmed` off the surface is the raw starboard sweep, so there are
-// no trim edges to ride and no port half to mirror onto: every curve here is simply one-sided.
+// The curves `lines` asks for, as world-space 3D polylines. `sampling`, `trimmed` and `hull` must be the very
+// ones the view is rendering (mesh.ts's shared sampling, the Sheet toggle's choice of stage, and the triangle
+// soup buildHullMesh stitched from them) — the curves are only exactly on the surface because they are read
+// from that same geometry. With `trimmed` off the surface is the raw starboard sweep, so there are no trim
+// edges to ride and no port half to mirror onto: every curve here is simply one-sided.
 export function buildLinesPlanCurves(
   model: Model,
-  mode: View3DMode,
+  lines: LineToggles,
   sampling: HullSampling,
   trimmed: boolean,
   hull: Mesh,
@@ -91,33 +90,36 @@ export function buildLinesPlanCurves(
   const station = (s: SectionRow): Vec3[][] =>
     !trimmed ? [s.pts] : s.keel ? [mirrorRow(s.pts)] : [s.pts, s.pts.map(mir)];
 
-  // the mesh's boundary chains: the first and last point of every column are joined column-to-column by real
-  // mesh edges (the stitch always pairs the two columns' first points, and their last)
-  const bold: Vec3[][] = [
-    ...bothSides(cols.map((s) => s.pts[0])), // the sheer edge (untrimmed: the sheet's deck edge)
-    ...bothSides(cols.map((s) => s.pts[s.pts.length - 1])), // the keel, or the transom cut
-    ...station(cols[0]), // the aft-most surviving column — the mesh's aft edge
-  ];
+  const bold: Vec3[][] = [];
+  if (lines.edges) {
+    // the mesh's boundary chains: the first and last point of every column are joined column-to-column by
+    // real mesh edges (the stitch always pairs the two columns' first points, and their last)
+    bold.push(
+      ...bothSides(cols.map((s) => s.pts[0])), // the sheer edge (untrimmed: the sheet's deck edge)
+      ...bothSides(cols.map((s) => s.pts[s.pts.length - 1])), // the keel, or the transom cut
+      ...station(cols[0]), // the aft-most surviving column — the mesh's aft edge
+    );
 
-  // the chines: every station knot carrying a knuckle, which the mesh gives a tangent break, so it reads as a
-  // real edge of the surface. A chine only exists where the trim kept its row, hence the runs.
-  const creases = new Set<number>();
-  for (const s of cols) for (const c of s.creaseRows) creases.add(c);
-  for (const c of [...creases].sort((a, b) => a - b)) {
-    let run: Vec3[] = [];
-    for (const s of cols) {
-      const p = atSheetIndex(s, c);
-      if (p) run.push(p);
-      else {
-        if (run.length > 1) bold.push(...bothSides(run));
-        run = [];
+    // the chines: every station knot carrying a knuckle, which the mesh gives a tangent break, so it reads as
+    // a real edge of the surface. A chine only exists where the trim kept its row, hence the runs.
+    const creases = new Set<number>();
+    for (const s of cols) for (const c of s.creaseRows) creases.add(c);
+    for (const c of [...creases].sort((a, b) => a - b)) {
+      let run: Vec3[] = [];
+      for (const s of cols) {
+        const p = atSheetIndex(s, c);
+        if (p) run.push(p);
+        else {
+          if (run.length > 1) bold.push(...bothSides(run));
+          run = [];
+        }
       }
+      if (run.length > 1) bold.push(...bothSides(run));
     }
-    if (run.length > 1) bold.push(...bothSides(run));
   }
 
   const family: Vec3[][] = [];
-  if (mode === "body") {
+  if (lines.sections) {
     // decimated over the HULL's columns, then drawn on the selected surface's column of the same index — so
     // the stations keep their u when the sheet contributes columns fore and aft of where the hull exists
     const n = hullIdx.length,
@@ -125,10 +127,10 @@ export function buildLinesPlanCurves(
     for (let i = 0; i < n; i++)
       if (i % step === 0 || i === n - 1) {
         const s = sections[hullIdx[i]];
-        // skip the one that is already drawn bold as the surface's aft edge. On the hull that is always the
-        // first station; the sheet usually reaches further aft than the hull does, and there this station is
-        // an interior line like any other.
-        if (s !== cols[0]) family.push(...station(s));
+        // skip the one the edges already draw bold as the surface's aft edge — but only when they are drawn.
+        // On the hull that is always the first station; the sheet usually reaches further aft than the hull
+        // does, and there this station is an interior line like any other.
+        if (!lines.edges || s !== cols[0]) family.push(...station(s));
       }
   }
 
@@ -139,16 +141,15 @@ export function buildLinesPlanCurves(
   const sr = Math.sin(model.deckRake),
     cr = Math.cos(model.deckRake),
     wz: Field = (x, _y, z) => x * sr + z * cr;
-  const wzLevels =
-    mode === "waterline"
-      ? levelsIn(hullCols, wz, N_WATERLINES)
-      : ([] as number[]);
+  const wzLevels = lines.waterlines
+    ? levelsIn(hullCols, wz, N_WATERLINES)
+    : ([] as number[]);
   wzLevels.push(-model.waterline);
   const wzRuns = contours(hull, wz, wzLevels);
   const dwl = wzRuns.pop() ?? [];
   for (const runs of wzRuns) family.push(...runs);
 
-  if (mode === "buttocks") {
+  if (lines.buttocks) {
     // A buttock is the pair of planes y = ±level, and the trimmed hull is drawn mirrored, so |y| picks up
     // both halves of each in one march. The sheet is starboard skin only — the part of it below y = 0 is the
     // overhang the centerline trim removes, NOT the port half — so there the plain signed y draws the same

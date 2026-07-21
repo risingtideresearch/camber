@@ -48,7 +48,6 @@ export function StlOverlay({ stl, uLight }: StlOverlayProps) {
     () =>
       createHullMaterial(uLight, {
         base: STL_COLOR,
-        paint: false,
         transparent: true,
         depthWrite: false,
       }),

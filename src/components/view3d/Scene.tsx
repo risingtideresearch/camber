@@ -20,11 +20,11 @@ import {
   type LinesPlanCurves,
 } from "../../core/hullLines3d";
 import type { HullSampling } from "../../core/mesh";
-import { loa, type Model } from "../../core/model";
+import type { Model } from "../../core/model";
 import { selStationIdx, type ModelSelection } from "../../core/modelSelection";
 import { perfBegin, perfEnd, perfStep, PERF_MESH } from "../../core/perf";
 import type { StlState } from "../../core/stlImport";
-import { LINES_MODES, type View3DMode } from "../../core/view3dMode";
+import type { LineToggles, ShadingMode } from "../../core/view3dDisplay";
 import { CameraFacingCurves } from "./CameraFacingCurves";
 import { StlOverlay } from "./StlOverlay";
 import { useCameraFraming } from "./useCameraFraming";
@@ -46,8 +46,9 @@ interface SceneProps {
   model: Model;
   modelVersion: number;
   selection: ModelSelection;
-  mode: View3DMode;
-  sheet: boolean; // draw the mode on the raw untrimmed sweep (one side, no trims/mirror) instead of the hull
+  shading: ShadingMode; // how the surface is shaded — independent of which curves are drawn on it
+  lines: LineToggles; // which curve families to lay over it (a stable object: it is in a rebuild's deps)
+  sheet: boolean; // draw all of it on the raw untrimmed sweep (one side, no trims/mirror) instead of the hull
   showMesh: boolean;
   meshQuads: boolean;
   sampling: HullSampling | null;
@@ -59,7 +60,8 @@ export function Scene({
   model,
   modelVersion,
   selection,
-  mode,
+  shading,
+  lines,
   sheet,
   showMesh,
   meshQuads,
@@ -74,19 +76,20 @@ export function Scene({
   const uLight = useMemo(() => createSharedLightUniform(), []);
   useFrame(({ camera }) => updateHeadlight(uLight.value, camera));
 
+  // Every surface material carries the same polygon offset, because every one of them can have curves or the
+  // wireframe drawn ON it: those are at the very triangles and edges of this mesh (hullLines3d.ts), so the
+  // skin is pushed back to let them show through. `factor` is what makes it work where it is needed most: it
+  // scales with the polygon's own depth slope, so a face seen nearly edge-on (at the silhouette, where a
+  // curve's screen width sweeps the most depth) is pushed back the most.
   const hullMaterial = useMemo(
-    () => createHullMaterial(uLight, { base: HULL_BASE }),
+    () => createHullMaterial(uLight, { base: HULL_BASE, offset: true }),
     [uLight],
   );
   const transomMaterial = useMemo(
-    () => createHullMaterial(uLight, { base: TRANSOM_BASE }),
+    () => createHullMaterial(uLight, { base: TRANSOM_BASE, offset: true }),
     [uLight],
   );
-  // the lines-plan modes' occluder. The curves drawn over it are ON the surface — the very triangles and
-  // edges of this mesh (hullLines3d.ts) — so the skin is pushed back by a polygon offset to let them show
-  // through, the same wireframe-over-solid trick the Mesh overlay uses below. `factor` is what makes it work
-  // where it is needed most: it scales with the polygon's own depth slope, so a face seen nearly edge-on (at
-  // the silhouette, where a curve's screen width sweeps the most depth) is pushed back the most.
+  // the flat shading mode's plain white skin — the lines plan's classic occluder
   const whiteMaterial = useMemo(
     () =>
       new THREE.MeshBasicMaterial({
@@ -111,32 +114,21 @@ export function Scene({
     };
   }, [hullMaterial, transomMaterial, whiteMaterial, wireMaterial]);
 
-  // live per-model uniforms shared by the hull and transom passes — cheap enough to just re-set on every
-  // render (the r3f way to sync a plain value onto a persistent three.js object) rather than tracking exactly
-  // which of model.waterline / the hull's length / mode actually changed
-  const len = Math.max(loa(model), 1e-6);
-  hullMaterial.uniforms.uZebra.value = mode === "zebra" ? 1 : 0;
-  hullMaterial.uniforms.uWaterZ.value = -model.waterline;
-  hullMaterial.uniforms.uBoot.value = 0.004 * len;
-  transomMaterial.uniforms.uWaterZ.value = -model.waterline;
-  transomMaterial.uniforms.uBoot.value = 0.004 * len;
-  // with the wireframe overlay on, push the shaded fill back by a polygon offset (the classic wireframe-
-  // over-solid trick) so the wire — at the identical hull-grid positions — stays crisply superimposed on the
-  // skin from either side, with no z-fighting
-  hullMaterial.polygonOffset = showMesh;
-  hullMaterial.polygonOffsetFactor = 1;
-  hullMaterial.polygonOffsetUnits = 1;
+  // a live uniform, cheap enough to just re-set on every render (the r3f way to sync a plain value onto a
+  // persistent three.js object) rather than tracking whether the shading mode actually changed
+  hullMaterial.uniforms.uZebra.value = shading === "zebra" ? 1 : 0;
 
-  const isLinesMode = LINES_MODES.includes(mode);
+  const flat = shading === "flat";
 
-  // The hull's own tessellation (the lattice every mode shares — mesh.ts) plus the curvature-comb curves and
-  // the lines-plan curves, rebuilt together in one pass whenever the model, the display mode, the Sheet or
-  // Mesh toggle, the shared sampling, or the curvature settings change. Bundled into ONE perfBegin/perfEnd
-  // bracket (matching the old orchestration) rather than split across independent useMemos: perf.ts's
-  // snapshot only keeps the steps from a group's MOST RECENT pass, so two separate brackets in the same
-  // render would silently drop whichever ran first from the Performance panel. Deliberately not keyed on
-  // `selection` — the guide ribbon lives independently in CameraFacingCurves, so a selection change alone
-  // skips this rebuild for free.
+  // The hull's own tessellation (the lattice every shading mode shares — mesh.ts) plus the curvature-comb
+  // curves and the lines-plan curves, rebuilt together in one pass whenever the model, the line toggles, the
+  // Sheet or Mesh toggle, the shared sampling, or the curvature settings change. Bundled into ONE
+  // perfBegin/perfEnd bracket (matching the old orchestration) rather than split across independent useMemos:
+  // perf.ts's snapshot only keeps the steps from a group's MOST RECENT pass, so two separate brackets in the
+  // same render would silently drop whichever ran first from the Performance panel. Deliberately not keyed on
+  // `shading` (which changes nothing here — only which material the same geometry is drawn with) nor on
+  // `selection` — the guide ribbon lives independently in CameraFacingCurves, so either alone skips this
+  // rebuild for free.
   const {
     hullGeometry,
     transomGeometry,
@@ -180,13 +172,14 @@ export function Scene({
         )
       : null;
     // the lines-plan curves are read off the geometry just built — the sampling's own columns and the
-    // triangles stitched from them — so they need both, and there is nothing to draw without them
+    // triangles stitched from them — so they need both, and there is nothing to draw without them. Built
+    // whatever the toggles say, because the design waterline is drawn unconditionally.
     const linesPlanCurves: LinesPlanCurves | null =
-      LINES_MODES.includes(mode) && sampling && hullMesh
+      sampling && hullMesh
         ? perfStep(
             "Lines plan curves",
             () =>
-              buildLinesPlanCurves(model, mode, sampling, !sheet, hullMesh!),
+              buildLinesPlanCurves(model, lines, sampling, !sheet, hullMesh!),
             (c) => c.bold.length + c.family.length + c.dwl.length,
             "curves",
           )
@@ -204,7 +197,7 @@ export function Scene({
     model,
     modelVersion,
     sampling,
-    mode,
+    lines,
     sheet,
     showMesh,
     meshQuads,
@@ -225,34 +218,28 @@ export function Scene({
 
   return (
     <group rotation={[0, -model.deckRake, 0]}>
-      {isLinesMode ? (
-        <>
-          {hullGeometry && (
-            <mesh geometry={hullGeometry} material={whiteMaterial} />
-          )}
-          {transomGeometry && (
-            <mesh geometry={transomGeometry} material={whiteMaterial} />
-          )}
-        </>
-      ) : (
-        <>
-          {hullGeometry && (
-            <mesh geometry={hullGeometry} material={hullMaterial} />
-          )}
-          {transomGeometry && (
-            <mesh geometry={transomGeometry} material={transomMaterial} />
-          )}
-          {showMesh && wireGeometry && (
-            <lineSegments geometry={wireGeometry} material={wireMaterial} />
-          )}
-          {stl && <StlOverlay stl={stl} uLight={uLight} />}
-        </>
+      {/* the shading mode only picks the material: one geometry, drawn white, lit, or zebra-striped */}
+      {hullGeometry && (
+        <mesh
+          geometry={hullGeometry}
+          material={flat ? whiteMaterial : hullMaterial}
+        />
       )}
+      {transomGeometry && (
+        <mesh
+          geometry={transomGeometry}
+          material={flat ? whiteMaterial : transomMaterial}
+        />
+      )}
+      {showMesh && wireGeometry && (
+        <lineSegments geometry={wireGeometry} material={wireMaterial} />
+      )}
+      {stl && <StlOverlay stl={stl} uLight={uLight} />}
       <CameraFacingCurves
         model={model}
         guideIdx={guideIdx}
         curvature={curvCache}
-        lines={isLinesMode ? linesPlanCurves : null}
+        lines={linesPlanCurves}
       />
     </group>
   );

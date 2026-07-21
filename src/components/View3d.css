@@ -16,13 +16,14 @@
   display: flex;
   flex-wrap: wrap; /* wraps to a second row rather than overflowing past the canvas's edge in a narrow pane */
   justify-content: flex-end;
-  gap: 8px; /* separate the standalone Ortho/Mesh toggles from the mode bar */
+  gap: 8px; /* separate the standalone toggles from each other and from the shading bar */
   max-width: calc(100% - 28px);
   z-index: 1;
 }
-/* the mode buttons form one joined segmented bar; the Mesh dropdown stays a standalone rounded control
-   (its split-button + popover styling lives in the shared components/Dropdown.css) */
-.view3dmodes {
+/* Only the shading is a pick-one choice, so only it is drawn as a joined segmented bar — every independent
+   toggle (Sheet, the line families, and the Mesh dropdown, whose split-button + popover styling lives in the
+   shared components/Dropdown.css) stays a standalone rounded control. */
+.view3dshading {
   display: flex;
   gap: 0;
 }
@@ -39,19 +40,19 @@
   pointer-events: none;
 }
 /* segmented control: shared Buttons joined into one bar; the active one is inked by Button's `active` prop */
-.view3dmodes .btn {
+.view3dshading .btn {
   border-radius: 0;
   margin-left: -1px;
 }
-.view3dmodes .btn:first-child {
+.view3dshading .btn:first-child {
   border-radius: 8px 0 0 8px;
   margin-left: 0;
 }
-.view3dmodes .btn:last-child {
+.view3dshading .btn:last-child {
   border-radius: 0 8px 8px 0;
 }
 /* lift the active button so its ink border sits above its neighbours' */
-.view3dmodes .btn.active {
+.view3dshading .btn.active {
   position: relative;
   z-index: 1;
 }

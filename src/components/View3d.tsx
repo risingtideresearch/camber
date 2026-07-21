@@ -10,7 +10,11 @@ import type { StlState } from "../core/stlImport";
 import { computeHullSampling, type HullSampling } from "../core/mesh";
 import { PERF_N_DEFAULT, PERF_R_DEFAULT } from "../core/perf";
 import { defaultCurvature, type CurvatureSettings } from "../core/comb";
-import { type View3DMode } from "../core/view3dMode";
+import {
+  DEFAULT_LINES,
+  type LineToggles,
+  type ShadingMode,
+} from "../core/view3dDisplay";
 import { Button } from "./Button";
 import { Dropdown } from "./Dropdown";
 import { Scene } from "./view3d/Scene";
@@ -25,29 +29,43 @@ const CURVATURE_OFF = defaultCurvature();
 const CANVAS_BG = "#e6ecf3";
 
 // The 3D viewport: a Canvas3D (polymorph-ui / react-three-fiber) with its built-in orbit navigation and
-// perspective/orthographic toggle. It owns the display mode / Sheet / Mesh-overlay / perspective toggles
-// (nothing upstream needs them) and hands the model / selection / sampling / curvature down to <Scene>, which
-// builds and renders the actual hull geometry. There is no SVG overlay any more — every mode, including the
-// body/buttocks/waterline "lines plan" modes, is real 3D geometry sharing the one Canvas3D camera, so
-// switching modes never moves the camera.
+// perspective/orthographic toggle. It owns the display controls (shading, line families, Sheet, Mesh overlay,
+// perspective — nothing upstream needs them) and hands the model / selection / sampling / curvature down to
+// <Scene>, which builds and renders the actual hull geometry. There is no SVG overlay any more — everything,
+// the lines plan included, is real 3D geometry sharing the one Canvas3D camera, so changing what is displayed
+// never moves the camera.
 //
-// The mode picks HOW the surface is drawn; the Sheet toggle picks WHICH surface — the trimmed, mirrored hull
-// or the raw swept sheet it is cut from — so the two compose: the lines plan and the zebra stripes can be
-// inspected on the untrimmed sheet as readily as on the finished hull.
-const MODES: { mode: View3DMode; label: string; title: string }[] = [
-  { mode: "render", label: "Render", title: "Shaded hull" },
-  { mode: "body", label: "Body", title: "Lines plan — body (stations)" },
+// Nothing here is mutually exclusive except the shading: the line families are independent toggles that
+// compose with any shading, and the Sheet toggle picks WHICH surface all of it is drawn on — the trimmed,
+// mirrored hull or the raw swept sheet it is cut from — so a lines plan or the zebra stripes can be inspected
+// on the untrimmed sheet as readily as on the finished hull.
+const SHADINGS: { shading: ShadingMode; label: string; title: string }[] = [
   {
-    mode: "buttocks",
-    label: "Buttocks",
-    title: "Lines plan — buttocks (constant-y cuts)",
+    shading: "flat",
+    label: "Flat",
+    title: "Plain white skin — the lines plan's classic backdrop",
   },
+  { shading: "smooth", label: "Smooth", title: "Shaded hull" },
   {
-    mode: "waterline",
-    label: "Waterline",
-    title: "Lines plan — waterlines (constant-z cuts)",
+    shading: "zebra",
+    label: "Zebra",
+    title: "Zebra-stripe fairness check",
   },
-  { mode: "zebra", label: "Zebra", title: "Zebra-stripe fairness check" },
+];
+
+const LINES: { key: keyof LineToggles; label: string; title: string }[] = [
+  {
+    key: "edges",
+    label: "Edges",
+    title: "The surface's own feature edges: sheer, keel / transom cut, chines",
+  },
+  { key: "sections", label: "Sections", title: "Transverse stations" },
+  { key: "buttocks", label: "Buttocks", title: "Buttocks (constant-y cuts)" },
+  {
+    key: "waterlines",
+    label: "Waterlines",
+    title: "Waterlines (constant-z cuts)",
+  },
 ];
 
 interface View3dProps {
@@ -74,9 +92,12 @@ export function View3d({
   stl,
   title,
 }: View3dProps) {
-  const [mode, setMode] = useState<View3DMode>("render");
-  const [sheet, setSheet] = useState(false); // draw the mode on the untrimmed sweep instead of the hull
-  const [showMesh, setShowMesh] = useState(false); // overlay the quad-grid wireframe on the shaded GL modes
+  const [shading, setShading] = useState<ShadingMode>("smooth");
+  // one object rather than four useStates: <Scene> keys a rebuild on it, so its identity has to change only
+  // when a toggle actually does
+  const [lines, setLines] = useState<LineToggles>(DEFAULT_LINES);
+  const [sheet, setSheet] = useState(false); // draw everything on the untrimmed sweep instead of the hull
+  const [showMesh, setShowMesh] = useState(false); // overlay the quad-grid wireframe
   const [meshQuads, setMeshQuads] = useState(true); // wire as quads (default) or the raw shaded triangles
   const [meshMenu, setMeshMenu] = useState(false); // the Mesh overlay dropdown open state
   const [orthographic, setOrthographic] = useState(true); // matches the view's historical ortho-only behaviour
@@ -102,7 +123,8 @@ export function View3d({
           model={model}
           modelVersion={modelVersion}
           selection={selection}
-          mode={mode}
+          shading={shading}
+          lines={lines}
           sheet={sheet}
           showMesh={showMesh}
           meshQuads={meshQuads}
@@ -128,7 +150,7 @@ export function View3d({
           onToggle={() => setShowMesh((v) => !v)}
           open={meshMenu}
           onOpenChange={setMeshMenu}
-          title="Overlay the hull's quad grid as a wireframe (works in the shaded modes, Render and Zebra). Its resolution is set by the Performance control's hull-sampling sliders."
+          title="Overlay the hull's quad grid as a wireframe, whatever else is displayed. Its resolution is set by the Performance control's hull-sampling sliders."
           menuLabel="Mesh overlay"
         >
           <label
@@ -145,20 +167,30 @@ export function View3d({
         </Dropdown>
         <Button
           active={sheet}
-          title="Draw the current mode on the raw untrimmed sweep (one side, no trims or mirror) instead of the finished hull"
+          title="Draw everything on the raw untrimmed sweep (one side, no trims or mirror) instead of the finished hull"
           onClick={() => setSheet((v) => !v)}
         >
           Sheet
         </Button>
-        <div className="view3dmodes">
-          {MODES.map((m) => (
+        {LINES.map((l) => (
+          <Button
+            key={l.key}
+            active={lines[l.key]}
+            title={l.title}
+            onClick={() => setLines((s) => ({ ...s, [l.key]: !s[l.key] }))}
+          >
+            {l.label}
+          </Button>
+        ))}
+        <div className="view3dshading">
+          {SHADINGS.map((s) => (
             <Button
-              key={m.mode}
-              active={mode === m.mode}
-              title={m.title}
-              onClick={() => setMode(m.mode)}
+              key={s.shading}
+              active={shading === s.shading}
+              title={s.title}
+              onClick={() => setShading(s.shading)}
             >
-              {m.label}
+              {s.label}
             </Button>
           ))}
         </div>

@@ -19,8 +19,9 @@ void main() {
 }`;
 
 // Per-pixel half-Lambert diffuse + a broad, soft specular; a "zebra" mode bands the surface by the reflected
-// eye direction so unfair (non-smooth) spots show as kinked lines; below the design waterline the hull wears
-// bottom paint (a darker body, softened by a boot-top smoothstep band so the paint line doesn't alias). V is
+// eye direction so unfair (non-smooth) spots show as kinked lines. The design waterline is NOT shaded here —
+// the hull used to wear darker bottom paint below it, but the view now draws it as a real curve on the
+// surface (hullLines3d.ts) in every shading mode, which reads the same whichever way the hull is shaded. V is
 // the TRUE per-fragment view direction (three's built-in `cameraPosition` uniform, free) rather than the old
 // single camera-basis constant — that was an orthographic-only approximation; this is simpler and more
 // correct now that the camera can be a close-up perspective view.
@@ -29,7 +30,7 @@ precision highp float;
 varying vec3 vNormalW;
 varying vec3 vWorld;
 uniform vec3 uLight, uBase;
-uniform float uStripes, uAlpha, uWaterZ, uPaint, uBoot;
+uniform float uStripes, uAlpha;
 uniform int uZebra;
 void main() {
   vec3 N = normalize(vNormalW), V = normalize(cameraPosition - vWorld);
@@ -45,10 +46,7 @@ void main() {
     vec3 col = mix(vec3(0.07, 0.09, 0.15), vec3(0.97, 0.98, 1.0), s) * (0.66 + 0.34 * diff);
     gl_FragColor = vec4(col, uAlpha);
   } else {
-    float sub = (1.0 - smoothstep(uWaterZ - uBoot, uWaterZ + uBoot, vWorld.z)) * uPaint;
-    vec3 body = uBase * 0.34 + uBase * diff * 0.80;
-    body = mix(body, uBase * (0.14 + 0.34 * diff), sub);
-    vec3 col = body + vec3(1.0) * spec * 0.40;
+    vec3 col = uBase * 0.34 + uBase * diff * 0.80 + vec3(1.0) * spec * 0.40;
     gl_FragColor = vec4(clamp(col, 0.0, 1.0), uAlpha);
   }
 }`;
@@ -57,9 +55,10 @@ export interface HullMaterialOptions {
   base: [number, number, number];
   alpha?: number; // default 1
   zebra?: boolean; // default false
-  paint?: boolean; // default true — bottom paint below the design waterline
-  waterZ?: number; // -model.waterline; irrelevant when paint is false
-  boot?: number; // the boot-top's soft band, in world units; irrelevant when paint is false
+  // push the shaded fill back by a polygon offset (the classic wireframe-over-solid trick), so the curves and
+  // wireframe drawn ON this surface — at its own vertex positions — stay crisply superimposed with no
+  // z-fighting, from either side
+  offset?: boolean; // default false
   transparent?: boolean; // default false
   depthWrite?: boolean; // default true
 }
@@ -83,11 +82,11 @@ export function createHullMaterial(
       uBase: { value: new THREE.Vector3(...opts.base) },
       uAlpha: { value: opts.alpha ?? 1.0 },
       uZebra: { value: opts.zebra ? 1 : 0 },
-      uPaint: { value: opts.paint === false ? 0.0 : 1.0 },
-      uWaterZ: { value: opts.waterZ ?? 0 },
-      uBoot: { value: opts.boot ?? 0 },
       uStripes: { value: 11.0 },
     },
+    polygonOffset: opts.offset ?? false,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
     // buildHullMesh's mirrored port-half triangles are wound opposite starboard's by design (positions and
     // normals both negated) — three's default back-face culling would silently drop half the hull without
     // this, exactly as the old program was two-sided for the same reason.
