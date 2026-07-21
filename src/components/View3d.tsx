@@ -17,6 +17,7 @@ import {
 } from "../core/view3dDisplay";
 import { Button } from "./Button";
 import { Dropdown } from "./Dropdown";
+import { CameraLens } from "./view3d/CameraLens";
 import { Scene } from "./view3d/Scene";
 import "./View3d.css";
 
@@ -52,6 +53,13 @@ const SHADINGS: { shading: ShadingMode; label: string; title: string }[] = [
     title: "Zebra-stripe fairness check",
   },
 ];
+
+// The perspective lens the view opens with, in degrees of vertical field of view, and the range the slider
+// offers. Narrower than polymorph-ui's own 40° default: a hull is a long object usually looked at end-on,
+// where a wide lens throws the far end away and bends the sheer. The bottom of the range is nearly the
+// orthographic view (which is this at 0°) and the top is wide enough to stand inside the boat.
+const DEFAULT_FOV = 30;
+const FOV_RANGE: [number, number] = [5, 80];
 
 const LINES: { key: keyof LineToggles; label: string; title: string }[] = [
   {
@@ -101,6 +109,8 @@ export function View3d({
   const [meshQuads, setMeshQuads] = useState(true); // wire as quads (default) or the raw shaded triangles
   const [meshMenu, setMeshMenu] = useState(false); // the Mesh overlay dropdown open state
   const [orthographic, setOrthographic] = useState(true); // matches the view's historical ortho-only behaviour
+  const [projMenu, setProjMenu] = useState(false); // the projection dropdown open state
+  const [fov, setFov] = useState(DEFAULT_FOV); // the perspective lens, in degrees; ignored while ortho
 
   // the sampling to tessellate: the one passed in, or a default-resolution fallback computed here for hosts
   // that don't supply one (the interpolation app). Only computed when no sampling is given.
@@ -119,6 +129,7 @@ export function View3d({
       <Canvas3D orthographic={orthographic} background={CANVAS_BG}>
         <Canvas3DOrbitControls autoFar autoNear />
         <Canvas3DAxesGizmo />
+        <CameraLens fov={fov} />
         <Scene
           model={model}
           modelVersion={modelVersion}
@@ -135,15 +146,33 @@ export function View3d({
       </Canvas3D>
       {title && <div className="view3dtitle">{title}</div>}
       <div className="view3dctl">
-        <Button
+        <Dropdown
+          label={orthographic ? "Ortho" : "Persp"}
           active={!orthographic}
+          onToggle={() => setOrthographic((o) => !o)}
+          open={projMenu}
+          onOpenChange={setProjMenu}
           title={
             orthographic ? "Switch to perspective" : "Switch to orthographic"
           }
-          onClick={() => setOrthographic((o) => !o)}
+          menuLabel="Projection options"
         >
-          {orthographic ? "Ortho" : "Persp"}
-        </Button>
+          <label
+            className="dd-row"
+            title="The perspective camera's vertical field of view. The camera pulls back as the lens narrows, so the hull stays the same size on screen and only the amount of perspective changes — at the narrow end the view approaches Ortho, which is this at 0°."
+          >
+            <span className="dd-name">Field of view</span>
+            <input
+              type="range"
+              min={FOV_RANGE[0]}
+              max={FOV_RANGE[1]}
+              step={1}
+              value={fov}
+              onChange={(e) => setFov(+e.target.value)}
+            />
+            <span className="dd-val">{fov}°</span>
+          </label>
+        </Dropdown>
         <Dropdown
           label="Mesh"
           active={showMesh}

@@ -20,6 +20,12 @@
   max-width: calc(100% - 28px);
   z-index: 1;
 }
+/* The 3D view is one pane of five, not a full window, and a dropdown panel here hangs inside it. The shared
+   row reserves a wide name column for the app bar's long labels ("Longitudinals per knot"); at this width
+   that pushes the panel out past the canvas's own edge, so the labels here size to their text instead. */
+.view3dctl .dd-row .dd-name {
+  min-width: 0;
+}
 /* Only the shading is a pick-one choice, so only it is drawn as a joined segmented bar — every independent
    toggle (Sheet, the line families, and the Mesh dropdown, whose split-button + popover styling lives in the
    shared components/Dropdown.css) stays a standalone rounded control. */
