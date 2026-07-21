@@ -54,6 +54,17 @@ export default tseslint.config(
     },
   },
 
+  // The 3D view's react-three-fiber layer: mutating three.js objects (materials, cameras, geometries) IS
+  // r3f's API contract, not the kind of stale-render hazard the React Compiler-oriented immutability rule
+  // targets — a camera or material returned by useThree/useMemo is a long-lived imperative handle, not
+  // component state. That rule is unusable here, so it's off for this directory only.
+  {
+    files: ["src/components/view3d/**/*.{ts,tsx}"],
+    rules: {
+      "react-hooks/immutability": "off",
+    },
+  },
+
   // Node-side code: tests, tooling, and config files.
   {
     files: [

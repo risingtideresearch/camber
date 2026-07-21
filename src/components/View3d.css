@@ -5,14 +5,19 @@
   border: 1px solid var(--line);
   border-radius: 10px;
   overflow: hidden;
-  background: linear-gradient(#eef3f8, #d7e0ea);
+  /* matches Canvas3D's own `background` prop, so a resize's one-frame lag between the container and the
+     WebGL canvas (see Canvas3D.tsx) shows the same colour instead of a gap */
+  background: #e6ecf3;
 }
 .view3dctl {
   position: absolute;
   top: 10px;
   right: 14px;
   display: flex;
-  gap: 8px; /* separate the standalone Mesh toggle from the mode bar */
+  flex-wrap: wrap; /* wraps to a second row rather than overflowing past the canvas's edge in a narrow pane */
+  justify-content: flex-end;
+  gap: 8px; /* separate the standalone Ortho/Mesh toggles from the mode bar */
+  max-width: calc(100% - 28px);
   z-index: 1;
 }
 /* the mode buttons form one joined segmented bar; the Mesh dropdown stays a standalone rounded control
@@ -49,22 +54,4 @@
 .view3dmodes .btn.active {
   position: relative;
   z-index: 1;
-}
-/* lines-plan overlay: white, covers the GL canvas; pointer-events pass through so drag-rotate still works */
-.lines3d {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  background: #ebeef2;
-  pointer-events: none;
-}
-.cv3d {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  touch-action: none;
-  cursor: grab;
-  background: transparent;
 }

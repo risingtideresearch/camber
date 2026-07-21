@@ -24,7 +24,7 @@ import {
   type StlSettings,
   type StlState,
 } from "../core/stlImport";
-import { getHullBBox } from "../core/draw3d";
+import { getHullBBox } from "../core/hullGeometry";
 import { buildJson } from "../core/json";
 import { clamp } from "../core/math";
 import { getDrag, setDrag } from "../core/drag";

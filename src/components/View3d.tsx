@@ -1,29 +1,35 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  createDraw3dParams,
-  draw3d,
-  type Draw3dParams,
-  type View3DMode,
-} from "../core/draw3d";
+  Canvas3D,
+  Canvas3DAxesGizmo,
+  Canvas3DOrbitControls,
+} from "polymorph-ui";
 import type { Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import type { StlState } from "../core/stlImport";
 import { computeHullSampling, type HullSampling } from "../core/mesh";
 import { PERF_N_DEFAULT, PERF_R_DEFAULT } from "../core/perf";
 import { defaultCurvature, type CurvatureSettings } from "../core/comb";
-import { clamp } from "../core/math";
+import { type View3DMode } from "../core/view3dMode";
 import { Button } from "./Button";
 import { Dropdown } from "./Dropdown";
+import { Scene } from "./view3d/Scene";
 import "./View3d.css";
 
 // a stable "all off" default for hosts (e.g. the interpolation app) that don't drive the curvature overlay —
 // a module constant so it keeps the same identity across renders and never triggers a needless rebuild
 const CURVATURE_OFF = defaultCurvature();
 
-// The 3D viewport. It OWNS its draw3dParams (rotation / zoom / display mode) — nothing upstream needs them —
-// and drives the WebGL canvas + the lines-plan SVG overlay imperatively via draw3d(), reacting to `model` /
-// `selection` from above. Drag-rotate and scroll-zoom mutate the local params and redraw only the GL (the
-// cached mesh is reused); a model change rebuilds the mesh.
+// the average of the app's old sky-gradient backdrop — a solid colour, since the 3D canvas now fully covers
+// the view (Canvas3D paints its own scene background rather than letting a CSS gradient show through)
+const CANVAS_BG = "#e6ecf3";
+
+// The 3D viewport: a Canvas3D (polymorph-ui / react-three-fiber) with its built-in orbit navigation and
+// perspective/orthographic toggle. It owns the display mode / Mesh-overlay / perspective toggle (nothing
+// upstream needs them) and hands the model / selection / sampling / curvature down to <Scene>, which builds
+// and renders the actual hull geometry. There is no SVG overlay any more — every mode, including the
+// body/buttocks/waterline "lines plan" modes, is real 3D geometry sharing the one Canvas3D camera, so
+// switching modes never moves the camera.
 const MODES: { mode: View3DMode; label: string; title: string }[] = [
   { mode: "render", label: "Render", title: "Shaded hull" },
   { mode: "body", label: "Body", title: "Lines plan — body (stations)" },
@@ -65,16 +71,11 @@ export function View3d({
   stl,
   title,
 }: View3dProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const svgRef = useRef<SVGSVGElement>(null); // the lines-plan overlay, owned by this instance (no global id lookup)
-  const paramsRef = useRef<Draw3dParams>(createDraw3dParams());
-  // the display mode, the Mesh-overlay toggle, and the quads/triangles wire choice are React-owned; the
-  // rebuild effect copies them into paramsRef before each draw, so paramsRef's own view3dMode / showMesh /
-  // meshQuads are always overwritten and their initial values are irrelevant.
   const [mode, setMode] = useState<View3DMode>("render");
   const [showMesh, setShowMesh] = useState(false); // overlay the quad-grid wireframe on the shaded GL modes
   const [meshQuads, setMeshQuads] = useState(true); // wire as quads (default) or the raw shaded triangles
   const [meshMenu, setMeshMenu] = useState(false); // the Mesh overlay dropdown open state
+  const [orthographic, setOrthographic] = useState(true); // matches the view's historical ortho-only behaviour
 
   // the sampling to tessellate: the one passed in, or a default-resolution fallback computed here for hosts
   // that don't supply one (the interpolation app). Only computed when no sampling is given.
@@ -88,141 +89,34 @@ export function View3d({
   );
   const effSampling = sampling ?? fallback;
 
-  // latest model / selection / STL for the ref-reading redraws (rotate / zoom / resize / selection) so they
-  // need not re-subscribe
-  const modelRef = useRef(model);
-  useEffect(() => {
-    modelRef.current = model;
-  }, [model]);
-  const selRef = useRef(selection);
-  useEffect(() => {
-    selRef.current = selection;
-  }, [selection]);
-  const stlRef = useRef(stl);
-  useEffect(() => {
-    stlRef.current = stl;
-  }, [stl]);
-
-  // redraw the GL only (no mesh rebuild) — for rotation, zoom, and resize
-  const redrawGL = useCallback(() => {
-    const cv = canvasRef.current;
-    if (cv)
-      draw3d(
-        cv,
-        svgRef.current,
-        model,
-        selRef.current,
-        paramsRef.current,
-        false,
-        stlRef.current,
-      );
-  }, [model]);
-
-  // rebuild + redraw whenever the model, the display mode, the Mesh overlay, the shared hull sampling, the
-  // curvature overlay, or the STL changes — everything the cached hull tessellation depends on
-  useEffect(() => {
-    const p = paramsRef.current;
-    p.view3dMode = mode;
-    p.showMesh = showMesh;
-    p.meshQuads = meshQuads;
-    p.sampling = effSampling;
-    p.curvature = curvature;
-    const cv = canvasRef.current;
-    if (cv) draw3d(cv, svgRef.current, model, selRef.current, p, true, stl);
-  }, [
-    model,
-    modelVersion,
-    mode,
-    showMesh,
-    meshQuads,
-    effSampling,
-    stl,
-    curvature,
-  ]);
-
-  // a selection change only moves the amber guide overlay, which is re-derived on every draw — redraw the
-  // cached mesh (rebuild=false) instead of re-tessellating the hull
-  useEffect(() => {
-    const cv = canvasRef.current;
-    if (cv)
-      draw3d(
-        cv,
-        svgRef.current,
-        modelRef.current,
-        selection,
-        paramsRef.current,
-        false,
-        stlRef.current,
-      );
-  }, [selection]);
-
-  // scroll-wheel zoom — a native non-passive listener so preventDefault() works (React's onWheel is passive)
-  useEffect(() => {
-    const cv = canvasRef.current;
-    if (!cv) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const p = paramsRef.current;
-      p.zoom = clamp(p.zoom * Math.exp(-e.deltaY * 0.0015), 0.3, 8);
-      redrawGL();
-    };
-    cv.addEventListener("wheel", onWheel, { passive: false });
-    return () => cv.removeEventListener("wheel", onWheel);
-  }, [redrawGL]);
-
-  // redraw the cached-mesh canvas at its new size when the viewport is resized
-  useEffect(() => {
-    const cv = canvasRef.current;
-    if (!cv) return;
-    const ro = new ResizeObserver(() => redrawGL());
-    ro.observe(cv);
-    return () => ro.disconnect();
-  }, [redrawGL]);
-
-  // drag-rotate via pointer capture on the canvas (no window listeners needed)
-  const rotRef = useRef<{
-    px: number;
-    py: number;
-    yaw0: number;
-    pitch0: number;
-  } | null>(null);
-  const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const p = paramsRef.current;
-    rotRef.current = {
-      px: e.clientX,
-      py: e.clientY,
-      yaw0: p.rot.yaw,
-      pitch0: p.rot.pitch,
-    };
-    canvasRef.current?.setPointerCapture(e.pointerId);
-    e.preventDefault();
-  };
-  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const r = rotRef.current;
-    if (!r) return;
-    const p = paramsRef.current;
-    p.rot.yaw = r.yaw0 + (e.clientX - r.px) * 0.008;
-    p.rot.pitch = clamp(r.pitch0 + (e.clientY - r.py) * 0.008, -1.45, 1.45);
-    redrawGL();
-  };
-  const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    rotRef.current = null;
-    canvasRef.current?.releasePointerCapture(e.pointerId);
-  };
-
   return (
     <div className="top3d">
-      <canvas
-        className="cv3d"
-        ref={canvasRef}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-      />
-      <svg ref={svgRef} className="lines3d" style={{ display: "none" }} />
+      <Canvas3D orthographic={orthographic} background={CANVAS_BG}>
+        <Canvas3DOrbitControls autoFar autoNear />
+        <Canvas3DAxesGizmo />
+        <Scene
+          model={model}
+          modelVersion={modelVersion}
+          selection={selection}
+          mode={mode}
+          showMesh={showMesh}
+          meshQuads={meshQuads}
+          sampling={effSampling}
+          curvature={curvature}
+          stl={stl}
+        />
+      </Canvas3D>
       {title && <div className="view3dtitle">{title}</div>}
       <div className="view3dctl">
+        <Button
+          active={!orthographic}
+          title={
+            orthographic ? "Switch to perspective" : "Switch to orthographic"
+          }
+          onClick={() => setOrthographic((o) => !o)}
+        >
+          {orthographic ? "Ortho" : "Persp"}
+        </Button>
         <Dropdown
           label="Mesh"
           active={showMesh}
