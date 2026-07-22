@@ -96,57 +96,33 @@ export function buildLinesPlanCurves(
     const p = posOf(c);
     return !trimmed ? [p] : c.keel ? [mirrorRow(p)] : [p, p.map(mir)];
   };
-  // a curve traced along the surface by one point per column, broken into runs wherever a column hasn't got
-  // one — which is how a chine that the trim kept for only part of the hull, or a keel the transom cuts in on,
-  // comes out as the several curves it really is rather than one that leaps the gap
-  const runsAlong = (pick: (c: HullColumnV2) => Vec3 | null): Vec3[][] => {
-    const out: Vec3[][] = [];
-    let run: Vec3[] = [];
-    for (const c of cols) {
-      const p = pick(c);
-      if (p) run.push(p);
-      else {
-        if (run.length > 1) out.push(run);
-        run = [];
-      }
-    }
-    if (run.length > 1) out.push(run);
-    return out;
-  };
-
   const bold: Vec3[][] = [];
   if (lines.edges) {
-    if (trimmed) {
-      // The trimmed hull's bold edges ARE the sampling's own boundary curves — the very vertices the skin ends
-      // on (`hullSheer` / `hullKeel` / `hullTransom`, including the sub-lattice head and foot corners), rather
-      // than a second reconstruction from the columns. So the drawn outline, the 2D transom footprint and keel,
-      // and the rendered surface's edge are one curve, not three that ought to agree. The fore-most column
-      // closes the loop at the bow, where the sheer and keel have all but met.
-      bold.push(
-        ...bothSides(sampling.hullSheer.map((s) => s.pos)),
-        ...bothSides(sampling.hullKeel.map((s) => s.pos)),
-        ...bothSides(sampling.hullTransom.map((s) => s.pos)),
-        ...station(cols[cols.length - 1]),
-      );
-    } else {
-      // the raw sheet has no trim edges to ride: its outline is the patch's own four sides — the deck edge
-      // (row 0) and the last row along it, and the aft and fore sections across.
-      bold.push(
-        ...bothSides(cols.map((c) => c.pts[0].pos)),
-        ...bothSides(cols.map((c) => c.pts[c.pts.length - 1].pos)),
-        ...station(cols[0]),
-        ...station(cols[cols.length - 1]),
-      );
-    }
-
-    // the chines: every sheet row carrying a knuckle, which the mesh gives a tangent break, so it reads as a
-    // real edge of the surface. A chine only exists where the trim kept its row, hence the runs.
-    const creases = new Set<number>();
+    // The bold feature edges are read off the mesh's OWN triangles, so they end exactly where the surface does
+    // — at a trim, at the transom, or where the bow closes — never a lattice step short of it. The boundary
+    // edges (an edge in a single triangle) give the sheer / keel / transom outline as one connected loop; the
+    // edges running along a creased station row give the chines. Both are mirrored to port (the keel, on the
+    // centerline, is its own mirror). With `trimmed` off the same extraction outlines the untrimmed patch.
+    const creaseRows = new Set<number>();
     for (const col of sheetCols)
-      for (const s of col) if (s.vCreaseK > 1e-6) creases.add(s.vSheetIndex);
-    for (const cr of [...creases].sort((a, b) => a - b))
-      for (const run of runsAlong((c) => atSheetIndex(c, cr)))
-        bold.push(...bothSides(run));
+      for (const s of col) if (s.vCreaseK > 1e-6) creaseRows.add(s.vSheetIndex);
+    const tris: [HullSample, HullSample, HullSample][] = [];
+    if (trimmed) {
+      for (const q of sampling.hullQuads) {
+        tris.push([q[0], q[1], q[2]]);
+        tris.push([q[0], q[2], q[3]]);
+      }
+      for (const t of sampling.hullTris) tris.push(t);
+    } else {
+      const sh = sampling.sheet;
+      for (let i = 0; i + 1 < sh.length; i++)
+        for (let k = 0; k + 1 < sh[i].length; k++) {
+          tris.push([sh[i][k], sh[i + 1][k], sh[i + 1][k + 1]]);
+          tris.push([sh[i][k], sh[i + 1][k + 1], sh[i][k + 1]]);
+        }
+    }
+    const { boundary, chines } = featureEdges(tris, creaseRows);
+    for (const run of [...boundary, ...chines]) bold.push(...bothSides(run));
   }
 
   const family: Vec3[][] = [];
@@ -162,12 +138,7 @@ export function buildLinesPlanCurves(
       // index. Where the trim erased the hull at that u there is simply no station, exactly as there is no
       // surface — which is how the family stays put as Sheet is toggled instead of being redealt.
       const s = sections[sheetIdx[Math.round((j * (n - 1)) / steps)]];
-      if (!drawableCol(s)) continue;
-      // skip the ones the edges already draw bold as the surface's end columns — but only when they are
-      // drawn. On the sheet those are the first and last stations; the hull's end columns are refinement
-      // columns, off the lattice, so no station is ever one of them.
-      if (!lines.edges || (s !== cols[0] && s !== cols[cols.length - 1]))
-        family.push(...station(s));
+      if (drawableCol(s)) family.push(...station(s));
     }
   }
 
@@ -217,15 +188,100 @@ export function buildLinesPlanCurves(
   return { bold, family, dwl };
 }
 
-// The column's point at sheet row k, or null where the trim cut that row away. A trimmed column keeps the
-// consecutive integer rows it kept, with a fractional crossing at each end, so only an exact integer match is
-// the row itself.
-function atSheetIndex(c: HullColumnV2, k: number): Vec3 | null {
-  for (const s of c.pts) {
-    if (Math.abs(s.vSheetIndex - k) < 1e-9) return s.pos;
-    if (s.vSheetIndex > k) break; // indices ascend — past k, it isn't there
+// ---------- feature edges read off the mesh's own triangles ----------
+//
+// The surface's feature lines are exactly two kinds of triangle edge, so reading them from the mesh keeps them
+// ON it — they end where its triangles do, not a lattice step short of a trim or of the bow:
+//   • BOUNDARY edges — an edge in a single triangle — are the sheer / keel / transom the surface ends on;
+//   • CREASE edges — an edge whose two ends both sit on the same creased station row — are the chines.
+// Both come back chained into polylines (a boundary is one closed loop; a chine an open run).
+
+type MeshEdge = [number, number]; // a pair of vertex ids
+
+// Chain a set of edges into polylines, following each unused edge on from the tip. Open runs first (their
+// degree-1 ends), then any closed loop left over. The mesh's crossings are shared by object identity, so the
+// ids match exactly and no join is missed.
+function chainEdges(edges: MeshEdge[], vert: HullSample[]): Vec3[][] {
+  const adj = new Map<number, number[]>();
+  for (const [a, b] of edges) {
+    (adj.get(a) ?? adj.set(a, []).get(a)!).push(b);
+    (adj.get(b) ?? adj.set(b, []).get(b)!).push(a);
   }
-  return null;
+  const V = vert.length,
+    ekey = (a: number, b: number): number => (a < b ? a * V + b : b * V + a),
+    used = new Set<number>(),
+    out: Vec3[][] = [];
+  // start from the sparsest vertices, so an open chain's degree-1 end is taken before any interior vertex
+  const starts = [...adj.keys()].sort(
+    (a, b) => adj.get(a)!.length - adj.get(b)!.length,
+  );
+  for (const start of starts) {
+    let seed = adj.get(start)!.find((x) => !used.has(ekey(start, x)));
+    while (seed !== undefined) {
+      const line = [start];
+      let cur = start,
+        next: number | undefined = seed;
+      while (next !== undefined && !used.has(ekey(cur, next))) {
+        used.add(ekey(cur, next));
+        line.push(next);
+        const from: number = next;
+        next = adj.get(from)!.find((x) => !used.has(ekey(from, x)));
+        cur = from;
+      }
+      if (line.length > 1) out.push(line.map((i) => vert[i].pos));
+      seed = adj.get(start)!.find((x) => !used.has(ekey(start, x)));
+    }
+  }
+  return out;
+}
+
+function featureEdges(
+  tris: [HullSample, HullSample, HullSample][],
+  creaseRows: Set<number>,
+): { boundary: Vec3[][]; chines: Vec3[][] } {
+  const id = new Map<HullSample, number>(),
+    vert: HullSample[] = [];
+  const vid = (s: HullSample): number => {
+    let i = id.get(s);
+    if (i === undefined) {
+      i = vert.length;
+      vert.push(s);
+      id.set(s, i);
+    }
+    return i;
+  };
+  for (const t of tris) for (const s of t) vid(s);
+  const V = vert.length,
+    ekey = (a: number, b: number): number => (a < b ? a * V + b : b * V + a);
+  const edge = new Map<number, { a: number; b: number; n: number }>();
+  for (const t of tris) {
+    const i = [vid(t[0]), vid(t[1]), vid(t[2])];
+    for (let e = 0; e < 3; e++) {
+      const a = i[e],
+        b = i[(e + 1) % 3],
+        k = ekey(a, b),
+        hit = edge.get(k);
+      if (hit) hit.n++;
+      else edge.set(k, { a, b, n: 1 });
+    }
+  }
+  // a vertex sits on a creased row when its row index is an integer that some station knuckle creased
+  const creaseRow = (i: number): boolean => {
+    const r = Math.round(vert[i].vSheetIndex);
+    return Math.abs(vert[i].vSheetIndex - r) < 1e-6 && creaseRows.has(r);
+  };
+  const bE: MeshEdge[] = [],
+    cE: MeshEdge[] = [];
+  for (const { a, b, n } of edge.values()) {
+    if (n === 1) bE.push([a, b]); // a boundary edge: only one triangle owns it
+    if (
+      creaseRow(a) &&
+      creaseRow(b) &&
+      Math.round(vert[a].vSheetIndex) === Math.round(vert[b].vSheetIndex)
+    )
+      cE.push([a, b]); // both ends on the same chine row
+  }
+  return { boundary: chainEdges(bE, vert), chines: chainEdges(cE, vert) };
 }
 
 // The range of `field` over the SHEET's columns. Read off the columns rather than off the drawn mesh's
