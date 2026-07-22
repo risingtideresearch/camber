@@ -162,7 +162,7 @@ export function EditorApp() {
     const out = perfStep(
       "Hull sampling",
       () => computeHullSampling(model, perf.numSections, perf.girthSteps),
-      (s) => s.trimmedSections.reduce((n, r) => n + r.pts.length, 0),
+      (s) => s.columns.reduce((n, c) => n + c.pts.length, 0),
     );
     perfEnd(PERF_SECTIONS);
     return out;

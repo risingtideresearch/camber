@@ -24,6 +24,7 @@ import {
   sweptSection,
   transomOutline,
   trimmedHullGrid,
+  type HullSample,
   type HullSampling,
 } from "./mesh";
 import { perfStep } from "./perf";
@@ -359,153 +360,69 @@ const wireEdge = (arr: number[], a: Vec3, b: Vec3): void => {
   arr.push(a[0], a[1], a[2], b[0], b[1], b[2]);
 };
 
-// ---------- the hull mesh, stitched from the shared sampling's trimmed columns ----------
+// ---------- the hull mesh, welded from the shared sampling's trimmed cells ----------
 //
-// The sampling (mesh.ts) trimmed each column into a variable-length row of world points, each tagged with the
-// sheet index it came from. Two neighbouring columns are stitched into the surface by MATCHING those indices:
-// where both carry the same integer index the strip between them is a quad; where a column's trimmed end is a
-// fractional index the other lacks, the gap closes with a triangle. So the mesh rides the real trim edges
-// with no constant-width padding — that is the whole point of the index tags.
+// The sampling (mesh.ts) trimmed the SHEET itself into whole quads and boundary triangles — every vertex a
+// HullSample carrying its girth index and crease strength, and shared boundary vertices shared by OBJECT
+// IDENTITY. So the mesh builder no longer stitches ragged columns or splices a foot: it welds those faces onto
+// a deduplicated vertex set (the same HullSample in two faces is one vertex, so a node gathers every adjacent
+// face's normal), accumulates normals split by girth side for the creases, and mirrors the starboard half to
+// port. The trim, the boundary, and the foot all live in the sampling now.
 //
 // Only the STARBOARD half is built; the port half is its exact y-mirror (positions and normals negated), so
-// the two halves are guaranteed to meet seamlessly on the centerline. A closing column ends on the keel
-// (y = 0), and there the vertex normal's y-component is zeroed so the mirror joins smoothly (a round bottom
-// reads round; the mirror of an (x,0,z) normal is itself). An OPEN column ends above the centerline, so
-// starboard and port simply don't meet there — the correct gap, with no special case.
+// the two halves meet seamlessly on the centerline. Where a vertex sits on the keel (y = 0) its normal's
+// y-component is zeroed so the mirror joins smoothly (the mirror of an (x,0,z) normal is itself).
 
-// a column laid out for stitching: world points, their sheet indices, and the crease strength at each point
-// (non-zero only on a knuckled station knot). vBase is where its vertices start in the shared flat arrays.
-interface Col {
-  p: Vec3[];
-  idx: number[];
-  vBase: number;
-  transom: boolean; // this column's bottom is on the transom plane
-  keel: boolean; // ...or on the centerline
-}
-
-// stitch two adjacent columns by walking their sheet indices together (a monotone merge): a matching integer
-// rung emits the two triangles of a quad; wherever one column's next index runs ahead (a fractional trimmed
-// end, or a rung the other column lost to the trim) a single triangle closes the gap.
-//
-// `foot` is the transom's foot corner, given only for the ONE strip that spans it (−1 everywhere else). It is
-// a vertex the lattice cannot hold — it lies between the two columns — so rather than bend the lattice around
-// it, the strip is stitched exactly as any other and then its bottom edge alone is split across it. That edge
-// always belongs to the LAST triangle stitch emits: every path through the walk ends having just laid down
-// A's last point against B's last. So the last triangle is held back, and released as the two triangles that
-// run A_last → foot → B_last instead. One vertex, one extra triangle, and the quad grid is untouched.
-function stitch(
-  A: Col,
-  B: Col,
-  addTri: (a: number, b: number, c: number) => void,
-  foot = -1,
-): void {
-  const na = A.idx.length,
-    nb = B.idx.length;
-  let i = 0,
-    j = 0,
-    held: [number, number, number] | null = null;
-  // with a foot to splice, emit one triangle behind so the last one is still in hand at the end
-  const out =
-    foot < 0
-      ? addTri
-      : (a: number, b: number, c: number): void => {
-          if (held) addTri(...held);
-          held = [a, b, c];
-        };
-  while (i + 1 < na || j + 1 < nb) {
-    const ai = i + 1 < na ? A.idx[i + 1] : Infinity,
-      bj = j + 1 < nb ? B.idx[j + 1] : Infinity;
-    if (Math.abs(ai - bj) < 1e-9) {
-      out(A.vBase + i, A.vBase + i + 1, B.vBase + j);
-      out(A.vBase + i + 1, B.vBase + j + 1, B.vBase + j);
-      i++;
-      j++;
-    } else if (ai < bj) {
-      out(A.vBase + i, A.vBase + i + 1, B.vBase + j);
-      i++;
-    } else {
-      out(A.vBase + i, B.vBase + j + 1, B.vBase + j);
-      j++;
-    }
-  }
-  if (!held) return;
-  // find the bottom edge in the held triangle and split it, keeping the winding: (p, q, r) with the edge p→q
-  // becomes (p, foot, r) + (foot, q, r)
-  const t = held as [number, number, number],
-    lo = A.vBase + na - 1,
-    hi = B.vBase + nb - 1;
-  const e = [0, 1, 2].find((k) => {
-    const p = t[k],
-      q = t[(k + 1) % 3];
-    return (p === lo && q === hi) || (p === hi && q === lo);
-  });
-  if (e === undefined) return addTri(...t); // no bottom edge to split — leave the triangle as stitched
-  addTri(t[e], foot, t[(e + 2) % 3]);
-  addTri(foot, t[(e + 1) % 3], t[(e + 2) % 3]);
-}
-
-// The mesh is built from the SAMPLING alone — it takes no model, because there is nothing left in the model
-// for it to consult: the trims have all been applied already, and where the hull ends is recorded in the
-// columns themselves.
 export function buildHullMesh(
   sampling: HullSampling,
   trimmed: boolean,
   wantWire: boolean,
   wireQuads: boolean, // wire as quads (true) or the raw shaded triangles (false); ignored unless wantWire
 ): { hull: Mesh; wire: Mesh | null } {
-  const sections = trimmed ? sampling.trimmedSections : sampling.sheetSections;
-
-  // lay every non-empty column's vertices into shared flat arrays, carrying each vertex's sheet index and
-  // crease strength (looked up from the column's crease knots; only exact-integer indices can be a knot)
-  const cols: Col[] = [],
-    verts: Vec3[] = [],
-    vg: number[] = [], // per-vertex sheet index
-    vk: number[] = []; // per-vertex crease strength
-  for (const s of sections) {
-    const idx = s.sheetIndex;
-    if (s.empty || s.pts.length < 2 || !idx) continue;
-    const cm = new Map<number, number>();
-    for (let t = 0; t < s.creaseRows.length; t++)
-      cm.set(s.creaseRows[t], s.creaseK[t]);
-    const vBase = verts.length;
-    for (let k = 0; k < s.pts.length; k++) {
-      verts.push(s.pts[k]);
-      vg.push(idx[k]);
-      const r = Math.round(idx[k]);
-      vk.push(Math.abs(idx[k] - r) < 1e-6 ? (cm.get(r) ?? 0) : 0);
+  // weld the sampling's faces onto a deduplicated vertex set. Trimmed → the quad/tri mesh; the raw Sheet view
+  // → every cell of the untrimmed grid.
+  const verts: HullSample[] = [],
+    vIdx = new Map<HullSample, number>();
+  const idOf = (s: HullSample): number => {
+    let id = vIdx.get(s);
+    if (id === undefined) {
+      id = verts.length;
+      verts.push(s);
+      vIdx.set(s, id);
     }
-    cols.push({
-      p: s.pts,
-      idx,
-      vBase,
-      transom: !!s.transom,
-      keel: s.keel,
-    });
-  }
-  if (cols.length < 2) return { hull: emptyMesh(), wire: null };
-
-  // The transom's foot: one vertex, on the boundary edge between the last column the transom cut and the
-  // first the keel does. It belongs to no column (it sits between two), so it goes in as a loose vertex and
-  // `stitch` splits that one edge across it — the alternative, a column of its own, would lay a hair-thin
-  // edge loop across the whole girth to place a single point at the bottom of it.
-  let footStrip = -1,
-    footV = -1;
-  if (trimmed && sampling.transomFoot)
-    for (let c = 0; c + 1 < cols.length; c++)
-      if (cols[c].transom && cols[c + 1].keel) {
-        footStrip = c;
-        footV = verts.length;
-        verts.push(sampling.transomFoot);
-        // a boundary vertex on the centerline: no crease, and its girth index only has to sort with the two
-        // ends it sits between, which it does at their mean
-        vg.push(
-          (cols[c].idx[cols[c].idx.length - 1] +
-            cols[c + 1].idx[cols[c + 1].idx.length - 1]) /
-            2,
-        );
-        vk.push(0);
-        break;
+    return id;
+  };
+  const rawTris: [number, number, number][] = [];
+  const weld = (a: HullSample, b: HullSample, c: HullSample): void => {
+    rawTris.push([idOf(a), idOf(b), idOf(c)]);
+  };
+  perfStep(
+    "Welding cells",
+    () => {
+      if (trimmed) {
+        for (const q of sampling.hullQuads) {
+          weld(q[0], q[1], q[2]);
+          weld(q[0], q[2], q[3]);
+        }
+        for (const t of sampling.hullTris) weld(t[0], t[1], t[2]);
+      } else {
+        const sh = sampling.sheet;
+        for (let i = 0; i + 1 < sh.length; i++)
+          for (let k = 0; k + 1 < sh[i].length; k++) {
+            weld(sh[i][k], sh[i + 1][k], sh[i + 1][k + 1]);
+            weld(sh[i][k], sh[i + 1][k + 1], sh[i][k + 1]);
+          }
       }
+      return rawTris;
+    },
+    (t) => t.length,
+    "tris",
+  );
+  if (rawTris.length < 1) return { hull: emptyMesh(), wire: null };
+
+  const pos = verts.map((s) => s.pos),
+    vg = verts.map((s) => s.vSheetIndex), // per-vertex girth (sheet-row) index
+    vk = verts.map((s) => s.vCreaseK); // per-vertex crease strength
 
   // face-normal accumulation, split by girth side: nLo gathers faces centred below a vertex's index, nHi
   // above. A smooth vertex uses nLo + nHi; a crease vertex blends toward its own side so a knuckle reads as
@@ -519,8 +436,8 @@ export function buildHullMesh(
     g: number; // the triangle's centroid index, for the crease-side test
   }
   const tris: Tri[] = [];
-  const addTri = (a: number, b: number, c: number): void => {
-    const fn = V.cross(V.sub(verts[b], verts[a]), V.sub(verts[c], verts[a])),
+  for (const [a, b, c] of rawTris) {
+    const fn = V.cross(V.sub(pos[b], pos[a]), V.sub(pos[c], pos[a])),
       g = (vg[a] + vg[b] + vg[c]) / 3;
     for (const v of [a, b, c]) {
       const bk = g >= vg[v] ? nHi[v] : nLo[v];
@@ -529,17 +446,7 @@ export function buildHullMesh(
       bk[2] += fn[2];
     }
     tris.push({ a, b, c, g });
-  };
-  perfStep(
-    "Stitching columns",
-    () => {
-      for (let c = 0; c + 1 < cols.length; c++)
-        stitch(cols[c], cols[c + 1], addTri, c === footStrip ? footV : -1);
-      return tris;
-    },
-    (t) => t.length,
-    "tris",
-  );
+  }
 
   // resolve each vertex's smooth normal (both sides), zeroing y on the keel of the trimmed hull so the mirror
   // joins with no transverse tilt (a smooth round bottom). The one-sided crease normals are formed at emit.
@@ -550,14 +457,14 @@ export function buildHullMesh(
       nLo[v][1] + nHi[v][1],
       nLo[v][2] + nHi[v][2],
     ];
-    if (keelY && Math.abs(verts[v][1]) < 1e-6) n[1] = 0;
+    if (keelY && Math.abs(pos[v][1]) < 1e-6) n[1] = 0;
     return V.norm(n);
   });
   const nrmAt = (v: number, g: number): Vec3 => {
     if (vk[v] <= 1e-6) return smoothN[v];
     const side = g >= vg[v] ? nHi[v] : nLo[v],
       hn: Vec3 = [side[0], side[1], side[2]];
-    if (keelY && Math.abs(verts[v][1]) < 1e-6) hn[1] = 0;
+    if (keelY && Math.abs(pos[v][1]) < 1e-6) hn[1] = 0;
     return V.norm(V.lerp(smoothN[v], V.norm(hn), vk[v]));
   };
 
@@ -573,17 +480,17 @@ export function buildHullMesh(
         pushTri(
           P,
           Nn,
-          verts[t.a],
+          pos[t.a],
           nrmAt(t.a, t.g),
-          verts[t.b],
+          pos[t.b],
           nrmAt(t.b, t.g),
-          verts[t.c],
+          pos[t.c],
           nrmAt(t.c, t.g),
         );
         if (wantTriWire) {
-          wireEdge(triWireP, verts[t.a], verts[t.b]);
-          wireEdge(triWireP, verts[t.b], verts[t.c]);
-          wireEdge(triWireP, verts[t.c], verts[t.a]);
+          wireEdge(triWireP, pos[t.a], pos[t.b]);
+          wireEdge(triWireP, pos[t.b], pos[t.c]);
+          wireEdge(triWireP, pos[t.c], pos[t.a]);
         }
       }
       if (trimmed) {
@@ -610,52 +517,53 @@ export function buildHullMesh(
   );
 
   // the quad-grid wire: girth edges (consecutive points within a column) plus longitudinal edges (matching
-  // sheet indices across adjacent columns) and the surface's own boundary, starboard then y-mirrored — the
-  // raw-triangle wire is the emitted triangle soup captured above.
+  // sheet rows across adjacent columns) and the surface's own boundary. On the trimmed hull the columns are the
+  // sampling's trimmed sections and the whole thing is y-mirrored to port; on the raw Sheet view it is the full
+  // untrimmed grid, one-sided. The raw-triangle wire is the emitted triangle soup captured above.
   const buildQuadWire = (): number[] => {
     const w: number[] = [];
-    // the girth edges — and, on the first and last columns, the fore and aft ends of the boundary
+    if (!trimmed) {
+      const sh = sampling.sheet;
+      for (const col of sh)
+        for (let k = 0; k + 1 < col.length; k++)
+          wireEdge(w, col[k].pos, col[k + 1].pos);
+      for (let i = 0; i + 1 < sh.length; i++)
+        for (let k = 0; k < sh[i].length; k++)
+          wireEdge(w, sh[i][k].pos, sh[i + 1][k].pos);
+      return w;
+    }
+    const cols = sampling.columns.filter((c) => c.pts.length >= 2);
+    // the girth edges (each column's own run, sheer → keel/transom)
     for (const c of cols)
-      for (let k = 0; k + 1 < c.p.length; k++) wireEdge(w, c.p[k], c.p[k + 1]);
+      for (let k = 0; k + 1 < c.pts.length; k++)
+        wireEdge(w, c.pts[k].pos, c.pts[k + 1].pos);
     for (let ci = 0; ci + 1 < cols.length; ci++) {
-      const A = cols[ci],
-        B = cols[ci + 1],
-        na = A.idx.length,
-        nb = B.idx.length;
-      // The rest of the boundary is the two ends of the strip between these columns, and those are exactly the
-      // hull's trim edges: the sheer along the top, and along the bottom the keel or whatever the trim cut the
-      // column short with. The rung walk below can't reach them — a trimmed column ends on a FRACTIONAL sheet
-      // index its neighbour doesn't share, so nothing matches there — yet stitch() closes the strip across both
-      // regardless (its first triangle carries A[0]–B[0], its last A[na−1]–B[nb−1]). They are the outline the
-      // eye reads the wireframe by, so draw them explicitly. The keel is among them because only the STARBOARD
-      // half is stitched here: the mirror below lays the port copy straight over it, so the centerline reads as
-      // a drawn line rather than as the interior edge it becomes once the two halves are joined.
-      wireEdge(w, A.p[0], B.p[0]);
-      // the bottom one runs through the transom's foot on the one strip that spans it, exactly as the
-      // triangles do — the wire is meant to be the surface's own edges, foot included
-      if (ci === footStrip && footV >= 0) {
-        wireEdge(w, A.p[na - 1], verts[footV]);
-        wireEdge(w, verts[footV], B.p[nb - 1]);
-      } else wireEdge(w, A.p[na - 1], B.p[nb - 1]);
+      const A = cols[ci].pts,
+        B = cols[ci + 1].pts,
+        na = A.length,
+        nb = B.length;
+      // the surface's own boundary between these columns — the sheer along the top and the keel/transom along
+      // the bottom. A trimmed column ends on a FRACTIONAL sheet row its neighbour doesn't share, so the rung
+      // walk below can't reach these, yet the mesh spans them; they are the outline the eye reads the wire by,
+      // so draw them explicitly. The keel is among them because only the STARBOARD half is drawn here.
+      wireEdge(w, A[0].pos, B[0].pos);
+      wireEdge(w, A[na - 1].pos, B[nb - 1].pos);
+      // the longitudinal rungs: the shared integer sheet rows of the two columns
       let i = 0,
         j = 0;
       while (i < na && j < nb) {
-        const d = A.idx[i] - B.idx[j];
+        const d = A[i].vSheetIndex - B[j].vSheetIndex;
         if (Math.abs(d) < 1e-9) {
-          // the strip's own two ends went in above — where nothing was trimmed away (the sheet, or an untrimmed
-          // keel) they are matching rungs like any other, and would otherwise be drawn twice
           if (!(i === 0 && j === 0) && !(i === na - 1 && j === nb - 1))
-            wireEdge(w, A.p[i], B.p[j]);
+            wireEdge(w, A[i].pos, B[j].pos);
           i++;
           j++;
         } else if (d < 0) i++;
         else j++;
       }
     }
-    if (trimmed) {
-      const nStar = w.length;
-      for (let i = 0; i < nStar; i += 3) w.push(w[i], -w[i + 1], w[i + 2]);
-    }
+    const nStar = w.length;
+    for (let i = 0; i < nStar; i += 3) w.push(w[i], -w[i + 1], w[i + 2]);
     return w;
   };
 
@@ -752,15 +660,13 @@ export function computeBBox(pos: Float32Array): number[] | null {
 // whatever happens to be on screen. Falls back to the model's nominal hull box when the hull has no sections
 // at all (a degenerate model).
 export function getHullBBox(model: Model): number[] {
-  const { trimmedSections } = computeHullSampling(model, 128, 8);
+  const { columns } = computeHullSampling(model, 128, 8);
   const pos: number[] = [];
-  for (const s of trimmedSections) {
-    if (s.empty) continue;
-    for (const p of s.pts) {
-      pos.push(p[0], p[1], p[2]); // starboard
-      pos.push(p[0], -p[1], p[2]); // port mirror
+  for (const c of columns)
+    for (const s of c.pts) {
+      pos.push(s.pos[0], s.pos[1], s.pos[2]); // starboard
+      pos.push(s.pos[0], -s.pos[1], s.pos[2]); // port mirror
     }
-  }
   return computeBBox(new Float32Array(pos)) ?? nominalBox(model);
 }
 

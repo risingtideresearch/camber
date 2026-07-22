@@ -24,7 +24,7 @@
 
 import { mirrorRow, type Vec3 } from "./math";
 import type { Model } from "./model";
-import type { HullSampling, SectionRow } from "./mesh";
+import type { HullColumnV2, HullSample, HullSampling } from "./mesh";
 import type { Mesh } from "./hullGeometry";
 import type { LineToggles } from "./view3dDisplay";
 
@@ -48,9 +48,8 @@ type Field = (x: number, y: number, z: number) => number;
 
 const EMPTY: LinesPlanCurves = { bold: [], family: [], dwl: [] };
 
-// a column the mesh builder actually stitches into the surface (the same test buildHullMesh applies)
-const drawableCol = (s: SectionRow): boolean =>
-  !s.empty && s.pts.length >= 2 && !!s.sheetIndex;
+// a column with enough surviving points to draw (the same threshold the mesh builder welds from)
+const drawableCol = (c: HullColumnV2): boolean => c.pts.length >= 2;
 
 // The curves `lines` asks for, as world-space 3D polylines. `sampling`, `trimmed` and `hull` must be the very
 // ones the view is rendering (mesh.ts's shared sampling, the Sheet toggle's choice of stage, and the triangle
@@ -70,22 +69,20 @@ export function buildLinesPlanCurves(
   // a trim — so toggling Sheet redraws the SAME lines on more or less surface rather than respacing the whole
   // family over whatever extent is left after trimming. The sampling's stages are index-aligned (one entry per
   // column of the one lattice), so a sheet column's index names the same u in the trimmed hull.
-  const sheetIdx: number[] = [],
-    sheetCols: SectionRow[] = [];
-  sampling.sheetSections.forEach((s, i) => {
-    if (drawableCol(s)) {
-      sheetIdx.push(i);
-      sheetCols.push(s);
-    }
-  });
+  const sheetCols = sampling.sheet, // the untrimmed grid columns — every one full
+    sheetIdx = sheetCols.map((_, i) => i);
   if (sheetIdx.length < 2 || hull.count < 3) return EMPTY; // nothing to lay a lines plan out from
 
-  // the columns the mesh was actually stitched from: the same stage buildHullMesh used
-  const sections = trimmed ? sampling.trimmedSections : sampling.sheetSections,
-    cols = sections.filter(drawableCol);
+  // the columns the mesh was drawn from: the trimmed sections, or (Sheet view) the untrimmed grid columns
+  // wrapped as columns of their own
+  const sections: HullColumnV2[] = trimmed
+    ? sampling.columns
+    : sheetCols.map((col, i) => ({ pts: col, i, keel: false, transom: false }));
+  const cols = sections.filter(drawableCol);
   if (cols.length < 2) return EMPTY;
 
   const mir = (p: Vec3): Vec3 => [p[0], -p[1], p[2]];
+  const posOf = (c: HullColumnV2): Vec3[] => c.pts.map((s) => s.pos);
   // a starboard curve and its port mirror — unless it rides the centerline, where the two coincide, or the
   // surface is the untrimmed sheet, which has no port half
   const bothSides = (line: Vec3[]): Vec3[][] =>
@@ -95,16 +92,18 @@ export function buildLinesPlanCurves(
   // one full-width station: the column joined to its mirror through the keel where the section closes there,
   // and left as two open curves where the transom (or an open bottom) cut it instead — exactly the gap the
   // surface itself has
-  const station = (s: SectionRow): Vec3[][] =>
-    !trimmed ? [s.pts] : s.keel ? [mirrorRow(s.pts)] : [s.pts, s.pts.map(mir)];
+  const station = (c: HullColumnV2): Vec3[][] => {
+    const p = posOf(c);
+    return !trimmed ? [p] : c.keel ? [mirrorRow(p)] : [p, p.map(mir)];
+  };
   // a curve traced along the surface by one point per column, broken into runs wherever a column hasn't got
   // one — which is how a chine that the trim kept for only part of the hull, or a keel the transom cuts in on,
   // comes out as the several curves it really is rather than one that leaps the gap
-  const runsAlong = (pick: (s: SectionRow) => Vec3 | null): Vec3[][] => {
+  const runsAlong = (pick: (c: HullColumnV2) => Vec3 | null): Vec3[][] => {
     const out: Vec3[][] = [];
     let run: Vec3[] = [];
-    for (const s of cols) {
-      const p = pick(s);
+    for (const c of cols) {
+      const p = pick(c);
       if (p) run.push(p);
       else {
         if (run.length > 1) out.push(run);
@@ -115,46 +114,38 @@ export function buildLinesPlanCurves(
     return out;
   };
 
-  // The bottom boundary chain: each column's last point, joined column to column by real mesh edges — plus
-  // the transom's FOOT, which is a vertex of that boundary belonging to no column. The mesh builder splices
-  // it into the one edge that spans it, so a chain that skipped it would cut the corner the surface goes
-  // round, by as much as a whole lattice step's worth of half-breadth.
-  const bottomChain = (): Vec3[] => {
-    const out: Vec3[] = [];
-    for (let i = 0; i < cols.length; i++) {
-      out.push(cols[i].pts[cols[i].pts.length - 1]);
-      if (
-        trimmed &&
-        sampling.transomFoot &&
-        cols[i].transom &&
-        cols[i + 1]?.keel
-      )
-        out.push(sampling.transomFoot);
-    }
-    return out;
-  };
-
   const bold: Vec3[][] = [];
   if (lines.edges) {
-    // the mesh's boundary chains: the first and last point of every column are joined column-to-column by
-    // real mesh edges (the stitch always pairs the two columns' first points, and their last)
-    bold.push(
-      ...bothSides(cols.map((s) => s.pts[0])), // the sheer edge (untrimmed: the sheet's deck edge)
-      ...bothSides(bottomChain()), // the keel, or the transom cut
-      // both end columns, which close that pair of chains into the surface's whole outline: the aft edge
-      // (the transom cut, or wherever the sweep starts) and the fore one. On the trimmed hull the fore
-      // column is the bow closure, so it is short — the two chains have all but met there. On the sheet it
-      // is the sweep's full stem section, the fourth side of the patch.
-      ...station(cols[0]),
-      ...station(cols[cols.length - 1]),
-    );
+    if (trimmed) {
+      // The trimmed hull's bold edges ARE the sampling's own boundary curves — the very vertices the skin ends
+      // on (`hullSheer` / `hullKeel` / `hullTransom`, including the sub-lattice head and foot corners), rather
+      // than a second reconstruction from the columns. So the drawn outline, the 2D transom footprint and keel,
+      // and the rendered surface's edge are one curve, not three that ought to agree. The fore-most column
+      // closes the loop at the bow, where the sheer and keel have all but met.
+      bold.push(
+        ...bothSides(sampling.hullSheer.map((s) => s.pos)),
+        ...bothSides(sampling.hullKeel.map((s) => s.pos)),
+        ...bothSides(sampling.hullTransom.map((s) => s.pos)),
+        ...station(cols[cols.length - 1]),
+      );
+    } else {
+      // the raw sheet has no trim edges to ride: its outline is the patch's own four sides — the deck edge
+      // (row 0) and the last row along it, and the aft and fore sections across.
+      bold.push(
+        ...bothSides(cols.map((c) => c.pts[0].pos)),
+        ...bothSides(cols.map((c) => c.pts[c.pts.length - 1].pos)),
+        ...station(cols[0]),
+        ...station(cols[cols.length - 1]),
+      );
+    }
 
-    // the chines: every station knot carrying a knuckle, which the mesh gives a tangent break, so it reads as
-    // a real edge of the surface. A chine only exists where the trim kept its row, hence the runs.
+    // the chines: every sheet row carrying a knuckle, which the mesh gives a tangent break, so it reads as a
+    // real edge of the surface. A chine only exists where the trim kept its row, hence the runs.
     const creases = new Set<number>();
-    for (const s of cols) for (const c of s.creaseRows) creases.add(c);
-    for (const c of [...creases].sort((a, b) => a - b))
-      for (const run of runsAlong((s) => atSheetIndex(s, c)))
+    for (const col of sheetCols)
+      for (const s of col) if (s.vCreaseK > 1e-6) creases.add(s.vSheetIndex);
+    for (const cr of [...creases].sort((a, b) => a - b))
+      for (const run of runsAlong((c) => atSheetIndex(c, cr)))
         bold.push(...bothSides(run));
   }
 
@@ -216,29 +207,23 @@ export function buildLinesPlanCurves(
     for (const runs of contours(hull, trimmed ? ay : (_x, y) => y, levels))
       family.push(...runs);
     // On the hull that same profile is the KEEL, which the surface ends on rather than crosses: |y| touches 0
-    // there without changing sign, so no march can catch it however many levels it is given. It is read off
-    // the columns instead — the bottom point of each one the centerline, rather than the transom, cut — and
-    // left to `edges` where those draw it bold as part of the keel chain. Its aft-most run starts at the
-    // transom's foot, which no column carries, so that point is put back on the front of it.
-    if (trimmed && !lines.edges) {
-      const runs = runsAlong((s) => (s.keel ? s.pts[s.pts.length - 1] : null));
-      if (runs.length && sampling.transomFoot)
-        runs[0].unshift(sampling.transomFoot);
-      family.push(...runs);
-    }
+    // there without changing sign, so no march can catch it however many levels it is given. It is the mesh's
+    // own keel edge (`hullKeel`, foot corner and all) — the same curve `edges` draws bold — shown here only when
+    // `edges` is off so the profile member is not lost.
+    if (trimmed && !lines.edges && sampling.hullKeel.length > 1)
+      family.push(sampling.hullKeel.map((s) => s.pos));
   }
 
   return { bold, family, dwl };
 }
 
-// The column's point at sheet index k, or null where the trim cut that row away. A trimmed column keeps the
-// consecutive integer indices of the sheet rows it kept, with a fractional crossing at each end, so only an
-// exact integer match is the row itself.
-function atSheetIndex(s: SectionRow, k: number): Vec3 | null {
-  const idx = s.sheetIndex!;
-  for (let t = 0; t < idx.length; t++) {
-    if (Math.abs(idx[t] - k) < 1e-9) return s.pts[t];
-    if (idx[t] > k) break; // indices ascend — past k, it isn't there
+// The column's point at sheet row k, or null where the trim cut that row away. A trimmed column keeps the
+// consecutive integer rows it kept, with a fractional crossing at each end, so only an exact integer match is
+// the row itself.
+function atSheetIndex(c: HullColumnV2, k: number): Vec3 | null {
+  for (const s of c.pts) {
+    if (Math.abs(s.vSheetIndex - k) < 1e-9) return s.pos;
+    if (s.vSheetIndex > k) break; // indices ascend — past k, it isn't there
   }
   return null;
 }
@@ -248,12 +233,12 @@ function atSheetIndex(s: SectionRow, k: number): Vec3 | null {
 // as far in either |y| or z, and scanning it would respace the whole family the moment Sheet was toggled.
 // Both fields used here are unchanged by the port mirror (z ignores y; |y| is symmetric in it), so the
 // starboard sheet gives the full range of the mirrored hull too.
-function rangeIn(cols: SectionRow[], field: Field): [number, number] {
+function rangeIn(cols: HullSample[][], field: Field): [number, number] {
   let lo = Infinity,
     hi = -Infinity;
-  for (const s of cols)
-    for (const p of s.pts) {
-      const f = field(p[0], p[1], p[2]);
+  for (const col of cols)
+    for (const s of col) {
+      const f = field(s.pos[0], s.pos[1], s.pos[2]);
       if (f < lo) lo = f;
       if (f > hi) hi = f;
     }

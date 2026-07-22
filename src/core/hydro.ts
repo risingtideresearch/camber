@@ -145,20 +145,19 @@ export function hydrostatics(
   // monotone in u, so the strips stay ordered for the trapezoid integration below).
   const hs = computeHullSampling(model, ns, m);
   const strips: Strip[] = [];
-  for (let i = 0; i < hs.trimmedSections.length; i++) {
-    const sec = hs.trimmedSections[i];
-    if (sec.empty) continue;
+  for (const col of hs.columns) {
+    if (col.pts.length < 2) continue;
+    const pts = col.pts.map((s) => s.pos); // the trimmed section, as world points
     let dmax = 0;
-    for (const q of sec.pts)
-      dmax = Math.max(dmax, immersion(model, q[0], q[2]));
+    for (const q of pts) dmax = Math.max(dmax, immersion(model, q[0], q[2]));
     if (dmax <= 0) continue; // dry section (above the waterline)
-    const s = stripOf(model, sec);
+    const s = stripOf(model, { pts });
     if (s.area <= 0) continue;
     strips.push({
-      x: model.plan.at(hs.uParams[i])[0],
+      x: model.plan.at(hs.uParams[col.i])[0],
       ...s,
       draft: dmax,
-      keel: sec.keel,
+      keel: col.keel,
     });
   }
   if (strips.length < 3) return null;

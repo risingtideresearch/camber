@@ -2,13 +2,13 @@
 //
 // Builds a small isometric wireframe of the current model as a self-contained SVG string. It's generated in
 // the editor at save time and stored on the design row, so the file view can show it as a plain <img> without
-// ever loading the model. Geometry reuses trimmedHullGrid (the same full-width station×offset point grid the
-// STEP export samples); the projection reproduces the 3D canvas's orthographic camera (see draw3d.ts VERT_SRC).
-// The drawing is fitted to its own projected bounds, so the model's unit and absolute size are irrelevant here.
+// ever loading the model. Geometry reuses the shared sampling's trimmed columns (the same surface the 3D view
+// draws); the projection reproduces the 3D canvas's orthographic camera (see draw3d.ts VERT_SRC). The drawing
+// is fitted to its own projected bounds, so the model's unit and absolute size are irrelevant here.
 
 import { type Model, prepare } from "./model";
-import { trimmedHullGrid } from "./mesh";
-import type { Vec3 } from "./math";
+import { computeHullSampling, type HullColumnV2 } from "./mesh";
+import { mirrorRow, type Vec3 } from "./math";
 
 // a pleasing fixed 3/4 view (matches the editor's default 3D orientation)
 const YAW = -0.62,
@@ -17,11 +17,10 @@ const YAW = -0.62,
 export function buildPreviewSvg(model: Model): string {
   prepare(model);
   const NS = 36;
-  // grid[i][j]: i station (transom→bow), j offset — FULL WIDTH, starboard sheer (0) → keel → port sheer
-  const { grid, creaseCols } = trimmedHullGrid(model, NS, 3);
-  if (grid.length < 4 || grid[0].length < 2) return "";
-  const NC = grid[0].length - 1,
-    KEEL = NC >> 1;
+  const sampling = computeHullSampling(model, NS, 3),
+    cols = sampling.columns.filter((c) => c.pts.length >= 2),
+    M = sampling.M;
+  if (cols.length < 4) return "";
 
   const c1 = Math.cos(YAW),
     s1 = Math.sin(YAW),
@@ -38,27 +37,57 @@ export function buildPreviewSvg(model: Model): string {
       Y1 = rx * s1 + y * c1;
     return [X1, -(Y1 * s2 + rz * c2)];
   };
+  const mir = (p: Vec3): Vec3 => [p[0], -p[1], p[2]];
   const frames: [number, number][][] = [];
   const longs: [number, number][][] = [];
 
-  // transverse frames: a handful of sections. Each row is already the full section (starboard sheer → keel →
-  // port sheer), so it draws as one polyline — no mirroring.
+  // transverse frames: a handful of full-width sections. A section that closes on the keel is mirrored through
+  // it into one polyline; one the transom (or an open bottom) cut is drawn as its two open half-sections.
   const NF = 8;
-  for (let f = 0; f <= NF; f++)
-    frames.push(grid[Math.round((NS * f) / NF)].map(proj));
+  for (let f = 0; f <= NF; f++) {
+    const c = cols[Math.round(((cols.length - 1) * f) / NF)],
+      pts = c.pts.map((s) => s.pos);
+    if (c.keel) frames.push(mirrorRow(pts).map(proj));
+    else {
+      frames.push(pts.map(proj));
+      frames.push(pts.map(mir).map(proj));
+    }
+  }
 
-  // longitudinals: both sheers (0, NC), the keel (KEEL), the chine/crease lines (already on both sides), and
-  // a mid line per side
-  const cols = new Set<number>([
-    0,
-    NC,
-    KEEL,
-    KEEL >> 1,
-    NC - (KEEL >> 1),
-    ...creaseCols,
-  ]);
-  for (const j of [...cols].sort((a, b) => a - b))
-    longs.push(grid.map((row) => proj(row[j])));
+  // longitudinals: the sheer, a couple of interior sheet rows, and the chine/crease rows — each traced across
+  // the columns and broken into runs where the trim dropped it — plus the bottom (keel / transom) edge. Every
+  // run that leaves the centerline is drawn on both sides.
+  const rowAt = (c: HullColumnV2, k: number): Vec3 | null => {
+    for (const s of c.pts) {
+      if (Math.abs(s.vSheetIndex - k) < 1e-9) return s.pos;
+      if (s.vSheetIndex > k) break;
+    }
+    return null;
+  };
+  const runsAlong = (pick: (c: HullColumnV2) => Vec3 | null): void => {
+    let run: Vec3[] = [];
+    const flush = (): void => {
+      if (run.length > 1) {
+        longs.push(run.map(proj));
+        if (run.some((p) => Math.abs(p[1]) > 1e-9))
+          longs.push(run.map(mir).map(proj));
+      }
+      run = [];
+    };
+    for (const c of cols) {
+      const p = pick(c);
+      if (p) run.push(p);
+      else flush();
+    }
+    flush();
+  };
+  const creaseRows = new Set<number>();
+  for (const col of sampling.sheet)
+    for (const s of col) if (s.vCreaseK > 1e-6) creaseRows.add(s.vSheetIndex);
+  const rows = new Set<number>([0, M >> 2, M >> 1, ...creaseRows]);
+  for (const k of [...rows].sort((a, b) => a - b))
+    runsAlong(k === 0 ? (c) => c.pts[0].pos : (c) => rowAt(c, k));
+  runsAlong((c) => c.pts[c.pts.length - 1].pos); // the keel / transom bottom edge
 
   // fit a viewBox to all projected points
   let minX = Infinity,

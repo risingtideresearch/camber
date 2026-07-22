@@ -9,7 +9,7 @@ import {
   computeHullSampling,
   forwardLimit,
   transomOutline,
-  type SectionRow,
+  type HullColumnV2,
 } from "../../src/core/mesh";
 import { loadJsonText } from "../../src/core/json";
 import type { Vec3 } from "../../src/core/math";
@@ -41,7 +41,7 @@ const NSEC = 80,
   uFwd = forwardLimit(model),
   xFwd = model.plan.at(uFwd)[0],
   sampling = computeHullSampling(model, NSEC, 4),
-  sections: SectionRow[] = sampling.trimmedSections;
+  sections: HullColumnV2[] = sampling.columns;
 
 let body = "";
 // deck reference z=0
@@ -56,16 +56,16 @@ body += `<line x1="${mapX(0)}" y1="${zScreenP(zWL(0))}" x2="${mapX(xFwd)}" y2="$
 // keel + stem (green), matching the mesh: keel rises to the forefoot, then the diving top edge back to the
 // trim. The transom's foot is prepended — it lies between two columns, so no closing section carries it.
 const closing = sections.filter((s) => s.keel && s.pts.length > 1);
-const keel = closing.map((s) => s.pts[s.pts.length - 1] as Vec3);
+const keel: Vec3[] = sampling.hullKeel.map((s) => s.pos); // foot → rocker, aft to bow
 const te = transomOutline(sampling);
 if (keel.length) {
-  if (sampling.transomFoot) keel.unshift(sampling.transomFoot);
   // the tolerance is a fraction of the hull's own length (it was absolute against v1's fixed L = 1000)
   const tol = 0.003 * L;
-  const dived = (s: SectionRow) => s.pts[0][2] < model.trimZ(s.pts[0][0]) - tol;
+  const dived = (s: HullColumnV2) =>
+    s.pts[0].pos[2] < model.trimZ(s.pts[0].pos[0]) - tol;
   let b = closing.length;
   while (b > 0 && dived(closing[b - 1])) b--;
-  const stem = closing.slice(b).map((s) => s.pts[0] as Vec3);
+  const stem = closing.slice(b).map((s) => s.pts[0].pos);
   if (stem.length)
     for (let i = stem.length - 1; i >= 0; i--) keel.push(stem[i]);
   else keel.push([xFwd, 0, model.trimZ(xFwd)]);
