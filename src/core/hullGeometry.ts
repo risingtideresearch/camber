@@ -516,10 +516,16 @@ export function buildHullMesh(
     "tris",
   );
 
-  // the quad-grid wire: girth edges (consecutive points within a column) plus longitudinal edges (matching
-  // sheet rows across adjacent columns) and the surface's own boundary. On the trimmed hull the columns are the
-  // sampling's trimmed sections and the whole thing is y-mirrored to port; on the raw Sheet view it is the full
-  // untrimmed grid, one-sided. The raw-triangle wire is the emitted triangle soup captured above.
+  // The quad wire: THE CELLS THE SURFACE IS ACTUALLY MADE OF — every whole quad's four sides and every
+  // boundary triangle's three, and nothing else. Drawing it instead from the trimmed columns (girth runs plus
+  // rungs between matching sheet rows) put lines where there is no surface: two neighbouring columns end on
+  // different trims at different fractional rows, so the chord closing them off ran outside the skin — past
+  // the transom plane, or below the keel. The cells cannot lie that way: an edge is drawn only because a face
+  // spans it. The hull's outline falls out for free, as the sides the marching-squares polygons brought with
+  // them. On the raw Sheet view there is no trim, so the wire is the full untrimmed lattice, one-sided.
+  //
+  // Faces share their vertices by object identity, so an edge is keyed by its two welded vertex ids (order
+  // normalized) and drawn once however many cells meet on it.
   const buildQuadWire = (): number[] => {
     const w: number[] = [];
     if (!trimmed) {
@@ -532,36 +538,22 @@ export function buildHullMesh(
           wireEdge(w, sh[i][k].pos, sh[i + 1][k].pos);
       return w;
     }
-    const cols = sampling.columns.filter((c) => c.pts.length >= 2);
-    // the girth edges (each column's own run, sheer → keel/transom)
-    for (const c of cols)
-      for (let k = 0; k + 1 < c.pts.length; k++)
-        wireEdge(w, c.pts[k].pos, c.pts[k + 1].pos);
-    for (let ci = 0; ci + 1 < cols.length; ci++) {
-      const A = cols[ci].pts,
-        B = cols[ci + 1].pts,
-        na = A.length,
-        nb = B.length;
-      // the surface's own boundary between these columns — the sheer along the top and the keel/transom along
-      // the bottom. A trimmed column ends on a FRACTIONAL sheet row its neighbour doesn't share, so the rung
-      // walk below can't reach these, yet the mesh spans them; they are the outline the eye reads the wire by,
-      // so draw them explicitly. The keel is among them because only the STARBOARD half is drawn here.
-      wireEdge(w, A[0].pos, B[0].pos);
-      wireEdge(w, A[na - 1].pos, B[nb - 1].pos);
-      // the longitudinal rungs: the shared integer sheet rows of the two columns
-      let i = 0,
-        j = 0;
-      while (i < na && j < nb) {
-        const d = A[i].vSheetIndex - B[j].vSheetIndex;
-        if (Math.abs(d) < 1e-9) {
-          if (!(i === 0 && j === 0) && !(i === na - 1 && j === nb - 1))
-            wireEdge(w, A[i].pos, B[j].pos);
-          i++;
-          j++;
-        } else if (d < 0) i++;
-        else j++;
-      }
-    }
+    const nV = verts.length,
+      seen = new Set<number>();
+    const edge = (a: HullSample, b: HullSample): void => {
+      const ia = vIdx.get(a) as number,
+        ib = vIdx.get(b) as number,
+        key = ia < ib ? ia * nV + ib : ib * nV + ia;
+      if (seen.has(key)) return;
+      seen.add(key);
+      wireEdge(w, a.pos, b.pos);
+    };
+    // the whole quads: their four sides, never the diagonal the shading split them on
+    for (const q of sampling.hullQuads)
+      for (let e = 0; e < 4; e++) edge(q[e], q[(e + 1) % 4]);
+    // the boundary cells, which the surface carries as triangles — so the wire shows them as triangles
+    for (const t of sampling.hullTris)
+      for (let e = 0; e < 3; e++) edge(t[e], t[(e + 1) % 3]);
     const nStar = w.length;
     for (let i = 0; i < nStar; i += 3) w.push(w[i], -w[i + 1], w[i + 2]);
     return w;
