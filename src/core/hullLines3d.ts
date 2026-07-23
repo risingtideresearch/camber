@@ -262,8 +262,10 @@ export function buildTrimCurves(
 // chained into runs. Taking SEGMENTS rather than points is what makes the black meet the colour — a run starts
 // at the last surviving point and ends at the next one, which are points of the edge curve itself.
 //
-// A marched trim holds one crossing per column that HAS one, so a column it misses (the sheer runs out where a
-// fine bow's top dives below it) simply leaves a gap in the list, with no segment across it.
+// A marched trim holds one crossing per column that HAS one, plus the corners it makes with the other two
+// trims, which fall BETWEEN columns. So consecutive points are a column apart at most — a column the trim
+// misses (the sheer runs out where a fine bow's top dives below it) leaves a wider gap, with no segment across
+// it — and a corner, being a point of the hull's edge too, is where the black hands over to the colour.
 function cutRuns(raw: TrimCurve, edge: Set<HullSample>): Vec3[][] {
   const out: Vec3[][] = [];
   let run: Vec3[] = [];
@@ -274,7 +276,10 @@ function cutRuns(raw: TrimCurve, edge: Set<HullSample>): Vec3[][] {
   for (let i = 1; i < raw.length; i++) {
     const a = raw[i - 1],
       b = raw[i];
-    if (b.uSheetIndex !== a.uSheetIndex + 1 || (edge.has(a) && edge.has(b))) {
+    if (
+      b.uSheetIndex > a.uSheetIndex + 1 + 1e-9 ||
+      (edge.has(a) && edge.has(b))
+    ) {
       close();
       continue;
     }

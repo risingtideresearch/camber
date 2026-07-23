@@ -195,10 +195,11 @@ export function sweptSection(
 // Every vertex is a `HullSample` carrying its (u, v), its (possibly fractional) sheet indices, and the crease
 // strength when crossing it in each direction. Shared boundary vertices are shared by OBJECT IDENTITY — the
 // same HullSample object in two cells, in the trimmed boundary curves, and in the transom panel — so nothing
-// can crack and the panel rides the skin's own edge. Four things come out of one pass, in the order the hull
-// is defined: the untrimmed `sheet`; the three trims marched over it; the trimmed boundary curves (`hullSheer`
-// / `hullKeel` / `hullTransom`) read off the trimmed columns; and the render mesh (`hullQuads` / `hullTris`)
-// of the starboard half (the port half is its y-mirror, added by the mesh builder).
+// can crack and the panel rides the skin's own edge. Five things come out of one pass, in the order the hull
+// is defined: the untrimmed `sheet`; the three trims marched over it; the three CORNERS where those trims cross
+// each other; the trimmed boundary curves (`hullSheer` / `hullKeel` / `hullTransom`) read off the trimmed
+// columns and closed on those corners; and the render mesh (`hullQuads` / `hullTris`) of the starboard half
+// (the port half is its y-mirror, added by the mesh builder).
 
 export interface HullSample {
   pos: Vec3;
@@ -230,12 +231,14 @@ export interface HullSampling {
   uParams: number[]; // the u of each column — the uniform lattice
   vParams: number[]; // the v of each row: vParams[k] = k / R
   sheet: HullSample[][]; // [column i][row k] — the full untrimmed grid
-  // each trim marched over the whole sheet, one sample per column (its crossing within that column)
+  // each trim marched over the whole sheet, one sample per column (its crossing within that column), with the
+  // corners it makes with the other two spliced in at their exact u
   sheerTrim: TrimCurve;
   centerlineTrim: TrimCurve;
   transomTrim: TrimCurve;
   // the hull's actual boundary once the trims are cut against each other, read off the trimmed columns with
-  // the head (sheer ∩ transom) and foot (keel ∩ transom) corners spliced onto the transom's ends
+  // the three corners — head (sheer ∩ transom), foot (keel ∩ transom) and stem (sheer ∩ centerline, the tip of
+  // the bow) — spliced onto the ends they close
   hullSheer: TrimCurve;
   hullKeel: TrimCurve;
   hullTransom: TrimCurve;
@@ -243,6 +246,14 @@ export interface HullSampling {
   // the render mesh of the STARBOARD trimmed half, vertices shared by object identity
   hullQuads: Quad[];
   hullTris: Tri[];
+}
+
+// A corner of the trimmed sheet: the exact point where two of the three trims cross, and which two they are
+// (always a < b). It is a point of BOTH of their edges, and the tip the mesh's bevel is cut off short of.
+interface TrimCorner {
+  s: HullSample;
+  a: number; // the trim it was walked along...
+  b: number; // ...and the one whose constraint vanished on it
 }
 
 // the interior station knots that carry a knuckle, as sheet indices (knot i sits at i·R) with their blended
@@ -437,7 +448,9 @@ export function computeHullSampling(
   const sheerB: HullSample[] = [],
     keelB: HullSample[] = [],
     transomB: HullSample[] = [];
+  const ciOf = new Map<HullSample, number>(); // which trim a boundary crossing lies on
   const record = (b: { s: HullSample; ci: number }): void => {
+    ciOf.set(b.s, b.ci);
     if (seenB.has(b.s)) return;
     seenB.add(b.s);
     (b.ci === 0 ? sheerB : b.ci === 1 ? keelB : transomB).push(b.s);
@@ -475,41 +488,35 @@ export function computeHullSampling(
     columns.push({ pts, i, keel, transom });
   }
 
-  // the head (sheer ∩ transom) and foot (keel ∩ transom) corners: a u the lattice never visits, found by
-  // bisecting the transom distance of the sheer edge / the keel over u. They are the transom edge's two ends,
-  // and each is spliced into the mesh cell that holds it (below) so the panel shares them with the skin.
-  const topAt = (u: number): { pos: Vec3; v: number } => {
-    const fr = frameAt(model, u),
-      sec = sectionAt(model, u),
-      g = (v: number): number => cS(sectionWorld(fr, sec, v)),
-      v = g(0) >= 0 ? 0 : bisectRoot(g, 0, sec.vmax, g(0));
-    return { pos: sectionWorld(fr, sec, v), v };
-  };
-  const keelAt = (u: number): { pos: Vec3; v: number } => {
-    const fr = frameAt(model, u),
-      sec = sectionAt(model, u),
-      g = (v: number): number => cC(sectionWorld(fr, sec, v)),
-      v = g(0) <= 0 ? 0 : bisectRoot(g, 0, sec.vmax, g(0)),
-      pos = sectionWorld(fr, sec, v);
-    pos[1] = 0;
-    return { pos, v };
-  };
-  const cornerU = (
-    d: (u: number) => number,
-    ua: number,
-    ub: number,
-  ): number => {
-    let da = d(ua);
-    for (let it = 0; it < 40; it++) {
-      const um = 0.5 * (ua + ub),
-        dm = d(um);
-      if (dm < 0 === da < 0) {
-        ua = um;
-        da = dm;
-      } else ub = um;
+  // (3) marched raw trims: one crossing per column, over the whole sheet, ignoring the other trims. Held per
+  // column — null where a column never crosses that trim — so the corners below can bracket on them.
+  const rawTrim: (HullSample | null)[][] = [];
+  for (let ci = 0; ci < 3; ci++) {
+    const row: (HullSample | null)[] = [];
+    for (let i = 0; i <= N; i++) {
+      let hit: HullSample | null = null;
+      for (let k = 0; k < M; k++) {
+        const fa = cons[ci](sheet[i][k].pos),
+          fb = cons[ci](sheet[i][k + 1].pos);
+        if (fa < 0 !== fb < 0) {
+          hit = colCross(ci, i, k);
+          break;
+        }
+      }
+      row.push(hit);
     }
-    return 0.5 * (ua + ub);
-  };
+    rawTrim.push(row);
+  }
+
+  // (4) THE CORNERS: the points where two trims cross each other — the head (sheer ∩ transom) and the foot
+  // (centerline ∩ transom) at the two ends of the transom edge, and the STEM (sheer ∩ centerline) at the tip of
+  // the bow, where the sheer trim runs into the centerline and the hull closes to a point.
+  //
+  // None of them lands on the lattice, and none is where the marching stops: a cell that both trims cut is cut
+  // off with a straight bevel, and both edge curves stop at their last cell crossing — short of the point they
+  // actually meet at, by up to a cell. So each corner is converged in its own right, the same way for all
+  // three: walk ONE of the two trims as a curve in u, and bisect for the u where the OTHER one's constraint
+  // vanishes on it.
   const mkCorner = (pos: Vec3, u: number, v: number): HullSample => ({
     pos,
     u,
@@ -519,73 +526,51 @@ export function computeHullSampling(
     uCreaseK: 0,
     vCreaseK: 0,
   });
-  let head: HullSample | null = null,
-    foot: HullSample | null = null;
-  if (columns.some((c) => c.transom)) {
-    // head: between the aft-most erased column and the first live one (where the sheer edge crosses the plane)
-    let i0 = 0;
-    while (i0 <= N && columns[i0].pts.length === 0) i0++;
-    if (i0 > 0 && i0 <= N) {
-      const u = cornerU(
-          (uu) => cT(topAt(uu).pos),
-          uParams[i0 - 1],
-          uParams[i0],
-        ),
-        t = topAt(u);
-      head = mkCorner(t.pos, u, t.v);
-    }
-    // foot: between the aft-most transom column and the first keel one (where the keel crosses the plane)
-    let ik = 0;
-    while (ik <= N && !columns[ik].keel) ik++;
-    if (ik > 0 && ik <= N && columns[ik - 1].transom) {
-      const u = cornerU(
-          (uu) => cT(keelAt(uu).pos),
-          uParams[ik - 1],
-          uParams[ik],
-        ),
-        t = keelAt(u);
-      foot = mkCorner(t.pos, u, t.v);
-    }
-  }
-
-  // (3) marched raw trims: one crossing per column, over the whole sheet, ignoring the other trims
-  const marchTrim = (ci: number): TrimCurve => {
-    const out: TrimCurve = [];
-    for (let i = 0; i <= N; i++)
-      for (let k = 0; k < M; k++) {
-        const fa = cons[ci](sheet[i][k].pos),
-          fb = cons[ci](sheet[i][k + 1].pos);
-        if (fa < 0 !== fb < 0) {
-          out.push(colCross(ci, i, k));
-          break;
-        }
-      }
-    return out;
+  // The crossing of constraint `ci` on the section at u — that trim as a curve in u, converged. `ci` is the
+  // sheer or the centerline, never the transom: every PAIR of trims holds one of those two, and both are met
+  // going down from the deck point, which starts ABOVE the sheer trim and OUTBOARD of the centerline. A
+  // section already past the trim at v = 0 has its crossing there.
+  const trimAt = (ci: number, u: number): { pos: Vec3; v: number } => {
+    const fr = frameAt(model, u),
+      sec = sectionAt(model, u),
+      g = (v: number): number => cons[ci](sectionWorld(fr, sec, v)),
+      g0 = g(0),
+      v = (ci === 0 ? g0 >= 0 : g0 <= 0) ? 0 : bisectRoot(g, 0, sec.vmax, g0),
+      pos = sectionWorld(fr, sec, v);
+    if (ci === 1) pos[1] = 0;
+    return { pos, v };
   };
+  const corners: TrimCorner[] = [];
+  // Walk trim `a` from column to column, bracket the sign changes of trim `b`'s constraint along it, and
+  // converge each. The marched trim brackets it (its crossings are the same curve, already computed), but the
+  // bisection runs on the exact walk, so a bracket the walk does not agree with is dropped rather than forced.
+  // A crossing the THIRD trim has already cut away is no corner of the hull, and is dropped too.
+  const findCorners = (a: number, b: number): void => {
+    const c = 3 - a - b,
+      d = (u: number): number => cons[b](trimAt(a, u).pos);
+    for (let i = 0; i < N; i++) {
+      const pa = rawTrim[a][i],
+        pb = rawTrim[a][i + 1];
+      if (!pa || !pb || cons[b](pa.pos) < 0 === cons[b](pb.pos) < 0) continue;
+      const da = d(uParams[i]);
+      if (da < 0 === d(uParams[i + 1]) < 0) continue;
+      const u = bisectRoot(d, uParams[i], uParams[i + 1], da),
+        t = trimAt(a, u);
+      if (b === 1) t.pos[1] = 0; // a corner on the centerline sits EXACTLY on it, as its crossings do
+      if (cons[c](t.pos) >= 0)
+        corners.push({ s: mkCorner(t.pos, u, t.v), a, b });
+    }
+  };
+  findCorners(0, 1); // the stem: the bow's tip, where the sheer trim runs into the centerline
+  findCorners(0, 2); // the head: the transom's top, where the sheer edge crosses the plane
+  findCorners(1, 2); // the foot: the transom's bottom, where the keel crosses the plane
 
   // (5) tessellate the interior cell by cell: a whole quad where all four corners survive, a marching-squares
-  // polygon on the boundary. The head / foot corner is spliced into its own cell's polygon so the boundary
-  // passes exactly through it.
+  // polygon on the boundary. The boundary polygons are held back until the corners have been spliced into
+  // them, and fanned into triangles after.
   const hullQuads: Quad[] = [],
-    hullTris: Tri[] = [];
-  const cornerCell = (c: HullSample | null): number =>
-    c
-      ? Math.floor(c.uSheetIndex) * M +
-        Math.min(M - 1, Math.floor(c.vSheetIndex))
-      : -1;
-  const headCell = cornerCell(head),
-    footCell = cornerCell(foot);
-  const isCross = (s: HullSample): boolean =>
-    !Number.isInteger(s.uSheetIndex) || !Number.isInteger(s.vSheetIndex);
-  const insertCorner = (poly: HullSample[], corner: HullSample): void => {
-    for (let a = 0; a < poly.length; a++) {
-      const b = (a + 1) % poly.length;
-      if (isCross(poly[a]) && isCross(poly[b])) {
-        poly.splice(a + 1, 0, corner);
-        return;
-      }
-    }
-  };
+    hullTris: Tri[] = [],
+    polys: HullSample[][] = [];
   const cornersOf: [number, number][] = [
     [0, 0],
     [1, 0],
@@ -627,25 +612,50 @@ export function computeHullSampling(
           poly.push(b.s);
         }
       }
-      const cell = i * M + k;
-      if (cell === headCell && head) insertCorner(poly, head);
-      else if (cell === footCell && foot) insertCorner(poly, foot);
-      for (let t = 1; t + 1 < poly.length; t++)
-        hullTris.push([poly[0], poly[t], poly[t + 1]]);
+      polys.push(poly);
     }
 
+  // Splice each corner into the mesh. Where two trims cross, the marching cuts the tip off with a BEVEL: one
+  // polygon edge running straight from a crossing of the first trim to a crossing of the second, whatever
+  // sub-cell sliver of the closing wedge lies beyond it (a wedge thinner than a cell holds no lattice node, so
+  // it raises no polygon of its own). That edge is the corner's, so the corner goes into the nearest one that
+  // joins its two trims — the bevel becomes a point, sharing both of its ends with the skin by identity.
+  for (const c of corners) {
+    let into: HullSample[] | null = null,
+      at = -1,
+      best = Infinity;
+    for (const poly of polys)
+      for (let j = 0; j < poly.length; j++) {
+        const p = poly[j].pos,
+          q = poly[(j + 1) % poly.length].pos,
+          x = ciOf.get(poly[j]),
+          y = ciOf.get(poly[(j + 1) % poly.length]);
+        if (x === undefined || y === undefined) continue;
+        if (Math.min(x, y) !== c.a || Math.max(x, y) !== c.b) continue;
+        const dx = (p[0] + q[0]) / 2 - c.s.pos[0],
+          dy = (p[1] + q[1]) / 2 - c.s.pos[1],
+          dz = (p[2] + q[2]) / 2 - c.s.pos[2],
+          d = dx * dx + dy * dy + dz * dz;
+        if (d < best) {
+          best = d;
+          into = poly;
+          at = j + 1;
+        }
+      }
+    if (into) into.splice(at, 0, c.s); // between the bevel's two ends, so the winding is unchanged
+  }
+  for (const poly of polys)
+    for (let t = 1; t + 1 < poly.length; t++)
+      hullTris.push([poly[0], poly[t], poly[t + 1]]);
+
   // (6) the trimmed boundary curves, assembled from every boundary crossing the mesh actually used — the
-  // columns' ends AND the row-edge crossings that carry the aft edge near the head — plus the head / foot
-  // corners the skin was spliced through, so each curve IS the skin's own edge, vertex for vertex. The sheer
-  // and keel run fore-aft (order by u); the transom runs head → foot, ordered down the plane by height z.
-  if (head) {
-    sheerB.push(head);
-    transomB.push(head);
-  }
-  if (foot) {
-    keelB.push(foot);
-    transomB.push(foot);
-  }
+  // columns' ends AND the row-edge crossings that carry the aft edge near the head — plus the corners the skin
+  // was spliced through, each one an end of BOTH of the edges it joins, so every curve IS the skin's own edge,
+  // vertex for vertex, right into its corners. The sheer and keel run fore-aft (order by u); the transom runs
+  // head → foot, ordered down the plane by height z.
+  for (const c of corners)
+    for (const ci of [c.a, c.b])
+      (ci === 0 ? sheerB : ci === 1 ? keelB : transomB).push(c.s);
   sheerB.sort((a, b) => a.uSheetIndex - b.uSheetIndex);
   keelB.sort((a, b) => a.uSheetIndex - b.uSheetIndex);
   transomB.sort((a, b) => b.pos[2] - a.pos[2]);
@@ -653,15 +663,29 @@ export function computeHullSampling(
     hullKeel: TrimCurve = keelB,
     hullTransom: TrimCurve = transomB;
 
+  // and the marched trims as drawable curves, each with its two corners spliced in at their exact u. A trim
+  // then passes THROUGH every crossing of another trim, so the point where the drawn curve leaves the hull's
+  // own edge and carries on cut-away is a vertex of it rather than somewhere inside a segment.
+  const trims: TrimCurve[] = rawTrim.map((row) =>
+    row.filter((s): s is HullSample => s !== null),
+  );
+  for (const c of corners)
+    for (const ci of [c.a, c.b]) {
+      let j = 0;
+      while (j < trims[ci].length && trims[ci][j].uSheetIndex < c.s.uSheetIndex)
+        j++;
+      trims[ci].splice(j, 0, c.s);
+    }
+
   return {
     R,
     M,
     uParams,
     vParams,
     sheet,
-    sheerTrim: marchTrim(0),
-    centerlineTrim: marchTrim(1),
-    transomTrim: marchTrim(2),
+    sheerTrim: trims[0],
+    centerlineTrim: trims[1],
+    transomTrim: trims[2],
     hullSheer,
     hullKeel,
     hullTransom,
