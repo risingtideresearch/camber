@@ -62,6 +62,7 @@ interface SceneProps {
   lines: LineToggles; // which curve families to lay over it (a stable object: it is in a rebuild's deps)
   sheet: boolean; // draw all of it on the raw untrimmed sweep (one side, no trims/mirror) instead of the hull
   trims: TrimToggles; // which of the sheet's three trims to draw over it (another stable object)
+  leftovers: boolean; // the Edges dropdown's box: also draw the trim runs that fall outside the boat
   showMesh: boolean;
   meshQuads: boolean;
   sampling: HullSampling | null;
@@ -77,6 +78,7 @@ export function Scene({
   lines,
   sheet,
   trims,
+  leftovers,
   showMesh,
   meshQuads,
   sampling,
@@ -209,11 +211,14 @@ export function Scene({
           )
         : null;
     // the sheet's own trims: curves the sampling already holds, so this only picks them — it owes nothing to
-    // the mesh just built, and is drawn whichever surface is up (see view3dDisplay.ts)
+    // the mesh just built. Drawn on the sheet the Sheet dropdown's own way; off it, only the leftovers the
+    // Edges dropdown asks for, which follow the Edges toggle they belong to — hence `sheet` and `leftovers &&
+    // lines.edges` (see view3dDisplay.ts)
     const trimCurves: TrimPlanCurves | null = sampling
       ? perfStep(
           "Trim curves",
-          () => buildTrimCurves(trims, sampling),
+          () =>
+            buildTrimCurves(trims, sampling, sheet, leftovers && lines.edges),
           (c) =>
             c.sheet.length + c.hull.reduce((n, h) => n + h.lines.length, 0),
           "curves",
@@ -236,6 +241,7 @@ export function Scene({
     lines,
     sheet,
     trims,
+    leftovers,
     showMesh,
     meshQuads,
     curvature,

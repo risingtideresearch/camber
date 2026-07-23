@@ -122,8 +122,13 @@ export function buildLinesPlanCurves(
           tris.push([sh[i][k], sh[i + 1][k + 1], sh[i][k + 1]]);
         }
     }
+    // the two kinds of feature edge, each its own subtractive box: the mesh boundary (the outline the surface
+    // ends on) and the chines (its interior creases). Either can be dropped without the other.
     const { boundary, chines } = featureEdges(tris, creaseRows);
-    for (const run of [...boundary, ...chines]) bold.push(...bothSides(run));
+    const runs: Vec3[][] = [];
+    if (lines.meshBoundary) runs.push(...boundary);
+    if (lines.chines) runs.push(...chines);
+    for (const run of runs) bold.push(...bothSides(run));
   }
 
   const family: Vec3[][] = [];
@@ -180,9 +185,10 @@ export function buildLinesPlanCurves(
       family.push(...runs);
     // On the hull that same profile is the KEEL, which the surface ends on rather than crosses: |y| touches 0
     // there without changing sign, so no march can catch it however many levels it is given. It is the mesh's
-    // own keel edge (`hullCenterline`, foot corner and all) — the same curve `edges` draws bold — shown here
-    // only when `edges` is off so the profile member is not lost.
-    if (trimmed && !lines.edges && sampling.hullCenterline.length > 1)
+    // own keel edge (`hullCenterline`, foot corner and all) — part of the boundary `edges` draws bold — shown
+    // here only when that boundary is NOT already up, so the profile member is neither lost nor doubled.
+    const boundaryUp = lines.edges && lines.meshBoundary;
+    if (trimmed && !boundaryUp && sampling.hullCenterline.length > 1)
       family.push(sampling.hullCenterline.map((s) => s.pos));
   }
 
@@ -201,6 +207,12 @@ export function buildLinesPlanCurves(
 // edge (`hullSheerLeftover` and its two siblings): the span the hull edge already covers would otherwise be
 // two coincident polylines fighting for the same pixels, and this way the black picks up exactly where the
 // colour stops — at the corner they share.
+//
+// All of that is the SHEET's story, and it goes when the sheet does: on the finished hull the hull form would
+// only re-draw an edge the boat already has, and the sheet form would draw that plus a sheet that is no longer
+// there. What is worth keeping is just the LEFTOVER — the runs of each cut that fall outside the boat — and
+// that is not this dropdown's to give: it is the Edges button's `leftovers`, passed in here because the runs
+// it wants are the ones the sheet form already knows how to pick (see view3dDisplay.ts).
 //
 // One-sided, unlike the lines plan: these are curves ON the sheet, and the sheet is the starboard sweep. The
 // port half of the finished hull is a mirror of the result of trimming, not a second sheet to trim.
@@ -246,23 +258,36 @@ const TRIM_SPECS: {
 export function buildTrimCurves(
   trims: TrimToggles,
   sampling: HullSampling,
+  sheetUp: boolean, // whether the raw sheet is the surface on show, rather than the trimmed hull
+  leftovers: boolean, // the Edges button's box: draw the runs of each cut that fall outside the boat
 ): TrimPlanCurves {
   const sheet: Vec3[][] = [],
     hull: TrimPlanCurves["hull"] = [];
+  // Off the sheet this dropdown has nothing to say, and the only curve that could be drawn is the one the
+  // Edges button asks for (see view3dDisplay.ts).
+  const leftoversOnly = !sheetUp;
+  if (leftoversOnly && !leftovers) return { sheet, hull };
+  // What each trim contributes, settled here because none of it varies from trim to trim. The hull form is
+  // the sheet's alone. And of the two sheet-form curves, the leftover is the one to take whenever the rest of
+  // the march would be laid over an edge that is being drawn anyway — by the hull form beneath it, or, once
+  // the sheet is put away, by the hull itself.
+  const drawSheetForm = leftoversOnly || trims.sheetCurves;
+  const drawHullForm = !leftoversOnly && trims.hullCurves;
+  const leftoverRuns = leftoversOnly || trims.hullCurves;
   for (const spec of TRIM_SPECS) {
     if (!trims[spec.key]) continue;
     // each curve in the order the sampling holds it — fore-aft for the sheer and keel, down the plane for the
-    // transom's hull edge — with nothing dropped, joined or split. The one choice made here is WHICH sheet
-    // curve: the whole march on its own, or, with the hull edge up as well, only the leftover the edge does
-    // not already cover.
-    if (trims.sheetCurves)
-      for (const run of trims.hullCurves
+    // transom's hull edge — with nothing dropped, joined or split
+    if (drawSheetForm)
+      for (const run of leftoverRuns
         ? spec.leftover(sampling)
         : spec.sheet(sampling))
         if (run.length > 1) sheet.push(run.map((s) => s.pos));
-    const edge = spec.hull(sampling);
-    if (trims.hullCurves && edge.length > 1)
-      hull.push({ color: spec.color, lines: [edge.map((s) => s.pos)] });
+    if (drawHullForm) {
+      const edge = spec.hull(sampling);
+      if (edge.length > 1)
+        hull.push({ color: spec.color, lines: [edge.map((s) => s.pos)] });
+    }
   }
   return { sheet, hull };
 }
