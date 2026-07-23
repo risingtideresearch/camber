@@ -215,7 +215,7 @@ export interface TrimPlanCurves {
 // brown from the transom outline both views draw.
 const TRIM_SPECS: {
   key: "sheer" | "centerline" | "transom";
-  sheet: (s: HullSampling) => TrimCurve; // marched over the whole sheet, as if this were the only trim
+  sheet: (s: HullSampling) => TrimCurve[]; // marched over the whole sheet, as if this were the only trim
   hull: (s: HullSampling) => TrimCurve; // the part of it the other two leave standing: the hull's own edge
   leftover: (s: HullSampling) => TrimCurve[]; // and the rest of it, in runs — what `hull` does not draw
   color: string;
@@ -258,7 +258,7 @@ export function buildTrimCurves(
     if (trims.sheetCurves)
       for (const run of trims.hullCurves
         ? spec.leftover(sampling)
-        : [spec.sheet(sampling)])
+        : spec.sheet(sampling))
         if (run.length > 1) sheet.push(run.map((s) => s.pos));
     const edge = spec.hull(sampling);
     if (trims.hullCurves && edge.length > 1)

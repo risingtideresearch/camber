@@ -187,7 +187,7 @@ export function sweptSection(
 // fractional sheet row and the mesh was stitched by fanning triangles between neighbouring columns' ragged
 // ends — which left the fixed-v longitudinals NOT ending where they were trimmed and scattered inconsistent
 // face normals along every trim edge. This one trims the SHEET ITSELF: it classifies every lattice node by
-// whether the hull keeps it (`keepAll` ≥ 0, the min of the three constraints), converges each trim/grid-edge
+// whether the hull keeps it (`kv` ≥ 0, the min of the three constraints), converges each trim/grid-edge
 // crossing by bisection SHARED between the two cells that meet on that edge, and tessellates the surviving
 // interior cell by cell — whole quads inside, marching-squares polygons on the boundary. The boundary is then
 // exact in BOTH directions and the normals stay clean along every edge.
@@ -232,11 +232,12 @@ export interface HullSampling {
   uParams: number[]; // the u of each column — the uniform lattice
   vParams: number[]; // the v of each row: vParams[k] = k / R
   sheet: HullSample[][]; // [column i][row k] — the full untrimmed grid
-  // each trim marched over the whole sheet, one sample per column (its crossing within that column), with the
-  // corners it makes with the other two spliced in at their exact u
-  sheetSheer: TrimCurve;
-  sheetCenterline: TrimCurve;
-  sheetTransom: TrimCurve;
+  // each trim marched over the whole sheet as if it were the only one — its zero contour traced cell by cell
+  // through BOTH edge directions, so it reaches the sheet's own top and bottom rows — in runs (a contour can
+  // leave and re-enter the sheet), with the corners it makes with the other two spliced in at their exact spot
+  sheetSheer: TrimCurve[];
+  sheetCenterline: TrimCurve[];
+  sheetTransom: TrimCurve[];
   // the hull's actual boundary once the trims are cut against each other, read off the trimmed columns with
   // the three corners — head (sheer ∩ transom), foot (keel ∩ transom) and stem (sheer ∩ centerline, the tip of
   // the bow) — spliced onto the ends they close
@@ -301,14 +302,13 @@ export function computeHullSampling(
   const vParams: number[] = [];
   for (let k = 0; k <= M; k++) vParams.push(k / R);
 
-  // the three keep constraints on a world point: ≥ 0 keeps it. Their MIN, `keepAll`, makes "the hull survives
-  // this point" one sign test, and one bisection on it lands on whichever trim binds — sheer, centerline, or
+  // the three keep constraints on a world point: ≥ 0 keeps it. Their MIN makes "the hull survives this
+  // point" one sign test, and one bisection on it lands on whichever trim binds — sheer, centerline, or
   // transom — with no case analysis (the same construction as `keepAt`, but on a point we already hold).
   const cS = (p: Vec3): number => model.trimZ(p[0]) - p[2]; // at/below the sheer trim
   const cC = (p: Vec3): number => p[1]; // at/inboard of the centerline
   const cT = (p: Vec3): number => p[0] - xTransom(model, p[2]); // forward of the transom
   const cons: ((p: Vec3) => number)[] = [cS, cC, cT];
-  const keepAll = (p: Vec3): number => Math.min(cS(p), cC(p), cT(p));
 
   // per-column frame + section (each evaluated once) and the knuckle strength at each crease row
   const frs: Frame[] = [],
@@ -342,7 +342,11 @@ export function computeHullSampling(
       });
     sheet.push(col);
   }
-  const kv = sheet.map((col) => col.map((s) => keepAll(s.pos))); // keepAll at every node
+  // every constraint at every node — the marched trims' sign fields — and their min, the hull's keep test
+  const cv = cons.map((c) => sheet.map((col) => col.map((s) => c(s.pos))));
+  const kv = sheet.map((col, i) =>
+    col.map((_, k) => Math.min(cv[0][i][k], cv[1][i][k], cv[2][i][k])),
+  );
   const inside = (i: number, k: number): boolean => kv[i][k] >= 0;
 
   // A trim/grid-edge crossing, converged by bisection on ONE constraint and CACHED so the two cells that meet
@@ -496,24 +500,83 @@ export function computeHullSampling(
     columns.push({ pts, i, keel, transom });
   }
 
-  // (3) marched raw trims: one crossing per column, over the whole sheet, ignoring the other trims. Held per
-  // column — null where a column never crosses that trim — so the corners below can bracket on them.
-  const rawTrim: (HullSample | null)[][] = [];
-  for (let ci = 0; ci < 3; ci++) {
-    const row: (HullSample | null)[] = [];
-    for (let i = 0; i <= N; i++) {
-      let hit: HullSample | null = null;
+  // (3) marched raw trims: each constraint's zero contour marched over the WHOLE sheet — every cell, both
+  // edge directions — ignoring the other trims. The per-column scan this replaces looked only at COLUMN
+  // edges (one crossing per column, first hit only), so a trim running steeply in v — the transom, cutting
+  // across the sheet's rows — came back with scattered samples and stopped short of the sheet's own top and
+  // bottom rows. Marching the cells follows the contour wherever it goes: a crossing on a column edge is
+  // `colCross`, on a row edge `rowCross` — the same cached samples the tessellation shares by identity — and
+  // each cell links its two crossings into a segment (a saddle cell pairs its four by the cell's mean).
+  // The segments then chain end to end into RUNS: open chains first, from their loose ends, then any closed
+  // loop left over. Runs, not one curve per trim — a contour can leave and re-enter the sheet.
+  const marchTrim = (ci: number): TrimCurve[] => {
+    const f = cv[ci],
+      neg = (i: number, k: number): boolean => f[i][k] < 0;
+    interface Seg {
+      a: HullSample;
+      b: HullSample;
+      used: boolean;
+    }
+    const segs: Seg[] = [],
+      adj = new Map<HullSample, Seg[]>();
+    const link = (a: HullSample, b: HullSample): void => {
+      const s = { a, b, used: false };
+      segs.push(s);
+      (adj.get(a) ?? adj.set(a, []).get(a)!).push(s);
+      (adj.get(b) ?? adj.set(b, []).get(b)!).push(s);
+    };
+    for (let i = 0; i < N; i++)
       for (let k = 0; k < M; k++) {
-        const fa = cons[ci](sheet[i][k].pos),
-          fb = cons[ci](sheet[i][k + 1].pos);
-        if (fa < 0 !== fb < 0) {
-          hit = colCross(ci, i, k);
-          break;
+        // the cell's edge crossings, ring-ordered bottom → right → top → left
+        const cross: HullSample[] = [];
+        if (neg(i, k) !== neg(i + 1, k)) cross.push(rowCross(ci, i, k));
+        if (neg(i + 1, k) !== neg(i + 1, k + 1))
+          cross.push(colCross(ci, i + 1, k));
+        if (neg(i + 1, k + 1) !== neg(i, k + 1))
+          cross.push(rowCross(ci, i, k + 1));
+        if (neg(i, k + 1) !== neg(i, k)) cross.push(colCross(ci, i, k));
+        if (cross.length === 2) link(cross[0], cross[1]);
+        else if (cross.length === 4) {
+          // a saddle: two diagonal corners in, two out, one crossing on every edge. The cell's mean value
+          // stands in for its centre and decides the pairing — the contour isolates the corners whose sign
+          // the mean disagrees with, so each segment joins the two edges flanking one such corner.
+          const mean = f[i][k] + f[i + 1][k] + f[i + 1][k + 1] + f[i][k + 1];
+          if (mean < 0 === neg(i, k)) {
+            link(cross[0], cross[1]); // around the bottom-right corner...
+            link(cross[2], cross[3]); // ...and the top-left
+          } else {
+            link(cross[3], cross[0]); // around the bottom-left corner...
+            link(cross[1], cross[2]); // ...and the top-right
+          }
         }
       }
-      row.push(hit);
-    }
-    rawTrim.push(row);
+    // chain the shared crossings into runs, following each unused segment on from the tip
+    const walk = (start: HullSample, seed: Seg): TrimCurve => {
+      const run: TrimCurve = [start];
+      let cur = start,
+        seg: Seg | undefined = seed;
+      while (seg) {
+        seg.used = true;
+        cur = seg.a === cur ? seg.b : seg.a;
+        run.push(cur);
+        seg = adj.get(cur)!.find((s) => !s.used);
+      }
+      return run;
+    };
+    const runs: TrimCurve[] = [];
+    for (const [s, list] of adj)
+      if (list.length === 1 && !list[0].used) runs.push(walk(s, list[0]));
+    for (const s of segs) if (!s.used) runs.push(walk(s.a, s));
+    return runs;
+  };
+  // orient and order the runs the way the drawn curves read — the sheer and centerline fore-aft (ascending
+  // u), the transom head → foot (down the plane by height z) — matching the hull edges they survive as.
+  const trims: TrimCurve[][] = [marchTrim(0), marchTrim(1), marchTrim(2)];
+  for (let ci = 0; ci < 3; ci++) {
+    const key = (s: HullSample): number => (ci === 2 ? -s.pos[2] : s.u);
+    for (const run of trims[ci])
+      if (key(run[0]) > key(run[run.length - 1])) run.reverse();
+    trims[ci].sort((r1, r2) => key(r1[0]) - key(r2[0]));
   }
 
   // (4) THE CORNERS: the points where two trims cross each other — the head (sheer ∩ transom) and the foot
@@ -549,25 +612,27 @@ export function computeHullSampling(
     return { pos, v };
   };
   const corners: TrimCorner[] = [];
-  // Walk trim `a` from column to column, bracket the sign changes of trim `b`'s constraint along it, and
-  // converge each. The marched trim brackets it (its crossings are the same curve, already computed), but the
-  // bisection runs on the exact walk, so a bracket the walk does not agree with is dropped rather than forced.
-  // A crossing the THIRD trim has already cut away is no corner of the hull, and is dropped too.
+  // Walk trim `a` from sample to sample along its marched runs, bracket the sign changes of trim `b`'s
+  // constraint along it, and converge each. The marched trim brackets it (its crossings are the same curve,
+  // already computed), but the bisection runs on the exact walk, so a bracket the walk does not agree with is
+  // dropped rather than forced. A crossing the THIRD trim has already cut away is no corner of the hull, and
+  // is dropped too.
   const findCorners = (a: number, b: number): void => {
     const c = 3 - a - b,
       d = (u: number): number => cons[b](trimAt(a, u).pos);
-    for (let i = 0; i < N; i++) {
-      const pa = rawTrim[a][i],
-        pb = rawTrim[a][i + 1];
-      if (!pa || !pb || cons[b](pa.pos) < 0 === cons[b](pb.pos) < 0) continue;
-      const da = d(uParams[i]);
-      if (da < 0 === d(uParams[i + 1]) < 0) continue;
-      const u = bisectRoot(d, uParams[i], uParams[i + 1], da),
-        t = trimAt(a, u);
-      if (b === 1) t.pos[1] = 0; // a corner on the centerline sits EXACTLY on it, as its crossings do
-      if (cons[c](t.pos) >= 0)
-        corners.push({ s: mkCorner(t.pos, u, t.v), a, b });
-    }
+    for (const run of trims[a])
+      for (let j = 0; j + 1 < run.length; j++) {
+        const pa = run[j],
+          pb = run[j + 1];
+        if (cons[b](pa.pos) < 0 === cons[b](pb.pos) < 0) continue;
+        const da = d(pa.u);
+        if (da < 0 === d(pb.u) < 0) continue;
+        const u = bisectRoot(d, pa.u, pb.u, da),
+          t = trimAt(a, u);
+        if (b === 1) t.pos[1] = 0; // a corner on the centerline sits EXACTLY on it, as its crossings do
+        if (cons[c](t.pos) >= 0)
+          corners.push({ s: mkCorner(t.pos, u, t.v), a, b });
+      }
   };
   findCorners(0, 1); // the stem: the bow's tip, where the sheer trim runs into the centerline
   findCorners(0, 2); // the head: the transom's top, where the sheer edge crosses the plane
@@ -671,37 +736,63 @@ export function computeHullSampling(
     hullCenterline: TrimCurve = keelB,
     hullTransom: TrimCurve = transomB;
 
-  // and the marched trims as drawable curves, each with its two corners spliced in at their exact u. A trim
+  // and each corner spliced into the marched curves it lies on. The corner is a point OF both of its trims,
+  // between two of the crossings the march found, so it goes into the run's segment nearest to it — nearest
+  // by point-to-segment distance, since a marched run need not be monotone in u or in anything else. A trim
   // then passes THROUGH every crossing of another trim, so the point where the drawn curve leaves the hull's
   // own edge and carries on cut-away is a vertex of it rather than somewhere inside a segment.
-  const trims: TrimCurve[] = rawTrim.map((row) =>
-    row.filter((s): s is HullSample => s !== null),
-  );
+  const segDistSq = (p: Vec3, a: Vec3, b: Vec3): number => {
+    const ex = b[0] - a[0],
+      ey = b[1] - a[1],
+      ez = b[2] - a[2],
+      px = p[0] - a[0],
+      py = p[1] - a[1],
+      pz = p[2] - a[2],
+      ee = ex * ex + ey * ey + ez * ez,
+      t = ee > 0 ? clamp((px * ex + py * ey + pz * ez) / ee, 0, 1) : 0,
+      dx = px - t * ex,
+      dy = py - t * ey,
+      dz = pz - t * ez;
+    return dx * dx + dy * dy + dz * dz;
+  };
   for (const c of corners)
     for (const ci of [c.a, c.b]) {
-      let j = 0;
-      while (j < trims[ci].length && trims[ci][j].uSheetIndex < c.s.uSheetIndex)
-        j++;
-      trims[ci].splice(j, 0, c.s);
+      let into: TrimCurve | null = null,
+        at = -1,
+        best = Infinity;
+      for (const run of trims[ci])
+        for (let j = 0; j + 1 < run.length; j++) {
+          const d = segDistSq(c.s.pos, run[j].pos, run[j + 1].pos);
+          if (d < best) {
+            best = d;
+            into = run;
+            at = j + 1;
+          }
+        }
+      if (into) into.splice(at, 0, c.s);
     }
 
-  // (7) and the LEFTOVER of each marched trim: the span of it that lies outside one of the other two, which is
+  // (7) and the LEFTOVER of each marched trim: the spans of it that lie outside one of the other two, which is
   // the whole curve minus the run that stands as the hull's own edge. It is read straight off the drawable
-  // curve above by the same test the sheet was trimmed with, so the split lands exactly on the corners just
+  // runs above by the same test the sheet was trimmed with, so the split lands exactly on the corners just
   // spliced in — a corner sits ON both of its trims, so its constraint there is zero to bisection tolerance,
   // and the epsilon keeps that sign from deciding anything. Each cut-away run then carries the corner it was
   // cut at as its end, which is the one point it shares with the hull edge: the two meet rather than overlap.
   const CORNER_EPS = 1e-9; // world units — far below any real crossing, far above the bisection's noise
-  const leftovers: TrimCurve[][] = trims.map((curve, ci) => {
+  const leftovers: TrimCurve[][] = trims.map((curves, ci) => {
     const others = [0, 1, 2].filter((c) => c !== ci),
-      cut = curve.map((s) => others.some((c) => cons[c](s.pos) < -CORNER_EPS)),
       runs: TrimCurve[] = [];
-    for (let j = 0; j < curve.length; j++) {
-      if (!cut[j]) continue;
-      let e = j;
-      while (e + 1 < curve.length && cut[e + 1]) e++;
-      runs.push(curve.slice(Math.max(0, j - 1), e + 2)); // one sample of slack: the corner at either end
-      j = e;
+    for (const curve of curves) {
+      const cut = curve.map((s) =>
+        others.some((c) => cons[c](s.pos) < -CORNER_EPS),
+      );
+      for (let j = 0; j < curve.length; j++) {
+        if (!cut[j]) continue;
+        let e = j;
+        while (e + 1 < curve.length && cut[e + 1]) e++;
+        runs.push(curve.slice(Math.max(0, j - 1), e + 2)); // one sample of slack: the corner at either end
+        j = e;
+      }
     }
     return runs;
   });
