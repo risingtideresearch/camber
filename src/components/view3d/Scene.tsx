@@ -17,14 +17,20 @@ import {
 } from "../../core/hullShader";
 import {
   buildLinesPlanCurves,
+  buildTrimCurves,
   type LinesPlanCurves,
+  type TrimPlanCurves,
 } from "../../core/hullLines3d";
 import type { HullSampling } from "../../core/mesh";
 import type { Model } from "../../core/model";
 import { selStationIdx, type ModelSelection } from "../../core/modelSelection";
 import { perfBegin, perfEnd, perfStep, PERF_MESH } from "../../core/perf";
 import type { StlState } from "../../core/stlImport";
-import type { LineToggles, ShadingMode } from "../../core/view3dDisplay";
+import type {
+  LineToggles,
+  ShadingMode,
+  TrimToggles,
+} from "../../core/view3dDisplay";
 import { CameraFacingCurves } from "./CameraFacingCurves";
 import { StlOverlay } from "./StlOverlay";
 import { useCameraFraming } from "./useCameraFraming";
@@ -55,6 +61,7 @@ interface SceneProps {
   shading: ShadingMode; // how the surface is shaded — independent of which curves are drawn on it
   lines: LineToggles; // which curve families to lay over it (a stable object: it is in a rebuild's deps)
   sheet: boolean; // draw all of it on the raw untrimmed sweep (one side, no trims/mirror) instead of the hull
+  trims: TrimToggles; // which of the sheet's three trims to draw over it (another stable object)
   showMesh: boolean;
   meshQuads: boolean;
   sampling: HullSampling | null;
@@ -69,6 +76,7 @@ export function Scene({
   shading,
   lines,
   sheet,
+  trims,
   showMesh,
   meshQuads,
   sampling,
@@ -156,6 +164,7 @@ export function Scene({
     wireGeometry,
     curvCache,
     linesPlanCurves,
+    trimCurves,
   } = useMemo(() => {
     perfBegin(PERF_MESH);
     let hullGeometry: THREE.BufferGeometry | null = null,
@@ -199,6 +208,16 @@ export function Scene({
             "curves",
           )
         : null;
+    // the sheet's own trims: curves the sampling already holds, so this only picks and splits them — it owes
+    // nothing to the mesh just built, and is drawn whichever surface is up (see view3dDisplay.ts)
+    const trimCurves: TrimPlanCurves | null = sampling
+      ? perfStep(
+          "Trim curves",
+          () => buildTrimCurves(trims, sampling),
+          (c) => c.cut.length + c.kept.reduce((n, k) => n + k.lines.length, 0),
+          "curves",
+        )
+      : null;
     perfEnd(PERF_MESH);
     return {
       hullGeometry,
@@ -206,6 +225,7 @@ export function Scene({
       wireGeometry,
       curvCache,
       linesPlanCurves,
+      trimCurves,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -214,6 +234,7 @@ export function Scene({
     sampling,
     lines,
     sheet,
+    trims,
     showMesh,
     meshQuads,
     curvature,
@@ -255,6 +276,7 @@ export function Scene({
         guideIdx={guideIdx}
         curvature={curvCache}
         lines={linesPlanCurves}
+        trims={trimCurves}
       />
     </group>
   );

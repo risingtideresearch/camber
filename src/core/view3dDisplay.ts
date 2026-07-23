@@ -9,6 +9,10 @@
 // Two further toggles live in the view and change what all of the above is drawn ON: `sheet` swaps the
 // trimmed, mirrored hull for the raw untrimmed sweep (one side, no trims/mirror), and `showMesh` overlays the
 // hull's quad grid as a wireframe, to inspect the mesh itself.
+//
+// `TrimToggles` rides with `sheet` (it is the Sheet button's dropdown) but is independent of it: each of the
+// three trims can be drawn where it runs over the WHOLE sheet, whichever surface is up — which is the point of
+// showing them, since what a trim cuts is mostly the part of the sheet the finished hull no longer has.
 
 export type ShadingMode = "flat" | "smooth" | "zebra";
 
@@ -27,4 +31,18 @@ export const DEFAULT_LINES: LineToggles = {
   sections: false,
   buttocks: false,
   waterlines: false,
+};
+
+// which of the sheet's three trims to draw, each marched over the whole sheet as if it were the only one
+export interface TrimToggles {
+  sheer: boolean; // the top cut: z = the sheer trim curve
+  centerline: boolean; // the keel cut: y = 0
+  transom: boolean; // the aft cut: the raked transom plane
+}
+
+// none of them: they are an inspection aid for how the three trims cut each other, not part of the boat
+export const DEFAULT_TRIMS: TrimToggles = {
+  sheer: false,
+  centerline: false,
+  transom: false,
 };

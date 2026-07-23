@@ -12,7 +12,7 @@ import {
   createSharedRibbonCamera,
   updateRibbonCamera,
 } from "../../core/ribbonShader";
-import type { LinesPlanCurves } from "../../core/hullLines3d";
+import type { LinesPlanCurves, TrimPlanCurves } from "../../core/hullLines3d";
 import { loa, type Model } from "../../core/model";
 import type { Vec3 } from "../../core/math";
 
@@ -52,6 +52,7 @@ interface CameraFacingCurvesProps {
   guideIdx: number | null; // the selected station point's index, or null — draws its amber swept longitudinal
   curvature: CurvCurve3[] | null; // buildCurvature3's output, memoized by the caller
   lines: LinesPlanCurves | null; // buildLinesPlanCurves' output (only in a lines-plan mode), memoized by the caller
+  trims: TrimPlanCurves | null; // buildTrimCurves' output — the sheet's three trims, memoized by the caller
 }
 
 // Every 3D guide curve — the selected station's longitudinal, the curvature combs, the lines plan — drawn as
@@ -67,6 +68,7 @@ export function CameraFacingCurves({
   guideIdx,
   curvature,
   lines,
+  trims,
 }: CameraFacingCurvesProps) {
   const invalidate = useThree((s) => s.invalidate);
   // shared by reference with every material below, so one write per frame updates all of them
@@ -122,6 +124,25 @@ export function CameraFacingCurves({
           halfWidthPx: LINES_DWL_HALF_PX,
         });
     }
+    // The sheet's trims at the bold Edges weight, because on the hull that is exactly what their surviving
+    // span IS — the same edge, drawn in the trim's own colour to say which cut made it. The cut-away span is
+    // one black job whichever trims are shown, so it reads as the continuation of those edges out over the
+    // sheet rather than as a family of its own.
+    if (trims) {
+      if (trims.cut.length)
+        out.push({
+          polylines: trims.cut,
+          color: new THREE.Color(LINES_BLACK),
+          halfWidthPx: LINES_BOLD_HALF_PX,
+        });
+      for (const k of trims.kept)
+        if (k.lines.length)
+          out.push({
+            polylines: k.lines,
+            color: new THREE.Color(k.color),
+            halfWidthPx: LINES_BOLD_HALF_PX,
+          });
+    }
     if (guideIdx !== null) {
       const runs = buildLongitudinalCurve(model, guideIdx);
       if (runs.length)
@@ -133,7 +154,7 @@ export function CameraFacingCurves({
         });
     }
     return out;
-  }, [model, guideIdx, curvature, lines]);
+  }, [model, guideIdx, curvature, lines, trims]);
 
   const meshes = useMemo(
     () =>

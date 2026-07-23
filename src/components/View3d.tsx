@@ -12,8 +12,10 @@ import { PERF_N_DEFAULT, PERF_R_DEFAULT } from "../core/perf";
 import { defaultCurvature, type CurvatureSettings } from "../core/comb";
 import {
   DEFAULT_LINES,
+  DEFAULT_TRIMS,
   type LineToggles,
   type ShadingMode,
+  type TrimToggles,
 } from "../core/view3dDisplay";
 import { Button } from "./Button";
 import { Dropdown } from "./Dropdown";
@@ -39,7 +41,9 @@ const CANVAS_BG = "#e6ecf3";
 // Nothing here is mutually exclusive except the shading: the line families are independent toggles that
 // compose with any shading, and the Sheet toggle picks WHICH surface all of it is drawn on — the trimmed,
 // mirrored hull or the raw swept sheet it is cut from — so a lines plan or the zebra stripes can be inspected
-// on the untrimmed sheet as readily as on the finished hull.
+// on the untrimmed sheet as readily as on the finished hull. The Sheet button's dropdown carries the three
+// trim curves (they are what cuts the sheet down to the hull), but they too are independent of it: showing
+// one over the finished hull is how you see the cut carry on past the boat.
 const SHADINGS: { shading: ShadingMode; label: string; title: string }[] = [
   {
     shading: "flat",
@@ -60,6 +64,28 @@ const SHADINGS: { shading: ShadingMode; label: string; title: string }[] = [
 // orthographic view (which is this at 0°) and the top is wide enough to stand inside the boat.
 const DEFAULT_FOV = 30;
 const FOV_RANGE: [number, number] = [5, 80];
+
+// The Sheet button's dropdown: the three cuts that make the sheet into the hull, each drawable as the curve it
+// marches over the WHOLE sheet. Where the other two leave it standing it is the boat's own edge and is drawn
+// in that trim's 2D colour; the rest — the part another trim got to first — carries on in the Edges black. So
+// the colour break marks where two trims cross, and the black tail shows the cut running on past the boat.
+const TRIMS: { key: keyof TrimToggles; label: string; title: string }[] = [
+  {
+    key: "sheer",
+    label: "Sheer trim",
+    title: "The top cut: where the sheer trim curve crosses the sheet",
+  },
+  {
+    key: "centerline",
+    label: "Centerline trim",
+    title: "The keel cut: where the sheet crosses y = 0",
+  },
+  {
+    key: "transom",
+    label: "Transom trim",
+    title: "The aft cut: where the transom plane crosses the sheet",
+  },
+];
 
 const LINES: { key: keyof LineToggles; label: string; title: string }[] = [
   {
@@ -105,6 +131,8 @@ export function View3d({
   // when a toggle actually does
   const [lines, setLines] = useState<LineToggles>(DEFAULT_LINES);
   const [sheet, setSheet] = useState(false); // draw everything on the untrimmed sweep instead of the hull
+  const [trims, setTrims] = useState<TrimToggles>(DEFAULT_TRIMS); // which of the sheet's cuts to draw
+  const [sheetMenu, setSheetMenu] = useState(false); // the Sheet dropdown open state
   const [showMesh, setShowMesh] = useState(false); // overlay the quad-grid wireframe
   const [meshQuads, setMeshQuads] = useState(true); // wire as quads (default) or the raw shaded triangles
   const [meshMenu, setMeshMenu] = useState(false); // the Mesh overlay dropdown open state
@@ -137,6 +165,7 @@ export function View3d({
           shading={shading}
           lines={lines}
           sheet={sheet}
+          trims={trims}
           showMesh={showMesh}
           meshQuads={meshQuads}
           sampling={effSampling}
@@ -194,13 +223,31 @@ export function View3d({
             <span className="dd-name">As quads</span>
           </label>
         </Dropdown>
-        <Button
+        <Dropdown
+          label="Sheet"
           active={sheet}
+          onToggle={() => setSheet((v) => !v)}
+          open={sheetMenu}
+          onOpenChange={setSheetMenu}
           title="Draw everything on the raw untrimmed sweep (one side, no trims or mirror) instead of the finished hull"
-          onClick={() => setSheet((v) => !v)}
+          menuLabel="Sheet trims"
         >
-          Sheet
-        </Button>
+          <div className="dd-section">
+            <div className="dd-group">Trim curves</div>
+            {TRIMS.map((t) => (
+              <label key={t.key} className="dd-row dd-check" title={t.title}>
+                <input
+                  type="checkbox"
+                  checked={trims[t.key]}
+                  onChange={(e) =>
+                    setTrims((s) => ({ ...s, [t.key]: e.target.checked }))
+                  }
+                />
+                <span className="dd-name">{t.label}</span>
+              </label>
+            ))}
+          </div>
+        </Dropdown>
         {LINES.map((l) => (
           <Button
             key={l.key}

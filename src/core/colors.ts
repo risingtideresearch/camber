@@ -15,6 +15,7 @@ export const COL = {
   station: getCSS("--station"),
   wl: getCSS("--wl"),
   deck: getCSS("--deck"),
+  transom: getCSS("--transom"),
   mut: getCSS("--mut"),
 };
 
