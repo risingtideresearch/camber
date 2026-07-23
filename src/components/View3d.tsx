@@ -291,12 +291,12 @@ export function View3d({
           onToggle={() => setLines((s) => ({ ...s, edges: !s.edges }))}
           open={edgesMenu}
           onOpenChange={setEdgesMenu}
-          title="The surface's own feature edges: the mesh boundary (sheer, keel / transom cut) and every chine"
+          title="The surface's own feature edges: the mesh boundary (sheer, keel, and the transom's outline) and every chine"
           menuLabel="Edge options"
         >
           <label
             className="dd-row dd-check"
-            title="The mesh boundary: the outline the surface ends on — sheer, keel, transom cut. Uncheck to keep the chines but drop the outline drawn over them"
+            title="The mesh boundary: the outline the surface ends on — sheer, keel, and the transom (its aft cut plus the top edge that closes the panel across the breadth). Uncheck to keep the chines but drop the outline drawn over them"
           >
             <input
               type="checkbox"

@@ -129,6 +129,16 @@ export function buildLinesPlanCurves(
     if (lines.meshBoundary) runs.push(...boundary);
     if (lines.chines) runs.push(...chines);
     for (const run of runs) bold.push(...bothSides(run));
+    // The flat transom panel closes the hull aft, and its outline is a closed loop: the aft edge the skin
+    // ends on — already in `boundary` above, head to foot, mirrored to port by `bothSides` — plus the
+    // straight top edge across the breadth at the sheer, which no skin spans (the open top of the transom).
+    // So the boundary the skin gives leaves the transom's outline broken at the top; when it is up, close it
+    // with just that one edge, the head corner to its port mirror. Only that edge, because the rest of the
+    // panel's border IS the skin's aft edge — drawing the whole loop would lay a second polyline over it.
+    if (trimmed && lines.meshBoundary && sampling.hullTransom.length > 1) {
+      const head = sampling.hullTransom[0].pos;
+      if (Math.abs(head[1]) > 1e-9) bold.push([head, mir(head)]);
+    }
   }
 
   const family: Vec3[][] = [];
