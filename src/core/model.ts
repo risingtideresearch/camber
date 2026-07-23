@@ -20,8 +20,9 @@
 //   the two halves meet at the keel) and the transom plane. That happens in `mesh.ts`.
 //
 // Coordinates are ABSOLUTE, in the model's `unit`. There is no unitless scale: a 5 m hull in mm runs x from
-// 0 to 5000. The editable bounds are therefore fractions of the hull's own length (see `bounds`), not the
-// fixed constants a normalized model could afford.
+// 0 to 5000. The panels the 2D editor draws are therefore fractions of a hull length (see `bounds`), not the
+// fixed constants a normalized model could afford — of `viewLen`, the length captured when the hull was
+// installed, so that editing it never moves the drawing under the pointer.
 
 import { clamp, lerp, type Vec2, type Vec3 } from "./math";
 import { pchipSlopes, hermiteEval } from "./pchip";
@@ -91,6 +92,11 @@ export interface Model {
   deckRake: number; // deck rake (rad, +ve = bow up): a rigid rotation about y through the sheer origin.
   // Everything is built deck-flat (z = 0); the boat floats at this rake.
   x0: number; // the cut-station scrubber's position, in x
+  // The hull length the 2D views lay their panels out against. It is CAPTURED when a whole hull is installed
+  // (reset / load / blend) and then held, rather than read from the live plan: a control point may be dragged
+  // anywhere at all, including past the current bow, and the drawing must not rescale and re-centre itself
+  // out from under the pointer while it happens. Session state, like x0 — never serialized.
+  viewLen: number;
 
   // ---- derived by prepare(); never authored ----
   plan: PlanCurve; // P(u) = (x, y) and dP/du
@@ -164,6 +170,7 @@ export function createModel(): Model {
     waterline: 0,
     deckRake: 0,
     x0: 0,
+    viewLen: 0,
   } as unknown as Model;
   resetModel(model); // a fresh model IS the default hull — never a half-initialized shell
   return model;
@@ -183,6 +190,7 @@ export function resetModel(model: Model): void {
   model.waterline = S(150);
   model.deckRake = 0;
   model.x0 = S(500);
+  captureViewLength(model);
   prepare(model);
 }
 
@@ -191,30 +199,45 @@ export function resetModel(model: Model): void {
 export const loa = (model: Model): number =>
   model.sheerPlan[model.sheerPlan.length - 1].x - model.sheerPlan[0].x;
 
-// The editable domain — the ranges a control point may be dragged within, and the minimum spacing between
-// neighbours. A normalized model could hard-code these; an absolute one can't, so they are fractions of the
-// hull's own length, chosen to reproduce the original bounds on a 1000-long hull.
+// Capture the length the 2D views draw against (see Model.viewLen). Call it wherever a whole hull is
+// installed — never from an edit, which is the whole point of it being captured rather than derived.
+export function captureViewLength(model: Model): void {
+  model.viewLen = loa(model);
+}
+
+// How big the 2D panels are drawn: the half-breadth band the plan strip reserves, and the box the station
+// editor is fitted to. A normalized model could hard-code these; an absolute one can't, so they are
+// fractions of a hull length, chosen to reproduce the original numbers on a 1000-long hull.
+//
+// They are NOT limits on the sheer plan or the sheer trim — those two are dragged freely, and a control
+// point taken past the edge of its panel simply lands outside it, to be reached by panning or zooming out.
+// The station editor still clamps its section points to this box, which is why the drawn box and those
+// clamps come from one place.
 export interface Bounds {
-  yMax: number; // plan half-breadth upper bound
-  yMin: number; // room below the centerline for a tumblehome bow's crossing
+  yMax: number; // plan half-breadth the strip is sized for
+  yMin: number; // band below the centerline, where a tumblehome bow's plan crosses
   nMin: number; // outboard (tumblehome) limit of a station point
   nMax: number; // inboard limit
   zMin: number; // deepest a station point may go
-  zTrimMin: number; // the sheer trim stays in [zTrimMin, 0] — at or below the deck
-  gap: number; // minimum x-spacing between neighbouring control points
 }
-export function bounds(model: Model): Bounds {
-  const len = loa(model) || 1;
+export function boundsOf(len: number): Bounds {
+  const l = len || 1;
   return {
-    yMax: 0.275 * len,
-    yMin: -0.055 * len,
-    nMin: -0.113 * len,
-    nMax: 0.338 * len,
-    zMin: -0.338 * len,
-    zTrimMin: -0.275 * len,
-    gap: 0.08 * len,
+    yMax: 0.275 * l,
+    yMin: -0.055 * l,
+    nMin: -0.113 * l,
+    nMax: 0.338 * l,
+    zMin: -0.338 * l,
   };
 }
+export const bounds = (model: Model): Bounds => boundsOf(model.viewLen);
+
+// The one spacing rule left between neighbouring control points, and it is not a matter of taste: the plan's
+// x(u) and the sheer trim's z(x) are both READ as functions of x (bspline.ts inverts the one, pchip.ts
+// differences the other), so two points that met would make that reading ambiguous — and the trim's PCHIP
+// would divide by their zero spacing. Nothing needs more room than float noise, so this is a hair against the
+// hull's own size: a point may be dragged right up against its neighbour, just not through it.
+const hair = (model: Model): number => 1e-6 * (loa(model) || 1);
 
 // ---------- deck rake (world frame) ----------
 // The hull is built deck-flat (deck = z = 0). The deck rake is a rigid rotation of the whole hull by
@@ -317,8 +340,8 @@ function buildLoft(model: Model): Loft {
 // The sheer trim is authored in profile and has to answer "z at this x" — and it answers it constantly, once
 // per hull column in the mesh sweep. A parametric (x, z) curve would have to invert its x component (a
 // bisection) on every one of those calls; a graph does not. So the trim is a MONOTONE-x PCHIP: its control
-// points' x strictly increase (the editor enforces the gap), so z is a plain 1-D Hermite function of x with
-// no inversion. This drops the trim out of the sweep's hot path entirely.
+// points' x strictly increase (the one thing the edit operations still hold — see `hair`), so z is a plain
+// 1-D Hermite function of x with no inversion. This drops the trim out of the sweep's hot path entirely.
 //
 // The trade: the control points are read as PCHIP knots, not as a parametric Catmull-Rom, so the curve's
 // exact shape shifts slightly from the old fit and a trim point's knuckle `k` no longer bends the curve
@@ -431,40 +454,44 @@ export function sampleU(N = 160): number[] {
 
 // ---------- edit operations ----------
 // These all take MODEL-space coordinates (the editor maps a pointer's inverse-view coordinates to model
-// space before calling them), so they depend only on the core and live here with the other mutations. They
-// clamp to the editable domain (`bounds`), which is relative to the hull's own length.
+// space before calling them), so they depend only on the core and live here with the other mutations.
+//
+// The sheer plan and the sheer trim are free: a point goes exactly where it is put, at any half-breadth, any
+// height, and any distance along the hull — including past the bow, which simply makes the hull longer. The
+// only thing held back is the ORDER of a curve's own points in x (see `hair`), because both curves are read
+// as functions of x. The station editor keeps clamping its section points to the box it is drawn in.
 //
 // Every one of them leaves the model's derived curves stale; the caller re-runs `prepare`.
 
-// ---- add (return the inserted index, or −1 when the segment has no room at the minimum spacing) ----
+// ---- add (return the inserted index, or −1 when the segment is too degenerate to take a point) ----
 
 // Insert a plan control point at x. The plan is a B-spline control polygon, so the new point is placed where
 // the caller asks rather than on the curve — there is no "on the curve" to land on.
 export function addPlanPoint(model: Model, x: number, y: number): number {
   const cp = model.sheerPlan,
     n = cp.length,
-    b = bounds(model);
+    e = hair(model);
   let k = cp.findIndex((p) => p.x > x);
   if (k < 0) k = n;
   if (k === 0) return -1; // the first point is pinned at the transom; nothing goes before it
-  const lo = cp[k - 1].x + b.gap,
-    hi = k < n ? cp[k].x - b.gap : cp[n - 1].x + b.gap * 4;
+  const lo = cp[k - 1].x + e,
+    hi = k < n ? cp[k].x - e : Infinity;
   if (lo > hi) return -1;
-  cp.splice(k, 0, { x: clamp(x, lo, hi), y: clamp(y, b.yMin, b.yMax) });
+  cp.splice(k, 0, { x: clamp(x, lo, hi), y });
   return k;
 }
 
+// The trim's first point is not pinned to anything, so a click aft of it inserts a new aft end.
 export function addTrimPoint(model: Model, x: number, z: number): number {
   const cp = model.sheerTrim,
     n = cp.length,
-    b = bounds(model);
+    e = hair(model);
   let k = cp.findIndex((p) => p.x > x);
   if (k < 0) k = n;
-  if (k === 0) return -1;
-  const lo = cp[k - 1].x + b.gap,
-    hi = k < n ? cp[k].x - b.gap : loa(model);
+  const lo = k > 0 ? cp[k - 1].x + e : -Infinity,
+    hi = k < n ? cp[k].x - e : Infinity;
   if (lo > hi) return -1;
-  cp.splice(k, 0, { x: clamp(x, lo, hi), z: clamp(z, b.zTrimMin, 0), k: 0 });
+  cp.splice(k, 0, { x: clamp(x, lo, hi), z, k: 0 });
   return k;
 }
 
@@ -540,8 +567,10 @@ export function addStationPoint(
 
 // ---- move ----
 
-// The first plan point is pinned at the transom (x = 0); every other point, including the last, moves in x.
-// y may go below the centerline (to yMin) so the plan can cross it and close a tumblehome bow.
+// The first plan point is pinned at the transom (x = 0) — it is the hull's origin, not a limit — so it moves
+// only in y; every other point, including the last, follows the pointer in x too, and the last one taken
+// forward simply lengthens the boat. y is free on both sides of the centerline: the plan crosses it to close
+// a tumblehome bow.
 export function movePlanPoint(
   model: Model,
   idx: number,
@@ -550,16 +579,17 @@ export function movePlanPoint(
 ): void {
   const cp = model.sheerPlan,
     n = cp.length,
-    b = bounds(model);
+    e = hair(model);
   if (idx > 0)
     cp[idx].x = clamp(
       mx,
-      cp[idx - 1].x + b.gap,
-      idx < n - 1 ? cp[idx + 1].x - b.gap : Infinity,
+      cp[idx - 1].x + e,
+      idx < n - 1 ? cp[idx + 1].x - e : Infinity,
     );
-  cp[idx].y = clamp(my, b.yMin, b.yMax);
+  cp[idx].y = my;
 }
 
+// Free in z — above the flat deck as readily as below it — and free in x, both ends included.
 export function moveTrim(
   model: Model,
   idx: number,
@@ -568,30 +598,30 @@ export function moveTrim(
 ): void {
   const cp = model.sheerTrim,
     n = cp.length,
-    b = bounds(model);
-  if (idx > 0)
-    cp[idx].x = clamp(
-      mx,
-      cp[idx - 1].x + b.gap,
-      idx < n - 1 ? cp[idx + 1].x - b.gap : loa(model),
-    );
-  cp[idx].z = clamp(mz, b.zTrimMin, 0); // at or below the flat deck
+    e = hair(model);
+  cp[idx].x = clamp(
+    mx,
+    idx > 0 ? cp[idx - 1].x + e : -Infinity,
+    idx < n - 1 ? cp[idx + 1].x - e : Infinity,
+  );
+  cp[idx].z = mz;
 }
 
+// The transom goes anywhere in the profile; only the ORDER of its two points is held, because they are read
+// as a line x(z) through two heights and the plane inverts if the top drops below the bottom.
 export function moveTransom(
   model: Model,
   idx: number,
   mx: number,
   mz: number,
 ): void {
-  const b = bounds(model),
-    cp = model.transom[idx];
-  cp.x = clamp(mx, 0, loa(model) * 0.45); // the transom stays in the aft region
-  // keep the two points ordered in z — the top must stay above the bottom, or the plane inverts
+  const cp = model.transom[idx],
+    e = hair(model);
+  cp.x = mx;
   cp.z =
     idx === 0
-      ? clamp(mz, model.transom[1].z + 1e-3, 0)
-      : clamp(mz, b.zTrimMin, model.transom[0].z - 1e-3);
+      ? Math.max(mz, model.transom[1].z + e)
+      : Math.min(mz, model.transom[0].z - e);
 }
 
 // Drag a station along the sheer. This is the edit v1 had no way to express: a template had no position,

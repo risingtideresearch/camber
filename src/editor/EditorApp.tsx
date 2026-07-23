@@ -178,8 +178,8 @@ export function EditorApp() {
       const drag = getDrag();
       if (!drag) return;
       const [vx, vy] = getVB(drag, e);
-      // the view transforms follow the hull's length, so they are re-derived per move rather than imported
-      // as module constants (a drag on the plan's last point changes the LOA under itself)
+      // the view transforms are held against the length captured when the hull was installed (see view.ts),
+      // so they do not shift mid-drag: a point tracks the pointer even when the drag is what sets the LOA
       const v = viewOf(model);
       if (drag.kind === "slider")
         setX0(model, clamp(v.invX(vx), 0, loa(model)));

@@ -60,8 +60,8 @@ export function PlanView({
     }
   };
 
-  // the strip's content box follows the hull's length: the panel geometry is derived from the same bounds
-  // the drag clamps use, so the drawing and the clamps agree by construction
+  // the strip's content box is sized for the hull as it was loaded, and stays that size while it is edited —
+  // it is the box the initial fit is taken from, not a limit on where the sheer may go (see view.ts)
   const lh = viewOf(model).lh;
 
   return (

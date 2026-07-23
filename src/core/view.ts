@@ -1,15 +1,20 @@
 // ---------- view transforms: world coordinates → screen (SVG viewBox) coordinates ----------
 //
-// The drawings are laid out against the hull's own length, not against fixed world numbers: v2 coordinates
-// are absolute in a real unit, so a 5 m hull and a 500 mm one are both legitimate and neither can be assumed.
-// `makeView(len)` therefore builds the transforms for a hull of length `len` (its LOA) — everything below is
-// a proportion of that, which is also how `bounds` in model.ts states the editable domain, so the drawn
-// panels and the drag limits agree by construction.
+// The drawings are laid out against a hull length, not against fixed world numbers: v2 coordinates are
+// absolute in a real unit, so a 5 m hull and a 500 mm one are both legitimate and neither can be assumed.
+// `makeView(len)` therefore builds the transforms for a hull of length `len` — everything below is a
+// proportion of that, which is also how `boundsOf` in model.ts sizes the panels, so the transforms and the
+// panels agree by construction.
+//
+// That length is `model.viewLen`, CAPTURED when the hull was installed, not the live LOA. Control points are
+// dragged freely, the last of them redefining the LOA as it goes; reading the live length here would rescale
+// and re-centre every strip on each pointer move, which is the one thing a drag must not do. A hull edited
+// past the panel it was fitted to just draws outside it, until the user pans or zooms out.
 //
 // The panel sizes that fall out (lh, ph) depend on len; the ones that don't (STW, STH, the paddings) are
 // plain constants.
 
-import { bounds, loa, type Model } from "./model";
+import { boundsOf, type Model } from "./model";
 
 // ---------- len-independent constants ----------
 export const PXpad = 60; // x padding, in viewBox units, at each end of the 1000-wide strips
@@ -63,8 +68,7 @@ export function makeView(len: number): View {
     zMax = ZMAX_F * l,
     ph = (zMax - zMin) * sx + Ptop + Pbot,
     pzBase = ph - Pbot;
-  // the plan and station domains come from the model's own editable bounds, so a point can never be dragged
-  // somewhere the drawing has no room for
+  // the plan strip's height and the station editor's box come from the same panel sizes model.ts states
   const b = boundsOf(l),
     lh = (b.yMax - b.yMin) * sx + 2 * Ppad,
     lbase = Ppad + b.yMax * sx;
@@ -92,14 +96,4 @@ export function makeView(len: number): View {
   };
 }
 
-// the editable bounds for a hull of length `l`, without needing a Model to ask
-function boundsOf(l: number): ReturnType<typeof bounds> {
-  return bounds({
-    sheerPlan: [
-      { x: 0, y: 0 },
-      { x: l, y: 0 },
-    ],
-  } as Model);
-}
-
-export const viewOf = (model: Model): View => makeView(loa(model));
+export const viewOf = (model: Model): View => makeView(model.viewLen);

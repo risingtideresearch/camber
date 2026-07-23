@@ -24,6 +24,7 @@ import {
 import { convertV1ToV2 } from "../legacy/v1/convert";
 import type { HullDocument as V1Doc } from "../legacy/v1/document";
 import {
+  captureViewLength,
   type Model,
   type PlanCP,
   type TrimCP,
@@ -261,6 +262,7 @@ export function loadHull(model: Model, v: HullData): void {
   model.transom = v.transom;
   model.stations = v.stations;
   model.x0 = clamp(model.x0, 0, v.sheerPlan[v.sheerPlan.length - 1].x);
+  captureViewLength(model); // this hull, not the one it replaced, is what the 2D views are laid out for
 }
 
 // editor import: load the document into the model

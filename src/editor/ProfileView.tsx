@@ -59,7 +59,7 @@ export function ProfileView({
     }
   };
 
-  const ph = viewOf(model).ph; // the z window is a fraction of the hull's length (see view.ts)
+  const ph = viewOf(model).ph; // a fraction of the length the hull was loaded at, held there (see view.ts)
 
   return (
     <div className="viewstrip">

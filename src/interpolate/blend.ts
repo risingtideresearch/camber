@@ -17,7 +17,7 @@
 // what lets the metric heatmap / scatter sample the whole space on a grid.
 
 import { clamp } from "../core/math";
-import { prepare, type Model } from "../core/model";
+import { captureViewLength, prepare, type Model } from "../core/model";
 import { hydrostatics, type Hydro } from "../core/hydro";
 import type { HullData } from "../core/json";
 
@@ -60,6 +60,7 @@ export function blend(model: Model, hulls: Hull[], weights: number[]): void {
       k: mix((h) => h.data.stations[j].points[i].k),
     })),
   }));
+  captureViewLength(model); // a blend installs a whole hull, so it restates what the 2D views draw against
 }
 
 // ---------- the blend control: a slider param (2 hulls) / a polygon pad puck (3+ hulls) ----------

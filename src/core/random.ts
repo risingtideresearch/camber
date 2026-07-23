@@ -96,7 +96,7 @@
 //   (v1 carried per-station blend WEIGHTS in the plan; they were always the straight aft→fore handoff
 //   and never consumed a coordinate, so dropping them leaves the layout of θ untouched.)
 
-import { bounds, loa, type Bounds, type Model } from "./model";
+import { boundsOf, loa, type Bounds, type Model } from "./model";
 import { VERSION, type HullDocument } from "./document";
 import { loadJsonText } from "./json";
 
@@ -207,9 +207,12 @@ function decodeDoc(model: Model, z: Coord): string {
   const P = model.sheerPlan.length, // sheerPlan count
     Q = model.sheerTrim.length, // sheerTrim count
     S = model.stations[0].points.length; // section count (every station shares it)
-  const b = bounds(model),
-    L = loa(model) || 1,
-    DEPTH_MAX = -b.zTrimMin;
+  // the envelope this prior samples inside, taken against the hull's LIVE length: a generated hull is a
+  // whole new boat, so it is written to the size of the one it replaces rather than to what a view draws.
+  // The trim's depth is the generator's own prior (the editor no longer bounds the sheer trim at all).
+  const L = loa(model) || 1,
+    b = boundsOf(L),
+    DEPTH_MAX = 0.275 * L;
   // The backbone targets below are written at v1's unitless 1000-long scale, where this prior was tuned.
   // v2's coordinates are absolute in the document's unit, so every LENGTH-dimensioned target is mapped onto
   // the live hull's own LOA — the canonical boat is then the same SHAPE whatever the hull's size or unit.

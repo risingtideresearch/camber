@@ -95,7 +95,7 @@ ok(m.unit === "mm", "default unit is mm");
 ok(m.stations.length === 2, "default has 2 stations");
 {
   const b = bounds(m);
-  ok(b.yMax > 0 && b.gap > 0, "bounds scale with the hull");
+  ok(b.yMax > 0 && b.nMax > 0, "the drawn panels scale with the hull");
   // the plan curve interpolates its end control points
   const p0 = m.plan.at(0),
     p1 = m.plan.at(1);
