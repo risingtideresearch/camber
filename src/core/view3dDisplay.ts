@@ -13,8 +13,9 @@
 // `TrimToggles` rides with `sheet` (it is the Sheet button's dropdown) but is independent of it: a trim can be
 // drawn whichever surface is up — which is the point of showing them, since what a trim cuts is mostly the
 // part of the sheet the finished hull no longer has. It is two choices crossed: WHICH FORM of a trim to draw
-// (the curve it marches over the whole sheet, the span of it the hull kept, or both, overlapping), and WHICH
-// of the three trims to draw it for.
+// (the curve it marches over the whole sheet, the span of it the hull kept, or both — and with both, the
+// sheet form gives up that span and draws only the cut-away rest, so the two meet instead of overlapping),
+// and WHICH of the three trims to draw it for.
 
 export type ShadingMode = "flat" | "smooth" | "zebra";
 
@@ -37,8 +38,8 @@ export const DEFAULT_LINES: LineToggles = {
 
 // the sheet's three trims, and the two forms each can be drawn in
 export interface TrimToggles {
-  // WHICH FORM. Independent, and drawn exactly as the sampling holds them, so where a trim survives both are
-  // the same curve and lie on top of each other.
+  // WHICH FORM. Either can be shown without the other; with both, the sheet form stands back to the part of
+  // the march the hull edge does not draw, so no span is drawn twice.
   sheetCurves: boolean; // each trim marched over the WHOLE sheet, as if it were the only one
   hullCurves: boolean; // the span of it the other two leave standing: the hull's own edge
   // WHICH TRIM either form is drawn for

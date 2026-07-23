@@ -196,8 +196,11 @@ export function buildLinesPlanCurves(
 // `sheetCenterline` / `sheetTransom`), which is the cut itself, running on past the boat wherever another trim
 // got to the sheet first; and the span of it the other two leave standing is the hull's own edge (`hullSheer`
 // / `hullCenterline` / `hullTransom`), corners and ordering included. The two are drawn as two independent
-// toggles — the sheet's form in the Edges black, the hull's in that trim's 2D colour — and NOT cut against
-// each other, so where a trim survives both toggles draw the same curve and it is left to overlap.
+// toggles — the sheet's form in the Edges black, the hull's in that trim's 2D colour. Alone, each draws the
+// whole of its curve. TOGETHER, the sheet form drops back to the LEFTOVER the sampling holds beside the hull
+// edge (`hullSheerLeftover` and its two siblings): the span the hull edge already covers would otherwise be
+// two coincident polylines fighting for the same pixels, and this way the black picks up exactly where the
+// colour stops — at the corner they share.
 //
 // One-sided, unlike the lines plan: these are curves ON the sheet, and the sheet is the starboard sweep. The
 // port half of the finished hull is a mirror of the result of trimming, not a second sheet to trim.
@@ -214,24 +217,28 @@ const TRIM_SPECS: {
   key: "sheer" | "centerline" | "transom";
   sheet: (s: HullSampling) => TrimCurve; // marched over the whole sheet, as if this were the only trim
   hull: (s: HullSampling) => TrimCurve; // the part of it the other two leave standing: the hull's own edge
+  leftover: (s: HullSampling) => TrimCurve[]; // and the rest of it, in runs — what `hull` does not draw
   color: string;
 }[] = [
   {
     key: "sheer",
     sheet: (s) => s.sheetSheer,
     hull: (s) => s.hullSheer,
+    leftover: (s) => s.hullSheerLeftover,
     color: COL.sheer,
   },
   {
     key: "centerline",
     sheet: (s) => s.sheetCenterline,
     hull: (s) => s.hullCenterline,
+    leftover: (s) => s.hullCenterlineLeftover,
     color: COL.keel,
   },
   {
     key: "transom",
     sheet: (s) => s.sheetTransom,
     hull: (s) => s.hullTransom,
+    leftover: (s) => s.hullTransomLeftover,
     color: COL.transom,
   },
 ];
@@ -245,9 +252,14 @@ export function buildTrimCurves(
   for (const spec of TRIM_SPECS) {
     if (!trims[spec.key]) continue;
     // each curve in the order the sampling holds it — fore-aft for the sheer and keel, down the plane for the
-    // transom's hull edge — with nothing dropped, joined or split
-    const raw = spec.sheet(sampling);
-    if (trims.sheetCurves && raw.length > 1) sheet.push(raw.map((s) => s.pos));
+    // transom's hull edge — with nothing dropped, joined or split. The one choice made here is WHICH sheet
+    // curve: the whole march on its own, or, with the hull edge up as well, only the leftover the edge does
+    // not already cover.
+    if (trims.sheetCurves)
+      for (const run of trims.hullCurves
+        ? spec.leftover(sampling)
+        : [spec.sheet(sampling)])
+        if (run.length > 1) sheet.push(run.map((s) => s.pos));
     const edge = spec.hull(sampling);
     if (trims.hullCurves && edge.length > 1)
       hull.push({ color: spec.color, lines: [edge.map((s) => s.pos)] });

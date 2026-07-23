@@ -198,7 +198,8 @@ export function sweptSection(
 // can crack and the panel rides the skin's own edge. Five things come out of one pass, in the order the hull
 // is defined: the untrimmed `sheet`; the three trims marched over it; the three CORNERS where those trims cross
 // each other; the trimmed boundary curves (`hullSheer` / `hullCenterline` / `hullTransom`) read off the trimmed
-// columns and closed on those corners; and the render mesh (`hullQuads` / `hullTris`) of the starboard half
+// columns and closed on those corners, each with the cut-away rest of its marched trim beside it
+// (`hullSheerLeftover` and its two siblings); and the render mesh (`hullQuads` / `hullTris`) of the starboard half
 // (the port half is its y-mirror, added by the mesh builder).
 
 export interface HullSample {
@@ -242,6 +243,13 @@ export interface HullSampling {
   hullSheer: TrimCurve;
   hullCenterline: TrimCurve;
   hullTransom: TrimCurve;
+  // and the rest of each marched trim: the span the other two CUT AWAY, which the hull's own edge above does
+  // not draw. In RUNS, not one curve — a trim cut at both ends leaves two pieces and they do not join — each
+  // closed on the corner where the hull's edge takes over, so a leftover run and that edge together are the
+  // whole marched trim again, with the corner the only point in both
+  hullSheerLeftover: TrimCurve[];
+  hullCenterlineLeftover: TrimCurve[];
+  hullTransomLeftover: TrimCurve[];
   columns: HullColumnV2[]; // the per-column trimmed sections, aligned with uParams
   // the render mesh of the STARBOARD trimmed half, vertices shared by object identity
   hullQuads: Quad[];
@@ -677,6 +685,27 @@ export function computeHullSampling(
       trims[ci].splice(j, 0, c.s);
     }
 
+  // (7) and the LEFTOVER of each marched trim: the span of it that lies outside one of the other two, which is
+  // the whole curve minus the run that stands as the hull's own edge. It is read straight off the drawable
+  // curve above by the same test the sheet was trimmed with, so the split lands exactly on the corners just
+  // spliced in — a corner sits ON both of its trims, so its constraint there is zero to bisection tolerance,
+  // and the epsilon keeps that sign from deciding anything. Each cut-away run then carries the corner it was
+  // cut at as its end, which is the one point it shares with the hull edge: the two meet rather than overlap.
+  const CORNER_EPS = 1e-9; // world units — far below any real crossing, far above the bisection's noise
+  const leftovers: TrimCurve[][] = trims.map((curve, ci) => {
+    const others = [0, 1, 2].filter((c) => c !== ci),
+      cut = curve.map((s) => others.some((c) => cons[c](s.pos) < -CORNER_EPS)),
+      runs: TrimCurve[] = [];
+    for (let j = 0; j < curve.length; j++) {
+      if (!cut[j]) continue;
+      let e = j;
+      while (e + 1 < curve.length && cut[e + 1]) e++;
+      runs.push(curve.slice(Math.max(0, j - 1), e + 2)); // one sample of slack: the corner at either end
+      j = e;
+    }
+    return runs;
+  });
+
   return {
     R,
     M,
@@ -689,6 +718,9 @@ export function computeHullSampling(
     hullSheer,
     hullCenterline,
     hullTransom,
+    hullSheerLeftover: leftovers[0],
+    hullCenterlineLeftover: leftovers[1],
+    hullTransomLeftover: leftovers[2],
     columns,
     hullQuads,
     hullTris,

@@ -68,15 +68,15 @@ const FOV_RANGE: [number, number] = [5, 80];
 // The Sheet button's dropdown: the three cuts that make the sheet into the hull, each drawable in two forms.
 // The SHEET form is the curve the trim marches over the whole sheet as if it were the only one, in the Edges
 // black — the cut itself, running on past the boat wherever another trim got there first. The HULL form is the
-// span of it the other two leave standing, which is the boat's own edge, in that trim's 2D colour. They are
-// independent and uncut: with both shown, the colour lies on the black wherever the trim survived, and the
-// black alone is what was cut away.
+// span of it the other two leave standing, which is the boat's own edge, in that trim's 2D colour. Either can
+// be shown without the other, and with BOTH shown the black gives up the span the colour has: it draws only
+// what was cut away, taking over from the colour at the corner where the trim left the boat.
 const TRIM_FORMS: { key: keyof TrimToggles; label: string; title: string }[] = [
   {
     key: "sheetCurves",
     label: "Show sheet trim curves",
     title:
-      "Each trim marched across the whole sheet as if it were the only one, drawn black — the cut itself, carrying on past the boat",
+      "Each trim marched across the whole sheet as if it were the only one, drawn black — the cut itself, carrying on past the boat. With the hull form shown too, only the part carrying on past it",
   },
   {
     key: "hullCurves",
