@@ -208,13 +208,14 @@ export function Scene({
             "curves",
           )
         : null;
-    // the sheet's own trims: curves the sampling already holds, so this only picks and splits them — it owes
-    // nothing to the mesh just built, and is drawn whichever surface is up (see view3dDisplay.ts)
+    // the sheet's own trims: curves the sampling already holds, so this only picks them — it owes nothing to
+    // the mesh just built, and is drawn whichever surface is up (see view3dDisplay.ts)
     const trimCurves: TrimPlanCurves | null = sampling
       ? perfStep(
           "Trim curves",
           () => buildTrimCurves(trims, sampling),
-          (c) => c.cut.length + c.kept.reduce((n, k) => n + k.lines.length, 0),
+          (c) =>
+            c.sheet.length + c.hull.reduce((n, h) => n + h.lines.length, 0),
           "curves",
         )
       : null;

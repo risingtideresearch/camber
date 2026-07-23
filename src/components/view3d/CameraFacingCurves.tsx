@@ -125,21 +125,22 @@ export function CameraFacingCurves({
         });
     }
     // The sheet's trims at the bold Edges weight, because on the hull that is exactly what their surviving
-    // span IS — the same edge, drawn in the trim's own colour to say which cut made it. The cut-away span is
-    // one black job whichever trims are shown, so it reads as the continuation of those edges out over the
-    // sheet rather than as a family of its own.
+    // span IS — the same edge, drawn in the trim's own colour to say which cut made it. The whole marched cut
+    // is one black job whichever trims are shown, so it reads as those edges carrying on out over the sheet
+    // rather than as a family of its own. Nothing is cut against anything: with both toggles on, the coloured
+    // hull edges lie ON the black, and are pushed after them so they win the depth test's ties.
     if (trims) {
-      if (trims.cut.length)
+      if (trims.sheet.length)
         out.push({
-          polylines: trims.cut,
+          polylines: trims.sheet,
           color: new THREE.Color(LINES_BLACK),
           halfWidthPx: LINES_BOLD_HALF_PX,
         });
-      for (const k of trims.kept)
-        if (k.lines.length)
+      for (const h of trims.hull)
+        if (h.lines.length)
           out.push({
-            polylines: k.lines,
-            color: new THREE.Color(k.color),
+            polylines: h.lines,
+            color: new THREE.Color(h.color),
             halfWidthPx: LINES_BOLD_HALF_PX,
           });
     }

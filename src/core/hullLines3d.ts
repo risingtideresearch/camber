@@ -191,51 +191,47 @@ export function buildLinesPlanCurves(
 
 // ---------- the sheet's own three trims ----------
 //
-// Both halves of this are already in the sampling, and nothing here recomputes either. Each trim comes marched
-// across the WHOLE sheet as if it were the only one (`sheerTrim` / `centerlineTrim` / `transomTrim`), and the
-// span of it that survives the other two IS the hull's own edge (`hullSheer` / `hullKeel` / `hullTransom`) —
-// so the surviving span is drawn as it stands, in that trim's 2D colour, and all that is left to work out is
-// which part of the marched curve it does NOT cover, to carry on in the Edges black.
-//
-// That question is answered by object identity, not by geometry: mesh.ts converges each trim/grid-edge
-// crossing once and CACHES it, so a point of the marched trim that survived is the very same HullSample object
-// in the hull's edge curve. A Set membership test settles it — no constraint is evaluated a second time and
-// the two curves cannot drift apart. Each colour break therefore lands exactly on a crossing of two trims, and
-// the black tail shows how far past the boat that cut goes on running.
+// Nothing here is computed: every curve this draws is already in the sampling, and it is taken exactly as it
+// stands. Each trim comes marched across the WHOLE sheet as if it were the only one (`sheerTrim` /
+// `centerlineTrim` / `transomTrim`), which is the cut itself, running on past the boat wherever another trim
+// got to the sheet first; and the span of it the other two leave standing is the hull's own edge (`hullSheer`
+// / `hullKeel` / `hullTransom`), corners and ordering included. The two are drawn as two independent toggles —
+// the sheet's form in the Edges black, the hull's in that trim's 2D colour — and NOT cut against each other,
+// so where a trim survives both toggles draw the same curve and it is left to overlap.
 //
 // One-sided, unlike the lines plan: these are curves ON the sheet, and the sheet is the starboard sweep. The
 // port half of the finished hull is a mirror of the result of trimming, not a second sheet to trim.
 
 export interface TrimPlanCurves {
-  kept: { color: string; lines: Vec3[][] }[]; // per shown trim: the hull edge it survives as
-  cut: Vec3[][]; // every shown trim's cut-away span, drawn black at the Edges weight
+  sheet: Vec3[][]; // the shown trims as marched over the whole sheet — black, at the Edges weight
+  hull: { color: string; lines: Vec3[][] }[]; // per shown trim: the hull edge it survives as, in its colour
 }
 
-// Which pair of cached curves each toggle draws, and in which colour. The colours are the 2D views' own: the
-// sheer trim's orange and the centerline's teal from the plan / profile, the transom's brown from the transom
-// outline both views draw.
+// Which pair of cached curves each of the three per-trim toggles draws, and in which colour. The colours are
+// the 2D views' own: the sheer trim's orange and the centerline's teal from the plan / profile, the transom's
+// brown from the transom outline both views draw.
 const TRIM_SPECS: {
-  key: keyof TrimToggles;
-  raw: (s: HullSampling) => TrimCurve; // marched over the whole sheet, as if this were the only trim
-  edge: (s: HullSampling) => TrimCurve; // the part of it the other two leave standing: the hull's own edge
+  key: "sheer" | "centerline" | "transom";
+  sheet: (s: HullSampling) => TrimCurve; // marched over the whole sheet, as if this were the only trim
+  hull: (s: HullSampling) => TrimCurve; // the part of it the other two leave standing: the hull's own edge
   color: string;
 }[] = [
   {
     key: "sheer",
-    raw: (s) => s.sheerTrim,
-    edge: (s) => s.hullSheer,
+    sheet: (s) => s.sheerTrim,
+    hull: (s) => s.hullSheer,
     color: COL.sheer,
   },
   {
     key: "centerline",
-    raw: (s) => s.centerlineTrim,
-    edge: (s) => s.hullKeel,
+    sheet: (s) => s.centerlineTrim,
+    hull: (s) => s.hullKeel,
     color: COL.keel,
   },
   {
     key: "transom",
-    raw: (s) => s.transomTrim,
-    edge: (s) => s.hullTransom,
+    sheet: (s) => s.transomTrim,
+    hull: (s) => s.hullTransom,
     color: COL.transom,
   },
 ];
@@ -244,50 +240,19 @@ export function buildTrimCurves(
   trims: TrimToggles,
   sampling: HullSampling,
 ): TrimPlanCurves {
-  const kept: TrimPlanCurves["kept"] = [],
-    cut: Vec3[][] = [];
+  const sheet: Vec3[][] = [],
+    hull: TrimPlanCurves["hull"] = [];
   for (const spec of TRIM_SPECS) {
     if (!trims[spec.key]) continue;
-    // the hull's edge as the sampling already ordered it — fore-aft for the sheer and keel, down the plane for
-    // the transom — corners and all, so the colour reaches the exact corner the black picks up from
-    const edge = spec.edge(sampling);
-    if (edge.length > 1)
-      kept.push({ color: spec.color, lines: [edge.map((s) => s.pos)] });
-    cut.push(...cutRuns(spec.raw(sampling), new Set(edge)));
+    // each curve in the order the sampling holds it — fore-aft for the sheer and keel, down the plane for the
+    // transom's hull edge — with nothing dropped, joined or split
+    const raw = spec.sheet(sampling);
+    if (trims.sheetCurves && raw.length > 1) sheet.push(raw.map((s) => s.pos));
+    const edge = spec.hull(sampling);
+    if (trims.hullCurves && edge.length > 1)
+      hull.push({ color: spec.color, lines: [edge.map((s) => s.pos)] });
   }
-  return { kept, cut };
-}
-
-// The marched trim minus the hull's edge: every segment of it that is NOT between two points the edge kept,
-// chained into runs. Taking SEGMENTS rather than points is what makes the black meet the colour — a run starts
-// at the last surviving point and ends at the next one, which are points of the edge curve itself.
-//
-// A marched trim holds one crossing per column that HAS one, plus the corners it makes with the other two
-// trims, which fall BETWEEN columns. So consecutive points are a column apart at most — a column the trim
-// misses (the sheer runs out where a fine bow's top dives below it) leaves a wider gap, with no segment across
-// it — and a corner, being a point of the hull's edge too, is where the black hands over to the colour.
-function cutRuns(raw: TrimCurve, edge: Set<HullSample>): Vec3[][] {
-  const out: Vec3[][] = [];
-  let run: Vec3[] = [];
-  const close = (): void => {
-    if (run.length > 1) out.push(run);
-    run = [];
-  };
-  for (let i = 1; i < raw.length; i++) {
-    const a = raw[i - 1],
-      b = raw[i];
-    if (
-      b.uSheetIndex > a.uSheetIndex + 1 + 1e-9 ||
-      (edge.has(a) && edge.has(b))
-    ) {
-      close();
-      continue;
-    }
-    if (!run.length) run.push(a.pos);
-    run.push(b.pos);
-  }
-  close();
-  return out;
+  return { sheet, hull };
 }
 
 // ---------- feature edges read off the mesh's own triangles ----------

@@ -65,10 +65,27 @@ const SHADINGS: { shading: ShadingMode; label: string; title: string }[] = [
 const DEFAULT_FOV = 30;
 const FOV_RANGE: [number, number] = [5, 80];
 
-// The Sheet button's dropdown: the three cuts that make the sheet into the hull, each drawable as the curve it
-// marches over the WHOLE sheet. Where the other two leave it standing it is the boat's own edge and is drawn
-// in that trim's 2D colour; the rest — the part another trim got to first — carries on in the Edges black. So
-// the colour break marks where two trims cross, and the black tail shows the cut running on past the boat.
+// The Sheet button's dropdown: the three cuts that make the sheet into the hull, each drawable in two forms.
+// The SHEET form is the curve the trim marches over the whole sheet as if it were the only one, in the Edges
+// black — the cut itself, running on past the boat wherever another trim got there first. The HULL form is the
+// span of it the other two leave standing, which is the boat's own edge, in that trim's 2D colour. They are
+// independent and uncut: with both shown, the colour lies on the black wherever the trim survived, and the
+// black alone is what was cut away.
+const TRIM_FORMS: { key: keyof TrimToggles; label: string; title: string }[] = [
+  {
+    key: "sheetCurves",
+    label: "Show sheet trim curves",
+    title:
+      "Each trim marched across the whole sheet as if it were the only one, drawn black — the cut itself, carrying on past the boat",
+  },
+  {
+    key: "hullCurves",
+    label: "Show hull trim curves",
+    title:
+      "The span of each trim the other two leave standing — the hull's own edge, in that trim's 2D colour",
+  },
+];
+
 const TRIMS: { key: keyof TrimToggles; label: string; title: string }[] = [
   {
     key: "sheer",
@@ -234,6 +251,21 @@ export function View3d({
         >
           <div className="dd-section">
             <div className="dd-group">Trim curves</div>
+            {TRIM_FORMS.map((t) => (
+              <label key={t.key} className="dd-row dd-check" title={t.title}>
+                <input
+                  type="checkbox"
+                  checked={trims[t.key]}
+                  onChange={(e) =>
+                    setTrims((s) => ({ ...s, [t.key]: e.target.checked }))
+                  }
+                />
+                <span className="dd-name">{t.label}</span>
+              </label>
+            ))}
+          </div>
+          <div className="dd-section">
+            <div className="dd-group">Which trims</div>
             {TRIMS.map((t) => (
               <label key={t.key} className="dd-row dd-check" title={t.title}>
                 <input

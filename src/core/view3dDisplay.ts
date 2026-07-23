@@ -10,9 +10,11 @@
 // trimmed, mirrored hull for the raw untrimmed sweep (one side, no trims/mirror), and `showMesh` overlays the
 // hull's quad grid as a wireframe, to inspect the mesh itself.
 //
-// `TrimToggles` rides with `sheet` (it is the Sheet button's dropdown) but is independent of it: each of the
-// three trims can be drawn where it runs over the WHOLE sheet, whichever surface is up — which is the point of
-// showing them, since what a trim cuts is mostly the part of the sheet the finished hull no longer has.
+// `TrimToggles` rides with `sheet` (it is the Sheet button's dropdown) but is independent of it: a trim can be
+// drawn whichever surface is up — which is the point of showing them, since what a trim cuts is mostly the
+// part of the sheet the finished hull no longer has. It is two choices crossed: WHICH FORM of a trim to draw
+// (the curve it marches over the whole sheet, the span of it the hull kept, or both, overlapping), and WHICH
+// of the three trims to draw it for.
 
 export type ShadingMode = "flat" | "smooth" | "zebra";
 
@@ -33,16 +35,25 @@ export const DEFAULT_LINES: LineToggles = {
   waterlines: false,
 };
 
-// which of the sheet's three trims to draw, each marched over the whole sheet as if it were the only one
+// the sheet's three trims, and the two forms each can be drawn in
 export interface TrimToggles {
+  // WHICH FORM. Independent, and drawn exactly as the sampling holds them, so where a trim survives both are
+  // the same curve and lie on top of each other.
+  sheetCurves: boolean; // each trim marched over the WHOLE sheet, as if it were the only one
+  hullCurves: boolean; // the span of it the other two leave standing: the hull's own edge
+  // WHICH TRIM either form is drawn for
   sheer: boolean; // the top cut: z = the sheer trim curve
   centerline: boolean; // the keel cut: y = 0
   transom: boolean; // the aft cut: the raked transom plane
 }
 
-// none of them: they are an inspection aid for how the three trims cut each other, not part of the boat
+// neither form: the trims are an inspection aid for how the three cut each other, not part of the boat. All
+// three trims are picked though, so either form drawn shows the whole story at once and the per-trim boxes are
+// there to take one away.
 export const DEFAULT_TRIMS: TrimToggles = {
-  sheer: false,
-  centerline: false,
-  transom: false,
+  sheetCurves: false,
+  hullCurves: false,
+  sheer: true,
+  centerline: true,
+  transom: true,
 };
