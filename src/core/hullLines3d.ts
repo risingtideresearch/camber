@@ -180,10 +180,10 @@ export function buildLinesPlanCurves(
       family.push(...runs);
     // On the hull that same profile is the KEEL, which the surface ends on rather than crosses: |y| touches 0
     // there without changing sign, so no march can catch it however many levels it is given. It is the mesh's
-    // own keel edge (`hullKeel`, foot corner and all) — the same curve `edges` draws bold — shown here only when
-    // `edges` is off so the profile member is not lost.
-    if (trimmed && !lines.edges && sampling.hullKeel.length > 1)
-      family.push(sampling.hullKeel.map((s) => s.pos));
+    // own keel edge (`hullCenterline`, foot corner and all) — the same curve `edges` draws bold — shown here
+    // only when `edges` is off so the profile member is not lost.
+    if (trimmed && !lines.edges && sampling.hullCenterline.length > 1)
+      family.push(sampling.hullCenterline.map((s) => s.pos));
   }
 
   return { bold, family, dwl };
@@ -192,12 +192,12 @@ export function buildLinesPlanCurves(
 // ---------- the sheet's own three trims ----------
 //
 // Nothing here is computed: every curve this draws is already in the sampling, and it is taken exactly as it
-// stands. Each trim comes marched across the WHOLE sheet as if it were the only one (`sheerTrim` /
-// `centerlineTrim` / `transomTrim`), which is the cut itself, running on past the boat wherever another trim
+// stands. Each trim comes marched across the WHOLE sheet as if it were the only one (`sheetSheer` /
+// `sheetCenterline` / `sheetTransom`), which is the cut itself, running on past the boat wherever another trim
 // got to the sheet first; and the span of it the other two leave standing is the hull's own edge (`hullSheer`
-// / `hullKeel` / `hullTransom`), corners and ordering included. The two are drawn as two independent toggles —
-// the sheet's form in the Edges black, the hull's in that trim's 2D colour — and NOT cut against each other,
-// so where a trim survives both toggles draw the same curve and it is left to overlap.
+// / `hullCenterline` / `hullTransom`), corners and ordering included. The two are drawn as two independent
+// toggles — the sheet's form in the Edges black, the hull's in that trim's 2D colour — and NOT cut against
+// each other, so where a trim survives both toggles draw the same curve and it is left to overlap.
 //
 // One-sided, unlike the lines plan: these are curves ON the sheet, and the sheet is the starboard sweep. The
 // port half of the finished hull is a mirror of the result of trimming, not a second sheet to trim.
@@ -218,19 +218,19 @@ const TRIM_SPECS: {
 }[] = [
   {
     key: "sheer",
-    sheet: (s) => s.sheerTrim,
+    sheet: (s) => s.sheetSheer,
     hull: (s) => s.hullSheer,
     color: COL.sheer,
   },
   {
     key: "centerline",
-    sheet: (s) => s.centerlineTrim,
-    hull: (s) => s.hullKeel,
+    sheet: (s) => s.sheetCenterline,
+    hull: (s) => s.hullCenterline,
     color: COL.keel,
   },
   {
     key: "transom",
-    sheet: (s) => s.transomTrim,
+    sheet: (s) => s.sheetTransom,
     hull: (s) => s.hullTransom,
     color: COL.transom,
   },

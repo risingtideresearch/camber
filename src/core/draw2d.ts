@@ -612,14 +612,14 @@ export function drawProfile(
     "DWL",
   );
   // emergent keel + stem, drawn as one continuous outline from transom to bow so it MATCHES the 3D mesh:
-  //  • aft: the transom's foot, where the keel meets the cut — `hullKeel` already carries it as its first
+  //  • aft: the transom's foot, where the keel meets the cut — `hullCenterline` already carries it as its first
   //    point (the corner computeHullSampling splices onto the keel's aft end), so the line starts on the plane;
   //  • bottom: the keel/rocker — the deepest point of each closing section — rising to the bow;
   //  • stem: at a tumblehome bow the deck tucks to the centerline, so the section TOP (col.pts[0]) dives below
   //    the authored trim and meets the keel at the forefoot. Trace that diving top edge back from the forefoot
   //    to where it rejoins the trim — the real raked leading edge, not a fabricated plumb line.
   const closing = cols.filter((c) => c.keel && c.pts.length > 1);
-  const keel = sampling.hullKeel.map((s) => s.pos); // foot → rocker, aft to bow
+  const keel = sampling.hullCenterline.map((s) => s.pos); // foot → rocker, aft to bow
   if (keel.length) {
     // the bow stem: the CONTIGUOUS run of forwardmost sections whose top has dived below the authored trim
     // (the tumblehome lens). Only the forward run — a section's top can also drop below the trim near the

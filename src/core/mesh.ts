@@ -197,7 +197,7 @@ export function sweptSection(
 // same HullSample object in two cells, in the trimmed boundary curves, and in the transom panel — so nothing
 // can crack and the panel rides the skin's own edge. Five things come out of one pass, in the order the hull
 // is defined: the untrimmed `sheet`; the three trims marched over it; the three CORNERS where those trims cross
-// each other; the trimmed boundary curves (`hullSheer` / `hullKeel` / `hullTransom`) read off the trimmed
+// each other; the trimmed boundary curves (`hullSheer` / `hullCenterline` / `hullTransom`) read off the trimmed
 // columns and closed on those corners; and the render mesh (`hullQuads` / `hullTris`) of the starboard half
 // (the port half is its y-mirror, added by the mesh builder).
 
@@ -233,14 +233,14 @@ export interface HullSampling {
   sheet: HullSample[][]; // [column i][row k] — the full untrimmed grid
   // each trim marched over the whole sheet, one sample per column (its crossing within that column), with the
   // corners it makes with the other two spliced in at their exact u
-  sheerTrim: TrimCurve;
-  centerlineTrim: TrimCurve;
-  transomTrim: TrimCurve;
+  sheetSheer: TrimCurve;
+  sheetCenterline: TrimCurve;
+  sheetTransom: TrimCurve;
   // the hull's actual boundary once the trims are cut against each other, read off the trimmed columns with
   // the three corners — head (sheer ∩ transom), foot (keel ∩ transom) and stem (sheer ∩ centerline, the tip of
   // the bow) — spliced onto the ends they close
   hullSheer: TrimCurve;
-  hullKeel: TrimCurve;
+  hullCenterline: TrimCurve;
   hullTransom: TrimCurve;
   columns: HullColumnV2[]; // the per-column trimmed sections, aligned with uParams
   // the render mesh of the STARBOARD trimmed half, vertices shared by object identity
@@ -660,7 +660,7 @@ export function computeHullSampling(
   keelB.sort((a, b) => a.uSheetIndex - b.uSheetIndex);
   transomB.sort((a, b) => b.pos[2] - a.pos[2]);
   const hullSheer: TrimCurve = sheerB,
-    hullKeel: TrimCurve = keelB,
+    hullCenterline: TrimCurve = keelB,
     hullTransom: TrimCurve = transomB;
 
   // and the marched trims as drawable curves, each with its two corners spliced in at their exact u. A trim
@@ -683,11 +683,11 @@ export function computeHullSampling(
     uParams,
     vParams,
     sheet,
-    sheerTrim: trims[0],
-    centerlineTrim: trims[1],
-    transomTrim: trims[2],
+    sheetSheer: trims[0],
+    sheetCenterline: trims[1],
+    sheetTransom: trims[2],
     hullSheer,
-    hullKeel,
+    hullCenterline,
     hullTransom,
     columns,
     hullQuads,

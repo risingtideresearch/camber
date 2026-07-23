@@ -56,7 +56,7 @@ body += `<line x1="${mapX(0)}" y1="${zScreenP(zWL(0))}" x2="${mapX(xFwd)}" y2="$
 // keel + stem (green), matching the mesh: keel rises to the forefoot, then the diving top edge back to the
 // trim. The transom's foot is prepended — it lies between two columns, so no closing section carries it.
 const closing = sections.filter((s) => s.keel && s.pts.length > 1);
-const keel: Vec3[] = sampling.hullKeel.map((s) => s.pos); // foot → rocker, aft to bow
+const keel: Vec3[] = sampling.hullCenterline.map((s) => s.pos); // foot → rocker, aft to bow
 const te = transomOutline(sampling);
 if (keel.length) {
   // the tolerance is a fraction of the hull's own length (it was absolute against v1's fixed L = 1000)
