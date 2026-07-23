@@ -38,14 +38,14 @@ const CANVAS_BG = "#e6ecf3";
 // the lines plan included, is real 3D geometry sharing the one Canvas3D camera, so changing what is displayed
 // never moves the camera.
 //
-// Nothing here is mutually exclusive except the shading: the line families are independent toggles that
-// compose with any shading, and the Sheet toggle picks WHICH surface all of it is drawn on — the trimmed,
-// mirrored hull or the raw swept sheet it is cut from — so a lines plan or the zebra stripes can be inspected
-// on the untrimmed sheet as readily as on the finished hull. The Sheet button's dropdown carries the three
-// trim curves (they are what cuts the sheet down to the hull), and they belong to it: they are curves on the
-// sheet, so they go when it does. The one part of a cut still worth seeing on the finished hull is the run of
-// it that falls OUTSIDE the boat, and that hangs off the Edges button instead — it is an edge the hull has not
-// got, which is the one thing the Edges toggle cannot draw for itself.
+// Nothing here is mutually exclusive except the shading: the lines are independent boxes in the Lines button's
+// dropdown that compose with any shading, and the Sheet toggle picks WHICH surface all of it is drawn on — the
+// trimmed, mirrored hull or the raw swept sheet it is cut from — so a lines plan or the zebra stripes can be
+// inspected on the untrimmed sheet as readily as on the finished hull. The Sheet button's dropdown carries the
+// three trim curves (they are what cuts the sheet down to the hull), and they belong to it: they are curves on
+// the sheet, so they go when it does. The one part of a cut still worth seeing on the finished hull is the run
+// of it that falls OUTSIDE the boat, and that hangs off the Lines button instead — it is an edge the hull has
+// not got, which is the one thing the Lines toggle cannot draw for itself.
 const SHADINGS: { shading: ShadingMode; label: string; title: string }[] = [
   {
     shading: "flat",
@@ -68,7 +68,7 @@ const DEFAULT_FOV = 30;
 const FOV_RANGE: [number, number] = [5, 80];
 
 // The Sheet button's dropdown: the three cuts that make the sheet into the hull, each drawable in two forms.
-// The SHEET form is the curve the trim marches over the whole sheet as if it were the only one, in the Edges
+// The SHEET form is the curve the trim marches over the whole sheet as if it were the only one, in the bold
 // black — the cut itself, running on past the boat wherever another trim got there first. The HULL form is the
 // span of it the other two leave standing, which is the boat's own edge, in that trim's 2D colour. Either can
 // be shown without the other, and with BOTH shown the black gives up the span the colour has: it draws only
@@ -76,7 +76,7 @@ const FOV_RANGE: [number, number] = [5, 80];
 //
 // Both forms are the sheet's own and go when it does: on the finished hull the one would re-draw an edge the
 // boat already has, and the other would add that plus a sheet that is not there. The part still worth seeing
-// off the sheet is the leftover, and that is not this dropdown's — it is the Edges button's own box.
+// off the sheet is the leftover, and that is not this dropdown's — it is the Lines button's own box.
 const TRIM_FORMS: { key: keyof TrimToggles; label: string; title: string }[] = [
   {
     key: "sheetCurves",
@@ -110,14 +110,15 @@ const TRIMS: { key: keyof TrimToggles; label: string; title: string }[] = [
   },
 ];
 
-// the three lines-plan families — Edges is a Dropdown above, not one of these plain toggles
-const LINES: { key: keyof LineToggles; label: string; title: string }[] = [
+// the three classic lines-plan families, each a checkbox in the Lines dropdown. The design waterline and the
+// two feature-edge boxes live in that dropdown too, but are spelled out inline rather than in this list.
+const FAMILIES: { key: keyof LineToggles; label: string; title: string }[] = [
   { key: "sections", label: "Sections", title: "Transverse stations" },
   { key: "buttocks", label: "Buttocks", title: "Buttocks (constant-y cuts)" },
   {
     key: "waterlines",
     label: "Waterlines",
-    title: "Waterlines (constant-z cuts)",
+    title: "Waterlines: a family of constant-z cuts spread over the sheet",
   },
 ];
 
@@ -153,7 +154,7 @@ export function View3d({
   const [trims, setTrims] = useState<TrimToggles>(DEFAULT_TRIMS); // which of the sheet's cuts to draw
   const [sheetMenu, setSheetMenu] = useState(false); // the Sheet dropdown open state
   const [leftovers, setLeftovers] = useState(false); // draw the trims' off-the-boat runs alongside the edges
-  const [edgesMenu, setEdgesMenu] = useState(false); // the Edges dropdown open state
+  const [linesMenu, setLinesMenu] = useState(false); // the Lines dropdown open state
   const [showMesh, setShowMesh] = useState(false); // overlay the quad-grid wireframe
   const [meshQuads, setMeshQuads] = useState(true); // wire as quads (default) or the raw shaded triangles
   const [meshMenu, setMeshMenu] = useState(false); // the Mesh overlay dropdown open state
@@ -286,62 +287,84 @@ export function View3d({
           </div>
         </Dropdown>
         <Dropdown
-          label="Edges"
+          label="Lines"
           active={lines.edges}
           onToggle={() => setLines((s) => ({ ...s, edges: !s.edges }))}
-          open={edgesMenu}
-          onOpenChange={setEdgesMenu}
-          title="The surface's own feature edges: the mesh boundary (sheer, keel, and the transom's outline) and every chine"
-          menuLabel="Edge options"
+          open={linesMenu}
+          onOpenChange={setLinesMenu}
+          title="Every line drawn over the surface: its own feature edges (boundary and chines), the classic lines-plan families, and the design waterline. The whole set shows or hides together — with this off, none of the boxes below draws, however it is checked."
+          menuLabel="Line options"
+          align="right"
         >
-          <label
-            className="dd-row dd-check"
-            title="The mesh boundary: the outline the surface ends on — sheer, keel, and the transom (its aft cut plus the top edge that closes the panel across the breadth). Uncheck to keep the chines but drop the outline drawn over them"
-          >
-            <input
-              type="checkbox"
-              checked={lines.meshBoundary}
-              onChange={(e) =>
-                setLines((s) => ({ ...s, meshBoundary: e.target.checked }))
-              }
-            />
-            <span className="dd-name">Mesh boundary</span>
-          </label>
-          <label
-            className="dd-row dd-check"
-            title="The chines: the creases across the surface's interior, as against the mesh boundary that outlines it. Uncheck to drop them and keep the outline"
-          >
-            <input
-              type="checkbox"
-              checked={lines.chines}
-              onChange={(e) =>
-                setLines((s) => ({ ...s, chines: e.target.checked }))
-              }
-            />
-            <span className="dd-name">Chines</span>
-          </label>
-          <label
-            className="dd-row dd-check"
-            title="Also draw the leftovers of the three trims: the runs of each cut that fall outside the boat, in the Edges black. Which trims they are drawn for is the Sheet dropdown's choice. Needs Edges on"
-          >
-            <input
-              type="checkbox"
-              checked={leftovers}
-              onChange={(e) => setLeftovers(e.target.checked)}
-            />
-            <span className="dd-name">Trim curves leftovers</span>
-          </label>
+          <div className="dd-section">
+            <div className="dd-group">Feature edges</div>
+            <label
+              className="dd-row dd-check"
+              title="The mesh boundary: the outline the surface ends on — sheer, keel, and the transom (its aft cut plus the top edge that closes the panel across the breadth). Uncheck to keep the chines but drop the outline drawn over them"
+            >
+              <input
+                type="checkbox"
+                checked={lines.meshBoundary}
+                onChange={(e) =>
+                  setLines((s) => ({ ...s, meshBoundary: e.target.checked }))
+                }
+              />
+              <span className="dd-name">Mesh boundary</span>
+            </label>
+            <label
+              className="dd-row dd-check"
+              title="The chines: the creases across the surface's interior, as against the mesh boundary that outlines it. Uncheck to drop them and keep the outline"
+            >
+              <input
+                type="checkbox"
+                checked={lines.chines}
+                onChange={(e) =>
+                  setLines((s) => ({ ...s, chines: e.target.checked }))
+                }
+              />
+              <span className="dd-name">Chines</span>
+            </label>
+            <label
+              className="dd-row dd-check"
+              title="Also draw the leftovers of the three trims: the runs of each cut that fall outside the boat, in the bold feature-edge black. Which trims they are drawn for is the Sheet dropdown's choice. Needs Lines on"
+            >
+              <input
+                type="checkbox"
+                checked={leftovers}
+                onChange={(e) => setLeftovers(e.target.checked)}
+              />
+              <span className="dd-name">Trim curves leftovers</span>
+            </label>
+          </div>
+          <div className="dd-section">
+            <div className="dd-group">Lines plan</div>
+            {FAMILIES.map((l) => (
+              <label key={l.key} className="dd-row dd-check" title={l.title}>
+                <input
+                  type="checkbox"
+                  checked={lines[l.key]}
+                  onChange={(e) =>
+                    setLines((s) => ({ ...s, [l.key]: e.target.checked }))
+                  }
+                />
+                <span className="dd-name">{l.label}</span>
+              </label>
+            ))}
+            <label
+              className="dd-row dd-check"
+              title="The design waterline: the one waterline the model itself defines, drawn in blue (distinct from the Waterlines family above)"
+            >
+              <input
+                type="checkbox"
+                checked={lines.dwl}
+                onChange={(e) =>
+                  setLines((s) => ({ ...s, dwl: e.target.checked }))
+                }
+              />
+              <span className="dd-name">Waterline</span>
+            </label>
+          </div>
         </Dropdown>
-        {LINES.map((l) => (
-          <Button
-            key={l.key}
-            active={lines[l.key]}
-            title={l.title}
-            onClick={() => setLines((s) => ({ ...s, [l.key]: !s[l.key] }))}
-          >
-            {l.label}
-          </Button>
-        ))}
         <div className="view3dshading">
           {SHADINGS.map((s) => (
             <Button

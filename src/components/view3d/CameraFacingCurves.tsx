@@ -124,7 +124,7 @@ export function CameraFacingCurves({
           halfWidthPx: LINES_DWL_HALF_PX,
         });
     }
-    // The sheet's trims at the bold Edges weight, because on the hull that is exactly what their surviving
+    // The sheet's trims at the bold feature-edge weight, because on the hull that is exactly what their surviving
     // span IS — the same edge, drawn in the trim's own colour to say which cut made it. The whole marched cut
     // is one black job whichever trims are shown, so it reads as those edges carrying on out over the sheet
     // rather than as a family of its own. Nothing is cut against anything: with both toggles on, the coloured

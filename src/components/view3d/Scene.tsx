@@ -62,7 +62,7 @@ interface SceneProps {
   lines: LineToggles; // which curve families to lay over it (a stable object: it is in a rebuild's deps)
   sheet: boolean; // draw all of it on the raw untrimmed sweep (one side, no trims/mirror) instead of the hull
   trims: TrimToggles; // which of the sheet's three trims to draw over it (another stable object)
-  leftovers: boolean; // the Edges dropdown's box: also draw the trim runs that fall outside the boat
+  leftovers: boolean; // the Lines dropdown's box: also draw the trim runs that fall outside the boat
   showMesh: boolean;
   meshQuads: boolean;
   sampling: HullSampling | null;
@@ -198,10 +198,11 @@ export function Scene({
         )
       : null;
     // the lines-plan curves are read off the geometry just built — the sampling's own columns and the
-    // triangles stitched from them — so they need both, and there is nothing to draw without them. Built
-    // whatever the toggles say, because the design waterline is drawn unconditionally.
+    // triangles stitched from them — so they need both, and there is nothing to draw without them. The Lines
+    // master (`lines.edges`) gates the whole overlay: with it off nothing here is built at all, whatever the
+    // individual boxes — feature edges, families, the design waterline — say.
     const linesPlanCurves: LinesPlanCurves | null =
-      sampling && hullMesh
+      sampling && hullMesh && lines.edges
         ? perfStep(
             "Lines plan curves",
             () =>
@@ -212,7 +213,7 @@ export function Scene({
         : null;
     // the sheet's own trims: curves the sampling already holds, so this only picks them — it owes nothing to
     // the mesh just built. Drawn on the sheet the Sheet dropdown's own way; off it, only the leftovers the
-    // Edges dropdown asks for, which follow the Edges toggle they belong to — hence `sheet` and `leftovers &&
+    // Lines dropdown asks for, which follow the Lines master they belong to — hence `sheet` and `leftovers &&
     // lines.edges` (see view3dDisplay.ts)
     const trimCurves: TrimPlanCurves | null = sampling
       ? perfStep(

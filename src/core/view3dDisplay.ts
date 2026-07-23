@@ -2,15 +2,17 @@
 //
 // `ShadingMode` picks how the SURFACE is shaded: "flat" = the plain unlit skin the lines plan is drawn over,
 // "smooth" = the lit, shaded hull, "zebra" = zebra-striped (a fairness check). `LineToggles` picks which
-// CURVES are laid over it — each family independently, whatever the shading is: the surface's own feature
-// edges, and the three classic lines-plan families (stations / constant-y cuts / constant-z cuts). The design
-// waterline is not a toggle: being the one line the model itself defines, it is always drawn.
+// CURVES are laid over it, whatever the shading is: the surface's own feature edges, the three classic
+// lines-plan families (stations / constant-y cuts / constant-z cuts), and the design waterline. `edges` is
+// the Lines button — the master over the whole set: with it off nothing here is drawn, whatever the other
+// boxes say, and with it on each of them is an independent choice. (It keeps the name `edges` from when it
+// governed only the feature edges, which are now just two of the boxes under it.)
 //
 // Three further toggles live in the view itself rather than in either set. `sheet` swaps the trimmed, mirrored
 // hull for the raw untrimmed sweep (one side, no trims/mirror) and `showMesh` overlays the hull's quad grid as
-// a wireframe, to inspect the mesh itself. `leftovers` — a box in the Edges button's own dropdown — adds to
+// a wireframe, to inspect the mesh itself. `leftovers` — a box in the Lines button's own dropdown — adds to
 // the boat's feature edges the ghost of the edges it has NOT got: the runs of each trim that fall outside it,
-// hanging in the space the cut took away. It belongs to Edges, and follows it: it draws nothing while `edges`
+// hanging in the space the cut took away. It belongs to Lines, and follows it: it draws nothing while `edges`
 // is off, and starts off itself, so the finished hull opens as the finished hull.
 //
 // `TrimToggles` rides with `sheet` (it is the Sheet button's dropdown) and, unlike the line families, belongs
@@ -25,7 +27,10 @@
 export type ShadingMode = "flat" | "smooth" | "zebra";
 
 export interface LineToggles {
-  edges: boolean; // the master: the surface's own feature edges — the mesh boundary AND every chine
+  // `edges` is the Lines master: the whole set of lines below is drawn only while it is on, whatever the
+  // individual boxes say. It keeps the name from when it governed just the feature edges — now the first two
+  // boxes under it (mesh boundary and chines).
+  edges: boolean;
   // The two kinds of feature edge, each a subtractive box on `edges`: with `edges` off neither shows, and with
   // it on either can be dropped on its own. `meshBoundary` is the outline the surface ends on — sheer, keel,
   // transom cut; `chines` are the creases across its interior. Drop the boundary to read the creases without
@@ -34,12 +39,14 @@ export interface LineToggles {
   chines: boolean;
   sections: boolean; // transverse stations (columns of the hull's own sampling)
   buttocks: boolean; // constant-y cuts
-  waterlines: boolean; // constant-z cuts
+  waterlines: boolean; // constant-z cuts (a family of them, spread over the sheet)
+  dwl: boolean; // the design waterline: the single constant-z line the model's own waterline depth defines
 }
 
-// what the view starts with: the surface's own edges, boundary and chines both — they read well under any
-// shading and keep the flat skin from opening as a featureless silhouette — but none of the three families,
-// which are the ones you go looking for
+// what the view starts with: the Lines master on, drawing the surface's own edges (boundary and chines both —
+// they read well under any shading and keep the flat skin from opening as a featureless silhouette) and the
+// design waterline (the one line the model itself defines), but none of the three families, which are the ones
+// you go looking for
 export const DEFAULT_LINES: LineToggles = {
   edges: true,
   meshBoundary: true,
@@ -47,6 +54,7 @@ export const DEFAULT_LINES: LineToggles = {
   sections: false,
   buttocks: false,
   waterlines: false,
+  dwl: true,
 };
 
 // the sheet's three trims, and the two forms each can be drawn in

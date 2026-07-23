@@ -41,7 +41,7 @@ const N_STATION_STEPS = 32,
 export interface LinesPlanCurves {
   bold: Vec3[][]; // sheer / keel / chines / both end columns — heavy weight (the `edges` toggle)
   family: Vec3[][]; // the enabled non-chine families: stations / buttocks / waterlines — light weight
-  dwl: Vec3[][]; // the design-waterline crossing — blue, always drawn
+  dwl: Vec3[][]; // the design-waterline crossing — blue; empty unless the Lines dropdown's Waterline box is on
 }
 
 // a scalar field of a mesh vertex, read straight off the position buffer (no Vec3 per vertex)
@@ -158,10 +158,10 @@ export function buildLinesPlanCurves(
     }
   }
 
-  // The design waterline shares the waterline family's field, so both are marched in one pass over the
-  // triangles: the DWL is simply the last level asked for. The field is `worldZ` with the rake's sin/cos
-  // lifted out — it runs once per mesh vertex per pass, and those two trig calls cost more than the whole
-  // rest of the march put together.
+  // The design waterline shares the waterline family's field, so when its box is on the two are marched in one
+  // pass over the triangles: the DWL is laid on as the last level, after any of the family's own, so it can be
+  // lifted straight back off. The field is `worldZ` with the rake's sin/cos lifted out — it runs once per mesh
+  // vertex per pass, and those two trig calls cost more than the whole rest of the march put together.
   const sr = Math.sin(model.deckRake),
     cr = Math.cos(model.deckRake),
     wz: Field = (x, _y, z) => x * sr + z * cr;
@@ -170,9 +170,9 @@ export function buildLinesPlanCurves(
     const [lo, hi] = rangeIn(sheetCols, wz);
     wzLevels.push(...spread(lo, hi, N_WATERLINES));
   }
-  wzLevels.push(-model.waterline);
+  if (lines.dwl) wzLevels.push(-model.waterline);
   const wzRuns = contours(hull, wz, wzLevels);
-  const dwl = wzRuns.pop() ?? [];
+  const dwl = lines.dwl ? (wzRuns.pop() ?? []) : [];
   for (const runs of wzRuns) family.push(...runs);
 
   if (lines.buttocks) {
@@ -212,7 +212,7 @@ export function buildLinesPlanCurves(
 // `sheetCenterline` / `sheetTransom`), which is the cut itself, running on past the boat wherever another trim
 // got to the sheet first; and the span of it the other two leave standing is the hull's own edge (`hullSheer`
 // / `hullCenterline` / `hullTransom`), corners and ordering included. The two are drawn as two independent
-// toggles — the sheet's form in the Edges black, the hull's in that trim's 2D colour. Alone, each draws the
+// toggles — the sheet's form in the bold black, the hull's in that trim's 2D colour. Alone, each draws the
 // whole of its curve. TOGETHER, the sheet form drops back to the LEFTOVER the sampling holds beside the hull
 // edge (`hullSheerLeftover` and its two siblings): the span the hull edge already covers would otherwise be
 // two coincident polylines fighting for the same pixels, and this way the black picks up exactly where the
@@ -221,14 +221,14 @@ export function buildLinesPlanCurves(
 // All of that is the SHEET's story, and it goes when the sheet does: on the finished hull the hull form would
 // only re-draw an edge the boat already has, and the sheet form would draw that plus a sheet that is no longer
 // there. What is worth keeping is just the LEFTOVER — the runs of each cut that fall outside the boat — and
-// that is not this dropdown's to give: it is the Edges button's `leftovers`, passed in here because the runs
+// that is not this dropdown's to give: it is the Lines button's `leftovers`, passed in here because the runs
 // it wants are the ones the sheet form already knows how to pick (see view3dDisplay.ts).
 //
 // One-sided, unlike the lines plan: these are curves ON the sheet, and the sheet is the starboard sweep. The
 // port half of the finished hull is a mirror of the result of trimming, not a second sheet to trim.
 
 export interface TrimPlanCurves {
-  sheet: Vec3[][]; // the shown trims as marched over the whole sheet — black, at the Edges weight
+  sheet: Vec3[][]; // the shown trims as marched over the whole sheet — black, at the bold feature-edge weight
   hull: { color: string; lines: Vec3[][] }[]; // per shown trim: the hull edge it survives as, in its colour
 }
 
@@ -269,12 +269,12 @@ export function buildTrimCurves(
   trims: TrimToggles,
   sampling: HullSampling,
   sheetUp: boolean, // whether the raw sheet is the surface on show, rather than the trimmed hull
-  leftovers: boolean, // the Edges button's box: draw the runs of each cut that fall outside the boat
+  leftovers: boolean, // the Lines button's box: draw the runs of each cut that fall outside the boat
 ): TrimPlanCurves {
   const sheet: Vec3[][] = [],
     hull: TrimPlanCurves["hull"] = [];
   // Off the sheet this dropdown has nothing to say, and the only curve that could be drawn is the one the
-  // Edges button asks for (see view3dDisplay.ts).
+  // Lines button asks for (see view3dDisplay.ts).
   const leftoversOnly = !sheetUp;
   if (leftoversOnly && !leftovers) return { sheet, hull };
   // What each trim contributes, settled here because none of it varies from trim to trim. The hull form is
