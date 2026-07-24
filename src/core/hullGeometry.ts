@@ -365,13 +365,15 @@ const wireEdge = (arr: number[], a: Vec3, b: Vec3): void => {
 // The sampling (mesh.ts) trimmed the SHEET itself into whole quads and boundary triangles — every vertex a
 // HullSample carrying its girth index and crease strength, and shared boundary vertices shared by OBJECT
 // IDENTITY. So the mesh builder no longer stitches ragged columns or splices a foot: it welds those faces onto
-// a deduplicated vertex set (the same HullSample in two faces is one vertex, so a node gathers every adjacent
-// face's normal), accumulates normals split by girth side for the creases, and mirrors the starboard half to
-// port. The trim, the boundary, and the foot all live in the sampling now.
+// a deduplicated vertex set (the same HullSample in two faces is one vertex) and mirrors the starboard half to
+// port. The per-vertex normals ride ON the samples: each HullSample carries the surface normal computed
+// straight from the sheet f(u,v) (mesh.ts), split into a −v side and a +v side so a knuckle keeps its edge — so
+// the builder only reads and blends them, it no longer averages neighbouring faces. The trim, the boundary,
+// the foot, and now the normals all live in the sampling.
 //
 // Only the STARBOARD half is built; the port half is its exact y-mirror (positions and normals negated), so
-// the two halves meet seamlessly on the centerline. Where a vertex sits on the keel (y = 0) its normal's
-// y-component is zeroed so the mirror joins smoothly (the mirror of an (x,0,z) normal is itself).
+// the two halves meet on the centerline sharing the keel line. Every vertex keeps the surface normal the sheet
+// f(u,v) gave it — the crease coefficient already shaped that, so nothing is blended or zeroed at emit.
 
 export function buildHullMesh(
   sampling: HullSampling,
@@ -422,51 +424,32 @@ export function buildHullMesh(
 
   const pos = verts.map((s) => s.pos),
     vg = verts.map((s) => s.vSheetIndex), // per-vertex girth (sheet-row) index
-    vk = verts.map((s) => s.vCreaseK); // per-vertex crease strength
+    // the two analytic surface normals each sample carries, both already unit: nLo approaching in −v (toward the
+    // sheer), nHi in +v (toward the keel). Off a crease they are the one same vector; at a knuckle they part —
+    // the section's own tangent break, already scaled by the crease coefficient that shaped it — and each face
+    // simply takes the side it lies on. Nothing is blended in on top: the crease is in the geometry these
+    // normals came from, so blending by the coefficient again would count it twice.
+    nLo = verts.map((s) => s.nrmLo),
+    nHi = verts.map((s) => s.nrmHi);
 
-  // face-normal accumulation, split by girth side: nLo gathers faces centred below a vertex's index, nHi
-  // above. A smooth vertex uses nLo + nHi; a crease vertex blends toward its own side so a knuckle reads as
-  // an edge and a faded knuckle stays smooth. Unnormalized cross products area-weight the average.
-  const nLo = verts.map((): Vec3 => [0, 0, 0]),
-    nHi = verts.map((): Vec3 => [0, 0, 0]);
+  // each triangle tagged with its centroid girth, for the crease-side test at emit
   interface Tri {
     a: number;
     b: number;
     c: number;
     g: number; // the triangle's centroid index, for the crease-side test
   }
-  const tris: Tri[] = [];
-  for (const [a, b, c] of rawTris) {
-    const fn = V.cross(V.sub(pos[b], pos[a]), V.sub(pos[c], pos[a])),
-      g = (vg[a] + vg[b] + vg[c]) / 3;
-    for (const v of [a, b, c]) {
-      const bk = g >= vg[v] ? nHi[v] : nLo[v];
-      bk[0] += fn[0];
-      bk[1] += fn[1];
-      bk[2] += fn[2];
-    }
-    tris.push({ a, b, c, g });
-  }
+  const tris: Tri[] = rawTris.map(([a, b, c]) => ({
+    a,
+    b,
+    c,
+    g: (vg[a] + vg[b] + vg[c]) / 3,
+  }));
 
-  // resolve each vertex's smooth normal (both sides), zeroing y on the keel of the trimmed hull so the mirror
-  // joins with no transverse tilt (a smooth round bottom). The one-sided crease normals are formed at emit.
-  const keelY = trimmed;
-  const smoothN = verts.map((_, v): Vec3 => {
-    const n: Vec3 = [
-      nLo[v][0] + nHi[v][0],
-      nLo[v][1] + nHi[v][1],
-      nLo[v][2] + nHi[v][2],
-    ];
-    if (keelY && Math.abs(pos[v][1]) < 1e-6) n[1] = 0;
-    return V.norm(n);
-  });
-  const nrmAt = (v: number, g: number): Vec3 => {
-    if (vk[v] <= 1e-6) return smoothN[v];
-    const side = g >= vg[v] ? nHi[v] : nLo[v],
-      hn: Vec3 = [side[0], side[1], side[2]];
-    if (keelY && Math.abs(pos[v][1]) < 1e-6) hn[1] = 0;
-    return V.norm(V.lerp(smoothN[v], V.norm(hn), vk[v]));
-  };
+  // each vertex takes the surface normal of the side its face lies on: nHi for a face centred toward the keel
+  // (girth index ≥ the vertex's), nLo toward the sheer. Off a crease the two sides are equal, so it makes no
+  // difference; at a knuckle they differ and are kept as they are, which is what draws the chine.
+  const nrmAt = (v: number, g: number): Vec3 => (g >= vg[v] ? nHi[v] : nLo[v]);
 
   // emit the starboard triangles (and the raw-triangle wire, if asked), then the port y-mirror
   const P: number[] = [],

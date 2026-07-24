@@ -23,7 +23,7 @@
 //     in both directions and its normals stay clean along every trim, so the 3D surface, the 2D outlines, the
 //     lines plan, hydrostatics, and STL/preview are all built from it. See the block above `HullSample`.
 
-import { clamp, mirrorRow, type Vec2, type Vec3 } from "./math";
+import { clamp, mirrorRow, V, type Vec2, type Vec3 } from "./math";
 import { perfAdd, perfMark, PERF_MESH } from "./perf";
 import {
   bisectRoot,
@@ -210,6 +210,12 @@ export interface HullSample {
   vSheetIndex: number; // integer on a row, fractional on a column-edge crossing between two rows
   uCreaseK: number; // crease strength crossing this point in u (0 — the model has no transverse creases)
   vCreaseK: number; // crease strength crossing this point in v (a chine / knuckle row)
+  // the surface normal read straight off the sheet f(u,v) — the outward normal ∂f/∂u × ∂f/∂v — carried as two
+  // one-sided values so a crease row keeps the two normals a chine needs. nrmLo is the normal approaching the
+  // sample in −v (toward the sheer), nrmHi in +v (toward the keel); off a crease they are the same vector. The
+  // mesh builder reads these and blends them by vCreaseK rather than averaging neighbouring faces (buildHullMesh).
+  nrmLo: Vec3;
+  nrmHi: Vec3;
 }
 
 export type TrimCurve = HullSample[]; // an ordered polyline of samples along one trim
@@ -310,13 +316,27 @@ export function computeHullSampling(
   const cT = (p: Vec3): number => p[0] - xTransom(model, p[2]); // forward of the transom
   const cons: ((p: Vec3) => number)[] = [cS, cC, cT];
 
-  // per-column frame + section (each evaluated once) and the knuckle strength at each crease row
+  // The steps for the surface normal's derivatives. EU nudges u for the ∂f/∂u central difference; EV nudges v
+  // to pick the segment on either side of a crease knot for the one-sided ∂f/∂v. Both are tiny against their
+  // parameter's [0,1]/[0,vmax] range — small enough to read the local derivative, far above float noise.
+  const EU = 1e-4,
+    EV = 1e-3;
+
+  // per-column frame + section (each evaluated once), the knuckle strength at each crease row, and the u±EU
+  // neighbour frames/sections the ∂f/∂u finite difference reads (clamped to [0,1], so a boundary column takes a
+  // one-sided step and reuses its own frame/section on the clamped side)
   const frs: Frame[] = [],
     secs: Section[] = [],
-    creaseAt: Map<number, number>[] = [];
+    creaseAt: Map<number, number>[] = [],
+    frsLo: Frame[] = [],
+    secsLo: Section[] = [],
+    frsHi: Frame[] = [],
+    secsHi: Section[] = [],
+    uSpans: number[] = [];
   for (let i = 0; i <= N; i++) {
-    const fr = frameAt(model, uParams[i]),
-      sec = sectionAt(model, uParams[i]),
+    const u = uParams[i],
+      fr = frameAt(model, u),
+      sec = sectionAt(model, u),
       cm = new Map<number, number>(),
       { creaseRows, creaseK } = creasesOf(sec, R);
     for (let t = 0; t < creaseRows.length; t++)
@@ -324,13 +344,86 @@ export function computeHullSampling(
     frs.push(fr);
     secs.push(sec);
     creaseAt.push(cm);
+    const uLo = Math.max(u - EU, 0),
+      uHi = Math.min(u + EU, 1);
+    frsLo.push(uLo === u ? fr : frameAt(model, uLo));
+    secsLo.push(uLo === u ? sec : sectionAt(model, uLo));
+    frsHi.push(uHi === u ? fr : frameAt(model, uHi));
+    secsHi.push(uHi === u ? sec : sectionAt(model, uHi));
+    uSpans.push(uHi - uLo);
   }
 
-  // (1) the sheet: every lattice node a world point, tagged with its integer indices and v-crease strength
+  // ---- the surface normal, straight off the sheet f(u,v) = sectionWorld(frame(u), section(u), v) ----
+  // ∂f/∂v is the section's OWN exact tangent (an exact quadratic Bézier derivative), rotated into the world by
+  // the frame normal — z is world z, so only n rides the frame. ∂f/∂u is a central finite difference of the
+  // whole sheet in u: it has no clean closed form, because moving u slides the plan point, turns the frame, AND
+  // reshapes the lofted section all at once. Their cross product is the outward normal.
+  //
+  // Two one-sided ∂f/∂v — v nudged to either side — give the two normals a crease row needs: off a crease they
+  // coincide (the section is C¹ there), at a hard knuckle they part, and buildHullMesh blends between them by
+  // vCreaseK. The cross product's sign is left as it falls; it is consistent across the whole sheet, and the
+  // hull shader is two-sided, so outward-vs-inward never matters here.
+  const dfdv = (fr: Frame, sec: Section, v: number): Vec3 => {
+    const [dn, dz] = sec.d(v);
+    return [dn * fr.n[0], dn * fr.n[1], dz];
+  };
+  const normalsAt = (
+    fr: Frame,
+    sec: Section,
+    v: number,
+    frLo: Frame,
+    secLo: Section,
+    frHi: Frame,
+    secHi: Section,
+    uSpan: number,
+  ): { lo: Vec3; hi: Vec3 } => {
+    const dfdu = V.scale(
+      V.sub(sectionWorld(frHi, secHi, v), sectionWorld(frLo, secLo, v)),
+      1 / uSpan,
+    );
+    return {
+      lo: V.norm(V.cross(dfdu, dfdv(fr, sec, Math.max(v - EV, 0)))),
+      hi: V.norm(V.cross(dfdu, dfdv(fr, sec, Math.min(v + EV, sec.vmax)))),
+    };
+  };
+  // the same for a sample OFF the column lattice (a row-edge crossing or a corner, at fractional u): its u±EU
+  // neighbour frames/sections are built on the spot rather than read from the per-column arrays.
+  const normalsAtU = (
+    u: number,
+    v: number,
+    fr: Frame,
+    sec: Section,
+  ): { lo: Vec3; hi: Vec3 } => {
+    const uLo = Math.max(u - EU, 0),
+      uHi = Math.min(u + EU, 1);
+    return normalsAt(
+      fr,
+      sec,
+      v,
+      frameAt(model, uLo),
+      sectionAt(model, uLo),
+      frameAt(model, uHi),
+      sectionAt(model, uHi),
+      uHi - uLo,
+    );
+  };
+
+  // (1) the sheet: every lattice node a world point, tagged with its integer indices, v-crease strength, and
+  // the two one-sided surface normals
   const sheet: HullSample[][] = [];
   for (let i = 0; i <= N; i++) {
     const col: HullSample[] = [];
-    for (let k = 0; k <= M; k++)
+    for (let k = 0; k <= M; k++) {
+      const nn = normalsAt(
+        frs[i],
+        secs[i],
+        vParams[k],
+        frsLo[i],
+        secsLo[i],
+        frsHi[i],
+        secsHi[i],
+        uSpans[i],
+      );
       col.push({
         pos: sectionWorld(frs[i], secs[i], vParams[k]),
         u: uParams[i],
@@ -339,7 +432,10 @@ export function computeHullSampling(
         vSheetIndex: k,
         uCreaseK: 0,
         vCreaseK: creaseAt[i].get(k) ?? 0,
+        nrmLo: nn.lo,
+        nrmHi: nn.hi,
       });
+    }
     sheet.push(col);
   }
   // every constraint at every node — the marched trims' sign fields — and their min, the hull's keep test
@@ -366,6 +462,16 @@ export function computeHullSampling(
       v = bisectRoot(g, vParams[k], vParams[k + 1], g(vParams[k])),
       pos = sectionWorld(fr, sec, v);
     if (ci === 1) pos[1] = 0; // the centerline crossing must sit EXACTLY on y = 0 so the two halves meet
+    const nn = normalsAt(
+      fr,
+      sec,
+      v,
+      frsLo[i],
+      secsLo[i],
+      frsHi[i],
+      secsHi[i],
+      uSpans[i],
+    );
     const s: HullSample = {
       pos,
       u: uParams[i],
@@ -374,6 +480,8 @@ export function computeHullSampling(
       vSheetIndex: v * R,
       uCreaseK: 0,
       vCreaseK: 0,
+      nrmLo: nn.lo,
+      nrmHi: nn.hi,
     };
     colCache.set(key, s);
     return s;
@@ -397,6 +505,7 @@ export function computeHullSampling(
       const j = k / R;
       if (j > 0 && j < S - 1) vc = clamp(sec.ks[j] ?? 0, 0, 1);
     }
+    const nn = normalsAtU(u, vv, fr, sec);
     const s: HullSample = {
       pos,
       u,
@@ -405,6 +514,8 @@ export function computeHullSampling(
       vSheetIndex: k,
       uCreaseK: 0,
       vCreaseK: vc,
+      nrmLo: nn.lo,
+      nrmHi: nn.hi,
     };
     rowCache.set(key, s);
     return s;
@@ -588,15 +699,22 @@ export function computeHullSampling(
   // actually meet at, by up to a cell. So each corner is converged in its own right, the same way for all
   // three: walk ONE of the two trims as a curve in u, and bisect for the u where the OTHER one's constraint
   // vanishes on it.
-  const mkCorner = (pos: Vec3, u: number, v: number): HullSample => ({
-    pos,
-    u,
-    v,
-    uSheetIndex: u * N,
-    vSheetIndex: v * R,
-    uCreaseK: 0,
-    vCreaseK: 0,
-  });
+  const mkCorner = (pos: Vec3, u: number, v: number): HullSample => {
+    const fr = frameAt(model, u),
+      sec = sectionAt(model, u),
+      nn = normalsAtU(u, v, fr, sec);
+    return {
+      pos,
+      u,
+      v,
+      uSheetIndex: u * N,
+      vSheetIndex: v * R,
+      uCreaseK: 0,
+      vCreaseK: 0,
+      nrmLo: nn.lo,
+      nrmHi: nn.hi,
+    };
+  };
   // The crossing of constraint `ci` on the section at u — that trim as a curve in u, converged. `ci` is the
   // sheer or the centerline, never the transom: every PAIR of trims holds one of those two, and both are met
   // going down from the deck point, which starts ABOVE the sheer trim and OUTBOARD of the centerline. A
