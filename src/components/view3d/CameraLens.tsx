@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
@@ -12,9 +12,28 @@ interface OrbitControlsLike {
 const halfAngle = (fovDeg: number): number =>
   Math.tan(((fovDeg / 2) * Math.PI) / 180);
 
+// The VERTICAL field of view (what three.js's camera actually takes) whose DIAGONAL is `fov` at this aspect.
+// The half-tangents of the three angles form a right triangle: the horizontal one is the vertical one times
+// the aspect, so the diagonal's is the vertical's times hypot(1, aspect).
+const verticalFov = (fov: number, aspect: number): number =>
+  (2 * Math.atan(halfAngle(fov) / Math.hypot(1, aspect)) * 180) / Math.PI;
+
 // The perspective camera's lens, applied as a DOLLY-ZOOM: setting the field of view moves the camera along
 // its view axis so the hull keeps exactly the size it had on screen, and only the amount of perspective
 // changes.
+//
+// The number is the DIAGONAL field of view, not three.js's vertical one, and the conversion is redone on
+// every resize. A vertical lens is a lens whose width is whatever the window happens to be: widening the
+// view simply opens the horizontal angle, so the same slider setting throws far more perspective across a
+// wide viewport than a tall one. The diagonal is the widest angle actually on screen, so pinning THAT —
+// narrowing the vertical lens as the view widens — keeps the amount of foreshortening the same whatever
+// shape the window is.
+//
+// A resize changes the lens and NOTHING else: the eye stays exactly where the user left it. The dolly below
+// is for the slider, where the point is to change the perspective without changing the framing; dragging a
+// window edge is not a request to move the camera, and paying for the new lens by sliding the eye along its
+// axis while the user is still dragging reads as the hull deforming under the mouse. Only the amount of
+// screen it covers changes, which is what a window resize is allowed to do.
 //
 // That dolly is the whole point. Foreshortening depends on nothing but where the eye is relative to the
 // hull's size, so a control that only wrote `fov` would leave the eye where it was and every convergence
@@ -35,25 +54,41 @@ export function CameraLens({ fov }: { fov: number }) {
     (s) => s.controls,
   ) as unknown as OrbitControlsLike | null;
   const invalidate = useThree((s) => s.invalidate);
+  const size = useThree((s) => s.size); // re-runs on resize: the vertical lens the diagonal asks for moves with the aspect
+  // what the last run applied, so a re-run can tell a resize (same lens, new aspect — set it and leave the
+  // pose alone) from an actual lens change or a camera handover (dolly, and normalize `zoom`)
+  const applied = useRef<{ camera: THREE.Camera; fov: number } | null>(null);
 
   useEffect(() => {
     if (!(camera instanceof THREE.PerspectiveCamera) || !controls) return;
+    if (!(size.width > 0) || !(size.height > 0)) return;
+    const vFov = verticalFov(fov, size.width / size.height),
+      resized = applied.current?.camera === camera && applied.current.fov === fov;
+    applied.current = { camera, fov };
+
+    if (resized) {
+      camera.fov = vFov;
+      camera.updateProjectionMatrix();
+      invalidate();
+      return;
+    }
+
     const dist = camera.position.distanceTo(controls.target);
     if (!(dist > 0)) return;
     // what is held fixed: the world height the viewport spans at the orbit target (Canvas3DCamera.ts's own
     // formula, so this agrees with the zoom-matching done when the projection is toggled)
     const height = (2 * dist * halfAngle(camera.fov)) / camera.zoom;
-    camera.fov = fov;
+    camera.fov = vFov;
     camera.zoom = 1;
     // the distance at which that height exactly fills the new lens, along the same view axis
     camera.position
       .sub(controls.target)
-      .multiplyScalar(height / (2 * halfAngle(fov)) / dist)
+      .multiplyScalar(height / (2 * halfAngle(vFov)) / dist)
       .add(controls.target);
     camera.updateProjectionMatrix();
     controls.update(); // re-derives the controls' spherical state, and autoNear/autoFar, from the new pose
     invalidate();
-  }, [camera, controls, fov, invalidate]);
+  }, [camera, controls, fov, invalidate, size.width, size.height]);
 
   return null;
 }

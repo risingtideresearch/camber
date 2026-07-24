@@ -60,12 +60,17 @@ const SHADINGS: { shading: ShadingMode; label: string; title: string }[] = [
   },
 ];
 
-// The perspective lens the view opens with, in degrees of vertical field of view, and the range the slider
-// offers. Narrower than polymorph-ui's own 40° default: a hull is a long object usually looked at end-on,
-// where a wide lens throws the far end away and bends the sheer. The bottom of the range is nearly the
-// orthographic view (which is this at 0°) and the top is wide enough to stand inside the boat.
-const DEFAULT_FOV = 30;
-const FOV_RANGE: [number, number] = [5, 80];
+// The perspective lens the view opens with, in degrees of DIAGONAL field of
+// view, and the range the slider offers. Diagonal rather than three.js's own
+// vertical angle so that the amount of perspective is the same whatever shape
+// the window is — see CameraLens, which converts to the vertical lens the
+// camera takes and redoes it on every resize. We use a narrow lens by default
+// (50°), similar to photographing a boat with a mild telephoto lens. For
+// generic CAD purposes, a wider 60-70° might be a good default, but a hull is a
+// long object usually looked at end-on, where a wide one throws the far end
+// away and bends the sheer.
+const DEFAULT_FOV = 50;
+const FOV_RANGE: [number, number] = [1, 120];
 
 // The Sheet button's dropdown: the three cuts that make the sheet into the hull, each drawable in two forms.
 // The SHEET form is the curve the trim marches over the whole sheet as if it were the only one, in the bold
@@ -211,7 +216,7 @@ export function View3d({
         >
           <label
             className="dd-row"
-            title="The perspective camera's vertical field of view. The camera pulls back as the lens narrows, so the hull stays the same size on screen and only the amount of perspective changes — at the narrow end the view approaches Ortho, which is this at 0°."
+            title="The perspective camera's field of view, measured across the diagonal."
           >
             <span className="dd-name">Field of view</span>
             <input
