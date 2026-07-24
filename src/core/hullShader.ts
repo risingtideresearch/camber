@@ -24,6 +24,13 @@ void main() {
 // the curves and the mesh drawn ON it read as clearly in a shadowed area as in a lit one, and so Smooth sits
 // in the same light key as Flat rather than being a much darker mode.
 //
+// The zebra stripes are antialiased ANALYTICALLY rather than by supersampling: the pattern is a square wave in
+// a known coordinate, so a pixel's exact ink coverage is the difference of that wave's antiderivative across
+// the pixel's footprint in that coordinate — a handful of ALU ops, exact rather than a 16-tap estimate, and it
+// stays right no matter how fast the stripes run. Where they crowd below one pixel (a tight bilge, a nearly
+// singular reflection) the coverage rightly averages toward flat grey instead of breaking into moire, so a
+// greyed patch reads as "too fine to resolve here — zoom in", not as a surface defect.
+//
 // The design waterline is NOT shaded here — the hull used to wear darker bottom paint below it, but the view
 // now draws it as a real curve on the surface (hullLines3d.ts) in every shading mode, which reads the same
 // whichever way the hull is shaded.
@@ -47,6 +54,12 @@ varying vec3 vWorld;
 uniform vec3 uLight, uBase;
 uniform float uStripes, uAlpha;
 uniform int uZebra;
+
+// The antiderivative of the zebra's square wave, in stripe coordinates where one unit is one dark/light PAIR
+// and the pattern is \`fract(u) < 0.5\`: a ramp that rises through half of every period and holds through the
+// other half. Differencing it across a pixel's footprint gives that pixel's exact stripe coverage.
+float zebraRamp(float u) { return 0.5 * floor(u) + min(fract(u), 0.5); }
+
 void main() {
   vec3 V = isOrthographic
     ? normalize(vec3(viewMatrix[0][2], viewMatrix[1][2], viewMatrix[2][2]))
@@ -59,8 +72,18 @@ void main() {
   float spec = pow(max(dot(N, H), 0.0), 26.0); // broad, gentle highlight
   if (uZebra == 1) {
     vec3 R = reflect(-V, N);
-    float band = sin(atan(R.z, R.y) * uStripes);
-    float s = step(0.0, band);
+    vec2 p = vec2(R.y, R.z);
+    float k = uStripes / 6.283185307; // stripe coordinate: one unit per dark/light pair
+    float u = atan(p.y, p.x) * k;
+    // u's footprint in this pixel, by the chain rule on p — d(atan2)/dx = (p.x p'.y - p.y p'.x) / |p|^2 — and
+    // NOT by fwidth(u): atan's branch cut at +-pi would read there as an enormous derivative and lay a grey
+    // seam down the hull, though the pattern itself crosses it continuously (uStripes is a whole number of
+    // periods). |dx| + |dy| is fwidth's own Manhattan estimate of the footprint.
+    vec2 dpx = dFdx(p), dpy = dFdy(p);
+    float r2 = max(dot(p, p), 1e-12);
+    float w = k * (abs(p.x * dpx.y - p.y * dpx.x) + abs(p.x * dpy.y - p.y * dpy.x)) / r2;
+    w = max(w, 1e-5); // a pixel narrower than any stripe edge: the difference below degrades to a hard step
+    float s = clamp((zebraRamp(u + 0.5 * w) - zebraRamp(u - 0.5 * w)) / w, 0.0, 1.0);
     vec3 col = mix(vec3(0.07, 0.09, 0.15), vec3(0.97, 0.98, 1.0), s) * (0.66 + 0.34 * diff);
     gl_FragColor = vec4(col, uAlpha);
   } else {
