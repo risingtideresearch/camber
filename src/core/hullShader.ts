@@ -60,7 +60,7 @@ void main() {
   if (uZebra == 1) {
     vec3 R = reflect(-V, N);
     float band = sin(atan(R.z, R.y) * uStripes);
-    float s = smoothstep(-0.14, 0.14, band);
+    float s = step(0.0, band);
     vec3 col = mix(vec3(0.07, 0.09, 0.15), vec3(0.97, 0.98, 1.0), s) * (0.66 + 0.34 * diff);
     gl_FragColor = vec4(col, uAlpha);
   } else {
@@ -100,7 +100,7 @@ export function createHullMaterial(
       uBase: { value: new THREE.Vector3(...opts.base) },
       uAlpha: { value: opts.alpha ?? 1.0 },
       uZebra: { value: opts.zebra ? 1 : 0 },
-      uStripes: { value: 11.0 },
+      uStripes: { value: 64.0 },
     },
     polygonOffset: opts.offset ?? false,
     polygonOffsetFactor: 1,
