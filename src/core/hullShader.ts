@@ -18,11 +18,13 @@ void main() {
   gl_Position = projectionMatrix * viewMatrix * worldPosition;
 }`;
 
-// Per-pixel half-Lambert diffuse + a broad, soft specular; a "zebra" mode bands the surface by the reflected
-// eye direction so unfair (non-smooth) spots show as kinked lines. The shaded skin stays deliberately close to
-// its base colour — the diffuse only swings it between 0.78x and 1.06x, and the highlight is a whisper — so
-// the curves and the mesh drawn ON it read as clearly in a shadowed area as in a lit one, and so Smooth sits
-// in the same light key as Flat rather than being a much darker mode.
+// Per-pixel half-Lambert diffuse + a two-lobe, base-tinted specular; a "zebra" mode bands the surface by the
+// reflected eye direction so unfair (non-smooth) spots show as kinked lines. The shaded skin reads as polished
+// metal rather than matte paint: the diffuse swings it between 0.50x and 1.15x so the form is legible from
+// shading alone, and the highlight carries the hull's own hue at full value the way a metal colours what it
+// reflects instead of blooming white. The shadow floor is still kept well off black so the curves and the mesh
+// drawn ON the surface stay readable in a shadowed area, and so Smooth sits near Flat's light key rather than
+// being a much darker mode.
 //
 // The zebra stripes are antialiased ANALYTICALLY rather than by supersampling: the pattern is a square wave in
 // a known coordinate, so a pixel's exact ink coverage is the difference of that wave's antiderivative across
@@ -69,7 +71,7 @@ void main() {
   vec3 Lc = normalize(uLight);
   float diff = dot(N, Lc) * 0.5 + 0.5; diff *= diff; // half-Lambert: the terminator stays soft
   vec3 H = normalize(Lc + V);
-  float spec = pow(max(dot(N, H), 0.0), 26.0); // broad, gentle highlight
+  float nh = max(dot(N, H), 0.0);
   if (uZebra == 1) {
     vec3 R = reflect(-V, N);
     vec2 p = vec2(R.y, R.z);
@@ -87,7 +89,13 @@ void main() {
     vec3 col = mix(vec3(0.07, 0.09, 0.15), vec3(0.97, 0.98, 1.0), s) * (0.66 + 0.34 * diff);
     gl_FragColor = vec4(col, uAlpha);
   } else {
-    vec3 col = uBase * (0.78 + 0.28 * diff) + vec3(1.0) * spec * 0.12;
+    // The metal's tint: the base colour pushed up to full value, so the reflection stays bright while carrying
+    // the hue. Two lobes — a tight core for the polished glint and a broad sheen around it — plus a Schlick
+    // grazing term, which is what makes a metal turn mirror at its silhouette and is most of the "metal" read.
+    vec3 tint = uBase / max(max(uBase.r, max(uBase.g, uBase.b)), 1e-4);
+    float fres = pow(1.0 - max(dot(N, V), 0.0), 5.0);
+    vec3 col = uBase * (0.50 + 0.65 * diff)
+             + tint * (0.42 * pow(nh, 96.0) + 0.16 * pow(nh, 18.0) + 0.20 * fres * diff);
     gl_FragColor = vec4(clamp(col, 0.0, 1.0), uAlpha);
   }
 }`;
