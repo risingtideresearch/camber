@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { addStation, removeStation, setKeelK, type Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import type { CurvatureSettings } from "../core/comb";
@@ -8,8 +7,8 @@ import { StationEditor } from "./StationEditor";
 import "./SidePanel.css";
 
 // The section editor card: the tab strip, the stacked per-station editors (only the active one shown), and
-// the keel-knuckle slider for the active station. Owns which tab is active; everything else flows from the
-// model passed in from above.
+// the keel-knuckle slider for the active station. Which station is active is owned above, since the plan
+// view activates one too; everything else flows from the model passed in from above.
 interface SidePanelProps {
   model: Model;
   modelVersion: number;
@@ -19,6 +18,8 @@ interface SidePanelProps {
   setTool: (t: Tool) => void;
   bumpModel: () => void;
   curvature: CurvatureSettings;
+  activeStation: number;
+  setActiveStation: (si: number) => void;
 }
 
 export function SidePanel({
@@ -30,10 +31,10 @@ export function SidePanel({
   setTool,
   bumpModel,
   curvature,
+  activeStation,
+  setActiveStation,
 }: SidePanelProps) {
-  const [activeTab, setActiveTab] = useState(0);
   const K = model.stations.length;
-  const active = Math.min(activeTab, K - 1); // clamp in case a station was removed
 
   // A station is added AT THE CUT: it needs a definite position along the sheer (v1's templates had none),
   // and the cut is where the user is already looking. Its section is read off the loft there, so the hull is
@@ -43,29 +44,29 @@ export function SidePanel({
     const idx = addStation(model, model.plan.uAtX(model.x0));
     if (idx < 0) return; // no room at the minimum station spacing
     onSelect(null);
-    setActiveTab(idx); // the freshly added station becomes active
+    setActiveStation(idx); // the freshly added station becomes active
     bumpModel();
   };
   const onRemoveStation = (si: number) => {
     if (K <= 1) return;
     removeStation(model, si);
     onSelect(null);
-    setActiveTab((t) => Math.min(t, model.stations.length - 1));
+    setActiveStation(Math.min(activeStation, model.stations.length - 1));
     bumpModel();
   };
   const onKeel = (k: number) => {
-    setKeelK(model, active, k);
+    setKeelK(model, activeStation, k);
     bumpModel();
   };
 
-  const keelK = model.stations[active]?.keelK ?? 0;
+  const keelK = model.stations[activeStation]?.keelK ?? 0;
 
   return (
     <div className="card sidecard">
       <SideTabs
         model={model}
-        activeTab={active}
-        onSelectTab={setActiveTab}
+        activeTab={activeStation}
+        onSelectTab={setActiveStation}
         onAddStation={onAddStation}
         onRemoveStation={onRemoveStation}
       />
@@ -77,7 +78,7 @@ export function SidePanel({
             modelVersion={modelVersion}
             selection={selection}
             si={si}
-            active={si === active}
+            active={si === activeStation}
             tool={tool}
             onSelect={onSelect}
             setTool={setTool}

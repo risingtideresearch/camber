@@ -343,6 +343,8 @@ export function drawPlan(
   selection: ModelSelection,
   sampling: HullSampling,
   onSelect: OnModelSelect,
+  activeStation: number, // the station the section editor is showing — emphasized here, and set by a click
+  onActivateStation: (si: number) => void,
   sc: [number, number],
   curv?: CurvatureSettings,
 ): void {
@@ -549,7 +551,9 @@ export function drawPlan(
       si,
       [v.mapX(fr.p[0]), v.yPlan(fr.p[1])],
       [v.mapX(end[0]), v.yPlan(end[1])],
+      si === activeStation,
       onSelect,
+      onActivateStation,
     );
   });
   model.sheerPlan.forEach((cp, idx) =>
@@ -1293,15 +1297,19 @@ export function cpDot(
 
 // A station's handle on the plan curve: the station drawn as it is seen from above — a segment from its
 // first knot, on the plan curve, running inboard along the station plane's normal to the last knot's offset
-// n — in the station's own accent colour, dragged fore-aft to move the station along the sheer. It is a
-// content-space segment, not a fixed()-wrapped marker: its length is a real inboard distance, so it has to
-// scale with the drawing (only its stroke stays a constant screen width).
+// n — in the station's own accent colour. Pressing it makes that station the active one (the same act as
+// clicking its tab over the section editor) and then drags it fore-aft along the sheer; the active one is
+// drawn heavier, so the plan says which section is being edited. It is a content-space segment, not a
+// fixed()-wrapped marker: its length is a real inboard distance, so it has to scale with the drawing (only
+// its stroke stays a constant screen width).
 export function stationHandle(
   svg: SVGGElement,
   si: number,
   a: Vec2, // screen: the first knot, on the plan curve
   b: Vec2, // screen: the last knot, at its inboard offset
+  active: boolean,
   onSelect: OnModelSelect,
+  onActivate: (si: number) => void,
 ): void {
   const ends = {
     x1: a[0].toFixed(2),
@@ -1313,7 +1321,7 @@ export function stationHandle(
     el("line", {
       ...ends,
       stroke: stationColor(si),
-      "stroke-width": 2.4,
+      "stroke-width": active ? 3 : 2,
       "stroke-linecap": "round",
     }),
   );
@@ -1325,10 +1333,14 @@ export function stationHandle(
     opacity: 0,
     style: "cursor:ew-resize",
   });
-  titled(hit, `Station ${si + 1} — drag along the sheer to move it`);
-  hit.addEventListener("pointerdown", (e) =>
-    stationUDown(si, svg, e, onSelect),
+  titled(
+    hit,
+    `Station ${si + 1} — click to edit its section, drag along the sheer to move it`,
   );
+  hit.addEventListener("pointerdown", (e) => {
+    onActivate(si);
+    stationUDown(si, svg, e, onSelect);
+  });
   svg.append(hit);
 }
 

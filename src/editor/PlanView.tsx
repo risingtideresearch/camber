@@ -25,6 +25,9 @@ interface PlanViewProps {
   bumpModel: () => void;
   sync?: RefObject<SvgViewSync>; // shared zoom / x-pan with the profile strip
   curvature: CurvatureSettings;
+  // which station the section editor is on: shown emphasized here, and set by clicking a station's segment
+  activeStation: number;
+  onActivateStation: (si: number) => void;
 }
 
 export function PlanView({
@@ -38,13 +41,34 @@ export function PlanView({
   bumpModel,
   sync,
   curvature,
+  activeStation,
+  onActivateStation,
 }: PlanViewProps) {
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
-      drawPlan(g, model, selection, sampling, onSelect, [sx, sy], curvature);
+      drawPlan(
+        g,
+        model,
+        selection,
+        sampling,
+        onSelect,
+        activeStation,
+        onActivateStation,
+        [sx, sy],
+        curvature,
+      );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [model, modelVersion, selection, sampling, onSelect, curvature],
+    [
+      model,
+      modelVersion,
+      selection,
+      sampling,
+      onSelect,
+      curvature,
+      activeStation,
+      onActivateStation,
+    ],
   );
 
   const onBackgroundClick = (vx: number, vy: number) => {

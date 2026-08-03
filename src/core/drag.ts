@@ -34,7 +34,9 @@ export function startDrag(
 ): void {
   setDrag({ ...d, svg });
   // a drag on a control point selects it (persistently). The x-cut slider and a station's u-handle move
-  // rather than select: neither is a control point of the shape (the station is chosen by its tab).
+  // rather than select: neither is a control point of the shape. (Pressing a station's handle does make it
+  // the ACTIVE station, but that is which section is being edited, not a selection — the plan view calls it
+  // alongside this, the same way its tab does.)
   if (d.kind === "sheer") onSelect({ tgt: "plan", idx: d.idx! });
   else if (d.kind === "trim") onSelect({ tgt: "trim", idx: d.idx! });
   else if (d.kind === "transom") onSelect({ tgt: "transom", idx: d.idx! });

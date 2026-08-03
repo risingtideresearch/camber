@@ -92,6 +92,11 @@ export function EditorApp() {
   const [tool, setTool] = useState<Tool>("select");
   const [curvature, setCurvature] = useState(defaultCurvature);
   const [selection, setSelection] = useState<ModelSelection>(null);
+  // Which station the section editor is showing. It lives here, not in the side panel, because two views
+  // set it: its tab over the section editor, and its own segment in the plan. Clamped on read in case the
+  // station it names was removed.
+  const [activeStationRaw, setActiveStation] = useState(0);
+  const activeStation = Math.min(activeStationRaw, model.stations.length - 1);
   // The performance readout. Its `on` drives the core's recording switch — a module-level flag rather than
   // state, because the draws that report into it are imperative and must not re-render anything — so the
   // toggle is pushed there and the views are bumped to redraw, which is what fills the panel.
@@ -474,6 +479,8 @@ export function EditorApp() {
                     bumpModel={bumpModel}
                     sync={planProfileSync}
                     curvature={curvature}
+                    activeStation={activeStation}
+                    onActivateStation={setActiveStation}
                   />
                 </Area>
                 <AreaSeparator className="areasep" />
@@ -504,6 +511,8 @@ export function EditorApp() {
                 setTool={setTool}
                 bumpModel={bumpModel}
                 curvature={curvature}
+                activeStation={activeStation}
+                setActiveStation={setActiveStation}
               />
             </Area>
             <AreaSeparator className="areasep" />
