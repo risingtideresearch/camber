@@ -18,6 +18,10 @@ export interface PlanCurve {
   // u of a given x, by inverting the monotone x(u). Only needed where a curve authored against x (the sheer
   // trim, the transom) has to meet one authored against u.
   uAtX: (x: number) => number;
+  // u of the point on the curve nearest q — the foot of the perpendicular, where there is one. This is how a
+  // pointer picks a place along the plan: near the bow, where the curve turns hard, "straight down from the
+  // pointer" and "nearest the pointer" are quite different, and only the latter tracks the hand.
+  uAtPoint: (q: Vec2) => number;
 }
 
 // the knot span containing u for a clamped knot vector (The NURBS Book, A2.1)
@@ -119,10 +123,15 @@ function deBoorAt(pts: Vec2[], U: number[], p: number, u: number): Vec2 {
 // rather than merely close.
 export function planCurve(pts: Vec2[]): PlanCurve {
   const numCP = pts.length;
-  if (numCP === 0) return { at: () => [0, 0], d: () => [1, 0], uAtX: () => 0 };
+  const degenerate = {
+    d: () => [1, 0] as Vec2,
+    uAtX: () => 0,
+    uAtPoint: () => 0,
+  };
+  if (numCP === 0) return { at: () => [0, 0], ...degenerate };
   if (numCP === 1) {
     const q = pts[0];
-    return { at: () => [...q] as Vec2, d: () => [1, 0], uAtX: () => 0 };
+    return { at: () => [...q] as Vec2, ...degenerate };
   }
   const p = Math.min(3, numCP - 1),
     U = uniformKnots(numCP, p);
@@ -148,9 +157,57 @@ export function planCurve(pts: Vec2[]): PlanCurve {
       : deBoorAt(dPts, dU, dp, clamp(u, 0, 1));
   const x0 = at(0)[0],
     x1 = at(1)[0];
+  // Squared distance from q to P(u) — minimized below; the square keeps it smooth at the minimum and the
+  // ordering is the same as the distance's, so nothing needs a root.
+  const dist2 = (u: number, q: Vec2): number => {
+    const [x, y] = at(u),
+      dx = x - q[0],
+      dy = y - q[1];
+    return dx * dx + dy * dy;
+  };
   return {
     at,
     d,
+    // Nearest point, in two passes: a coarse scan to pick the lobe (dist² can have several local minima —
+    // an S-shaped plan is nearest to a point off its beam in more than one place, and a scan is what tells
+    // the global one from the others), then golden-section inside the bracket around that sample, where the
+    // function IS unimodal. SCAN is far finer than a control polygon of a handful of points can wiggle.
+    uAtPoint: (q: Vec2) => {
+      const SCAN = 64;
+      let bu = 0,
+        bd = Infinity;
+      for (let i = 0; i <= SCAN; i++) {
+        const u = i / SCAN,
+          dd = dist2(u, q);
+        if (dd < bd) {
+          bd = dd;
+          bu = u;
+        }
+      }
+      let lo = Math.max(0, bu - 1 / SCAN),
+        hi = Math.min(1, bu + 1 / SCAN);
+      const g = (Math.sqrt(5) - 1) / 2; // golden ratio: each step keeps one of the two probes
+      let a = hi - g * (hi - lo),
+        b = lo + g * (hi - lo),
+        fa = dist2(a, q),
+        fb = dist2(b, q);
+      for (let it = 0; it < 32; it++) {
+        if (fa < fb) {
+          hi = b;
+          b = a;
+          fb = fa;
+          a = hi - g * (hi - lo);
+          fa = dist2(a, q);
+        } else {
+          lo = a;
+          a = b;
+          fa = fb;
+          b = lo + g * (hi - lo);
+          fb = dist2(b, q);
+        }
+      }
+      return (lo + hi) / 2;
+    },
     uAtX: (x: number) => {
       const xc = clamp(x, x0, x1);
       let lo = 0,

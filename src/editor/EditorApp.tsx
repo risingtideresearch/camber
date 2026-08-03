@@ -195,10 +195,17 @@ export function EditorApp() {
         moveTrim(model, drag.idx!, v.invX(vx), v.invZp(vy));
       else if (drag.kind === "transom")
         moveTransom(model, drag.idx!, v.invX(vx), v.invZp(vy));
-      // a station handle rides the plan curve: the pointer's x picks the station's u by inverting the
-      // plan's monotone x(u), which is the same inversion the cut scrubber uses
+      // a station handle rides the plan curve: the station's u is the plan point NEAREST the pointer, not
+      // the one straight below it. Where the plan turns toward the centerline at the bow, a vertical hit
+      // slides far along the curve for a small sideways move (and stops responding at all once the pointer
+      // passes the stem); the nearest point keeps the handle under the hand. The plan is drawn at the one
+      // isometric scale (view.ts), so nearest in model space is also nearest on screen.
       else if (drag.kind === "stationU")
-        moveStationU(model, drag.idx!, model.plan.uAtX(v.invX(vx)));
+        moveStationU(
+          model,
+          drag.idx!,
+          model.plan.uAtPoint([v.invX(vx), v.invY(vy)]),
+        );
       else if (drag.kind === "stn")
         moveStationPoint(model, drag.si!, drag.idx!, v.invN(vx), v.invZ(vy));
       bumpModel();

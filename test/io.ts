@@ -11,7 +11,8 @@
 //   - pchip: the monotone Hermite interpolant must pass through its knots exactly — the eased
 //     C2-Fritsch-Carlson slopes may reshape the curve BETWEEN knots, never at them.
 //   - bspline: a clamped B-spline interpolates only its first and last control points; the sampler
-//     must hit those endpoint values.
+//     must hit those endpoint values, and the plan curve's nearest-point query (which is what a
+//     station handle rides during a plan drag) must agree with a brute-force scan of the curve.
 //
 // Run with `npm run test:io` (tsx runs this directly under node). Non-zero exit on any failure so
 // it can gate CI alongside the geometry tests.
@@ -20,7 +21,7 @@ import { createModel, resetModel } from "../src/core/model";
 import { buildStl } from "../src/core/stl";
 import { parseStl } from "../src/core/stlImport";
 import { pchipSlopes, hermiteEval } from "../src/core/pchip";
-import { clampedBSplineSamplerX } from "../src/core/bspline";
+import { clampedBSplineSamplerX, planCurve } from "../src/core/bspline";
 import { type Vec2 } from "../src/core/math";
 
 // copy a string into a fresh ArrayBuffer, as parseStl expects (a FileReader hands the app one)
@@ -117,6 +118,46 @@ function bsplineEndpoints(): { ok: boolean; detail: string } {
   };
 }
 
+// plan curve: uAtPoint must find the GLOBAL nearest point, matched against a dense brute-force scan.
+// The probes are the awkward ones — off the beam amidships, off the bow where the plan turns hard toward
+// the centerline, and past either end, where the answer is the clamped endpoint rather than a foot.
+function planNearestPoint(): { ok: boolean; detail: string } {
+  const c = planCurve([
+    [0, 300],
+    [1000, 480],
+    [2500, 500],
+    [4000, 380],
+    [5000, 0],
+  ]);
+  const probes: Vec2[] = [
+    [2500, 600], // abeam, amidships
+    [4900, 200], // off the bow, in the turn
+    [1000, 100], // inboard, where a station's segment reaches
+    [5200, -100], // past the stem
+    [-300, 300], // aft of the transom
+  ];
+  const N = 100000;
+  let worst = 0;
+  for (const q of probes) {
+    let ref = 0,
+      rd = Infinity;
+    for (let i = 0; i <= N; i++) {
+      const u = i / N,
+        p = c.at(u),
+        d = Math.hypot(p[0] - q[0], p[1] - q[1]);
+      if (d < rd) {
+        rd = d;
+        ref = u;
+      }
+    }
+    worst = Math.max(worst, Math.abs(c.uAtPoint(q) - ref));
+  }
+  return {
+    ok: worst <= 1e-4,
+    detail: `worst u error ${worst.toExponential(2)}`,
+  };
+}
+
 function main(): number {
   const cases: { name: string; run: () => { ok: boolean; detail: string } }[] =
     [
@@ -124,6 +165,7 @@ function main(): number {
       { name: "stl binary parse", run: stlBinary },
       { name: "pchip knot interpolation", run: pchipKnots },
       { name: "bspline endpoints", run: bsplineEndpoints },
+      { name: "plan nearest point", run: planNearestPoint },
     ];
   let failures = 0;
   console.log("I/O and numerics — STL round-trip/parse, pchip and bspline\n");
