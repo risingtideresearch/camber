@@ -83,6 +83,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.card .cver {
+  font-size: 11px;
+  color: var(--mut);
+  margin-top: -4px; /* sits with the name, not as its own row in the card's 6px gap */
+}
 .card .topo {
   display: flex;
   flex-wrap: wrap;

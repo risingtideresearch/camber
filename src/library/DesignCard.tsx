@@ -1,10 +1,12 @@
+import { documentVersion } from "../core/document";
 import type { DesignRow } from "../core/supabase";
 import type { Topo } from "./topo";
 import "./DesignCard.css";
 
-// One design in the library grid: a stored 3/4 wireframe thumbnail, the name, its topology stat chips, and
-// the created date. The presentation flags are derived by LibraryApp from the current selection / blend
-// state; the blend-pick check badge and the compat/incompat dimming are driven by CSS off `.fileapp.blending`.
+// One design in the library grid: a stored 3/4 wireframe thumbnail, the name, the document's format version,
+// its topology stat chips, and the created date. The presentation flags are derived by LibraryApp from the
+// current selection / blend state; the blend-pick check badge and the compat/incompat dimming are driven by
+// CSS off `.fileapp.blending`.
 interface DesignCardProps {
   row: DesignRow;
   topo: Topo | null;
@@ -39,6 +41,9 @@ export function DesignCard({
   onClick,
   onDoubleClick,
 }: DesignCardProps) {
+  // The format the document declares — untagged documents read as v1. LibraryApp lists only readable
+  // versions, so this is a real number here; a NaN (non-numeric tag) would show nothing rather than "vNaN".
+  const version = documentVersion(row.document);
   const cls = [
     "card",
     selected && "selected",
@@ -64,6 +69,7 @@ export function DesignCard({
         <div className="preview noprev">no preview</div>
       )}
       <div className="cname">{row.name}</div>
+      {isFinite(version) && <div className="cver">camber v{version}</div>}
       {topo && (
         <div className="topo">
           <StatChip
