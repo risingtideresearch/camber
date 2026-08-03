@@ -63,7 +63,8 @@ export function CameraLens({ fov }: { fov: number }) {
     if (!(camera instanceof THREE.PerspectiveCamera) || !controls) return;
     if (!(size.width > 0) || !(size.height > 0)) return;
     const vFov = verticalFov(fov, size.width / size.height),
-      resized = applied.current?.camera === camera && applied.current.fov === fov;
+      resized =
+        applied.current?.camera === camera && applied.current.fov === fov;
     applied.current = { camera, fov };
 
     if (resized) {
