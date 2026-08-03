@@ -3,6 +3,7 @@
 // pure over (model, identity, working name).
 
 import type { Model } from "../core/model";
+import { VERSION, documentVersion } from "../core/document";
 import { buildJson, loadJsonText } from "../core/json";
 import { buildPreviewSvg } from "../core/preview";
 import { getDesign, insertDesign, updateDesign } from "../core/supabase";
@@ -57,11 +58,23 @@ export function saveView(model: Model, id: DesignId, name: string): SaveView {
   return { buttonLabel, kind: "saved", text: "Saved" };
 }
 
-// open the design with the given row id into the model; returns its name. Throws on failure.
-export async function openDesign(model: Model, rowId: string): Promise<string> {
+// The title a design opens under. A document older than VERSION is CONVERTED as it loads (this build only
+// writes VERSION), so it opens under a converted name: that makes the editor a fork from the start, and the
+// one save action inserts a new row instead of overwriting — the original stays in the library as it was.
+export const openedName = (name: string, version: number): string =>
+  version < VERSION ? `${name} converted to v${VERSION}` : name;
+
+// Open the design with the given row id into the model; returns its stored name and the format version its
+// document declares (which the load may have converted upward). Throws on failure.
+export async function openDesign(
+  model: Model,
+  rowId: string,
+): Promise<{ name: string; version: number }> {
   const opened = await getDesign(rowId);
+  // read the version off the stored document before the load converts it away (a second parse, once per open)
+  const version = documentVersion(JSON.parse(opened.documentText));
   loadJsonText(model, opened.documentText);
-  return opened.name;
+  return { name: opened.name, version };
 }
 
 // The one save action: overwrite the open design, or — if the name was changed (fork) or it was never saved

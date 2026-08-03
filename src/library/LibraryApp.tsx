@@ -6,7 +6,7 @@ import {
   listDesigns,
   type DesignRow,
 } from "../core/supabase";
-import { isReadableVersion } from "../core/document";
+import { VERSION, documentVersion, isReadableVersion } from "../core/document";
 import { loadJsonText, parseDocument } from "../core/json";
 import { buildStep } from "../core/step";
 import { buildStl } from "../core/stl";
@@ -148,6 +148,12 @@ export function LibraryApp() {
   const compatCount = blend ? rows.filter((r) => isCompatible(r.id)).length : 0;
 
   // ---------- navigation ----------
+  // A design older than VERSION is converted as the editor loads it. That is a one-way trip, so the editor
+  // opens it under a converted name and saves it as a NEW design — the original stays here untouched. The
+  // Open button says which of the two is about to happen.
+  const converts =
+    !!selectedRow && documentVersion(selectedRow.document) < VERSION;
+
   const newDesign = () => {
     window.location.href = "editor.html";
   };
@@ -321,10 +327,14 @@ export function LibraryApp() {
           </Button>
           <Button
             disabled={!selectedRow}
-            title="Open the selected design in the editor"
+            title={
+              converts
+                ? `Convert the selected design to v${VERSION} and open it in the editor — it saves as a new design, leaving this one as it is`
+                : "Open the selected design in the editor"
+            }
             onClick={() => selectedRow && openInEditor(selectedRow.id)}
           >
-            Open
+            {converts ? `Convert to v${VERSION} and Open` : "Open"}
           </Button>
           <Button
             disabled={!selectedRow}

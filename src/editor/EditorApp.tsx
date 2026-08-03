@@ -35,6 +35,7 @@ import {
   isUnsaved,
   newDesignId,
   openDesign,
+  openedName,
   revert,
   saveDesign,
   saveView,
@@ -234,15 +235,19 @@ export function EditorApp() {
       const rowId = new URLSearchParams(window.location.search).get("id");
       if (rowId) {
         try {
-          const nm = await openDesign(model, rowId);
+          const { name: nm, version } = await openDesign(model, rowId);
           if (cancelled) return;
+          // The identity keeps the row's OWN name: an older document opens under a converted title, which
+          // differs from it, so the editor starts out a fork — saving writes a new v2 row and leaves the
+          // original untouched. For an up-to-date document the two are the same and Save overwrites.
+          const title = openedName(nm, version);
           idRef.current = {
             currentId: rowId,
             savedName: nm,
             savedSnapshot: buildJson(model),
           };
-          setName(nm);
-          nameRef.current = nm;
+          setName(title);
+          nameRef.current = title;
         } catch (e) {
           if (cancelled) return; // a cleaned-up run must not clobber a newer run's load
           console.error("open design failed:", e);
