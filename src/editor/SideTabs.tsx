@@ -50,7 +50,7 @@ export function SideTabs({
       })}
       <button
         className="tab tabadd"
-        title="Add a station at the cut. Its section is read off the hull there, so the shape doesn't change — it just gains a handle. Drag its diamond along the sheer plan to move it."
+        title="Add a station at the cut. Its section is read off the hull there, so the shape doesn't change — it just gains a handle. Drag its line along the sheer plan to move it."
         disabled={K >= 7}
         onClick={onAddStation}
       >

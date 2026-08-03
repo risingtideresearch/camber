@@ -536,15 +536,25 @@ export function drawPlan(
   cutTrace(model, svg, (p) => [v.mapX(p[0]), v.yPlan(p[1])]);
   const [cx, cy] = model.plan.at(cutU(model));
   ringDot(svg, v.mapX(cx), v.yPlan(cy), COL.sheer);
+  // designed stations, seen from above: each sits at a definite u along the
+  // plan, so its mark starts on the plan curve and drags along it. Drawn under
+  // the plan control points, since the segment reaches far enough inboard to
+  // cross them and they have to stay grabbable.
+  model.stations.forEach((st, si) => {
+    const fr = frameAt(model, st.u),
+      nEnd = st.points[st.points.length - 1].n, // the last knot's inboard offset — the segment's length
+      end = stationWorld(fr, nEnd, 0);
+    stationHandle(
+      svg,
+      si,
+      [v.mapX(fr.p[0]), v.yPlan(fr.p[1])],
+      [v.mapX(end[0]), v.yPlan(end[1])],
+      onSelect,
+    );
+  });
   model.sheerPlan.forEach((cp, idx) =>
     cpDot(selection, svg, idx, v.mapX(cp.x), v.yPlan(cp.y), onSelect),
   );
-  // station handles: each station sits at a definite u along the plan, so its handle rides the plan curve
-  // and drags along it. This is the edit v1 could not express — a template had no position, only a weight.
-  model.stations.forEach((st, si) => {
-    const [sx, sy] = model.plan.at(st.u);
-    stationHandle(svg, si, v.mapX(sx), v.yPlan(sy), onSelect);
-  });
   perfEnd(PERF_PLAN);
 }
 
@@ -1281,29 +1291,45 @@ export function cpDot(
   });
 }
 
-// A station's handle on the plan curve: a diamond (distinct from the round plan control points, which it
-// may sit near) in the station's own accent colour, dragged fore-aft to move the station along the sheer.
+// A station's handle on the plan curve: the station drawn as it is seen from above — a segment from its
+// first knot, on the plan curve, running inboard along the station plane's normal to the last knot's offset
+// n — in the station's own accent colour, dragged fore-aft to move the station along the sheer. It is a
+// content-space segment, not a fixed()-wrapped marker: its length is a real inboard distance, so it has to
+// scale with the drawing (only its stroke stays a constant screen width).
 export function stationHandle(
   svg: SVGGElement,
   si: number,
-  sx: number,
-  sy: number,
+  a: Vec2, // screen: the first knot, on the plan curve
+  b: Vec2, // screen: the last knot, at its inboard offset
   onSelect: OnModelSelect,
 ): void {
-  fixed(svg, sx, sy, (g) => {
-    const d = el("path", {
-      d: "M0 -7 L7 0 L0 7 L-7 0 Z",
-      fill: stationColor(si),
-      stroke: "#fff",
-      "stroke-width": 1.5,
-      style: "cursor:ew-resize",
-    });
-    titled(d, `Station ${si + 1} — drag along the sheer to move it`);
-    d.addEventListener("pointerdown", (e) =>
-      stationUDown(si, svg, e, onSelect),
-    );
-    g.append(d);
+  const ends = {
+    x1: a[0].toFixed(2),
+    y1: a[1].toFixed(2),
+    x2: b[0].toFixed(2),
+    y2: b[1].toFixed(2),
+  };
+  svg.append(
+    el("line", {
+      ...ends,
+      stroke: stationColor(si),
+      "stroke-width": 2.4,
+      "stroke-linecap": "round",
+    }),
+  );
+  // an invisible band over the segment, wide enough that a thin line is still easy to grab
+  const hit = el("line", {
+    ...ends,
+    stroke: "#000",
+    "stroke-width": 10,
+    opacity: 0,
+    style: "cursor:ew-resize",
   });
+  titled(hit, `Station ${si + 1} — drag along the sheer to move it`);
+  hit.addEventListener("pointerdown", (e) =>
+    stationUDown(si, svg, e, onSelect),
+  );
+  svg.append(hit);
 }
 
 export function trimDot(
