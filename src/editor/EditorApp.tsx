@@ -49,6 +49,7 @@ import { TrimControls } from "./TrimControls";
 import { CurvatureControls } from "./CurvatureControls";
 import { PerfControls } from "./PerfControls";
 import { PerfPanel } from "./PerfPanel";
+import { WakePanel } from "./WakePanel";
 import { defaultCurvature } from "../core/comb";
 import {
   defaultPerf,
@@ -89,6 +90,9 @@ export function EditorApp() {
   // the plan and profile strips share one longitudinal zoom / x-pan so they stay lined up
   const planProfileSync = useSvgViewSync();
 
+  // the wave-pattern column: off by default, because sampling the hull for Michell's integral is real work
+  // and nobody editing a sheer line is waiting on a wake
+  const [wakeOn, setWakeOn] = useState(false);
   const [tool, setTool] = useState<Tool>("select");
   const [curvature, setCurvature] = useState(defaultCurvature);
   const [selection, setSelection] = useState<ModelSelection>(null);
@@ -433,6 +437,14 @@ export function EditorApp() {
         />
         <CurvatureControls value={curvature} onChange={setCurvature} />
         <PerfControls value={perf} onChange={onPerf} />
+        <button
+          type="button"
+          className={"btn" + (wakeOn ? " active" : "")}
+          onClick={() => setWakeOn((v) => !v)}
+          title="Wave pattern and wave-making resistance from Michell's integral over the live hull"
+        >
+          Wave
+        </button>
         <DesignBar
           name={name}
           saveKind={save.kind}
@@ -468,6 +480,16 @@ export function EditorApp() {
               <>
                 <Area className="area" defaultSize="22%" minSize="240px">
                   <PerfPanel settings={perf} />
+                </Area>
+                <AreaSeparator className="areasep" />
+              </>
+            )}
+            {/* The wave pattern gets a column for the same reason: it is a diagnostic read against edits made
+                elsewhere, and it must not cover the view being edited. Off by default — see wakeOn. */}
+            {wakeOn && (
+              <>
+                <Area className="area" defaultSize="26%" minSize="280px">
+                  <WakePanel model={model} modelVersion={modelVersion} />
                 </Area>
                 <AreaSeparator className="areasep" />
               </>

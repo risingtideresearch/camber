@@ -18,7 +18,8 @@
     "test:centerline": "tsx test/centerline.ts",
     "test:io": "tsx test/io.ts",
     "test:v2": "tsx test/v2core.ts",
-    "test": "npm run test:v2 && npm run test:smooth && npm run test:centerline && npm run test:io"
+    "test": "npm run test:v2 && npm run test:smooth && npm run test:centerline && npm run test:io && npm run test:michell",
+    "test:michell": "tsx test/michell.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

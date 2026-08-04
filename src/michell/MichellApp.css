@@ -1,0 +1,265 @@
+/* The fleet wake study (src/michell): a control rail beside one large field, because the whole page is about
+   what happens to the picture and the numbers when a hull is moved — those two must be visible at once. */
+.mapp {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.mmain {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  overflow: hidden;
+}
+.mside {
+  flex: 0 0 260px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+.mfield {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 10px 12px;
+}
+.cap {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+  margin: 0 0 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.cap .val {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 10px;
+}
+
+.ctl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ctl input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ctlval {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  font-weight: 600;
+}
+.mcheck {
+  gap: 6px;
+  margin-bottom: 4px;
+  color: var(--mut);
+}
+
+.mrow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 2px 0;
+  color: var(--mut);
+}
+.mrow b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+/* interference below 1 means the two hulls cancel some of each other's waves — the thing you are hunting */
+.mrow b.good {
+  color: var(--keel);
+}
+.msub {
+  font-size: 10px;
+  opacity: 0.85;
+}
+
+.msel {
+  width: 100%;
+  margin-bottom: 8px;
+  font: inherit;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: #fff;
+  color: var(--ink);
+}
+.merr {
+  color: var(--danger);
+  font-size: 10px;
+  margin-bottom: 6px;
+}
+
+/* Keep zoom available while the enlarged canvas is being scrolled. */
+.mcanvasctl {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.mcanvasctl button {
+  min-width: 26px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 2px 6px;
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+}
+.mcanvasctl button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* the two hulls' outlines are drawn in these colours over the field, so the legend dot has to match */
+.mdot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.mdot.m0 {
+  background: #ffffff;
+  border: 1px solid var(--mut);
+}
+.mdot.m1 {
+  background: #78ffdc;
+  border: 1px solid var(--mut);
+}
+
+.mcanvas {
+  display: block;
+  flex: 0 0 auto;
+  width: 100%;
+  height: auto;
+  background: #10141c;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: grab;
+  touch-action: none;
+}
+.mcanvas:active {
+  cursor: grabbing;
+}
+
+.mlegend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--mut);
+  font-size: 10px;
+}
+.mlegend i {
+  flex: 0 1 180px;
+  height: 7px;
+  border-radius: 2px;
+}
+.mhint {
+  margin-left: auto;
+  font-style: italic;
+}
+
+.mspec {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px 10px 2px;
+}
+.mspeccv {
+  display: block;
+  width: 100%;
+  height: 120px;
+}
+
+.mnote {
+  color: var(--mut);
+  font-size: 10px;
+  line-height: 1.5;
+  max-width: 90ch;
+}
+
+/* On narrow screens the rail no longer takes width away from the wake. The canvas then tracks the full
+   viewport width (less the page padding); on wider screens it tracks the space remaining beside the rail. */
+@media (max-width: 760px) {
+  .mmain {
+    display: block;
+    overflow: auto;
+  }
+  .mside {
+    width: 100%;
+    overflow: visible;
+  }
+  .mfield {
+    width: 100%;
+    margin-top: 12px;
+    overflow: auto;
+  }
+}
+
+.mmuted {
+  color: var(--mut);
+  font-size: 12px;
+}
+.mlink {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 12px;
+}
+.mlink:hover {
+  text-decoration: underline;
+}
+
+/* see WakePanel.css: a number outside the range the theory covers, or off an under-resolved grid */
+.mrow b.warn {
+  color: var(--danger);
+}
+.mwarn {
+  color: var(--danger);
+  font-size: 10px;
+  line-height: 1.45;
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+  border-radius: 3px;
+  padding: 5px 7px;
+  margin-top: 6px;
+}

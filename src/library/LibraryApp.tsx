@@ -160,6 +160,11 @@ export function LibraryApp() {
   const openInEditor = (id: string) => {
     window.location.href = `editor.html?id=${encodeURIComponent(id)}`;
   };
+  // The wave-pattern study opens with the selected design in its first hull slot; the second is picked there,
+  // because the question that page answers is about a PAIR and which pair is not knowable from one selection.
+  const openWake = (id: string) => {
+    window.location.href = `michell.html?id=${encodeURIComponent(id)}`;
+  };
 
   // ---------- exports (reuse the editor's writers via the scratch model) ----------
   const exportJson = () => {
@@ -335,6 +340,13 @@ export function LibraryApp() {
             onClick={() => selectedRow && openInEditor(selectedRow.id)}
           >
             {converts ? `Convert to v${VERSION} and Open` : "Open"}
+          </Button>
+          <Button
+            disabled={!selectedRow}
+            title="Wave pattern and wave-making resistance from Michell's integral, for this hull and a second one alongside it"
+            onClick={() => selectedRow && openWake(selectedRow.id)}
+          >
+            Wave…
           </Button>
           <Button
             disabled={!selectedRow}

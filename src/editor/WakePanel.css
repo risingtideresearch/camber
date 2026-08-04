@@ -1,0 +1,117 @@
+/* The wave-pattern card (src/editor/WakePanel): Michell's integral over the live hull, in its own resizable
+   column like the performance readout. It is read WHILE dragging the speed slider or editing the hull, so it
+   never floats over another view. */
+.wakecard {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--ink);
+  overflow-y: auto;
+}
+.wakecard .cap {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.wakectl {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.wakectl .ctl {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.wakewater {
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+/* the field itself. A dark mat under it so the faded (non-physical) region reads as "off the model" rather
+   than as pale water, and the canvas keeps the field's own aspect ratio — the Kelvin angle is a geometric
+   result, and stretching the picture would falsify it. */
+.wakefig {
+  flex: 0 0 auto;
+  background: #10141c;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+  line-height: 0;
+}
+.wakecanvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  image-rendering: auto;
+}
+.wakeerr {
+  padding: 16px;
+  color: var(--mut);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.wakelegend {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--mut);
+  font-size: 10px;
+}
+.wakelegend i {
+  flex: 1 1 auto;
+  height: 7px;
+  border-radius: 2px;
+}
+
+.wakerows {
+  flex: 0 0 auto;
+}
+.wakerow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 2px 0;
+  color: var(--mut);
+}
+.wakerow b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+/* the secondary block: dimensions and cost, which you check rather than watch */
+.wakedim {
+  font-size: 10px;
+  opacity: 0.85;
+}
+
+.wakenote {
+  flex: 0 0 auto;
+  color: var(--mut);
+  font-size: 10px;
+  line-height: 1.45;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+
+/* A number the model cannot stand behind — outside the useful Froude band, or on a grid too coarse for the
+   kernel at this speed. It is still shown (hiding it would be worse), but it must not read as an answer. */
+.wakerow b.warn {
+  color: var(--danger);
+}
+.wakewarn {
+  flex: 0 0 auto;
+  color: var(--danger);
+  font-size: 10px;
+  line-height: 1.45;
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+  border-radius: 3px;
+  padding: 5px 7px;
+}
