@@ -5,10 +5,12 @@ import type { CurvatureSettings } from "../../core/comb";
 import {
   buildCurvature3,
   buildHullMesh,
+  buildStationLines,
   buildTransomMesh,
   WIRE_RGB,
   type CurvCurve3,
   type Mesh,
+  type StationLines3,
 } from "../../core/hullGeometry";
 import {
   createHullMaterial,
@@ -167,6 +169,7 @@ export function Scene({
     curvCache,
     linesPlanCurves,
     trimCurves,
+    stationLines,
   } = useMemo(() => {
     perfBegin(PERF_MESH);
     let hullGeometry: THREE.BufferGeometry | null = null,
@@ -225,6 +228,23 @@ export function Scene({
           "curves",
         )
       : null;
+    // the authored stations' own construction lines (the dropdown's "Stations" group) — built straight from
+    // the model, no mesh or sampling needed, and gated by the Lines master like everything else up there
+    const stationLines: StationLines3 | null =
+      lines.edges &&
+      (lines.stationCurves || lines.stationKnots || lines.knotLongs)
+        ? perfStep(
+            "Station lines",
+            () =>
+              buildStationLines(model, {
+                curves: lines.stationCurves,
+                knots: lines.stationKnots,
+                longs: lines.knotLongs,
+              }),
+            (s) => s.curves.length + s.knots.length + s.longs.length,
+            "curves",
+          )
+        : null;
     perfEnd(PERF_MESH);
     return {
       hullGeometry,
@@ -233,6 +253,7 @@ export function Scene({
       curvCache,
       linesPlanCurves,
       trimCurves,
+      stationLines,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -285,6 +306,7 @@ export function Scene({
         curvature={curvCache}
         lines={linesPlanCurves}
         trims={trimCurves}
+        stations={stationLines}
       />
     </group>
   );

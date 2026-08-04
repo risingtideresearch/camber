@@ -24,6 +24,7 @@ interface ProfileViewProps {
   bumpModel: () => void;
   sync?: RefObject<SvgViewSync>; // shared zoom / x-pan with the plan strip
   curvature: CurvatureSettings;
+  knotLongs: boolean; // the station editor's "Show knot longitudinals" toggle, shared by all three 2D views
 }
 
 export function ProfileView({
@@ -37,13 +38,23 @@ export function ProfileView({
   bumpModel,
   sync,
   curvature,
+  knotLongs,
 }: ProfileViewProps) {
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
-      drawProfile(g, model, selection, sampling, onSelect, [sx, sy], curvature);
+      drawProfile(
+        g,
+        model,
+        selection,
+        sampling,
+        onSelect,
+        [sx, sy],
+        curvature,
+        knotLongs,
+      );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [model, modelVersion, selection, sampling, onSelect, curvature],
+    [model, modelVersion, selection, sampling, onSelect, curvature, knotLongs],
   );
 
   const onBackgroundClick = (vx: number, vy: number) => {

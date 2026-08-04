@@ -25,6 +25,7 @@ interface PlanViewProps {
   bumpModel: () => void;
   sync?: RefObject<SvgViewSync>; // shared zoom / x-pan with the profile strip
   curvature: CurvatureSettings;
+  knotLongs: boolean; // the station editor's "Show knot longitudinals" toggle, shared by all three 2D views
   // which station the section editor is on: shown emphasized here, and set by clicking a station's segment
   activeStation: number;
   onActivateStation: (si: number) => void;
@@ -41,6 +42,7 @@ export function PlanView({
   bumpModel,
   sync,
   curvature,
+  knotLongs,
   activeStation,
   onActivateStation,
 }: PlanViewProps) {
@@ -56,6 +58,7 @@ export function PlanView({
         onActivateStation,
         [sx, sy],
         curvature,
+        knotLongs,
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -66,6 +69,7 @@ export function PlanView({
       sampling,
       onSelect,
       curvature,
+      knotLongs,
       activeStation,
       onActivateStation,
     ],

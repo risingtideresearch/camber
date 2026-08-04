@@ -452,6 +452,44 @@ export function sampleU(N = 160): number[] {
   return Array.from({ length: N + 1 }, (_, i) => i / N);
 }
 
+// ---------- knot longitudinals ----------
+// The loft curve of each station-point index (each KNOT), untrimmed: curve i is the locus knot i traces
+// along the whole plan — the u-interpolation a section at any u is read from. Two readings of the same
+// curves, one loft sweep each (loft.at evaluates every index at once, so the indices share the pass):
+//
+//   • WORLD — placed by the frame at each u exactly as the sweep places its sections, for the plan /
+//     profile strips and the 3D view. Runs over all of u ∈ [0,1]: beyond the outermost stations the loft
+//     clamps, but the frame still moves, so the curve carries on along the plan at a frozen section.
+//   • SECTION — the raw (n, z) interpolation itself, for the station editor. Runs only between the
+//     outermost stations, where the loft actually interpolates; the clamped tails would pile onto the end
+//     points as zero-length segments.
+export function knotLongitudinalsWorld(model: Model, N = 120): Vec3[][] {
+  const S = model.loft.S,
+    out: Vec3[][] = Array.from({ length: S }, () => []);
+  for (let j = 0; j <= N; j++) {
+    const u = j / N,
+      fr = frameAt(model, u),
+      pts = model.loft.at(u).pts;
+    for (let i = 0; i < S; i++)
+      out[i].push(stationWorld(fr, pts[i][0], pts[i][1]));
+  }
+  return out;
+}
+
+export function knotLongitudinalsSection(model: Model, N = 120): Vec2[][] {
+  const sts = model.stations,
+    u0 = sts[0].u,
+    u1 = sts[sts.length - 1].u,
+    S = model.loft.S,
+    out: Vec2[][] = Array.from({ length: S }, () => []);
+  if (u1 <= u0) return out; // one station: the loft is constant, there is no curve in (n, z)
+  for (let j = 0; j <= N; j++) {
+    const pts = model.loft.at(u0 + ((u1 - u0) * j) / N).pts;
+    for (let i = 0; i < S; i++) out[i].push(pts[i]);
+  }
+  return out;
+}
+
 // ---------- edit operations ----------
 // These all take MODEL-space coordinates (the editor maps a pointer's inverse-view coordinates to model
 // space before calling them), so they depend only on the core and live here with the other mutations.

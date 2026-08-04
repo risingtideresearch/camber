@@ -7,15 +7,17 @@
 // <group> transform (rx = x·cosθ − z·sinθ, rz = x·sinθ + z·cosθ is exactly three's rotateY(−θ)) — so every
 // builder below emits unraked, deck-flat coordinates.
 
-import { type Vec3, V } from "./math";
+import { type Vec2, type Vec3, V } from "./math";
 import {
   type Model,
   frameAt,
   keepAt,
+  knotLongitudinalsWorld,
   loa,
   sectionAt,
   stationWorld,
 } from "./model";
+import { crCurveAuto } from "./spline";
 import {
   computeHullSampling,
   keelPointAt,
@@ -86,6 +88,57 @@ export function keptRuns(pts: Vec3[], keep: boolean[]): Vec3[][] {
   return runs;
 }
 
+// ---------- the authored stations, as 3D construction lines ----------
+//
+// The Lines dropdown's "Stations" group: the model's own control geometry, drawn over whatever surface is up
+// — nothing here is read off the mesh, unlike the sampled lines-plan families. Per station: its full section
+// curve (the same crCurveAuto construction the 2D section editor draws, placed by the station's frame) and
+// its knots — the authored control points — as their world centres, which the view draws as camera-facing
+// dot markers at a constant screen size (the 3D reading of the 2D editors' fixed-size dots — see
+// ringAttributes).
+// Across the stations: the knot longitudinals, each knot index's untrimmed loft locus. All of it is
+// one-sided (starboard), like the 2D editors it mirrors: it is the authored geometry, not the finished hull.
+//
+// Colours are returned as the station INDEX, mapped to the shared accent palette by the view — colors.ts
+// reads CSS custom properties at import time, so a core module must not pull it in (the core also runs under
+// node in the tests).
+export interface StationLines3 {
+  curves: { si: number; line: Vec3[] }[]; // per station: its full authored section curve
+  knots: { si: number; centers: Vec3[] }[]; // per station: its knots' world centres
+  longs: Vec3[][]; // the knot longitudinals, one polyline per knot index, drawn as one grey job
+}
+
+export function buildStationLines(
+  model: Model,
+  show: { curves: boolean; knots: boolean; longs: boolean },
+): StationLines3 {
+  const out: StationLines3 = { curves: [], knots: [], longs: [] };
+  if (show.curves || show.knots)
+    model.stations.forEach((st, si) => {
+      const fr = frameAt(model, st.u);
+      if (show.curves) {
+        const c = crCurveAuto(
+            st.points.map((p): Vec2 => [p.n, p.z]),
+            st.points.map((p) => p.k),
+          ),
+          line: Vec3[] = [],
+          N = 160;
+        for (let i = 0; i <= N; i++) {
+          const p = c.at((c.vmax * i) / N);
+          line.push(stationWorld(fr, p[0], p[1]));
+        }
+        out.curves.push({ si, line });
+      }
+      if (show.knots)
+        out.knots.push({
+          si,
+          centers: st.points.map((p) => stationWorld(fr, p.n, p.z)),
+        });
+    });
+  if (show.longs) out.longs = knotLongitudinalsWorld(model);
+  return out;
+}
+
 // ---------- ribbon geometry: the view-independent half of a camera-facing ribbon ----------
 //
 // A guide curve has to read at a reliable width, which WebGL's own one-pixel lines can't give it, so each is
@@ -152,6 +205,62 @@ export function ribbonAttributes(polylines: Vec3[][]): RibbonAttributes {
     }
   }
   return { position, tangent, side, index, count };
+}
+
+// ---------- ring geometry: the view-independent half of a camera-facing ring marker ----------
+//
+// The same split as the ribbon above, for the knot markers: what the camera can't change is only WHERE each
+// marker is, so every vertex carries the marker's centre plus its angle around the ring and which rim it is,
+// and the ring-marker shader (ribbonShader.ts) does the rest — offsetting into the view plane at a constant
+// screen radius, like the 2D editors' fixed-size dots. Two vertices per angle step (the inner and outer rim),
+// stitched into an annulus with the indices wrapping the seam.
+export interface RingAttributes {
+  position: Float32Array; // the marker's centre, repeated — the shader offsets every vertex from it
+  angle: Float32Array; // this vertex's angle around the ring
+  side: Float32Array; // −1 / +1: the inner or the outer rim
+  index: Uint16Array | Uint32Array;
+  count: number; // vertices
+}
+
+const RING_SEGS = 24;
+
+export function ringAttributes(centers: Vec3[]): RingAttributes {
+  const perRing = 2 * RING_SEGS,
+    count = centers.length * perRing,
+    position = new Float32Array(count * 3),
+    angle = new Float32Array(count),
+    side = new Float32Array(count),
+    index =
+      count > 65535
+        ? new Uint32Array(centers.length * RING_SEGS * 6)
+        : new Uint16Array(centers.length * RING_SEGS * 6);
+  let v = 0,
+    ii = 0;
+  for (const c of centers) {
+    const base = v;
+    for (let i = 0; i < RING_SEGS; i++) {
+      const t = (2 * Math.PI * i) / RING_SEGS;
+      for (const s of [-1, 1]) {
+        position[v * 3] = c[0];
+        position[v * 3 + 1] = c[1];
+        position[v * 3 + 2] = c[2];
+        angle[v] = t;
+        side[v] = s;
+        v++;
+      }
+    }
+    for (let i = 0; i < RING_SEGS; i++) {
+      const a = base + 2 * i,
+        b = base + 2 * ((i + 1) % RING_SEGS); // the next step's pair, wrapping the seam
+      index[ii++] = a;
+      index[ii++] = a + 1;
+      index[ii++] = b + 1;
+      index[ii++] = a;
+      index[ii++] = b + 1;
+      index[ii++] = b;
+    }
+  }
+  return { position, angle, side, index, count };
 }
 
 // ---------- 3D curvature combs (curvature-analysis overlay) ----------

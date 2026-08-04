@@ -113,3 +113,58 @@ export function createRibbonMaterial(
     side: THREE.DoubleSide,
   });
 }
+
+// ---------- the ring-marker material: a camera-facing annulus at a constant screen radius ----------
+//
+// The knot markers want what the 2D editors' fixed() dots have: a circle that faces the camera and keeps one
+// screen size at any zoom. A ribbon cannot give that — its WIDTH is screen-sized but its centerline is fixed
+// world geometry, so a ring built in world space both turns edge-on with its plane and scales with the zoom.
+// So the marker is its own small vertex program: every vertex sits AT the marker's centre and carries only
+// its angle around the ring and which rim (inner or outer) it is; the offset happens here, into the view
+// plane (a screen-aligned billboard), sized in CSS pixels exactly as the ribbon's width is — one scale under
+// ortho, per-vertex view depth under perspective — and sharing the same per-frame camera uniforms.
+
+export const RING_VERTEX_SRC = `
+attribute float aAngle; // this vertex's angle around the ring
+attribute float aSide;  // −1 = the inner rim, +1 = the outer one
+uniform float uRadiusPx; // the ring's centreline radius, in CSS pixels
+uniform float uHalfPx;   // half the rim stroke's width, in CSS pixels
+uniform float uBias;     // world units toward the eye, to lift the marker clear of the surface it marks
+uniform float uPxScale;
+uniform float uPersp;
+uniform float uNear;
+void main() {
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  vec3 eye = mix(vec3(0.0, 0.0, 1.0), normalize(-mv.xyz), uPersp);
+  float px = uPxScale * mix(1.0, max(-mv.z, uNear), uPersp);
+  mv.xy += vec2(cos(aAngle), sin(aAngle)) * ((uRadiusPx + aSide * uHalfPx) * px);
+  mv.xyz += eye * uBias;
+  gl_Position = projectionMatrix * mv;
+}`;
+
+export interface RingMaterialOptions {
+  color: THREE.Color;
+  radiusPx: number; // the ring's centreline radius, in CSS pixels
+  halfWidthPx: number; // half the rim stroke's width, in CSS pixels
+  bias?: number; // default 0 — world units toward the eye
+}
+
+export function createRingMaterial(
+  cam: RibbonCameraUniforms,
+  opts: RingMaterialOptions,
+): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    vertexShader: RING_VERTEX_SRC,
+    fragmentShader: RIBBON_FRAGMENT_SRC, // the same flat colour + output-colour-space conversion
+    uniforms: {
+      uColor: { value: opts.color },
+      uRadiusPx: { value: opts.radiusPx },
+      uHalfPx: { value: opts.halfWidthPx },
+      uBias: { value: opts.bias ?? 0 },
+      uPxScale: cam.uPxScale,
+      uPersp: cam.uPersp,
+      uNear: cam.uNear,
+    },
+    side: THREE.DoubleSide,
+  });
+}

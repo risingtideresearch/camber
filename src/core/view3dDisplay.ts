@@ -41,6 +41,14 @@ export interface LineToggles {
   buttocks: boolean; // constant-y cuts
   waterlines: boolean; // constant-z cuts (a family of them, spread over the sheet)
   dwl: boolean; // the design waterline: the single constant-z line the model's own waterline depth defines
+  // The AUTHORED stations, as construction geometry over whatever surface is up (the dropdown's "Stations"
+  // group) — the model's own control curves, unlike the sampled `sections` family above: each station's full
+  // section curve in its accent colour (the 2D section editor's fan, embedded in 3D), its knots — the
+  // station's control points — as fixed-size dot markers, and the knot longitudinals: the loft curve each knot index
+  // traces along the plan (the u-interpolation a section at any u is read from), in the construction grey.
+  stationCurves: boolean;
+  stationKnots: boolean;
+  knotLongs: boolean;
 }
 
 // what the view starts with: the Lines master on, drawing the surface's own edges (boundary and chines both —
@@ -55,6 +63,9 @@ export const DEFAULT_LINES: LineToggles = {
   buttocks: false,
   waterlines: false,
   dwl: true,
+  stationCurves: false,
+  stationKnots: false,
+  knotLongs: false,
 };
 
 // the sheet's three trims, and the two forms each can be drawn in

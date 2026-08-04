@@ -1,10 +1,12 @@
-import { SEL, HILITE, SELB, COL, stationColor } from "./colors";
+import { SEL, HILITE, SELB, COL, KNOT_LONG, stationColor } from "./colors";
 import { startDrag } from "./drag";
 import type { Vec2, Vec3 } from "./math";
 import {
   bounds,
   frameAt,
   keepAt,
+  knotLongitudinalsSection,
+  knotLongitudinalsWorld,
   loa,
   sectionAt,
   stationWorld,
@@ -260,6 +262,68 @@ export function cutTrace(
   );
 }
 
+// ---------- knot longitudinals (2D overlay) ----------
+// Every station's knots (its authored section points) as small circles, and the loft curve each knot index
+// traces — the u-interpolation a section at any u is read from — in the construction grey. The world reading
+// serves the plan and profile strips through their projections; the station editor draws the section reading
+// itself. The whole overlay is non-interactive (and drawn under the handles), so nothing grabbable is
+// covered by it.
+
+// a plain, non-interactive construction polyline in the knot-longitudinal grey
+function knotCurve(svg: SVGGElement, pts: Vec2[]): void {
+  if (pts.length < 2) return;
+  svg.append(
+    el("path", {
+      d: poly(pts),
+      fill: "none",
+      stroke: KNOT_LONG,
+      "stroke-width": 2,
+      opacity: 0.9,
+      "pointer-events": "none",
+    }),
+  );
+}
+
+// a small fixed-size circle marking one knot, ringed in its station's colour
+function knotDot(
+  svg: SVGGElement,
+  sx: number,
+  sy: number,
+  stroke: string,
+): void {
+  fixed(svg, sx, sy, (g) =>
+    g.append(
+      el("circle", {
+        cx: 0,
+        cy: 0,
+        r: 2.6,
+        fill: "#fff",
+        stroke,
+        "stroke-width": 1.3,
+        "pointer-events": "none",
+      }),
+    ),
+  );
+}
+
+// the world-space overlay the plan and profile strips share, each through its own projection
+function knotOverlayWorld(svg: SVGGElement, model: Model, proj: Proj): void {
+  const longs = perfStep(
+    "Knot longitudinals",
+    () => knotLongitudinalsWorld(model),
+    runPts,
+  );
+  for (const run of longs) knotCurve(svg, run.map(proj));
+  model.stations.forEach((st, si) => {
+    const fr = frameAt(model, st.u),
+      col = stationColor(si);
+    for (const p of st.points) {
+      const [sx, sy] = proj(stationWorld(fr, p.n, p.z));
+      knotDot(svg, sx, sy, col);
+    }
+  });
+}
+
 // Where the plan curve's inboard radius of curvature R is smaller than the section's inboard reach, the
 // fanned station planes cross and the swept surface folds (cusps) — every offset from R inward is doubled
 // over. The fold's outboard edge is at offset R along the normal (the plan curve's centre of curvature / its
@@ -347,6 +411,7 @@ export function drawPlan(
   onActivateStation: (si: number) => void,
   sc: [number, number],
   curv?: CurvatureSettings,
+  knotLongs = false, // the station editor's "Show knot longitudinals" toggle, shared by all three 2D views
 ): void {
   perfBegin(PERF_PLAN);
   const cols = sampling.columns,
@@ -538,6 +603,9 @@ export function drawPlan(
   cutTrace(model, svg, (p) => [v.mapX(p[0]), v.yPlan(p[1])]);
   const [cx, cy] = model.plan.at(cutU(model));
   ringDot(svg, v.mapX(cx), v.yPlan(cy), COL.sheer);
+  // every station's knots + the loft curve each knot traces, seen from above
+  if (knotLongs)
+    knotOverlayWorld(svg, model, (p) => [v.mapX(p[0]), v.yPlan(p[1])]);
   // designed stations, seen from above: each sits at a definite u along the
   // plan, so its mark starts on the plan curve and drags along it. Drawn under
   // the plan control points, since the segment reaches far enough inboard to
@@ -570,6 +638,7 @@ export function drawProfile(
   onSelect: OnModelSelect,
   sc: [number, number],
   curv?: CurvatureSettings,
+  knotLongs = false, // the station editor's "Show knot longitudinals" toggle, shared by all three 2D views
 ): void {
   perfBegin(PERF_PROFILE);
   const cols = sampling.columns,
@@ -804,6 +873,9 @@ export function drawProfile(
       for (const c of cs) drawComb2(svg, c, "var(--slider)");
     }
   }
+  // every station's knots + the loft curve each knot traces, in side view
+  if (knotLongs)
+    knotOverlayWorld(svg, model, (p) => [v.mapX(p[0]), v.zScreenP(p[2])]);
   // cut station — true profile rake (the fan shifts x as the section runs inboard to the keel)
   cutTrace(model, svg, (p) => [v.mapX(p[0]), v.zScreenP(p[2])], cut);
   // keel dot at the section's deepest point — the keel flag and the last point (y snapped to 0) come from
@@ -926,6 +998,7 @@ export function drawStation(
   onSelect: OnModelSelect,
   sc: [number, number],
   curv?: CurvatureSettings,
+  knotLongs = false, // the "Show knot longitudinals" toggle, shared by all three 2D views
 ): void {
   perfBegin(perfStation(si));
   const v = viewOf(model),
@@ -940,6 +1013,26 @@ export function drawStation(
     if (j !== si) stnCurve(v, svg, st.points, stationColor(j), 0.16);
   });
   stnCurve(v, svg, arr, col, 1);
+  // The knot overlay, in this editor's own (n, z) plane: the u-interpolation each knot index rides across
+  // the stations, and the OTHER stations' knots as small circles — this station's own knots are already its
+  // editing nodes, drawn (grabbable) over all of this.
+  if (knotLongs) {
+    const longs = perfStep(
+      "Knot longitudinals",
+      () => knotLongitudinalsSection(model),
+      runPts,
+    );
+    for (const run of longs)
+      knotCurve(
+        svg,
+        run.map((p): Vec2 => [v.snX(p[0]), v.snY(p[1])]),
+      );
+    model.stations.forEach((st, j) => {
+      if (j !== si)
+        for (const p of st.points)
+          knotDot(svg, v.snX(p.n), v.snY(p.z), stationColor(j));
+    });
+  }
   // curvature combs on the station section curves (transverse ⇒ the section hair count), each built from
   // the station's exact curve evaluator (stnEval), not the drawn polyline
   if (curv?.on) {

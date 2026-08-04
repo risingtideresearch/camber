@@ -3,6 +3,8 @@
 export const HILITE = "#f59e0b"; // amber "linked" marker (cut station + the 3D guide ribbon)
 export const SEL = "#ef4444"; // selected control point red — in the section editors (no red cut slider there)
 export const SELB = "#2563eb"; // selected control point blue — in plan/profile, where the red cut slider lives
+// the knot longitudinals' construction grey — darker than --station, which fades into the pale 3D hull
+export const KNOT_LONG = "#64748b";
 
 export function getCSS(v: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(v).trim();

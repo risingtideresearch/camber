@@ -92,6 +92,9 @@ export function EditorApp() {
   const [tool, setTool] = useState<Tool>("select");
   const [curvature, setCurvature] = useState(defaultCurvature);
   const [selection, setSelection] = useState<ModelSelection>(null);
+  // "Show knot longitudinals": every station's knots and the loft curve each knot index traces. One switch
+  // for all three 2D views (plan, profile, and the section editor, whose card carries the checkbox).
+  const [knotLongs, setKnotLongs] = useState(false);
   // Which station the section editor is showing. It lives here, not in the side panel, because two views
   // set it: its tab over the section editor, and its own segment in the plan. Clamped on read in case the
   // station it names was removed.
@@ -486,6 +489,7 @@ export function EditorApp() {
                     bumpModel={bumpModel}
                     sync={planProfileSync}
                     curvature={curvature}
+                    knotLongs={knotLongs}
                     activeStation={activeStation}
                     onActivateStation={setActiveStation}
                   />
@@ -503,6 +507,7 @@ export function EditorApp() {
                     bumpModel={bumpModel}
                     sync={planProfileSync}
                     curvature={curvature}
+                    knotLongs={knotLongs}
                   />
                 </Area>
               </AreaGroup>
@@ -518,6 +523,8 @@ export function EditorApp() {
                 setTool={setTool}
                 bumpModel={bumpModel}
                 curvature={curvature}
+                knotLongs={knotLongs}
+                setKnotLongs={setKnotLongs}
                 activeStation={activeStation}
                 setActiveStation={setActiveStation}
               />

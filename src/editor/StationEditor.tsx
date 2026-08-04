@@ -22,6 +22,7 @@ interface StationEditorProps {
   setTool: (t: Tool) => void;
   bumpModel: () => void;
   curvature: CurvatureSettings;
+  knotLongs: boolean; // the side panel's "Show knot longitudinals" toggle
 }
 
 export function StationEditor({
@@ -35,13 +36,23 @@ export function StationEditor({
   setTool,
   bumpModel,
   curvature,
+  knotLongs,
 }: StationEditorProps) {
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
-      drawStation(model, selection, g, si, onSelect, [sx, sy], curvature);
+      drawStation(
+        model,
+        selection,
+        g,
+        si,
+        onSelect,
+        [sx, sy],
+        curvature,
+        knotLongs,
+      );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [model, modelVersion, selection, si, onSelect, curvature],
+    [model, modelVersion, selection, si, onSelect, curvature, knotLongs],
   );
 
   const onBackgroundClick = (vx: number, vy: number) => {

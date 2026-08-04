@@ -18,6 +18,9 @@ interface SidePanelProps {
   setTool: (t: Tool) => void;
   bumpModel: () => void;
   curvature: CurvatureSettings;
+  // "Show knot longitudinals" — owned above (the plan and profile strips draw it too), toggled here
+  knotLongs: boolean;
+  setKnotLongs: (v: boolean) => void;
   activeStation: number;
   setActiveStation: (si: number) => void;
 }
@@ -31,6 +34,8 @@ export function SidePanel({
   setTool,
   bumpModel,
   curvature,
+  knotLongs,
+  setKnotLongs,
   activeStation,
   setActiveStation,
 }: SidePanelProps) {
@@ -84,8 +89,22 @@ export function SidePanel({
             setTool={setTool}
             bumpModel={bumpModel}
             curvature={curvature}
+            knotLongs={knotLongs}
           />
         ))}
+      </div>
+      <div className="keelrow">
+        <label
+          className="ctl"
+          title="Show every station's knots (small circles) and, in grey, the longitudinal curve each knot traces along the hull — the u-interpolation a section at any position is read from. Drawn here and in the plan and profile views."
+        >
+          <input
+            type="checkbox"
+            checked={knotLongs}
+            onChange={(e) => setKnotLongs(e.target.checked)}
+          />
+          Show knot longitudinals
+        </label>
       </div>
       <div className="keelrow">
         <label

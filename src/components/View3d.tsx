@@ -127,6 +127,29 @@ const FAMILIES: { key: keyof LineToggles; label: string; title: string }[] = [
   },
 ];
 
+// the Lines dropdown's "Stations" group: the AUTHORED stations' own construction geometry, as against the
+// sampled Sections family above
+const STATIONS: { key: keyof LineToggles; label: string; title: string }[] = [
+  {
+    key: "stationCurves",
+    label: "Station curves",
+    title:
+      "Each authored station's full section curve, in its station's accent colour — the 2D section editor's fan, embedded in 3D",
+  },
+  {
+    key: "stationKnots",
+    label: "Station knots",
+    title:
+      "Each authored station's knots (its control points), as small white dots ringed in the station's accent colour",
+  },
+  {
+    key: "knotLongs",
+    label: "Knot longitudinals",
+    title:
+      "The loft curve each knot index traces along the hull — the u-interpolation a section at any position is read from — drawn in grey",
+  },
+];
+
 interface View3dProps {
   model: Model;
   modelVersion: number;
@@ -368,6 +391,21 @@ export function View3d({
               />
               <span className="dd-name">Waterline</span>
             </label>
+          </div>
+          <div className="dd-section">
+            <div className="dd-group">Stations</div>
+            {STATIONS.map((l) => (
+              <label key={l.key} className="dd-row dd-check" title={l.title}>
+                <input
+                  type="checkbox"
+                  checked={lines[l.key]}
+                  onChange={(e) =>
+                    setLines((s) => ({ ...s, [l.key]: e.target.checked }))
+                  }
+                />
+                <span className="dd-name">{l.label}</span>
+              </label>
+            ))}
           </div>
         </Dropdown>
         <div className="view3dshading">
