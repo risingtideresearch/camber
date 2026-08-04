@@ -286,6 +286,7 @@ function centerplaneFromSpline(
     fanMaxRatio: 0,
     fanSpread: 0,
     footU: null,
+    spanFallbacks: 0,
   };
 }
 

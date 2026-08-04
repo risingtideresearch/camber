@@ -53,6 +53,7 @@
 
 import {
   bisectRoot,
+  bisectWhile,
   frameAt,
   immersion,
   sectionAt,
@@ -150,6 +151,7 @@ export interface Centerplane {
   fanMaxRatio: number; // max |δX|/L, the longitudinal offset the station-plane fan introduces
   fanSpread: number; // the same offset in metres — the length scale the section axis must resolve in X
   footU: number | null; // u where the domain's lower edge leaves the transom for the keel, if it does
+  spanFallbacks: number; // columns whose bracket came from a scan, not the domain's table (see spanAt)
 }
 
 // The surface point at (u, v) in the hydrodynamic frame: X along the track, Z down from the free surface.
@@ -244,6 +246,353 @@ function columnReach(model: Model, u: number, scan: number): number {
   return m;
 }
 
+// ---------- 1a. the wetted domain ----------
+//
+// WHERE the wetted hull is, with no reference to any quadrature grid: the fore and aft limits in u, and — for
+// each edge of the section span — which of wetAt's constraints cuts it over which run of u. It depends on the
+// model's geometry, trims, waterline and rake and on nothing else. Not on the resolution, and not even on
+// `scale`, which enters only when the nodes are converted to SI. So it is built once and handed to every
+// sample: the two passes of sampleForBandwidth stop re-deriving the same boundary, and a speed slider that
+// crosses a rung of the ladder re-integrates without re-finding the hull.
+//
+// The run boundaries are the point. wetAt is a min of four constraints, so it is smooth EXCEPT where the
+// binding constraint switches — every switch is a C⁰ corner in vTop(u) or vBot(u), and a corner inside a
+// longitudinal panel costs that panel's quadrature all of its order, silently. The transom→keel corner on the
+// lower edge (the "foot") used to be the only one this code looked for. The upper edge has them too: wherever
+// a submerged rail hands the cut back from the sheer to the waterline, vTop kinks exactly as hard.
+
+// What cuts one edge of the section span: an index into wetAt's four constraints (matching bindingAt), or
+// `end` where no constraint cuts it at all and the section curve simply runs out while still wet.
+export const BOUND = {
+  sheer: 0,
+  centerline: 1,
+  transom: 2,
+  waterline: 3,
+  end: -1,
+} as const;
+export type Bound = (typeof BOUND)[keyof typeof BOUND];
+
+// One run of u over which an edge keeps the same bound. The first begins at uA, each ends where the next
+// begins, and the last ends at uB.
+export interface EdgeRun {
+  uTo: number;
+  bound: Bound;
+}
+
+export interface WettedDomain {
+  uA: number; // the fore and aft limits, where the wetted section closes to a point
+  uB: number;
+  top: EdgeRun[]; // what cuts vTop(u), run by run
+  bot: EdgeRun[]; // and vBot(u)
+  breaks: number[]; // sorted interior u the longitudinal panels must split on: bound switches and stations
+  footU: number | null; // where the lower edge leaves the transom for the keel, if it does
+  // Whether every column's wetted set is ONE v-interval, which is what wetSpan's outermost bracket assumes.
+  // Checked at the scan columns only, so `true` means "not seen", not "does not happen": `hull-beamy` has a
+  // notched section over a band of u 0.0005 wide that this misses entirely, and finding it would cost more
+  // than the sampling it informs. spanAt therefore certifies every column itself rather than trusting this.
+  singleInterval: boolean;
+  scanV: number; // the section scan the runs were labelled with — the labels are only as good as it
+  // ---- the edges tabulated across [uA, uB], for BRACKETING and nothing else ----
+  // Not the answer, and never used as one. A bisection needs an interval that straddles the crossing and
+  // asks nothing else of it — so a coarse table is enough to produce one in O(1) where a scan costs `scanV`
+  // evaluations, and the bisection that follows converges to the same 1e-12 however loose the table was.
+  // This is the distinction that makes the table safe: interpolating the boundary would move the answer,
+  // bracketing it cannot.
+  uTab: Float64Array; // NT+1 samples spanning [uA, uB]
+  vTopTab: Float64Array; // vTop there, NaN where the column is dry
+  vBotTab: Float64Array;
+}
+
+// What cuts an edge sitting at v. `limit` is the parameter end this edge can rest on (0 for the top, vmax for
+// the bottom): an edge resting there with the hull still wet is cut by nothing, and no root was found for it.
+// Reporting a constraint in that case would invent a corner that is not there.
+function boundOf(
+  model: Model,
+  fr: Frame,
+  sec: Section,
+  v: number,
+  limit: number,
+): Bound {
+  if (Math.abs(v - limit) < 1e-12 && wetAt(model, fr, sec, v) > 0)
+    return BOUND.end;
+  return bindingAt(model, fr, sec, v) as Bound;
+}
+
+// How many separate wet runs the column at u has. wetSpan takes the OUTERMOST bracket, which is the right
+// answer only when there is exactly one — a section that dips dry in the middle (a tunnel, a deep notch)
+// would be silently filled in. Checked once here rather than assumed at every column.
+function wetRunCount(
+  model: Model,
+  fr: Frame,
+  sec: Section,
+  scan: number,
+): number {
+  let runs = 0,
+    wasWet = false;
+  for (let i = 0; i <= scan; i++) {
+    const wet = wetAt(model, fr, sec, (sec.vmax * i) / scan) >= 0;
+    if (wet && !wasWet) runs++;
+    wasWet = wet;
+  }
+  return runs;
+}
+
+export function wettedDomain(
+  model: Model,
+  scanV: number = DEFAULT_OPTIONS.scanV,
+): WettedDomain | null {
+  // ---- the wetted span in u. Bracket by scanning, then converge both ends: at the fore and aft limits the
+  // wetted section shrinks to a point, so the domain closes there and no edge term is left over.
+  const NSCAN = 96;
+  let uLo = -1,
+    uHi = -1;
+  const reach: number[] = [];
+  for (let i = 0; i <= NSCAN; i++) {
+    const r = columnReach(model, i / NSCAN, 24);
+    reach.push(r);
+    if (r >= 0) {
+      if (uLo < 0) uLo = i;
+      uHi = i;
+    }
+  }
+  if (uLo < 0) return null; // no wetted hull at all
+  const rc = (u: number): number => columnReach(model, u, 24);
+  const uA =
+    uLo === 0
+      ? 0
+      : bisectRoot(rc, (uLo - 1) / NSCAN, uLo / NSCAN, reach[uLo - 1]);
+  const uB =
+    uHi === NSCAN
+      ? 1
+      : bisectRoot(rc, (uHi + 1) / NSCAN, uHi / NSCAN, reach[uHi + 1]);
+  if (!(uB > uA)) return null;
+
+  // ---- the edge runs. One scan along the hull reading both edges of every column; wherever an edge changes
+  // which constraint cuts it, converge the switch by bisection. What is being bisected is a BOOLEAN ("is this
+  // edge still cut by the constraint it was"), not a smooth function with a root, so it is plain halving.
+  const NF = 48, // scan columns
+    NB = 24, // bisection iterations per switch
+    span = uB - uA;
+  // the bracket table is filled from this same pass — every sample here already pays for a full wetSpan, so
+  // recording where its edges landed costs two stores and saves the sampler a scan per column later
+  const uTab = new Float64Array(NF + 1),
+    vTopTab = new Float64Array(NF + 1).fill(NaN),
+    vBotTab = new Float64Array(NF + 1).fill(NaN);
+  // slot 0 sits at the probe just inside uA, not at uA itself, because that is where it was measured
+  uTab[0] = uA + span * 1e-4;
+  for (let i = 1; i <= NF; i++) uTab[i] = uA + (span * i) / NF;
+  const edgesAt = (u: number, tab = -1): [Bound, Bound] | null => {
+    const fr = frameAt(model, u),
+      sec = sectionAt(model, u),
+      sp = wetSpan(model, fr, sec, scanV);
+    if (!sp) return null;
+    if (tab >= 0) {
+      vTopTab[tab] = sp[0];
+      vBotTab[tab] = sp[1];
+    }
+    return [
+      boundOf(model, fr, sec, sp[0], 0),
+      boundOf(model, fr, sec, sp[1], sec.vmax),
+    ];
+  };
+  const top: EdgeRun[] = [],
+    bot: EdgeRun[] = [];
+  let singleInterval = true;
+  // start just inside uA: at uA itself the section has closed to a point and neither edge means anything
+  let prev = edgesAt(uTab[0], 0);
+  for (let i = 1; i <= NF; i++) {
+    const u = uA + (span * i) / NF;
+    const fr = frameAt(model, u),
+      sec = sectionAt(model, u);
+    if (wetRunCount(model, fr, sec, scanV) > 1) singleInterval = false;
+    const cur = edgesAt(u, i);
+    if (!cur) continue; // the section has closed (the far end) — nothing to compare
+    if (!prev) {
+      prev = cur;
+      continue;
+    }
+    for (const e of [0, 1] as const) {
+      if (cur[e] === prev[e]) continue;
+      const was = prev[e];
+      const uTo = bisectWhile(
+        (m) => {
+          const k = edgesAt(m);
+          return !!k && k[e] === was;
+        },
+        uA + (span * (i - 1)) / NF,
+        u,
+        NB,
+      );
+      (e === 0 ? top : bot).push({ uTo, bound: was });
+    }
+    prev = cur;
+  }
+  top.push({ uTo: uB, bound: prev ? prev[0] : BOUND.end });
+  bot.push({ uTo: uB, bound: prev ? prev[1] : BOUND.end });
+
+  // ---- the panel breaks: every interior corner the u-quadrature must not integrate across. The bound
+  // switches above, plus the station knots (the loft is only C¹ across one).
+  const breaks = new Set<number>();
+  for (const st of model.stations)
+    if (st.u > uA + 1e-9 && st.u < uB - 1e-9) breaks.add(st.u);
+  for (const r of [...top, ...bot])
+    if (r.uTo > uA + 1e-9 && r.uTo < uB - 1e-9) breaks.add(r.uTo);
+
+  // the foot, kept as its own number because it is the one corner with a name and a diagnostic. The trailing
+  // run ends at uB and is not a switch, so it cannot supply one.
+  const foot = bot.find((r) => r.bound === BOUND.transom && r.uTo < uB);
+
+  return {
+    uA,
+    uB,
+    top,
+    bot,
+    breaks: [...breaks].sort((a, b) => a - b),
+    footU: foot ? foot.uTo : null,
+    singleInterval,
+    scanV,
+    uTab,
+    vTopTab,
+    vBotTab,
+  };
+}
+
+// ---------- 1a′. the span search, given the domain ----------
+//
+// The domain-guided half. Most classification has already been settled by the domain; what remains is to look
+// up a bracket, check that the pre-classified route still holds at this exact column, and halve it. Those checks
+// and the fallback they may select belong to plan compilation below, never to the numerical evaluator.
+//
+// The bracket comes from the table, widened by the amount the edge moved between the two samples around u.
+// If it straddles, bisection converges to the crossing, because BISECTION DOES NOT CARE what the function
+// does inside the bracket — not its smoothness, not the kinks where the binding constraint changes, nothing
+// but the two signs at the ends.
+//
+// ---------- but a bracket is not all the scan was for ----------
+//
+// wetSpan takes the OUTERMOST wet sample at each end, which does two jobs: it brackets the crossing, and it
+// certifies there is no further wet band beyond it. A bracket replaces the first job and not the second, and
+// the difference is not academic — `hull-beamy` and `cuvature-kink` both have a narrow band of u (0.0005 and
+// 0.0035 wide, near the foot) where the section dips dry and comes back, so the column's wetted set is TWO
+// intervals. wetSpan spans the gap; a bracketed search converges on the inner crossing and stops. Neither is
+// the true integral over a notched section, but they are different, and a sampler that quietly changed which
+// one it computed depending on where a Gauss node happened to land would be indefensible.
+//
+// So the span is certified after it is found: the scan's own grid points OUTSIDE the span are tested, and any
+// wet one sends this to the full scan. That costs ~31 of the 64 samples on camber's hulls rather than 64,
+// which is a far smaller win than dropping the scan entirely — and it is the honest price of the guarantee
+// that this returns what wetSpan returns.
+//
+// Fallbacks are counted in `spanFallbacks` rather than hidden, because a hull that takes that path often has
+// quietly lost the optimisation.
+
+// Where the crossing is, given an interval known to straddle it: `dry` is the end outside the wetted hull.
+// Both edges of the span reduce to this, which is why there is one call and not two shapes.
+const convergeEdge = (
+  model: Model,
+  fr: Frame,
+  sec: Section,
+  dry: number,
+  wet: number,
+): number => bisectWhile((v) => wetAt(model, fr, sec, v) < 0, dry, wet);
+
+// The bound of `runs` at u. The runs are few (one per corner) and u ascends through the sampler's columns, so
+// a walk from the front costs nothing worth indexing away.
+const boundAt = (runs: EdgeRun[], u: number): Bound => {
+  for (const r of runs) if (u <= r.uTo) return r.bound;
+  return runs[runs.length - 1].bound;
+};
+
+type Span = [number, number] | null;
+type FastSpan = { resolved: true; span: Span } | { resolved: false };
+
+// The slow, general resolver. It owns the scan and all of the discrete decisions that follow from it.
+const resolveSpanByScan = (
+  model: Model,
+  fr: Frame,
+  sec: Section,
+  scanV: number,
+): Span => wetSpan(model, fr, sec, scanV);
+
+// Try the domain's pre-classified route. Failure here is not a dry column: it means one of the assumptions
+// encoded by the domain did not hold at this particular u, and the caller must use resolveSpanByScan.
+const resolveSpanFast = (
+  model: Model,
+  dom: WettedDomain,
+  fr: Frame,
+  sec: Section,
+  u: number,
+  scanV: number,
+): FastSpan => {
+  const n = dom.uTab.length;
+  // the table cell containing u; uTab is uniform apart from slot 0, so this lands within one of the true cell
+  let i = Math.floor(((u - dom.uA) / (dom.uB - dom.uA)) * (n - 1));
+  if (i < 0) i = 0;
+  if (i > n - 2) i = n - 2;
+  const t0 = dom.vTopTab[i],
+    t1 = dom.vTopTab[i + 1],
+    b0 = dom.vBotTab[i],
+    b1 = dom.vBotTab[i + 1];
+  if (!(isFinite(t0) && isFinite(t1) && isFinite(b0) && isFinite(b1)))
+    return { resolved: false }; // a dry table sample either side — the ends of the hull
+
+  // pad by the edge's own movement across the cell, plus a floor for where it barely moves at all
+  const padT = 0.5 * Math.abs(t1 - t0) + 1e-3 * sec.vmax,
+    padB = 0.5 * Math.abs(b1 - b0) + 1e-3 * sec.vmax;
+  const tDry = Math.max(0, Math.min(t0, t1) - padT),
+    tWet = Math.min(sec.vmax, Math.max(t0, t1) + padT),
+    bWet = Math.max(0, Math.min(b0, b1) - padB),
+    bDry = Math.min(sec.vmax, Math.max(b0, b1) + padB);
+
+  // the top edge: cut by nothing means it IS the section's start, and there is no crossing to find
+  const topEnd = boundAt(dom.top, u) === BOUND.end;
+  const botEnd = boundAt(dom.bot, u) === BOUND.end;
+  const wetHere = (v: number): boolean => wetAt(model, fr, sec, v) >= 0;
+  let vTop: number, vBot: number;
+  if (topEnd) {
+    if (!wetHere(0)) return { resolved: false }; // the label disagrees with the hull — trust the hull
+    vTop = 0;
+  } else {
+    if (wetHere(tDry) || !wetHere(tWet)) return { resolved: false }; // no straddle
+    vTop = convergeEdge(model, fr, sec, tDry, tWet);
+  }
+  if (botEnd) {
+    if (!wetHere(sec.vmax)) return { resolved: false };
+    vBot = sec.vmax;
+  } else {
+    if (wetHere(bDry) || !wetHere(bWet)) return { resolved: false };
+    vBot = convergeEdge(model, fr, sec, bDry, bWet);
+  }
+
+  // the certification: on wetSpan's own grid, nothing outside this span may be wet. Same grid, so anything
+  // the scan would have found here is found here too — that equality is the point, not a near-miss of it.
+  for (let j = 0; j <= scanV; j++) {
+    const v = (sec.vmax * j) / scanV;
+    if (v >= vTop && v <= vBot) continue;
+    if (wetHere(v)) return { resolved: false };
+  }
+  return {
+    resolved: true,
+    span: vBot > vTop + 1e-12 ? [vTop, vBot] : null,
+  };
+};
+
+// Public for the domain tests and diagnostics. Production sampling calls this only while compiling its column
+// plan; the numerical integration loop never sees the fast/fallback branch or a dry column.
+export function spanAt(
+  model: Model,
+  dom: WettedDomain,
+  fr: Frame,
+  sec: Section,
+  u: number,
+  scanV: number,
+): { span: Span; fellBack: boolean } {
+  const fast = resolveSpanFast(model, dom, fr, sec, u, scanV);
+  return fast.resolved
+    ? { span: fast.span, fellBack: false }
+    : { span: resolveSpanByScan(model, fr, sec, scanV), fellBack: true };
+}
+
 // The section sub-panel edges over [vTop, vBot]. Two things break smoothness in v and both become edges:
 //
 //   • STATION KNOTS. The section is a Catmull-Rom through the lofted station points and a knuckle lives at a
@@ -291,98 +640,116 @@ function vEdges(
   return fine;
 }
 
+// A resolution-specific integration plan. All geometry classification, fallback selection, dry-column
+// rejection and panel construction happen while compiling this object. The evaluator below receives only
+// complete wet columns and positive section panels.
+interface ColumnPlan {
+  wu: number;
+  fr: Frame;
+  sec: Section;
+  fr0: Frame;
+  sec0: Section;
+  fr1: Frame;
+  sec1: Section;
+  du: number;
+  vPanels: [number, number][];
+}
+
+interface CenterplanePlan {
+  columns: ColumnPlan[];
+  spanFallbacks: number;
+  sheerSubmerged: number;
+}
+
+function compileCenterplanePlan(
+  model: Model,
+  dom: WettedDomain,
+  o: MichellOptions,
+): CenterplanePlan {
+  const { uA, uB } = dom;
+  const uEdges: number[] = [uA];
+  const segs = [uA, ...dom.breaks, uB],
+    total = uB - uA;
+  for (let s = 0; s < segs.length - 1; s++) {
+    const a = segs[s],
+      b = segs[s + 1],
+      n = Math.max(1, Math.round((o.uPanels * (b - a)) / total));
+    for (let i = 1; i <= n; i++) uEdges.push(a + ((b - a) * i) / n);
+  }
+
+  const gu = gaussLegendre(o.uNodes),
+    columns: ColumnPlan[] = [];
+  let spanFallbacks = 0,
+    sheerSubmerged = 0;
+  // The finite-difference scale used for ∂/∂u. It is clamped to the current panel below so it cannot cross a
+  // station knot or a wetted-domain corner.
+  const EU = 1e-4;
+
+  for (let p = 0; p < uEdges.length - 1; p++) {
+    const ua = uEdges[p],
+      ub = uEdges[p + 1],
+      hu = 0.5 * (ub - ua),
+      mu = 0.5 * (ua + ub);
+    for (let iu = 0; iu < o.uNodes; iu++) {
+      const u = mu + hu * gu.x[iu],
+        wu = hu * gu.w[iu],
+        fr = frameAt(model, u),
+        sec = sectionAt(model, u),
+        got = spanAt(model, dom, fr, sec, u, o.scanV);
+      if (got.fellBack) spanFallbacks++;
+      if (!got.span) continue;
+      const [vTop, vBot] = got.span;
+      if (bindingAt(model, fr, sec, vTop) === BOUND.sheer) sheerSubmerged++;
+
+      const eu = Math.min(EU, 0.2 * Math.min(u - ua, ub - u)),
+        u0 = Math.max(0, u - eu),
+        u1 = Math.min(1, u + eu),
+        edges = vEdges(vTop, vBot, o.wlGrade, o.vPanels),
+        vPanels: [number, number][] = [];
+      for (let q = 0; q < edges.length - 1; q++)
+        if (edges[q + 1] > edges[q]) vPanels.push([edges[q], edges[q + 1]]);
+
+      columns.push({
+        wu,
+        fr,
+        sec,
+        fr0: frameAt(model, u0),
+        sec0: sectionAt(model, u0),
+        fr1: frameAt(model, u1),
+        sec1: sectionAt(model, u1),
+        du: u1 - u0,
+        vPanels,
+      });
+    }
+  }
+  return { columns, spanFallbacks, sheerSubmerged };
+}
+
 // Walk the hull once and reduce it to the weighted node cloud. `scale` is metres per model unit — the ONE
 // place the model's own units meet SI, because ν = g/U² is dimensional and a silent unit slip here is the
 // failure mode of every Michell implementation.
+//
+// `domain` is an optimisation and nothing more: the sampler derives its own when none is given, and one built
+// from a DIFFERENT model would produce nonsense, so pass it only where the model is demonstrably the same one
+// (sampleForBandwidth's two passes are the case it exists for).
 export function sampleCenterplane(
   model: Model,
   scale: number,
   options?: Partial<MichellOptions>,
+  domain?: WettedDomain,
 ): Centerplane | null {
   const o = { ...DEFAULT_OPTIONS, ...options };
   const cr = Math.cos(model.deckRake),
     sr = Math.sin(model.deckRake);
 
-  // ---- the wetted span in u. Bracket by scanning, then converge both ends: at the fore and aft limits the
-  // wetted section shrinks to a point, so the domain closes there and no edge term is left over.
-  const NSCAN = 96;
-  let uLo = -1,
-    uHi = -1;
-  const reach: number[] = [];
-  for (let i = 0; i <= NSCAN; i++) {
-    const r = columnReach(model, i / NSCAN, 24);
-    reach.push(r);
-    if (r >= 0) {
-      if (uLo < 0) uLo = i;
-      uHi = i;
-    }
-  }
-  if (uLo < 0) return null; // no wetted hull at all
-  const rc = (u: number): number => columnReach(model, u, 24);
-  const uA =
-    uLo === 0
-      ? 0
-      : bisectRoot(rc, (uLo - 1) / NSCAN, uLo / NSCAN, reach[uLo - 1]);
-  const uB =
-    uHi === NSCAN
-      ? 1
-      : bisectRoot(rc, (uHi + 1) / NSCAN, uHi / NSCAN, reach[uHi + 1]);
-  if (!(uB > uA)) return null;
+  const dom = domain ?? wettedDomain(model, o.scanV);
+  if (!dom) return null; // no wetted hull at all
+  const { footU } = dom;
 
-  // ---- the FOOT: where the domain's lower edge stops being the transom and becomes the keel. v_bot(u) has a
-  // corner there, so the u panels are split on it. Absent (null) for a hull with no wetted transom.
-  const bottomKind = (u: number): number => {
-    const fr = frameAt(model, u),
-      sec = sectionAt(model, u),
-      sp = wetSpan(model, fr, sec, o.scanV);
-    return sp ? bindingAt(model, fr, sec, sp[1]) : -1;
-  };
-  let footU: number | null = null;
-  {
-    // scan for the transom(2) → centerline(1) switch along the lower edge
-    const NF = 48;
-    let prev = bottomKind(uA + (uB - uA) * 1e-4);
-    for (let i = 1; i <= NF; i++) {
-      const u = uA + ((uB - uA) * i) / NF,
-        k = bottomKind(u);
-      if (prev === 2 && k !== 2) {
-        // bisect on "is the lower edge still the transom" — a boolean, so bisect on the constraint gap
-        let a = uA + ((uB - uA) * (i - 1)) / NF,
-          b = u;
-        for (let it = 0; it < 24; it++) {
-          const m = 0.5 * (a + b);
-          if (bottomKind(m) === 2) a = m;
-          else b = m;
-        }
-        footU = 0.5 * (a + b);
-        break;
-      }
-      prev = k;
-    }
-  }
-
-  // ---- longitudinal panel edges: uniform over [uA, uB], split at every station (the loft is only C¹ across
-  // a station knot) and at the foot corner.
-  const breaks = new Set<number>();
-  for (const st of model.stations)
-    if (st.u > uA + 1e-9 && st.u < uB - 1e-9) breaks.add(st.u);
-  if (footU !== null && footU > uA + 1e-9 && footU < uB - 1e-9)
-    breaks.add(footU);
-  const uEdges: number[] = [uA];
-  {
-    const inner = [...breaks].sort((a, b) => a - b);
-    const segs = [uA, ...inner, uB];
-    const total = uB - uA;
-    for (let s = 0; s < segs.length - 1; s++) {
-      const a = segs[s],
-        b = segs[s + 1],
-        n = Math.max(1, Math.round((o.uPanels * (b - a)) / total));
-      for (let i = 1; i <= n; i++) uEdges.push(a + ((b - a) * i) / n);
-    }
-  }
-
-  const gu = gaussLegendre(o.uNodes),
-    gv = gaussLegendre(o.vNodes);
+  // Compile every branch concerning the wetted geometry before entering the numerical evaluator: its columns
+  // are all wet, its spans are resolved, and its section panels all have positive width.
+  const plan = compileCenterplanePlan(model, dom, o);
+  const gv = gaussLegendre(o.vNodes);
   const Xs: number[] = [],
     Zs: number[] = [],
     Ws: number[] = [];
@@ -393,86 +760,44 @@ export function sampleCenterplane(
     xFwd = -Infinity,
     beamMax = 0,
     jacobianFlips = 0,
-    sheerSubmerged = 0,
-    columns = 0,
     fanMax = 0;
 
-  // the u step for the ∂/∂u finite difference of the surface map — the same scale mesh.ts uses for its
-  // surface normals, small against u ∈ [0,1] and far above float noise
-  const EU = 1e-4;
-
-  for (let p = 0; p < uEdges.length - 1; p++) {
-    const ua = uEdges[p],
-      ub = uEdges[p + 1],
-      hu = 0.5 * (ub - ua),
-      mu = 0.5 * (ua + ub);
-    for (let iu = 0; iu < o.uNodes; iu++) {
-      const u = mu + hu * gu.x[iu],
-        wu = hu * gu.w[iu];
-      const fr = frameAt(model, u),
-        sec = sectionAt(model, u),
-        span = wetSpan(model, fr, sec, o.scanV);
-      if (!span) continue;
-      columns++;
-      const [vTop, vBot] = span;
-      if (bindingAt(model, fr, sec, vTop) === 0) sheerSubmerged++;
-      // Neighbours for ∂/∂u, one-sided at the ends of the plan's parameter — and never reaching outside this
-      // PANEL. The panel edges are the station knots (and the foot corner), and ∂/∂u genuinely jumps across a
-      // station: the loft's u → chain-parameter map is only piecewise linear, so the two sides have different
-      // one-sided derivatives. A step that straddled one would silently average them.
-      //
-      // It only bites at high resolution, which is exactly where the low-Froude sizing puts us: at the default
-      // 96 panels the innermost Gauss node sits ~5e-4 from the edge in u, clear of the 1e-4 step, but at the
-      // 1536 panels Fn 0.1 asks for it sits 3.7e-5 away — inside it. Hence the clamp to a fraction of the
-      // panel rather than a fixed step.
-      const eu = Math.min(EU, 0.2 * Math.min(u - ua, ub - u));
-      const u0 = Math.max(0, u - eu),
-        u1 = Math.min(1, u + eu),
-        du = u1 - u0;
-      const fr0 = frameAt(model, u0),
-        sec0 = sectionAt(model, u0),
-        fr1 = frameAt(model, u1),
-        sec1 = sectionAt(model, u1);
-
-      const edges = vEdges(vTop, vBot, o.wlGrade, o.vPanels);
-      for (let q = 0; q < edges.length - 1; q++) {
-        const va = edges[q],
-          vb = edges[q + 1];
-        if (!(vb > va)) continue;
-        const hv = 0.5 * (vb - va),
-          mv = 0.5 * (va + vb);
-        for (let iv = 0; iv < o.vNodes; iv++) {
-          const v = mv + hv * gv.x[iv],
-            wv = hv * gv.w[iv];
-          const h = hydroAt(model, fr, sec, v, cr, sr);
-          // ∂(X,Z)/∂v exactly, from the section curve's own tangent; only n is carried by the frame
-          const [dn, dz] = sec.d(v),
-            xv = dn * fr.n[0],
-            zv = dz;
-          const Xv = xv * cr - zv * sr,
-            Zv = xv * sr + zv * cr;
-          // ∂(X,Z)/∂u by central difference of the surface map at fixed v
-          const a0 = hydroAt(model, fr0, sec0, v, cr, sr),
-            a1 = hydroAt(model, fr1, sec1, v, cr, sr);
-          const Xu = (a1.X - a0.X) / du,
-            Zu = (a1.Z - a0.Z) / du;
-          const J = Xu * Zv - Xv * Zu;
-          if (J > 0) jacobianFlips++; // the hull's own orientation makes J < 0 (X grows with u, Z falls with v)
-          const aJ = Math.abs(J) * wu * wv * scale * scale;
-          const y = h.y * scale;
-          Xs.push(h.X * scale);
-          Zs.push(h.Z * scale);
-          Ws.push(y * aJ);
-          volumeHalf += y * aJ;
-          areaProjected += aJ;
-          if (-h.Z * scale > draft) draft = -h.Z * scale;
-          if (h.X * scale < xAft) xAft = h.X * scale;
-          if (h.X * scale > xFwd) xFwd = h.X * scale;
-          if (2 * y > beamMax) beamMax = 2 * y;
-          // the fan diagnostic: how far the true longitudinal coordinate sits from the station's own x
-          const fan = Math.abs(h.X - fr.p[0] * cr) * scale;
-          if (fan > fanMax) fanMax = fan;
-        }
+  for (const column of plan.columns) {
+    const { wu, fr, sec, fr0, sec0, fr1, sec1, du } = column;
+    for (const [va, vb] of column.vPanels) {
+      const hv = 0.5 * (vb - va),
+        mv = 0.5 * (va + vb);
+      for (let iv = 0; iv < o.vNodes; iv++) {
+        const v = mv + hv * gv.x[iv],
+          wv = hv * gv.w[iv];
+        const h = hydroAt(model, fr, sec, v, cr, sr);
+        // ∂(X,Z)/∂v exactly, from the section curve's own tangent; only n is carried by the frame
+        const [dn, dz] = sec.d(v),
+          xv = dn * fr.n[0],
+          zv = dz;
+        const Xv = xv * cr - zv * sr,
+          Zv = xv * sr + zv * cr;
+        // ∂(X,Z)/∂u by central difference of the surface map at fixed v
+        const a0 = hydroAt(model, fr0, sec0, v, cr, sr),
+          a1 = hydroAt(model, fr1, sec1, v, cr, sr);
+        const Xu = (a1.X - a0.X) / du,
+          Zu = (a1.Z - a0.Z) / du;
+        const J = Xu * Zv - Xv * Zu;
+        if (J > 0) jacobianFlips++; // the hull's own orientation makes J < 0 (X grows with u, Z falls with v)
+        const aJ = Math.abs(J) * wu * wv * scale * scale;
+        const y = h.y * scale;
+        Xs.push(h.X * scale);
+        Zs.push(h.Z * scale);
+        Ws.push(y * aJ);
+        volumeHalf += y * aJ;
+        areaProjected += aJ;
+        if (-h.Z * scale > draft) draft = -h.Z * scale;
+        if (h.X * scale < xAft) xAft = h.X * scale;
+        if (h.X * scale > xFwd) xFwd = h.X * scale;
+        if (2 * y > beamMax) beamMax = 2 * y;
+        // the fan diagnostic: how far the true longitudinal coordinate sits from the station's own x
+        const fan = Math.abs(h.X - fr.p[0] * cr) * scale;
+        if (fan > fanMax) fanMax = fan;
       }
     }
   }
@@ -490,13 +815,14 @@ export function sampleCenterplane(
     xFwd,
     beamMax,
     wettedLength: xFwd - xAft,
-    columns,
+    columns: plan.columns.length,
     nodes: Xs.length,
     jacobianFlips,
-    sheerSubmerged,
+    sheerSubmerged: plan.sheerSubmerged,
     fanMaxRatio: loa * scale > 0 ? fanMax / (loa * scale) : 0,
     fanSpread: fanMax,
     footU,
+    spanFallbacks: plan.spanFallbacks,
   };
 }
 
@@ -654,6 +980,10 @@ export function resolutionOf(
 // (they are what the sizing rule needs, and they are not known before sampling), then the real one. The probe
 // is a few milliseconds against a sample that can be a second, and it is skipped when the baseline already
 // suffices — which it does over most of the useful speed range.
+//
+// Both passes integrate over the SAME hull, so the domain is found once and shared. It is not exposed: a
+// domain and a model that disagree would be a hard bug to see, and no caller outside this function has a
+// reason to hold one.
 export function sampleForBandwidth(
   model: Model,
   scale: number,
@@ -662,7 +992,9 @@ export function sampleForBandwidth(
   base: MichellOptions = DEFAULT_OPTIONS,
   maxNodes = MAX_NODES,
 ): { cp: Centerplane; resolution: Resolution; options: MichellOptions } | null {
-  const probe = sampleCenterplane(model, scale, base);
+  const dom = wettedDomain(model, base.scanV);
+  if (!dom) return null;
+  const probe = sampleCenterplane(model, scale, base, dom);
   if (!probe) return null;
   const want = sizeFor(probe, nu, secMax, base);
   // The cost ceiling. Below about Fn 0.1 the demand runs away — the kernel's wavelength goes as U², so on a
@@ -701,7 +1033,7 @@ export function sampleForBandwidth(
     capped.uPanels === base.uPanels &&
     capped.vPanels === base.vPanels &&
     capped.wlGrade === base.wlGrade;
-  const cp = same ? probe : sampleCenterplane(model, scale, capped);
+  const cp = same ? probe : sampleCenterplane(model, scale, capped, dom);
   if (!cp) return null;
   return { cp, resolution: resolutionOf(cp, nu, secMax), options: capped };
 }

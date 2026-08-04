@@ -408,24 +408,37 @@ export function xTransom(model: Model, z: number): number {
 }
 
 // ---------- bisection ----------
-// Refine a bracketed sign change of g on [a,b] (ga = g(a); the root stays bracketed with g(a) on ga's side).
-// A coarse scan finds the crossing between two samples; placing it with one linear-interpolation step leaves
-// an O(h²) error that is pure NOISE to anything that differentiates the result — the curvature combs second-
-// difference these points and jitter visibly. 40 halvings converge to ~1e-12·span, so the swept geometry is
-// smooth down to float precision.
-export function bisectRoot(
-  g: (v: number) => number,
+// Refine a bracketed crossing on [a, b] by halving. `keep` holds at a and fails at b, and where it stops
+// holding is what comes back. All bisection in camber goes through this one loop, because a bracketed
+// crossing is all bisection ever needs — the thing being crossed does not have to be the sign of a function.
+// It is a boolean where a boundary switches from one kind to another (which constraint cuts an edge, say),
+// and a sign test where it is an ordinary root.
+//
+// 40 halvings converge to ~1e-12·span. That precision is not decorative: a coarse scan placed with one
+// linear-interpolation step leaves an O(h²) error that is pure NOISE to anything that differentiates the
+// result — the curvature combs second-difference these points and jitter visibly.
+export function bisectWhile(
+  keep: (v: number) => boolean,
   a: number,
   b: number,
-  ga: number,
+  iters = 40,
 ): number {
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < iters; i++) {
     const m = 0.5 * (a + b);
-    if (g(m) < 0 === ga < 0) a = m;
+    if (keep(m)) a = m;
     else b = m;
   }
   return 0.5 * (a + b);
 }
+
+// The ordinary case: a sign change of g bracketed by [a, b], with ga = g(a). The root stays bracketed with
+// g(a) on ga's side.
+export const bisectRoot = (
+  g: (v: number) => number,
+  a: number,
+  b: number,
+  ga: number,
+): number => bisectWhile((v) => g(v) < 0 === ga < 0, a, b);
 
 // ---------- the trim test ----------
 // How far inside the hull a section point is, as one signed number: the hull keeps a point iff it is at or

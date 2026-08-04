@@ -21,14 +21,33 @@
 //
 // Run with `npm run test:michell`.
 
-import { createModel, prepare, type Model } from "../src/core/model";
+import {
+  bisectRoot,
+  createModel,
+  frameAt,
+  immersion,
+  prepare,
+  sectionAt,
+  stationWorld,
+  xTransom,
+  type Frame,
+  type Model,
+  type Section,
+} from "../src/core/model";
 import type { Vec3 } from "../src/core/math";
 import { computeHullSampling } from "../src/core/mesh";
 import { hydrostatics } from "../src/core/hydro";
-import { unitScale } from "../src/core/json";
+import { loadJsonText, unitScale } from "../src/core/json";
+import { examplesDir } from "./paths";
+import { readFileSync, readdirSync } from "fs";
+import { join } from "path";
 import {
   gaussLegendre,
   sampleCenterplane,
+  wettedDomain,
+  spanAt,
+  BOUND,
+  DEFAULT_OPTIONS,
   sampleForBandwidth,
   sizeFor,
   inUsefulRange,
@@ -164,6 +183,7 @@ function wigleyCloud(
     fanMaxRatio: 0,
     fanSpread: 0,
     footU: null,
+    spanFallbacks: 0,
   };
 }
 
@@ -262,6 +282,197 @@ const wig = wigleyCloud();
   ok(
     worst < 1e-9,
     `prismatic body: the transom and bow source lines fall out of the integrated form (worst ${worst.toExponential(2)})`,
+  );
+}
+
+// ---------- 3b. the wetted domain ----------
+//
+// The domain decides what every sample integrates over and where the longitudinal panels break, so a
+// mislabelled run is a wrong panel layout at every resolution — and it is invisible in the answer, because a
+// missing break costs quadrature ORDER, not obvious correctness. It shows up as a hull that converges a little
+// too slowly, which is exactly the kind of thing nobody notices.
+//
+// So the run labels are checked against a reconstruction written here. The four constraints ARE the definition
+// of the wetted hull and are restated rather than shared; what is genuinely independent is everything else —
+// this walks the edges at 512 samples per column and classifies them directly, where the domain builder scans
+// 48 columns and converges the switches by bisection. Run over every example hull, because the interesting
+// corners (a transom that cuts the upper edge, a submerged rail) are not on the default one.
+{
+  const REF_SCAN = 512;
+  const cons = (m: Model, fr: Frame, sec: Section, v: number): number[] => {
+    const [n, z] = sec.at(v),
+      p = stationWorld(fr, n, z);
+    return [
+      m.trimZ(p[0]) - p[2],
+      p[1],
+      p[0] - xTransom(m, p[2]),
+      immersion(m, p[0], p[2]),
+    ];
+  };
+  const wet = (m: Model, fr: Frame, sec: Section, v: number): number =>
+    Math.min(...cons(m, fr, sec, v));
+  // what cuts the edge at v, by the same convention the domain uses: −1 where the section simply runs out
+  const boundRef = (
+    m: Model,
+    fr: Frame,
+    sec: Section,
+    v: number,
+    limit: number,
+  ): number => {
+    if (Math.abs(v - limit) < 1e-12 && wet(m, fr, sec, v) > 0) return BOUND.end;
+    const c = cons(m, fr, sec, v);
+    let k = 0;
+    for (let i = 1; i < 4; i++) if (c[i] < c[k]) k = i;
+    return k;
+  };
+  const spanRef = (
+    m: Model,
+    fr: Frame,
+    sec: Section,
+  ): [number, number] | null => {
+    const g = (v: number): number => wet(m, fr, sec, v);
+    const gs: number[] = [];
+    for (let i = 0; i <= REF_SCAN; i++) gs.push(g((sec.vmax * i) / REF_SCAN));
+    let lo = -1,
+      hi = -1;
+    for (let i = 0; i <= REF_SCAN; i++)
+      if (gs[i] >= 0) {
+        if (lo < 0) lo = i;
+        hi = i;
+      }
+    if (lo < 0) return null;
+    const at = (i: number): number => (sec.vmax * i) / REF_SCAN;
+    return [
+      lo === 0 ? 0 : bisectRoot(g, at(lo - 1), at(lo), gs[lo - 1]),
+      hi === REF_SCAN
+        ? sec.vmax
+        : bisectRoot(g, at(hi + 1), at(hi), gs[hi + 1]),
+    ];
+  };
+
+  // its own copy of the built-in hull: this rung runs before the shared one is set up below
+  const base = createModel();
+  prepare(base);
+  const hulls: [string, Model][] = [["<default>", base]];
+  for (const f of readdirSync(examplesDir())
+    .filter((f) => f.endsWith(".json"))
+    .sort()) {
+    const m = createModel();
+    loadJsonText(m, readFileSync(join(examplesDir(), f), "utf8"));
+    prepare(m);
+    hulls.push([f, m]);
+  }
+
+  const NSPAN = 211; // a prime, so the probe columns never land on the table's own samples
+  let bad = 0,
+    checked = 0,
+    corners = 0,
+    spans = 0,
+    worstSpan = 0,
+    worstSpanAt = "",
+    worstHull = "";
+  const notched: string[] = [];
+  const flag = (why: string): void => {
+    bad++;
+    worstHull = why;
+  };
+  for (const [name, m] of hulls) {
+    const dom = wettedDomain(m);
+    if (!dom) {
+      ok(false, `${name}: no wetted domain`);
+      continue;
+    }
+    // the runs partition [uA, uB] in order and close on it
+    let prevTo = dom.uA;
+    for (const r of [...dom.top]) {
+      if (!(r.uTo > prevTo)) flag(name + " (top order)");
+      prevTo = r.uTo;
+    }
+    if (Math.abs(dom.top[dom.top.length - 1].uTo - dom.uB) > 1e-12)
+      flag(name + " (top does not close on uB)");
+    if (Math.abs(dom.bot[dom.bot.length - 1].uTo - dom.uB) > 1e-12)
+      flag(name + " (bot does not close on uB)");
+    corners += dom.top.length + dom.bot.length - 2;
+
+    // every interior run boundary is a break the panels will split on
+    for (const r of [...dom.top, ...dom.bot])
+      if (r.uTo > dom.uA + 1e-9 && r.uTo < dom.uB - 1e-9)
+        if (!dom.breaks.some((b) => Math.abs(b - r.uTo) < 1e-12))
+          flag(name + " (corner missing from breaks)");
+
+    // and every label is what the edge is actually cut by, sampled inside each run
+    for (const edge of [0, 1] as const) {
+      const runs = edge === 0 ? dom.top : dom.bot;
+      let from = dom.uA;
+      for (const r of runs) {
+        for (const f of [0.25, 0.5, 0.75]) {
+          const u = from + (r.uTo - from) * f,
+            fr = frameAt(m, u),
+            sec = sectionAt(m, u),
+            sp = spanRef(m, fr, sec);
+          if (!sp) continue;
+          const got = boundRef(
+            m,
+            fr,
+            sec,
+            edge === 0 ? sp[0] : sp[1],
+            edge === 0 ? 0 : sec.vmax,
+          );
+          checked++;
+          if (got !== r.bound)
+            flag(
+              `${name} (${edge ? "bot" : "top"} run to ${r.uTo.toFixed(4)}: labelled ${r.bound}, is ${got})`,
+            );
+        }
+        from = r.uTo;
+      }
+    }
+
+    if (!dom.singleInterval) notched.push(name);
+
+    // THE SPAN SEARCH ITSELF. spanAt brackets from the domain's table instead of scanning, so it must return
+    // what a scan returns — at columns that are not the table's own, which is where a bracket can be wrong.
+    // The reference here scans at 512, eight times finer than the sampler, so a span the sampler's grid is
+    // too coarse to see is caught as a disagreement rather than shared by both sides.
+    for (let i = 1; i < NSPAN; i++) {
+      const u = dom.uA + ((dom.uB - dom.uA) * i) / NSPAN,
+        fr = frameAt(m, u),
+        sec = sectionAt(m, u);
+      const got = spanAt(m, dom, fr, sec, u, DEFAULT_OPTIONS.scanV).span,
+        want = spanRef(m, fr, sec);
+      spans++;
+      if ((got === null) !== (want === null)) {
+        flag(
+          `${name} u=${u.toFixed(5)}: span found/not-found disagrees with a 512-scan`,
+        );
+        continue;
+      }
+      if (!got || !want) continue;
+      for (const k of [0, 1]) {
+        const d = Math.abs(got[k] - want[k]) / sec.vmax;
+        if (d > worstSpan) {
+          worstSpan = d;
+          worstSpanAt = `${name} u=${u.toFixed(5)} edge ${k}`;
+        }
+      }
+    }
+  }
+  ok(
+    bad === 0,
+    `the wetted domain's run labels hold on all ${hulls.length} hulls (${checked} edge samples, ${corners} corners found)` +
+      (bad ? ` — worst: ${worstHull}` : ""),
+  );
+  ok(
+    worstSpan < 1e-9,
+    `spanAt's bracketed search returns what a scan returns over ${spans} columns ` +
+      `(worst ${worstSpan.toExponential(2)} of vmax at ${worstSpanAt})`,
+  );
+  // not a failure: a notched section is a property of the hull, and spanAt certifies every column against it
+  // rather than trusting the domain's coarse check. Reported so the count cannot drift unnoticed.
+  info(
+    notched.length
+      ? `domain's coarse check saw a notched column on: ${notched.join(", ")}`
+      : `no notched columns seen at the domain's scan resolution (spanAt certifies the rest)`,
   );
 }
 
