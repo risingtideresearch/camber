@@ -45,9 +45,7 @@ export const PERF_PLAN = "Plan view";
 export const PERF_PROFILE = "Profile view";
 export const PERF_CUT = "Cut station";
 export const PERF_MESH = "3D view";
-// every mounted station editor redraws on every bump, not just the visible tab, so they get a pass each —
-// that they all cost is the sort of thing this panel exists to show
-export const perfStation = (si: number): string => `Station editor ${si + 1}`;
+export const PERF_STATION = "Station view";
 
 export interface Metric {
   label: string;

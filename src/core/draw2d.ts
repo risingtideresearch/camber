@@ -38,10 +38,10 @@ import {
   perfBegin,
   perfEnd,
   perfStep,
-  perfStation,
   PERF_CUT,
   PERF_PLAN,
   PERF_PROFILE,
+  PERF_STATION,
 } from "./perf";
 import { viewOf, PXpad, Ptop, type View } from "./view";
 
@@ -1027,7 +1027,7 @@ export function drawStation(
   curv?: CurvatureSettings,
   knotLongs = false, // the "Show knot longitudinals" toggle, shared by all three 2D views
 ): void {
-  perfBegin(perfStation(si));
+  perfBegin(PERF_STATION);
   const v = viewOf(model),
     b = bounds(model);
   setMarkerScale(sc[0], sc[1]);
@@ -1114,7 +1114,7 @@ export function drawStation(
       if (j !== si)
         redX(svg, v.snX(st.points[sIdx].n), v.snY(st.points[sIdx].z));
     });
-  perfEnd(perfStation(si));
+  perfEnd(PERF_STATION);
 }
 
 // ---------- the live cut station ----------
