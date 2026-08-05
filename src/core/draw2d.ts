@@ -638,7 +638,9 @@ export function drawProfile(
   onSelect: OnModelSelect,
   sc: [number, number],
   curv?: CurvatureSettings,
-  knotLongs = false, // the station editor's "Show knot longitudinals" toggle, shared by all three 2D views
+  // the station editor's "Show knot longitudinals" toggle, shared by all three 2D views. Here it also picks
+  // how the stations below are drawn: whole (construction geometry) with it on, trimmed to the hull with it off
+  knotLongs = false,
 ): void {
   perfBegin(PERF_PROFILE);
   const cols = sampling.columns,
@@ -873,6 +875,31 @@ export function drawProfile(
       for (const c of cs) drawComb2(svg, c, "var(--slider)");
     }
   }
+  // The authored stations in side view, each in its own accent colour. Drawn through the station's own frame,
+  // so each shows the fan's true rake — running inboard shifts x — rather than a plumb line at the station's
+  // x. Cut to the hull, exactly as the mesh cuts it; but whole while the knot-longitudinal overlay is up,
+  // since there the subject is the authored construction geometry the longitudinals loft between, not the
+  // finished surface. Non-interactive, like the overlay it accompanies.
+  const stns = perfStep(
+    "Station sections",
+    () => model.stations.map((st) => sweptSection(model, st.u, 10, !knotLongs)),
+    (rows) => rows.reduce((n, r) => n + r.pts.length, 0),
+  );
+  stns.forEach((row, si) => {
+    if (row.empty) return;
+    svg.append(
+      el("path", {
+        d: poly(row.pts.map((p): Vec2 => [v.mapX(p[0]), v.zScreenP(p[2])])),
+        fill: "none",
+        stroke: stationColor(si),
+        "stroke-width": 2,
+        opacity: 0.85,
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round",
+        "pointer-events": "none",
+      }),
+    );
+  });
   // every station's knots + the loft curve each knot traces, in side view
   if (knotLongs)
     knotOverlayWorld(svg, model, (p) => [v.mapX(p[0]), v.zScreenP(p[2])]);
