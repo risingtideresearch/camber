@@ -1,7 +1,9 @@
 import { useCallback } from "react";
+import { NumberInput } from "polymorph-ui";
 import {
   addStation,
   addStationPoint,
+  moveStationU,
   removeStation,
   setKeelK,
   type Model,
@@ -77,6 +79,13 @@ export function StationView({
     setKeelK(model, activeStation, k);
     bumpModel();
   };
+  // The same edit as dragging the station's handle in the plan view, typed instead: the model clamps u
+  // between the neighbouring stations, so a value past a neighbour lands at the limit and the field
+  // redraws showing where the station actually went.
+  const onU = (u: number) => {
+    moveStationU(model, activeStation, u);
+    bumpModel();
+  };
 
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
@@ -116,6 +125,9 @@ export function StationView({
   };
 
   const keelK = model.stations[activeStation]?.keelK ?? 0;
+  // Shown rounded: dragging the handle in the plan view leaves a full-precision float, and 3 decimals is
+  // already finer than the 0.02 minimum spacing between stations.
+  const u = Math.round((model.stations[activeStation]?.u ?? 0) * 1000) / 1000;
 
   return (
     <div className="card stationcard">
@@ -147,6 +159,13 @@ export function StationView({
           />
           Show knot longitudinals
         </label>
+      </div>
+      <div
+        className="keelrow urow"
+        title="Where the active station sits along the sheer plan, in the plan's own parameter u — 0 at the transom, 1 at the stem. Type a value or drag across the field; the station stops 0.02 short of its neighbours, the same limit a drag on its plan-view handle hits."
+      >
+        <span>Position</span>
+        <NumberInput label="u" value={u} onChange={onU} min={0} max={1} />
       </div>
       <div className="keelrow">
         <label

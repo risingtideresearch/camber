@@ -32,6 +32,48 @@
   opacity: 0.4;
 }
 
+/* the active station's position along the sheer, as a polymorph-ui NumberInput (click to type, drag across
+   it to scrub). polymorph-ui's inputs read their colours and metrics from custom properties defined by its
+   own dark base.css, which this app does not use — so the row supplies them in the editor's light palette,
+   and adds the border a white field needs to read as a field at all. */
+.urow {
+  display: flex;
+  /* baseline, not center: "Position" sits in its own line box, the field in an --item-height one, so
+     centering the two boxes leaves the words a pixel off. On baseline, "Position" follows the field's "u"
+     label — which polymorph-ui in turn aligns with the value. */
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--mut);
+
+  --ui-font-size: 12px;
+  --ui-font-weight: 400;
+  --item-height: 22px;
+  --item-padding: 0 6px;
+  --border-radius: 6px;
+  --input-background-color: #fff;
+  --primary-text-color: var(--ink);
+  --active-background-color: #bfdbfe;
+}
+/* the InputContainer: u is only ever 0…1, so the field stays narrow rather than filling the row.
+   content-box, against this app's global border-box (base.css): polymorph-ui centers the value in the full
+   --item-height and lines its label up with it, so under border-box the border would eat 2px of that height
+   from the value but not from the label, and the label would sit a pixel low. */
+.urow > div {
+  flex: 0 0 92px;
+  box-sizing: content-box;
+  border: 1px solid var(--line);
+}
+.urow [data-part="label"] {
+  color: var(--mut);
+}
+.urow [data-part="input"] {
+  font-weight: 600;
+  /* the app disables text selection while drawing (.app in EditorApp.css); this field is text */
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 /* the tab strip over the per-station editors */
 .tabstrip {
   display: flex;
