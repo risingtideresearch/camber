@@ -104,7 +104,7 @@ svg {
   width: 84px;
 }
 
-/* generic card surface, shared by the side panel and the cut panel */
+/* generic card surface, shared by the station view and the cut panel */
 .card {
   background: var(--panel);
   border: 1px solid var(--line);

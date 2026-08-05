@@ -122,7 +122,7 @@ export function SvgView({
     const H = hRef.current,
       self = selfRef.current!;
     const onResize = (w: number, h: number) => {
-      if (w <= 0 || h <= 0) return; // hidden (e.g. an inactive template tab) — wait until it's shown
+      if (w <= 0 || h <= 0) return; // hidden (e.g. an inactive station tab) — wait until it's shown
       if (mode === "fill") {
         // stretch to fill (non-uniform); never shared, never zoomed / panned
         self.h = h;

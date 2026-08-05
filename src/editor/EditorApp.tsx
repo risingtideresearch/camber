@@ -64,7 +64,7 @@ import { View3d } from "../components/View3d";
 import { PlanView } from "./PlanView";
 import { ProfileView } from "./ProfileView";
 import { useSvgViewSync } from "./svgViewSync";
-import { SidePanel } from "./SidePanel";
+import { StationView } from "./StationView";
 import { CutStationView } from "./CutStationView";
 import { StlControl } from "../components/StlControl";
 import { Area, AreaGroup, AreaSeparator } from "polymorph-ui";
@@ -95,7 +95,7 @@ export function EditorApp() {
   // "Show knot longitudinals": every station's knots and the loft curve each knot index traces. One switch
   // for all three 2D views (plan, profile, and the section editor, whose card carries the checkbox).
   const [knotLongs, setKnotLongs] = useState(false);
-  // Which station the section editor is showing. It lives here, not in the side panel, because two views
+  // Which station the section editor is showing. It lives here, not in the station view, because two views
   // set it: its tab over the section editor, and its own segment in the plan. Clamped on read in case the
   // station it names was removed.
   const [activeStationRaw, setActiveStation] = useState(0);
@@ -514,7 +514,7 @@ export function EditorApp() {
             </Area>
             <AreaSeparator className="areasep" />
             <Area className="area" defaultSize="25%" minSize="200px">
-              <SidePanel
+              <StationView
                 model={model}
                 modelVersion={modelVersion}
                 selection={selection}

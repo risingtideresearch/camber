@@ -1,4 +1,4 @@
-/* labeled slider control ("WL", "Rake", "Keel", …). Shared with the keel row in SidePanel, which
+/* labeled slider control ("WL", "Rake", "Keel", …). Shared with the keel row in StationView, which
    adds its own layout overrides on top of this base. */
 .ctl {
   display: inline-flex;

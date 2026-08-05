@@ -22,7 +22,7 @@ interface StationEditorProps {
   setTool: (t: Tool) => void;
   bumpModel: () => void;
   curvature: CurvatureSettings;
-  knotLongs: boolean; // the side panel's "Show knot longitudinals" toggle
+  knotLongs: boolean; // the station view's "Show knot longitudinals" toggle
 }
 
 export function StationEditor({

@@ -4,7 +4,7 @@ import { stationColor } from "../core/colors";
 // The tab strip over the per-station editors: one tab per station (its accent color; the active one carries
 // a ✕ to remove it), then a "+" to add a station (disabled at the palette cap of 7). Tabs are ordered by the
 // stations' own position along the hull, so "S1" is always the aftmost.
-interface SideTabsProps {
+interface StationTabsProps {
   model: Model;
   activeTab: number;
   onSelectTab: (t: number) => void;
@@ -12,13 +12,13 @@ interface SideTabsProps {
   onRemoveStation: (si: number) => void;
 }
 
-export function SideTabs({
+export function StationTabs({
   model,
   activeTab,
   onSelectTab,
   onAddStation,
   onRemoveStation,
-}: SideTabsProps) {
+}: StationTabsProps) {
   const K = model.stations.length;
   return (
     <div className="tabstrip">
@@ -27,7 +27,7 @@ export function SideTabs({
         return (
           <button
             key={j}
-            className={"tab tpltab" + (active ? " active" : "")}
+            className={"tab stationtab" + (active ? " active" : "")}
             style={{ ["--tab" as string]: stationColor(j) }}
             title={`Station ${j + 1} — at u = ${st.u.toFixed(3)} along the sheer plan`}
             onClick={() => onSelectTab(j)}

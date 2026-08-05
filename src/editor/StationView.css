@@ -1,13 +1,13 @@
-/* the section-template editor card. */
-.sidecard {
+/* the station editor card. */
+.stationcard {
   flex: 1 1 0; /* fill the resizable Area */
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
-/* the editor region takes the leftover height between the header and footer; the per-template pan/zoom views
+/* the editor region takes the leftover height between the header and footer; the per-station pan/zoom views
    are stacked (absolutely) on top of each other, only the active one shown. */
-.sidebody {
+.stationbody {
   flex: 1 1 0;
   min-height: 0;
   position: relative;
@@ -17,7 +17,7 @@
   inset: 0;
 }
 
-/* keel-knuckle slider for the active template, pinned under the square */
+/* keel-knuckle slider for the active station, pinned under the square */
 .keelrow {
   flex: 0 0 auto;
   margin-top: 8px;
@@ -36,7 +36,7 @@
   opacity: 0.4;
 }
 
-/* the tab strip over the per-template editors */
+/* the tab strip over the per-station editors */
 .tabstrip {
   display: flex;
   flex-wrap: wrap;
@@ -60,7 +60,7 @@
 .tab:hover {
   background: #f1f5f9;
 }
-.tab.tpltab {
+.tab.stationtab {
   color: var(--tab);
   font-weight: 600;
 }

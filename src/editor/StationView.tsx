@@ -2,14 +2,14 @@ import { addStation, removeStation, setKeelK, type Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import type { CurvatureSettings } from "../core/comb";
 import type { Tool } from "./types";
-import { SideTabs } from "./SideTabs";
+import { StationTabs } from "./StationTabs";
 import { StationEditor } from "./StationEditor";
-import "./SidePanel.css";
+import "./StationView.css";
 
 // The section editor card: the tab strip, the stacked per-station editors (only the active one shown), and
 // the keel-knuckle slider for the active station. Which station is active is owned above, since the plan
 // view activates one too; everything else flows from the model passed in from above.
-interface SidePanelProps {
+interface StationViewProps {
   model: Model;
   modelVersion: number;
   selection: ModelSelection;
@@ -25,7 +25,7 @@ interface SidePanelProps {
   setActiveStation: (si: number) => void;
 }
 
-export function SidePanel({
+export function StationView({
   model,
   modelVersion,
   selection,
@@ -38,7 +38,7 @@ export function SidePanel({
   setKnotLongs,
   activeStation,
   setActiveStation,
-}: SidePanelProps) {
+}: StationViewProps) {
   const K = model.stations.length;
 
   // A station is added AT THE CUT: it needs a definite position along the sheer (v1's templates had none),
@@ -67,15 +67,15 @@ export function SidePanel({
   const keelK = model.stations[activeStation]?.keelK ?? 0;
 
   return (
-    <div className="card sidecard">
-      <SideTabs
+    <div className="card stationcard">
+      <StationTabs
         model={model}
         activeTab={activeStation}
         onSelectTab={setActiveStation}
         onAddStation={onAddStation}
         onRemoveStation={onRemoveStation}
       />
-      <div className="sidebody">
+      <div className="stationbody">
         {model.stations.map((_, si) => (
           <StationEditor
             key={si}
