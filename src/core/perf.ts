@@ -38,9 +38,11 @@ export const defaultPerf = (): PerfSettings => ({
   girthSteps: PERF_R_DEFAULT,
 });
 
-// The pass names. Exported where two modules must agree on one: mesh.ts reports the hull's sub-steps into
-// the 3D view's pass, which draw3d opens. Each 2D view names its own on the way in.
+// The pass names. Exported where two modules must agree on one: mesh.ts reports sub-steps into two passes it
+// does not open — the hull rebuild's (the 3D view opens it) and the shared sampling's (EditorApp does, around
+// the one `computeHullSampling` every view reads). Each 2D view names its own on the way in.
 export const PERF_SECTIONS = "Shared sections";
+export const PERF_SAMPLING = "Hull sampling";
 export const PERF_PLAN = "Plan view";
 export const PERF_PROFILE = "Profile view";
 export const PERF_CUT = "Cut view";
@@ -166,9 +168,14 @@ export function perfAdd(
   n: number | null = null,
   unit = "pts",
 ): void {
-  if (!on || scope !== group) return;
+  if (!perfRecording(group)) return;
   write(group, label, ms, n, unit);
 }
+
+// Would a `perfAdd` to `group` be kept — is its pass the open one? The same gate, exposed for the caller whose
+// COUNTS cost something to work out: the hull sampling's sub-steps walk what they just built to count its
+// points, and that walk must not run when nothing would record it (everything else hands perfAdd a `.length`).
+export const perfRecording = (group: string): boolean => on && scope === group;
 
 function write(
   group: string,

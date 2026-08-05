@@ -24,7 +24,13 @@
 //     lines plan, hydrostatics, and STL/preview are all built from it. See the block above `HullSample`.
 
 import { clamp, mirrorRow, V, type Vec2, type Vec3 } from "./math";
-import { perfAdd, perfMark, PERF_MESH } from "./perf";
+import {
+  perfAdd,
+  perfMark,
+  perfRecording,
+  PERF_MESH,
+  PERF_SAMPLING,
+} from "./perf";
 import {
   bisectRoot,
   frameAt,
@@ -299,6 +305,20 @@ export function computeHullSampling(
   numSections: number,
   numLongitudinalsPerKnot: number,
 ): HullSampling {
+  // The sub-steps of the readout's "Hull sampling" pass, in the order the phases below run: each call closes
+  // the span since the previous one and reports it. Timed with a cursor rather than by wrapping each phase in
+  // a closure because the phases share this function's locals wholesale. The count is a THUNK — most of them
+  // walk what the phase just built — and nothing is timed or counted unless the sampling's own pass is the
+  // open one: hydro, the STL writer and the thumbnails call this outside it, and the hull's crossings are
+  // shared and CACHED, so whichever phase asks for one first is the one that pays for its bisection.
+  let tPhase = perfMark();
+  const phase = (label: string, count?: () => number, unit?: string): void => {
+    if (!perfRecording(PERF_SAMPLING)) return;
+    const t = performance.now();
+    perfAdd(PERF_SAMPLING, label, t - tPhase, count?.() ?? null, unit);
+    tPhase = t;
+  };
+
   const N = Math.max(1, Math.round(numSections)),
     R = Math.max(1, Math.round(numLongitudinalsPerKnot)),
     S = model.loft.S,
@@ -352,6 +372,7 @@ export function computeHullSampling(
     secsHi.push(uHi === u ? sec : sectionAt(model, uHi));
     uSpans.push(uHi - uLo);
   }
+  phase("Frames + sections", () => N + 1, "cols");
 
   // ---- the surface normal, straight off the sheet f(u,v) = sectionWorld(frame(u), section(u), v) ----
   // ∂f/∂v is the section's OWN exact tangent (an exact quadratic Bézier derivative), rotated into the world by
@@ -438,12 +459,14 @@ export function computeHullSampling(
     }
     sheet.push(col);
   }
+  phase("Sheet nodes (+ normals)", () => (N + 1) * (M + 1));
   // every constraint at every node — the marched trims' sign fields — and their min, the hull's keep test
   const cv = cons.map((c) => sheet.map((col) => col.map((s) => c(s.pos))));
   const kv = sheet.map((col, i) =>
     col.map((_, k) => Math.min(cv[0][i][k], cv[1][i][k], cv[2][i][k])),
   );
   const inside = (i: number, k: number): boolean => kv[i][k] >= 0;
+  phase("Keep fields (3 trims)", () => (N + 1) * (M + 1));
 
   // A trim/grid-edge crossing, converged by bisection on ONE constraint and CACHED so the two cells that meet
   // on the edge — and the trimmed boundary curves, and the transom panel — share the identical HullSample.
@@ -610,6 +633,7 @@ export function computeHullSampling(
     }
     columns.push({ pts, i, keel, transom });
   }
+  phase("Trimmed columns", () => columns.reduce((n, c) => n + c.pts.length, 0));
 
   // (3) marched raw trims: each constraint's zero contour marched over the WHOLE sheet — every cell, both
   // edge directions — ignoring the other trims. The per-column scan this replaces looked only at COLUMN
@@ -689,6 +713,9 @@ export function computeHullSampling(
       if (key(run[0]) > key(run[run.length - 1])) run.reverse();
     trims[ci].sort((r1, r2) => key(r1[0]) - key(r2[0]));
   }
+  phase("Marching the trims", () =>
+    trims.reduce((n, runs) => n + runs.reduce((m, r) => m + r.length, 0), 0),
+  );
 
   // (4) THE CORNERS: the points where two trims cross each other — the head (sheer ∩ transom) and the foot
   // (centerline ∩ transom) at the two ends of the transom edge, and the STEM (sheer ∩ centerline) at the tip of
@@ -755,6 +782,7 @@ export function computeHullSampling(
   findCorners(0, 1); // the stem: the bow's tip, where the sheer trim runs into the centerline
   findCorners(0, 2); // the head: the transom's top, where the sheer edge crosses the plane
   findCorners(1, 2); // the foot: the transom's bottom, where the keel crosses the plane
+  phase("Trim corners", () => corners.length);
 
   // (5) tessellate the interior cell by cell: a whole quad where all four corners survive, a marching-squares
   // polygon on the boundary. The boundary polygons are held back until the corners have been spliced into
@@ -805,6 +833,11 @@ export function computeHullSampling(
       }
       polys.push(poly);
     }
+  phase(
+    "Tessellating the cells",
+    () => hullQuads.length + polys.length,
+    "cells",
+  );
 
   // Splice each corner into the mesh. Where two trims cross, the marching cuts the tip off with a BEVEL: one
   // polygon edge running straight from a crossing of the first trim to a crossing of the second, whatever
@@ -835,9 +868,11 @@ export function computeHullSampling(
       }
     if (into) into.splice(at, 0, c.s); // between the bevel's two ends, so the winding is unchanged
   }
+  phase("Splicing the corners", () => corners.length);
   for (const poly of polys)
     for (let t = 1; t + 1 < poly.length; t++)
       hullTris.push([poly[0], poly[t], poly[t + 1]]);
+  phase("Fanning the polygons", () => hullTris.length, "tris");
 
   // (6) the trimmed boundary curves, assembled from every boundary crossing the mesh actually used — the
   // columns' ends AND the row-edge crossings that carry the aft edge near the head — plus the corners the skin
@@ -889,6 +924,10 @@ export function computeHullSampling(
         }
       if (into) into.splice(at, 0, c.s);
     }
+  phase(
+    "Boundary curves",
+    () => hullSheer.length + hullCenterline.length + hullTransom.length,
+  );
 
   // (7) and the LEFTOVER of each marched trim: the spans of it that lie outside one of the other two, which is
   // the whole curve minus the run that stands as the hull's own edge. It is read straight off the drawable
@@ -914,6 +953,12 @@ export function computeHullSampling(
     }
     return runs;
   });
+  phase("Leftover trim runs", () =>
+    leftovers.reduce(
+      (n, runs) => n + runs.reduce((m, r) => m + r.length, 0),
+      0,
+    ),
+  );
 
   return {
     R,

@@ -57,6 +57,7 @@ import {
   perfStep,
   setPerfOn,
   PERF_SECTIONS,
+  PERF_SAMPLING,
   type PerfSettings,
 } from "../core/perf";
 import { DesignBar } from "./DesignBar";
@@ -165,15 +166,17 @@ export function EditorApp() {
   // views' draw effects) whenever the model or that resolution changes, so every view sees a prepared model
   // and the same lattice — nothing re-sweeps the hull for itself. The 2D strips read its trimmedSections for
   // the outline, the 3D view stitches them into the surface.
+  //
+  // Two passes, not one: the sampling is the single most expensive thing an edit sets off and it has phases of
+  // its own worth reading apart (mesh.ts reports them into PERF_SAMPLING, which is why the pass is opened here
+  // rather than timed as one step of the shared work).
   const sampling = useMemo<HullSampling>(() => {
     perfBegin(PERF_SECTIONS);
     perfStep("prepare (derived curves)", () => prepare(model));
-    const out = perfStep(
-      "Hull sampling",
-      () => computeHullSampling(model, perf.numSections, perf.girthSteps),
-      (s) => s.columns.reduce((n, c) => n + c.pts.length, 0),
-    );
     perfEnd(PERF_SECTIONS);
+    perfBegin(PERF_SAMPLING);
+    const out = computeHullSampling(model, perf.numSections, perf.girthSteps);
+    perfEnd(PERF_SAMPLING);
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, modelVersion, perf.numSections, perf.girthSteps]);
