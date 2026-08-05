@@ -18,6 +18,13 @@ import {
 import type { LinesPlanCurves, TrimPlanCurves } from "../../core/hullLines3d";
 import { loa, type Model } from "../../core/model";
 import type { Vec3 } from "../../core/math";
+import {
+  perfAdd,
+  perfBegin,
+  perfEnd,
+  perfMark,
+  PERF_MESH,
+} from "../../core/perf";
 
 // on-screen (CSS-px) HALF-widths of the ribbons below, so they read at a constant screen size regardless of
 // zoom / framing — like the old SVG overlay's non-scaling strokes. Matches its stroke weights (curve 2.2,
@@ -86,7 +93,15 @@ export function CameraFacingCurves({
   const cam = useMemo(() => createSharedRibbonCamera(), []);
   useFrame(({ camera, size }) => updateRibbonCamera(cam, camera, size.height));
 
+  // The two builds below are the last of the 3D view's own work, and they run in this child rather than in
+  // <Scene>, i.e. after the pass it opened has already closed. They report into it all the same: a pass
+  // opened a second time in the same frame adds to it (core/perf), so "3D view" reads as the whole rebuild
+  // — the geometry AND the overlay it is drawn under — rather than as whatever part of it Scene happened to
+  // hold. Timed with perfMark / perfAdd rather than perfStep because what is being timed is the body of a
+  // useMemo, which there is no closure to wrap.
   const jobs = useMemo(() => {
+    perfBegin(PERF_MESH);
+    const t0 = perfMark();
     const out: Job[] = [],
       len = Math.max(loa(model), 1e-6);
     if (curvature)
@@ -187,10 +202,14 @@ export function CameraFacingCurves({
           bias: GUIDE_BIAS_F * len,
         });
     }
+    perfAdd(PERF_MESH, "Overlay ribbons", perfMark() - t0, out.length, "jobs");
+    perfEnd(PERF_MESH);
     return out;
   }, [model, guideIdx, curvature, lines, trims, stations]);
 
   const meshes = useMemo(() => {
+    perfBegin(PERF_MESH);
+    const t0 = perfMark();
     const out = jobs.map((job) => {
       const a = ribbonAttributes(job.polylines),
         geometry = new THREE.BufferGeometry();
@@ -247,6 +266,17 @@ export function CameraFacingCurves({
         });
       }
     }
+    perfAdd(
+      PERF_MESH,
+      "Ribbon buffers",
+      perfMark() - t0,
+      out.reduce(
+        (n, m) => n + (m.geometry.getAttribute("position")?.count ?? 0),
+        0,
+      ),
+      "verts",
+    );
+    perfEnd(PERF_MESH);
     return out;
   }, [jobs, cam, stations, model]);
 

@@ -155,10 +155,10 @@ export function Scene({
 
   // The hull's own tessellation (the lattice every shading mode shares — mesh.ts) plus the curvature-comb
   // curves and the lines-plan curves, rebuilt together in one pass whenever the model, the line toggles, the
-  // Sheet or Mesh toggle, the shared sampling, or the curvature settings change. Bundled into ONE
-  // perfBegin/perfEnd bracket (matching the old orchestration) rather than split across independent useMemos:
-  // perf.ts's snapshot only keeps the steps from a group's MOST RECENT pass, so two separate brackets in the
-  // same render would silently drop whichever ran first from the Performance panel. Deliberately not keyed on
+  // Sheet or Mesh toggle, the shared sampling, or the curvature settings change. One perfBegin/perfEnd
+  // bracket for the lot, which is how the rebuild reads: the overlay ribbons in CameraFacingCurves open the
+  // same pass again further down the tree and add to it (perf.ts keys a pass's tallies to the FRAME, so
+  // reopening one accumulates rather than replacing it). Deliberately not keyed on
   // `shading` (which changes nothing here — only which material the same geometry is drawn with) nor on
   // `selection` — the guide ribbon lives independently in CameraFacingCurves, so either alone skips this
   // rebuild for free.

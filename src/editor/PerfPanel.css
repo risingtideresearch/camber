@@ -26,9 +26,21 @@
   color: var(--mut);
 }
 
+/* the live rate, beside the frame time it is the reciprocal of — the number the complaint is usually
+   phrased in ("it only redraws twice a second") */
+.perffps {
+  color: var(--mut);
+  font-weight: 500;
+}
+
 /* one view's pass: its own total, then the steps inside it */
 .perfgroup {
   margin-top: 12px;
+}
+/* the frame is not one of the passes but the whole of one edit, so it leads and is set apart from them */
+.perfframe {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
 }
 .perfgroup:first-child {
   margin-top: 0;

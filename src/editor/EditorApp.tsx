@@ -54,6 +54,7 @@ import {
   defaultPerf,
   perfBegin,
   perfEnd,
+  perfFrame,
   perfStep,
   setPerfOn,
   PERF_SECTIONS,
@@ -82,7 +83,13 @@ export function EditorApp() {
     return m;
   });
   const [modelVersion, setModelVersion] = useState(0);
-  const bumpModel = useCallback(() => setModelVersion((v) => v + 1), []);
+  // Every edit goes through here, so this is where the performance readout's FRAME starts: the redraw it sets
+  // off costs far more than the passes inside it (React's own render and commit, three's reconciliation, the
+  // collector), and the frame is what measures the whole of it — see core/perf.
+  const bumpModel = useCallback(() => {
+    perfFrame();
+    setModelVersion((v) => v + 1);
+  }, []);
   // the views are mounted only once boot has settled the model, so nothing draws the default hull before a
   // URL design (?id=) finishes loading — the columns are sized by flex/layout, so mounting causes no reflow.
   const [booted, setBooted] = useState(false);
