@@ -5,16 +5,12 @@
   display: flex;
   flex-direction: column;
 }
-/* the editor region takes the leftover height between the header and footer; the per-station pan/zoom views
-   are stacked (absolutely) on top of each other, only the active one shown. */
+/* the editor region takes the leftover height between the tab strip and the footer controls; the one
+   pan/zoom view fills it, drawing whichever station is active. */
 .stationbody {
   flex: 1 1 0;
   min-height: 0;
   position: relative;
-}
-.stationlayer {
-  position: absolute;
-  inset: 0;
 }
 
 /* keel-knuckle slider for the active station, pinned under the square */

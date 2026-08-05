@@ -1,14 +1,28 @@
-import { addStation, removeStation, setKeelK, type Model } from "../core/model";
+import { useCallback } from "react";
+import {
+  addStation,
+  addStationPoint,
+  removeStation,
+  setKeelK,
+  type Model,
+} from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import type { CurvatureSettings } from "../core/comb";
+import { drawStation } from "../core/draw2d";
+import { viewOf, STW, STH } from "../core/view";
+import { SvgView } from "./SvgView";
 import type { Tool } from "./types";
 import { StationTabs } from "./StationTabs";
-import { StationEditor } from "./StationEditor";
 import "./StationView.css";
 
-// The section editor card: the tab strip, the stacked per-station editors (only the active one shown), and
-// the keel-knuckle slider for the active station. Which station is active is owned above, since the plan
-// view activates one too; everything else flows from the model passed in from above.
+// The section editor card: the tab strip, the section editor for the active station, and the keel-knuckle
+// slider for it. Which station is active is owned above, since the plan view activates one too; everything
+// else flows from the model passed in from above.
+//
+// One SvgView draws whichever station is active — switching tabs only changes what `draw` closes over, so
+// the pan / zoom carries across tabs (sections stay comparable) and the inactive stations cost nothing.
+// In "add" mode a click inserts a section point (into every station, index-aligned); in "select" mode an
+// empty click clears the selection.
 interface StationViewProps {
   model: Model;
   modelVersion: number;
@@ -64,6 +78,43 @@ export function StationView({
     bumpModel();
   };
 
+  const draw = useCallback(
+    (g: SVGGElement, sx: number, sy: number) => {
+      drawStation(
+        model,
+        selection,
+        g,
+        activeStation,
+        onSelect,
+        [sx, sy],
+        curvature,
+        knotLongs,
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      model,
+      modelVersion,
+      selection,
+      activeStation,
+      onSelect,
+      curvature,
+      knotLongs,
+    ],
+  );
+
+  const onBackgroundClick = (vx: number, vy: number) => {
+    if (tool === "add") {
+      const v = viewOf(model);
+      const idx = addStationPoint(model, activeStation, v.invN(vx), v.invZ(vy));
+      setTool("select");
+      onSelect({ tgt: "station", idx, si: activeStation });
+      bumpModel();
+    } else {
+      onSelect(null);
+    }
+  };
+
   const keelK = model.stations[activeStation]?.keelK ?? 0;
 
   return (
@@ -76,22 +127,13 @@ export function StationView({
         onRemoveStation={onRemoveStation}
       />
       <div className="stationbody">
-        {model.stations.map((_, si) => (
-          <StationEditor
-            key={si}
-            model={model}
-            modelVersion={modelVersion}
-            selection={selection}
-            si={si}
-            active={si === activeStation}
-            tool={tool}
-            onSelect={onSelect}
-            setTool={setTool}
-            bumpModel={bumpModel}
-            curvature={curvature}
-            knotLongs={knotLongs}
-          />
-        ))}
+        <SvgView
+          contentWidth={STW}
+          contentHeight={STH}
+          draw={draw}
+          cursor={tool === "add" ? "crosshair" : "default"}
+          onBackgroundClick={onBackgroundClick}
+        />
       </div>
       <div className="keelrow">
         <label
