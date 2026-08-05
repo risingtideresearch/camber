@@ -158,7 +158,8 @@ export function Scene({
   // Sheet or Mesh toggle, the shared sampling, or the curvature settings change. One perfBegin/perfEnd
   // bracket for the lot, which is how the rebuild reads: the overlay ribbons in CameraFacingCurves open the
   // same pass again further down the tree and add to it (perf.ts keys a pass's tallies to the FRAME, so
-  // reopening one accumulates rather than replacing it). Deliberately not keyed on
+  // reopening one accumulates rather than replacing it). Each bracket names its own part of the pass, so the
+  // three of them read as one rebuild in three places rather than as three rebuilds. Deliberately not keyed on
   // `shading` (which changes nothing here — only which material the same geometry is drawn with) nor on
   // `selection` — the guide ribbon lives independently in CameraFacingCurves, so either alone skips this
   // rebuild for free.
@@ -171,7 +172,7 @@ export function Scene({
     trimCurves,
     stationLines,
   } = useMemo(() => {
-    perfBegin(PERF_MESH);
+    perfBegin(PERF_MESH, "hull geometry");
     let hullGeometry: THREE.BufferGeometry | null = null,
       transomGeometry: THREE.BufferGeometry | null = null,
       wireGeometry: THREE.BufferGeometry | null = null,

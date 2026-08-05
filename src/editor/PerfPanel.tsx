@@ -70,14 +70,16 @@ export function PerfPanel({ settings }: PerfPanelProps) {
               <div className="perfghead">
                 <span>
                   {g.title}
-                  {/* a pass opened more than once in one frame — the same view redrawn twice for one edit,
-                      which is what StrictMode's double-invoked useMemo does to the two expensive ones */}
-                  {g.calls > 1 && (
+                  {/* the same part of a pass opened more than once in one frame — the same view redrawn twice
+                      for one edit, which is what StrictMode's double-invoked useMemo does to the two
+                      expensive ones. A pass spread over several brackets does not count: the 3D view's three
+                      are one rebuild, not three of it (core/perf) */}
+                  {g.repeats > 1 && (
                     <span
                       className="perfcalls"
-                      title={`this pass ran ${g.calls} times in one frame; the time is all of them`}
+                      title={`this pass's work ran ${g.repeats} times over in one frame; the time is all of them`}
                     >
-                      {" ×" + g.calls}
+                      {" ×" + g.repeats}
                     </span>
                   )}
                 </span>

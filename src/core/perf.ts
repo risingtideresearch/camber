@@ -17,7 +17,14 @@
 // barely half of one: StrictMode double-invokes every useMemo, so the hull sampling and the 3D rebuild each
 // run TWICE per edit. So the frame is measured end to end (`perfFrame`, called where the edit happens) and
 // reports the remainder as a step of its own, and every pass is keyed to the frame it ran in — a pass opened
-// twice in one frame adds up and says ×2, instead of the second opening quietly replacing the first.
+// again in one frame adds up, instead of the second opening quietly replacing the first.
+//
+// A pass gets opened more than once for two entirely different reasons, and the readout has to tell them
+// apart. The 3D view's rebuild is spread over three useMemos down its subtree, so three brackets are simply
+// what one rebuild is made of; StrictMode running each of those memos twice is the finding. So an opening
+// names its PART of the pass (`perfBegin`'s second argument) and the ×N badge reports the most openings any
+// ONE part had — 1 however many brackets the pass is spread over, 2 when StrictMode doubles them. Nothing has
+// to declare how many brackets to expect, which no constant could keep true anyway.
 //
 // Recording is OFF unless the toggle is on, and every entry point returns immediately when it is: this sits
 // in the hot path — sweptSection alone runs hundreds of times per redraw — so it must cost nothing unused.
@@ -72,7 +79,9 @@ export interface PerfGroup {
   title: string;
   ms: number;
   avg: number;
-  calls: number; // how many times the pass was opened in that frame — 2 is the finding, not a detail
+  // How many times the same work ran in that frame: the most openings any ONE part of the pass had (see
+  // `perfBegin`). 1 however many brackets the pass is spread over; 2 is the finding, not a detail.
+  repeats: number;
   metrics: Metric[];
 }
 export interface PerfSnapshot {
@@ -99,7 +108,7 @@ interface Step extends Tally {
 interface Pass extends Tally {
   title: string;
   steps: Map<string, Step>;
-  opens: number; // how many times the pass was opened in that frame
+  parts: Map<string, number>; // per part of the pass, how many times that part opened it in that frame
   t0: number;
 }
 
@@ -188,7 +197,6 @@ function closeFrame(end: number): void {
   if (framePasses > 0) {
     const g = passOf(PERF_FRAME);
     g.frame = frame;
-    g.opens = 1;
     g.ms = end - frameT0;
     setStep(g, F_PASSES, framePasses);
     setStep(g, F_REST, Math.max(g.ms - framePasses, 0));
@@ -216,17 +224,25 @@ function setStep(g: Pass, label: string, ms: number): void {
 // gated perfAdd discards anyway)
 export const perfMark = (): number => (on ? performance.now() : 0);
 
-export function perfBegin(group: string): void {
+// Open a pass. `part` names WHICH bracket of it this is, for a pass that is spread over several: the 3D view
+// opens one here for the hull geometry and two more further down its subtree for the overlay ribbons, and
+// unnamed they would be indistinguishable from one rebuild that ran three times. A pass opened from a single
+// place wants no name at all. The names only have to be distinct from each other WITHIN their own pass —
+// nothing matches them across modules, and two that collide cost a ×2 that isn't there rather than hiding a
+// repeat that is.
+export function perfBegin(group: string, part = ""): void {
   if (!on) return;
   // a redraw nobody announced — a zoom, a display toggle, the first paint — is a frame of its own
   if (!frameOpen) perfFrame();
   const g = passOf(group);
   if (g.frame !== frame) {
-    // the first opening of this frame starts the pass's tallies over; a second one adds to them
+    // the first opening of this frame starts the pass's tallies over; a later one adds to them
     g.frame = frame;
     g.ms = 0;
-    g.opens = 0;
+    g.parts.clear();
   }
+  // counted on the way in, where the name is: perfEnd is handed the pass, not the part of it
+  g.parts.set(part, (g.parts.get(part) ?? 0) + 1);
   g.t0 = performance.now();
   scope = group;
 }
@@ -238,7 +254,6 @@ export function perfEnd(group: string): void {
   frameLast = performance.now();
   const ms = frameLast - g.t0;
   g.ms += ms;
-  g.opens++;
   framePasses += ms;
   scope = null;
   arm(); // the frame reaches at least this far; if nothing follows, it ends here
@@ -306,7 +321,7 @@ const newTally = (): Tally => ({ ms: 0, avg: NaN, frame: -1 });
 function passOf(title: string): Pass {
   let g = groups.get(title);
   if (!g) {
-    g = { ...newTally(), title, steps: new Map(), opens: 0, t0: 0 };
+    g = { ...newTally(), title, steps: new Map(), parts: new Map(), t0: 0 };
     groups.set(title, g);
   }
   return g;
@@ -364,11 +379,15 @@ function build(): PerfSnapshot {
           n: s.n,
           unit: s.unit,
         });
+    // the badge is about work redone, not about how many brackets the pass is spread over, so it is the
+    // largest of the parts' counts rather than their sum (and 1 for the frame, which has no parts)
+    let repeats = 1;
+    for (const n of g.parts.values()) if (n > repeats) repeats = n;
     const view = {
       title: g.title,
       ms: g.ms,
       avg: g.avg,
-      calls: g.opens,
+      repeats,
       metrics,
     };
     if (g.title === PERF_FRAME) frameGroup = view;

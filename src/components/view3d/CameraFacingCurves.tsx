@@ -95,12 +95,13 @@ export function CameraFacingCurves({
 
   // The two builds below are the last of the 3D view's own work, and they run in this child rather than in
   // <Scene>, i.e. after the pass it opened has already closed. They report into it all the same: a pass
-  // opened a second time in the same frame adds to it (core/perf), so "3D view" reads as the whole rebuild
-  // — the geometry AND the overlay it is drawn under — rather than as whatever part of it Scene happened to
-  // hold. Timed with perfMark / perfAdd rather than perfStep because what is being timed is the body of a
-  // useMemo, which there is no closure to wrap.
+  // opened again in the same frame adds to it (core/perf), so "3D view" reads as the whole rebuild — the
+  // geometry AND the overlay it is drawn under — rather than as whatever part of it Scene happened to hold.
+  // Each names the part of the pass it is, so these two and Scene's do not read as the rebuild running three
+  // times over. Timed with perfMark / perfAdd rather than perfStep because what is being timed is the body of
+  // a useMemo, which there is no closure to wrap.
   const jobs = useMemo(() => {
-    perfBegin(PERF_MESH);
+    perfBegin(PERF_MESH, "overlay ribbons");
     const t0 = perfMark();
     const out: Job[] = [],
       len = Math.max(loa(model), 1e-6);
@@ -208,7 +209,7 @@ export function CameraFacingCurves({
   }, [model, guideIdx, curvature, lines, trims, stations]);
 
   const meshes = useMemo(() => {
-    perfBegin(PERF_MESH);
+    perfBegin(PERF_MESH, "ribbon buffers");
     const t0 = perfMark();
     const out = jobs.map((job) => {
       const a = ribbonAttributes(job.polylines),
