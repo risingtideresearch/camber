@@ -43,7 +43,7 @@ export const defaultPerf = (): PerfSettings => ({
 export const PERF_SECTIONS = "Shared sections";
 export const PERF_PLAN = "Plan view";
 export const PERF_PROFILE = "Profile view";
-export const PERF_CUT = "Cut station";
+export const PERF_CUT = "Cut view";
 export const PERF_MESH = "3D view";
 export const PERF_STATION = "Station view";
 
