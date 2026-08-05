@@ -1221,20 +1221,67 @@ export function waterlineStats(
   return { draft, beam, wet };
 }
 
-// the design-waterline contour in plan (x, y): where each column crosses worldZ = −waterline
-export function dwlContour(model: Model, N = 160): [number, number][][] {
+// The design-waterline contour in plan (x, y): where the trimmed hull crosses worldZ = −waterline, in runs.
+//
+// Read off the SHARED sampling rather than re-swept. The waterline is not a curve of its own — it is a level
+// set of the surface every other line in the plan strip is already drawn from — so it is found the way the 3D
+// view finds it (hullLines3d.ts): walk what has already been sampled, and where the immersion changes sign,
+// split the chord between the two samples that straddle it. One linear step over points that exist, against
+// a converged `dwlPointAt` per column, which re-swept the hull — frame, section, and the trimmed span's
+// bisections — at 161 fresh u values it shared with nothing, and so cost more than the whole rest of the view.
+//
+// Marched down the sampling's own columns, so the footprint lands on the same u lattice as the outline, the
+// max-beam line and the transom footprint beside it: one point per column, the first crossing from the sheer
+// down, which is the single-valued reading of a column the converged evaluator gave too. Runs, not one curve
+// — a column is dropped wherever it is wholly dry or wholly wet, and the footprint breaks there.
+//
+// `dwlPointAt` stays for the curvature comb, which second-differences the curve: that needs every sample
+// converged, since an interpolated one carries O(h²) placement noise a second difference has no answer to.
+export function dwlContour(
+  model: Model,
+  sampling: HullSampling,
+): [number, number][][] {
+  // the immersion field with the rake's sin/cos lifted out — it runs once per sample of every column, and
+  // those two trig calls would otherwise cost more than the whole march put together (the same reason the
+  // lines plan's own march hoists them)
+  const sr = Math.sin(model.deckRake),
+    cr = Math.cos(model.deckRake),
+    imm = (p: Vec3): number => -model.waterline - (p[0] * sr + p[2] * cr);
   const runs: [number, number][][] = [];
   let run: [number, number][] = [];
-  for (let i = 0; i <= N; i++) {
-    const p = dwlPointAt(model, i / N);
-    if (p) run.push([p[0], p[1]]);
-    else {
-      if (run.length > 1) runs.push(run);
-      run = [];
-    }
+  const flush = (): void => {
+    if (run.length > 1) runs.push(run);
+    run = [];
+  };
+  for (const c of sampling.columns) {
+    const hit = dwlInColumn(c.pts, imm);
+    if (hit) run.push(hit);
+    else flush();
   }
-  if (run.length > 1) runs.push(run);
+  flush();
   return runs;
+}
+
+// The first sign change of the immersion down one trimmed column (its points run sheer → keel/transom), as
+// the (x, y) of the crossing on the chord between the two samples that straddle it. Null where the column is
+// empty, wholly dry, or wholly wet — none of which the footprint draws through.
+function dwlInColumn(
+  pts: HullSample[],
+  imm: (p: Vec3) => number,
+): [number, number] | null {
+  if (pts.length < 2) return null;
+  let pg = imm(pts[0].pos);
+  for (let k = 1; k < pts.length; k++) {
+    const g = imm(pts[k].pos);
+    if (pg < 0 !== g < 0 && pg !== g) {
+      const a = pts[k - 1].pos,
+        b = pts[k].pos,
+        t = pg / (pg - g);
+      return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    }
+    pg = g;
+  }
+  return null;
 }
 
 // re-exported so callers building sections don't need both modules

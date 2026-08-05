@@ -527,8 +527,14 @@ export function drawPlan(
       }),
     );
   }
-  // design-waterline footprint (where the hull meets the WL plane)
-  const dwl = perfStep("Waterline footprint", () => dwlContour(model), runPts);
+  // Design-waterline footprint (where the hull meets the WL plane). Marched down the columns of the same
+  // sampling the outline, the max-beam line and the transom footprint above are read from, so it is a fourth
+  // reading of one surface rather than a second, independently swept approximation of it.
+  const dwl = perfStep(
+    "Waterline footprint",
+    () => dwlContour(model, sampling),
+    runPts,
+  );
   for (const run of dwl) {
     svg.append(
       el("path", {
