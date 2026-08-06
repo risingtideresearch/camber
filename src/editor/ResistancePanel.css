@@ -1,0 +1,151 @@
+/* The resistance card (src/editor/ResistancePanel): the Holtrop/Savitsky blend with Michell's wave curve over
+   it, in its own resizable column like the wave pattern and the performance readout. Same reasoning as those:
+   it is read WHILE the hull is being edited elsewhere, so it never floats over another view. */
+.rescard {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--ink);
+  overflow-y: auto;
+}
+.rescard .cap {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.resctl {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.resctl .ctl {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.reswater {
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+/* The Michell toggle gets a row to itself: it is the one control here that starts real work, and its note
+   carries either the reason it is off or the progress of the sweep it started. */
+.resmich {
+  flex: 1 1 auto;
+  gap: 5px;
+  min-width: 0;
+}
+.ctlnote {
+  margin-left: auto;
+  color: var(--mut);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.resfig {
+  flex: 0 0 auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+  line-height: 0;
+}
+.rescv {
+  display: block;
+  width: 100%;
+  cursor: crosshair;
+}
+.reserr {
+  padding: 16px;
+  color: var(--mut);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* four series is one more than a plot this size can carry unlabelled, so the legend does real work here
+   rather than restating the obvious */
+.reslegend {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  color: var(--mut);
+  font-size: 10px;
+}
+.reslegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.reslegend i {
+  width: 12px;
+  height: 0;
+  border-top: 2px solid var(--c);
+}
+.reslegend i.dash {
+  border-top-style: dashed;
+}
+/* the axis units, which belong with the legend rather than rotated up the side of a plot this narrow */
+.resaxis {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.resrows {
+  flex: 0 0 auto;
+}
+.resrow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 2px 0;
+  color: var(--mut);
+}
+.resrow b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+/* the speed the whole readout is taken at — it changes under the cursor, so it heads the block */
+.ressp {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 4px;
+  margin-bottom: 2px;
+}
+/* the diagnostic, tinted to its curve so the number and the line are obviously the same thing */
+.resrow b.mich {
+  color: var(--accent);
+}
+/* the secondary block: hull and regime, which you check rather than watch */
+.resdim {
+  font-size: 10px;
+  opacity: 0.85;
+}
+
+.reswarn {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--danger);
+  font-size: 10px;
+  line-height: 1.45;
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+  border-radius: 3px;
+  padding: 5px 7px;
+}
+
+.resnote {
+  flex: 0 0 auto;
+  color: var(--mut);
+  font-size: 10px;
+  line-height: 1.45;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}

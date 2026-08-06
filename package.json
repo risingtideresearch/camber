@@ -44,6 +44,7 @@
     "polymorph-ui": "github:risingtideresearch/polymorph-ui#82613716885cf605b8010eef1cdbbc38c15d2809",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "resistance": "github:risingtideresearch/resistance#1183e0c7454dde8b3bb06d9f6ae79f42939b3a39",
     "three": "^0.185.1"
   }
 }

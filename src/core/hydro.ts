@@ -13,7 +13,12 @@
 
 import { lerp, V, type Vec3 } from "./math";
 import { type Model, immersion, loa, worldZ } from "./model";
-import { computeHullSampling, sweptSection } from "./mesh";
+import {
+  computeHullSampling,
+  sweptSection,
+  transomOutline,
+  type HullSampling,
+} from "./mesh";
 
 export interface Hydro {
   // principal dimensions (model units)
@@ -25,6 +30,7 @@ export interface Hydro {
   waterplaneArea: number; // A_w
   midshipArea: number; // A_m (immersed section at amidships)
   maxSectionArea: number;
+  transomArea: number; // A_T — the immersed transom, transverse-projected (0 when it is dry or faired out)
   wettedArea: number; // WSA
   // centroids (model units; x from the transom reference, z in world height)
   lcb: number;
@@ -134,6 +140,39 @@ function deadriseAt(sec: { pts: Vec3[]; keel: boolean }, len: number): number {
   return Math.atan(Math.abs(dzdy)) * (180 / Math.PI); // deadrise = angle of the bottom from horizontal
 }
 
+// A_T, the immersed transom area — the quantity Holtrop's transom-immersion term wants, defined there as the
+// immersed part of the TRANSVERSE area of the transom at rest. So it is ∫ 2y dz over the transom's wetted
+// outline, projected onto the transverse plane: the same integral stripOf does for a station section, taken
+// on the transom's own curve instead of a column's.
+//
+// It reads that curve from the mesh's `hullTransom`, which is root-found onto the transom plane and ends on
+// the head (sheer ∩ transom) and foot (keel ∩ transom) corners. Do NOT be tempted to substitute the aftmost
+// wetted station for this: that is a different quantity and it does not converge — it is really "whichever
+// sampled column happened to be the first wet one", and it creeps toward the aft closure as the grid refines
+// (0.046, 0.137, 0.0012 m² at ns = 120, 180, 720 on the default hull). This integral holds 0.4764 m² to four
+// figures over the same range, because the outline it walks is the hull's actual aft edge.
+//
+// A dry or faired-out transom needs no special case: the outline is then empty or entirely above the
+// waterline, and the clipping leaves nothing to integrate.
+function transomAreaOf(model: Model, hs: HullSampling): number {
+  const outline = transomOutline(hs);
+  if (outline.length < 2) return 0;
+  let half = 0;
+  for (let i = 0; i < outline.length - 1; i++) {
+    let a = outline[i],
+      b = outline[i + 1];
+    const ia = immersion(model, a[0], a[2]),
+      ib = immersion(model, b[0], b[2]);
+    if (ia <= 0 && ib <= 0) continue; // dry segment
+    if (ia < 0) a = V.lerp(a, b, -ia / (ib - ia));
+    else if (ib < 0) b = V.lerp(a, b, ia / (ia - ib));
+    // world vertical, so a raked deck is handled exactly as stripOf handles it
+    const dz = Math.abs(worldZ(model, a[0], a[2]) - worldZ(model, b[0], b[2]));
+    half += ((Math.abs(a[1]) + Math.abs(b[1])) / 2) * dz;
+  }
+  return 2 * half; // the outline is one side; the transom is symmetric about the centerline
+}
+
 export function hydrostatics(
   model: Model,
   ns: number = NS,
@@ -240,6 +279,8 @@ export function hydrostatics(
     waterplaneArea: aw,
     midshipArea,
     maxSectionArea,
+    // free: it walks the boundary curve the sampling above already built
+    transomArea: transomAreaOf(model, hs),
     wettedArea: wsa,
     lcb,
     lcf: na(lcf),

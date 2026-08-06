@@ -50,6 +50,7 @@ import { CurvatureControls } from "./CurvatureControls";
 import { PerfControls } from "./PerfControls";
 import { PerfPanel } from "./PerfPanel";
 import { WakePanel } from "./WakePanel";
+import { ResistancePanel } from "./ResistancePanel";
 import { defaultCurvature } from "../core/comb";
 import {
   defaultPerf,
@@ -93,6 +94,9 @@ export function EditorApp() {
   // the wave-pattern column: off by default, because sampling the hull for Michell's integral is real work
   // and nobody editing a sheer line is waiting on a wake
   const [wakeOn, setWakeOn] = useState(false);
+  // the resistance column, off for the same reason: its empirical half is free, but the Michell curve it
+  // draws over that is a whole sweep of the wave panel's calculation
+  const [resistanceOn, setResistanceOn] = useState(false);
   const [tool, setTool] = useState<Tool>("select");
   const [curvature, setCurvature] = useState(defaultCurvature);
   const [selection, setSelection] = useState<ModelSelection>(null);
@@ -445,6 +449,14 @@ export function EditorApp() {
         >
           Wave
         </button>
+        <button
+          type="button"
+          className={"btn" + (resistanceOn ? " active" : "")}
+          onClick={() => setResistanceOn((v) => !v)}
+          title="Resistance and power against speed — Holtrop/Savitsky over the measured hull, with Michell's wave-making curve as a shape diagnostic"
+        >
+          Resistance
+        </button>
         <DesignBar
           name={name}
           saveKind={save.kind}
@@ -490,6 +502,17 @@ export function EditorApp() {
               <>
                 <Area className="area" defaultSize="26%" minSize="280px">
                   <WakePanel model={model} modelVersion={modelVersion} />
+                </Area>
+                <AreaSeparator className="areasep" />
+              </>
+            )}
+            {/* Resistance sits next to the wave pattern for the same reason both exist as columns: the two
+                are read against edits made elsewhere, and they answer different halves of one question —
+                what the whole drag curve looks like, and what the wave part of it is doing to the water. */}
+            {resistanceOn && (
+              <>
+                <Area className="area" defaultSize="26%" minSize="280px">
+                  <ResistancePanel model={model} modelVersion={modelVersion} />
                 </Area>
                 <AreaSeparator className="areasep" />
               </>

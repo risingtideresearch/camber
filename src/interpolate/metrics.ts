@@ -23,6 +23,7 @@ export const HEAT_METRICS: MetricDef[] = [
   { key: "waterplane", label: "Waterplane area", get: (h) => h.waterplaneArea },
   { key: "midship", label: "Midship area", get: (h) => h.midshipArea },
   { key: "wetted", label: "Wetted area", get: (h) => h.wettedArea },
+  { key: "transom", label: "Transom area · A_T", get: (h) => h.transomArea },
   // form coefficients
   { key: "cb", label: "Cb · block", get: (h) => h.cb },
   { key: "cp", label: "Cp · prismatic", get: (h) => h.cp },
