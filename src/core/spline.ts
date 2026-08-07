@@ -3,10 +3,9 @@
 // Every curve in the hull except the sheer plan (which stays a clamped B-spline) is one of these: the sheer
 // trim, each station's section, and the longitudinal loft that carries a station point along the hull.
 //
-// The curve interpolates its points, with non-uniform Catmull-Rom tangents converted to Bézier segments.
-// There are two conversions — `crChain` and `crChainC1` — differing only in which knot span scales the
-// tangent arriving at a knot, which decides the parameter the chain comes out C1 in (each one's comment
-// says whose). Two properties of the construction are what the rest of the model leans on:
+// The curve interpolates its points and is built by the exact non-uniform Catmull-Rom → Bézier conversion
+// (`crChain`): each segment, read over its local s ∈ [0,1], IS the Catmull-Rom polynomial over its own
+// knot interval. Two properties of that construction are what the rest of the model leans on:
 //
 //   • The Bézier control points are GEOMETRIC. They are derived from the knot spacing, but once derived they
 //     describe the shape without reference to it — the chain can be evaluated over ANY parameterization and
@@ -30,7 +29,7 @@
 import { lerp } from "./math";
 
 // A point of any dimension. The section curve is 2-D (n, z); the longitudinal loft is 2-D as well but knots
-// at the stations' u — its caller's real argument, not a derived spacing (see `crChainC1`).
+// at the stations' u — its caller's real argument, not a derived spacing (see `crChain`).
 export type Pt = number[];
 
 // One cubic Bézier segment: [B0, B1, B2, B3], B0/B3 on the curve.
@@ -55,9 +54,7 @@ export function centripetalParams(pts: Pt[]): number[] {
 
 // The Catmull-Rom derivative dP/dt at P₁ — the standard non-uniform tangent; with t evenly spaced by h it
 // reduces to the uniform Catmull-Rom's (P₂ − P₀)/2h. `t` are the knots of the three points involved. The
-// chain builders scale it to each Bézier segment's local [0,1] parameter themselves — they differ in WHICH
-// knot span scales the tangent arriving at a segment's far end, and that difference is the whole difference
-// between them (see `crChainC1`).
+// chain builder scales it by a segment's own knot span to that segment's local [0,1] parameter.
 function tangent(
   p0: Pt,
   p1: Pt,
@@ -85,60 +82,30 @@ function seg(p: Pt, q: Pt, m1: Pt, m2: Pt, kp: number, kq: number): Bez {
   return [p, b1, b2, q];
 }
 
-// The chain of Bézier segments through `vals`, shaped by the knot spacing `t` and creased by `ks`.
+// The chain of Bézier segments through `vals` — the exact conversion of the non-uniform Catmull-Rom over
+// the knots `t`, creased by `ks`: both of a segment's tangents are scaled by ITS OWN knot span, so segment
+// j, read over its local s ∈ [0,1], IS the Catmull-Rom polynomial over t ∈ [tⱼ, tⱼ₊₁].
 //
-// `t` is passed in rather than derived so the caller can spread the knots by a distance measured somewhere
-// other than in `vals` (and so the signature matches `crChainC1`, whose knots are its caller's real
-// argument); every current caller of THIS builder spreads them centripetally in `vals` itself.
+// What that buys depends on how the chain is read:
 //
-// The tangent LEAVING a point is scaled to the departing segment's knot span — and so is the tangent
-// ARRIVING at that point from the segment before, which is the span AFTER the shared point, not the one the
-// arriving segment covers. Giving both sides of a knot the one scale makes the chain C1 in the uniform
-// chain parameter v (knot j at parameter j), which is the parameter the sections are actually SAMPLED in:
-// their combs and normals difference in v, so this is the smoothness they read. The price is exactness of
-// the trace — the curve follows the centripetal shape's tangent directions without being that curve point
-// for point. `crChainC1` makes the opposite trade.
+//   • READ AT ITS KNOTS — the caller maps its argument linearly onto each knot interval — the chain is the
+//     parametric curve P(t) itself, C1 in t across every knot: the segments meeting there agree on the one
+//     derivative dP/dt, not merely its direction. The loft is read this way, at u, and that C1 is what
+//     keeps the swept longitudinals G1 in world space (see model.ts).
+//
+//   • SAMPLED UNIFORMLY in the chain parameter v (knot j at parameter j — the sections, whose mesh
+//     sampling and combs run in v): the trace is the same curve, because the control points are geometric,
+//     and the tangent DIRECTION at a knot is continuous; d/dv's magnitude steps there by the ratio of the
+//     adjacent knot spans. G1, which is what a drawn or meshed section needs.
+//
+// `t` is passed in rather than derived so the caller can knot the chain in whatever space its argument
+// lives in: the loft passes the stations' u outright; the sections spread theirs by the centripetal
+// distance measured in `vals` itself (`crCurveAuto`).
 //
 // At the ends there is no neighbor to reach across, so the tangent is the chord itself. That is exactly what
 // the tangent formula yields for a phantom point reflected through the endpoint, which is the usual way to
 // close a Catmull-Rom, so the ends need no special case beyond this substitution.
 export function crChain(vals: Pt[], t: number[], ks: number[]): Bez[] {
-  const n = vals.length,
-    segs: Bez[] = [];
-  for (let j = 0; j < n - 1; j++) {
-    const p = vals[j],
-      q = vals[j + 1],
-      chord = sub(q, p);
-    const m1 =
-      j > 0
-        ? scale(
-            tangent(vals[j - 1], p, q, t[j - 1], t[j], t[j + 1]),
-            t[j + 1] - t[j],
-          )
-        : chord;
-    const m2 =
-      j + 2 < n
-        ? scale(
-            tangent(p, q, vals[j + 2], t[j], t[j + 1], t[j + 2]),
-            t[j + 2] - t[j + 1],
-          )
-        : chord;
-    segs.push(seg(p, q, m1, m2, ks[j] ?? 0, ks[j + 1] ?? 0));
-  }
-  return segs;
-}
-
-// The exact Bézier conversion of the non-uniform Catmull-Rom over the knots `t`: segment j, read over its
-// local s ∈ [0,1], IS the Catmull-Rom polynomial over t ∈ [tⱼ, tⱼ₊₁] — both of a segment's tangents are
-// scaled by ITS OWN knot span. A caller that maps its argument linearly onto each knot interval (the loft
-// maps the hull parameter u this way) therefore gets the parametric curve P(t) itself, C1 in t across every
-// knot: the two segments meeting there agree on the one derivative dP/dt, not merely on its direction.
-//
-// Re-read that way, a `crChain` is only C0 — its equal-on-both-sides tangents get divided by each side's
-// own Δt, so the derivative's magnitude jumps at every knot. A curve READ AS A FUNCTION of its knots (the
-// loft, read at u) needs this builder; a curve sampled uniformly between its knots (the sections) wants
-// `crChain`. The ends take the chord, exactly as `crChain`'s do.
-export function crChainC1(vals: Pt[], t: number[], ks: number[]): Bez[] {
   const n = vals.length,
     segs: Bez[] = [];
   for (let j = 0; j < n - 1; j++) {

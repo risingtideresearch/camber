@@ -29,7 +29,7 @@ import { pchipSlopes, hermiteEval } from "./pchip";
 import { planCurve, type PlanCurve } from "./bspline";
 import {
   centripetalParams,
-  crChainC1,
+  crChain,
   crCurve,
   evalChain,
   type Bez,
@@ -255,7 +255,7 @@ export const immersion = (model: Model, x: number, z: number): number =>
 // read at u. Three things are lofted, and they do not all want the same interpolant:
 //
 //   • (n, z) — a non-uniform Catmull-Rom whose knots ARE the stations' u, built by the exact conversion
-//     (crChainC1) so that reading the chain through `param` below reproduces the parametric curve
+//     (crChain) so that reading the chain through `param` below reproduces the parametric curve
 //     (n, z)(u) itself — C1 in u across every station. The C1 matters in WORLD space: a longitudinal's
 //     velocity is the frame's motion (smooth in u) plus the in-plane velocity (dn/du, dz/du) carried by the
 //     station plane. The centripetal chain this replaces, re-read as a function of u, kept the in-plane
@@ -299,15 +299,15 @@ function buildLoft(model: Model): Loft {
     kCurves: { ys: number[]; m: number[] }[] = [];
   for (let i = 0; i < n; i++) {
     const vals = sts.map((s): number[] => [s.points[i].n, s.points[i].z]);
-    chains.push(crChainC1(vals, us, new Array(K).fill(0)));
+    chains.push(crChain(vals, us, new Array(K).fill(0)));
     const ys = sts.map((s) => s.points[i].k);
     kCurves.push({ ys, m: pchipSlopes(us, ys) });
   }
   const keelYs = sts.map((s) => s.keelK),
     keelM = pchipSlopes(us, keelYs);
   // u → the chain's parameter: knot j sits at parameter j, so this is the piecewise-linear index of u in
-  // us. Over crChainC1 segments this per-segment rescale is exact — evalChain here IS the parametric
-  // (n, z)(u), not a reparameterized trace of it.
+  // us. The chain's segments are the exact conversion over these knots, so the per-segment rescale is
+  // exact — evalChain here IS the parametric (n, z)(u), not a reparameterized trace of it.
   const param = (u: number): number => {
     const c = clamp(u, us[0], us[K - 1]);
     let j = 0;
