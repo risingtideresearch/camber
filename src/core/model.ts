@@ -29,7 +29,7 @@ import { pchipSlopes, hermiteEval } from "./pchip";
 import { planCurve, type PlanCurve } from "./bspline";
 import {
   centripetalParams,
-  crChain,
+  crChainC1,
   crCurve,
   evalChain,
   type Bez,
@@ -254,12 +254,16 @@ export const immersion = (model: Model, x: number, z: number): number =>
 // Point i of every station traces one curve along the hull; the section at an arbitrary u is those curves
 // read at u. Three things are lofted, and they do not all want the same interpolant:
 //
-//   • (n, z) — a centripetal Catmull-Rom. The knots sit at the stations' u, so the curve is a function of u
-//     and no inversion is needed to section at a given u; the SHAPE comes from Bézier control points built
-//     with centripetal spacing, which is legitimate because those control points are geometric (see
-//     spline.ts). The spacing is measured on the 3-D position (x(u), n, z), not on (n, z) alone: two
-//     stations far apart along the hull must not be treated as neighbours merely because their section
-//     points happen to land close together.
+//   • (n, z) — a non-uniform Catmull-Rom whose knots ARE the stations' u, built by the exact conversion
+//     (crChainC1) so that reading the chain through `param` below reproduces the parametric curve
+//     (n, z)(u) itself — C1 in u across every station. The C1 matters in WORLD space: a longitudinal's
+//     velocity is the frame's motion (smooth in u) plus the in-plane velocity (dn/du, dz/du) carried by the
+//     station plane. The centripetal chain this replaces, re-read as a function of u, kept the in-plane
+//     velocity's DIRECTION at a station but jumped its magnitude — and a smooth vector plus a
+//     magnitude-jumping one changes direction, so the swept longitudinals kinked (C0, not G1) at every
+//     station even though the (n, z) trace on its own looked fair. Knotting at u buys that smoothness at
+//     the price of centripetal spacing's no-cusp guarantee: stations close in u with very different
+//     sections can now overshoot, as any chordal or uniform Catmull-Rom can.
 //
 //   • k — PCHIP. A knuckle is a strength in [0,1] and must stay there; Catmull-Rom overshoots, and an
 //     overshoot here would either invent a crease past hard or push k negative. PCHIP is shape-preserving,
@@ -289,26 +293,21 @@ function buildLoft(model: Model): Loft {
       }),
     };
   }
-  const us = sts.map((s) => s.u),
-    xs = us.map((u) => model.plan.at(u)[0]);
-  // per point index: the (n, z) chain over the station u's, and the PCHIP slopes for k
+  const us = sts.map((s) => s.u);
+  // per point index: the (n, z) chain knotted at the stations' u, and the PCHIP slopes for k
   const chains: Bez[][] = [],
     kCurves: { ys: number[]; m: number[] }[] = [];
   for (let i = 0; i < n; i++) {
     const vals = sts.map((s): number[] => [s.points[i].n, s.points[i].z]);
-    // knot spacing from the 3-D chord: (x along the hull, n, z)
-    const q = sts.map((s, j): number[] => [
-      xs[j],
-      s.points[i].n,
-      s.points[i].z,
-    ]);
-    chains.push(crChain(vals, centripetalParams(q), new Array(K).fill(0)));
+    chains.push(crChainC1(vals, us, new Array(K).fill(0)));
     const ys = sts.map((s) => s.points[i].k);
     kCurves.push({ ys, m: pchipSlopes(us, ys) });
   }
   const keelYs = sts.map((s) => s.keelK),
     keelM = pchipSlopes(us, keelYs);
-  // u → the chain's parameter: knot j sits at parameter j, so this is the piecewise-linear index of u in us
+  // u → the chain's parameter: knot j sits at parameter j, so this is the piecewise-linear index of u in
+  // us. Over crChainC1 segments this per-segment rescale is exact — evalChain here IS the parametric
+  // (n, z)(u), not a reparameterized trace of it.
   const param = (u: number): number => {
     const c = clamp(u, us[0], us[K - 1]);
     let j = 0;
