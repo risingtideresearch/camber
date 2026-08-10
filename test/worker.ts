@@ -33,7 +33,22 @@ function transportFor(host: SessionHost): TransportFactory {
   };
 }
 
-const host = createSessionHost({ instanceId: "worker-one" });
+let releaseSave: (() => void) | undefined;
+const saveGate = new Promise<void>((resolve) => {
+  releaseSave = resolve;
+});
+const host = createSessionHost({
+  instanceId: "worker-one",
+  saveBackend: {
+    save: async (capture) => {
+      await saveGate;
+      return {
+        currentId: capture.currentId ?? "created-row",
+        created: capture.create,
+      };
+    },
+  },
+});
 const a = await connectHullStore({
   sessionId: "shared",
   windowId: "a",
@@ -44,7 +59,20 @@ const b = await connectHullStore({
   windowId: "b",
   transport: transportFor(host),
 });
-check(a.fresh && b.fresh, "two windows connect to one fresh session");
+check(a.fresh && !b.fresh, "only the first window bootstraps a fresh session");
+await a.store.dispatchMeta({
+  type: "initializeDesign",
+  currentId: "row-1",
+  savedName: "Test",
+  name: "Test",
+  savedState: a.store.snapshot().state,
+});
+await b.store.dispatchMeta({ type: "setName", name: "Shared title" });
+check(
+  a.store.snapshot().meta.name === "Shared title",
+  "metadata commands publish across windows",
+);
+await b.store.dispatchMeta({ type: "setName", name: "Test" });
 
 await a.store.dispatch({ type: "setWaterline", depth: 222 });
 await tick();
@@ -85,6 +113,26 @@ check(
 check(
   b.store.snapshot().revision > staleBase,
   "a stale command does not hide the intervening revision",
+);
+
+const savingRevision = a.store.snapshot().revision;
+const saving = a.store.save("Test");
+await tick();
+check(
+  b.store.snapshot().meta.saving,
+  "save-in-progress is shared with every window",
+);
+await b.store.dispatch({ type: "setWaterline", depth: 300 });
+releaseSave?.();
+const saved = await saving;
+check(
+  saved.revision === savingRevision,
+  "the owner saves the revision captured before the request",
+);
+check(
+  a.store.snapshot().revision > a.store.snapshot().savedRevision &&
+    a.store.snapshot().state.waterline === 300,
+  "an edit arriving during save remains dirty",
 );
 
 a.store.close?.();

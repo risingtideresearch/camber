@@ -113,7 +113,11 @@ export async function connectHullStore(
       for (const listener of listeners) listener();
       return;
     }
-    if (message.type === "outcome" || message.type === "ack") {
+    if (
+      message.type === "outcome" ||
+      message.type === "ack" ||
+      message.type === "save-result"
+    ) {
       const resolve = pending.get(message.requestId);
       pending.delete(message.requestId);
       resolve?.(message);
@@ -244,14 +248,29 @@ export async function connectHullStore(
     },
     undo: () => history("undo"),
     redo: () => history("redo"),
-    async markSaved(revision) {
-      await request((requestId) => ({
-        type: "mark-saved",
+    async dispatchMeta(command) {
+      const reply = await request((requestId) => ({
+        type: "meta-command",
         sessionId,
         windowId,
         requestId,
-        revision,
+        command,
       }));
+      if (reply.type !== "ack" || !reply.ok)
+        throw new Error("owner refused metadata command");
+    },
+    async save(name) {
+      const reply = await request((requestId) => ({
+        type: "save",
+        sessionId,
+        windowId,
+        requestId,
+        name,
+      }));
+      if (reply.type === "save-result") return reply.result;
+      throw new Error(
+        reply.type === "error" ? reply.message : "unexpected save reply",
+      );
     },
     close() {
       if (closed) return;

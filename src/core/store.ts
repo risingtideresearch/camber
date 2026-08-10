@@ -29,7 +29,14 @@ import {
   requiresCurrentBase,
 } from "./commands";
 import { cloneHull, defaultHull, type HullState } from "./hull";
+import {
+  applyMetaCommand,
+  initialSessionMeta,
+  type MetaCommand,
+  type SessionMeta,
+} from "./meta";
 import type { Model } from "./model";
+import { supabaseSaveBackend, type SaveBackend } from "./saveBackend";
 import {
   assemble,
   defaultSession,
@@ -37,6 +44,15 @@ import {
   type SessionState,
   type SliceRevs,
 } from "./runtime";
+
+export interface SaveCapture {
+  readonly revision: number;
+  readonly state: HullState;
+  readonly model: Model;
+  readonly currentId: string | null;
+  readonly name: string;
+  readonly create: boolean;
+}
 
 export interface Snapshot {
   /** The document's total order. This is what `modelVersion` used to be, except that it means something. */
@@ -47,6 +63,8 @@ export interface Snapshot {
   readonly savedRevision: number;
   readonly state: HullState;
   readonly session: SessionState;
+  /** Backend identity and save coordination, shared without rebuilding the runtime model. */
+  readonly meta: SessionMeta;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
 }
@@ -66,7 +84,8 @@ export interface HullOwner {
   dispatchSession(cmd: SessionCommand): void;
   snapshot(): Snapshot;
   subscribe(fn: (s: Snapshot) => void): () => void;
-  markSaved(revision: number): void;
+  dispatchMeta(command: MetaCommand): void;
+  save(name: string): Promise<SaveResult>;
   undo(author?: string): boolean;
   redo(author?: string): boolean;
 }
@@ -91,6 +110,7 @@ interface HistoryEntry {
 export interface OwnerOptions {
   state?: HullState;
   session?: SessionState;
+  saveBackend?: SaveBackend;
   /** Injectable for tests; the coalescing window is the only thing that reads a clock. */
   now?: () => number;
 }
@@ -102,11 +122,13 @@ export function createOwner(opts: OwnerOptions = {}): HullOwner {
     sessionRevision = 0,
     savedRevision = 0;
   let sliceRevs = initialSliceRevs();
+  let meta = initialSessionMeta();
   const undoStack: HistoryEntry[] = [],
     redoStack: HistoryEntry[] = [];
   const authors: RevisionAuthor[] = [];
   const listeners = new Set<(s: Snapshot) => void>();
   const now = opts.now ?? Date.now;
+  const saveBackend = opts.saveBackend ?? supabaseSaveBackend;
   // The owner needs an assembled model to hand `applyCommand` — `addStation` reads the loft, and the station
   // commands clamp against `viewLen`. Its own cache key, so a window's reader cache is never disturbed by it.
   const cacheKey = {};
@@ -120,6 +142,7 @@ export function createOwner(opts: OwnerOptions = {}): HullOwner {
       savedRevision,
       state,
       session,
+      meta,
       canUndo: undoStack.length > 0,
       canRedo: redoStack.length > 0,
     };
@@ -242,14 +265,62 @@ export function createOwner(opts: OwnerOptions = {}): HullOwner {
       return true;
     },
 
-    // Dirty is `revision !== savedRevision` — exact, and free. It replaces comparing a freshly built JSON
-    // string against the last saved one on a 300 ms poll.
-    markSaved(at) {
-      if (at < 0 || at > revision)
-        throw new Error(`cannot mark unknown revision ${at} saved`);
-      if (savedRevision === at) return;
-      savedRevision = at;
+    dispatchMeta(command) {
+      const next = applyMetaCommand(
+        meta,
+        command.type === "initializeDesign"
+          ? { ...command, savedState: cloneHull(command.savedState) }
+          : command,
+      );
+      if (next === meta) return;
+      meta = next;
+      if (command.type === "initializeDesign") savedRevision = revision;
       publish();
+    },
+
+    async save(name) {
+      if (meta.saving) throw new Error("a save is already in progress");
+      const trimmed = name.trim();
+      if (meta.design.currentId === null && !trimmed)
+        throw new Error("a name is required to create a design");
+      const create =
+        meta.design.currentId === null ||
+        (trimmed !== "" && trimmed !== meta.design.savedName);
+      const finalName = create ? trimmed : meta.design.savedName!;
+      meta = applyMetaCommand(meta, { type: "beginSave", name: finalName });
+      const capture: SaveCapture = {
+        revision,
+        state,
+        model: runtime(),
+        currentId: meta.design.currentId,
+        name: finalName,
+        create,
+      };
+      publish();
+
+      try {
+        // Awaiting the backend does not lock dispatch: later commands continue to publish while this exact
+        // immutable revision is in flight.
+        const result = await saveBackend.save(capture);
+        meta = applyMetaCommand(meta, {
+          type: "completeSave",
+          currentId: result.currentId,
+          name: capture.name,
+          savedState: cloneHull(capture.state),
+        });
+        savedRevision = capture.revision;
+        publish();
+        return {
+          revision: capture.revision,
+          currentId: result.currentId,
+          name: capture.name,
+          created: result.created,
+        };
+      } catch (error) {
+        meta = applyMetaCommand(meta, { type: "failSave" });
+        publish();
+        throw error;
+      }
     },
   };
 }
@@ -267,7 +338,8 @@ export interface HullStore {
   dispatchSession(cmd: SessionCommand): void;
   undo(): void | Promise<boolean>;
   redo(): void | Promise<boolean>;
-  markSaved(revision: number): void | Promise<void>;
+  dispatchMeta(command: MetaCommand): Promise<void>;
+  save(name: string): Promise<SaveResult>;
   close?(): void;
 }
 
@@ -275,7 +347,23 @@ export interface HullStore {
  * A reader over an owner in this same window. `dispatch` resolves in a microtask rather than returning
  * synchronously, so every call site is already written the way `workerStore` will need it.
  */
-export function localStore(owner: HullOwner, author = "local"): HullStore {
+export interface SaveResult {
+  readonly revision: number;
+  readonly currentId: string;
+  readonly name: string;
+  readonly created: boolean;
+}
+
+export interface LocalStoreOptions {
+  author?: string;
+}
+
+export function localStore(
+  owner: HullOwner,
+  options: string | LocalStoreOptions = "local",
+): HullStore {
+  const author =
+    typeof options === "string" ? options : (options.author ?? "local");
   const cacheKey = {};
   let seen = owner.snapshot();
   let model = assemble(seen.state, seen.session, {
@@ -306,6 +394,10 @@ export function localStore(owner: HullOwner, author = "local"): HullStore {
     dispatchSession: (cmd) => owner.dispatchSession(cmd),
     undo: () => void owner.undo(),
     redo: () => void owner.redo(),
-    markSaved: (revision) => owner.markSaved(revision),
+    dispatchMeta: (command) => {
+      owner.dispatchMeta(command);
+      return Promise.resolve();
+    },
+    save: (name) => owner.save(name),
   };
 }

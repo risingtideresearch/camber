@@ -9,6 +9,7 @@
 // workerStore relies on an awaited dispatch seeing its new Snapshot already installed.
 
 import { rejected } from "./commands";
+import { supabaseSaveBackend, type SaveBackend } from "./saveBackend";
 import {
   PROTOCOL_VERSION,
   type ClientMessage,
@@ -26,6 +27,7 @@ export interface SessionHostOptions {
   instanceId?: string;
   now?: () => number;
   onError?: (error: unknown) => void;
+  saveBackend?: SaveBackend;
 }
 
 export interface SessionDiagnostics {
@@ -58,6 +60,7 @@ export function createSessionHost(
   const onError =
     options.onError ??
     ((error: unknown) => console.error("camber owner:", error));
+  const saveBackend = options.saveBackend ?? supabaseSaveBackend;
   const sessions = new Map<string, Session>();
   let queue: Promise<unknown> = Promise.resolve();
 
@@ -75,7 +78,7 @@ export function createSessionHost(
     if (existing) return existing;
     const session: Session = {
       id,
-      owner: createOwner({ now: options.now }),
+      owner: createOwner({ now: options.now, saveBackend }),
       clients: new Map(),
     };
     session.owner.subscribe((snapshot) => {
@@ -84,6 +87,25 @@ export function createSessionHost(
     });
     sessions.set(id, session);
     return session;
+  };
+
+  const save = async (
+    session: Session,
+    client: HostClient,
+    requestId: string,
+    name: string,
+  ): Promise<void> => {
+    try {
+      const result = await session.owner.save(name);
+      client.post({ type: "save-result", requestId, result });
+    } catch (error) {
+      fail(
+        client,
+        "save-failed",
+        error instanceof Error ? error.message : String(error),
+        requestId,
+      );
+    }
   };
 
   const process = (client: HostClient, message: ClientMessage): void => {
@@ -97,13 +119,16 @@ export function createSessionHost(
         return;
       }
       const session = openSession(message.sessionId);
-      session.clients.set(client.id, client);
       const snapshot = session.owner.snapshot();
+      // Only one window bootstraps an uninitialized session from the backend. Other windows adopt the
+      // owner's publications instead of racing a second install of the same design.
+      const fresh = !snapshot.meta.initialized && session.clients.size === 0;
+      session.clients.set(client.id, client);
       client.post({
         type: "connected",
         sessionId: session.id,
         snapshot,
-        fresh: snapshot.revision === 0,
+        fresh,
         protocolVersion: PROTOCOL_VERSION,
         instanceId,
       });
@@ -162,22 +187,20 @@ export function createSessionHost(
         });
         return;
       }
-      case "mark-saved": {
-        let ok = true;
-        try {
-          session.owner.markSaved(message.revision);
-        } catch (error) {
-          ok = false;
-          onError(error);
-        }
+      case "meta-command":
+        session.owner.dispatchMeta(message.command);
         client.post({
           type: "ack",
           requestId: message.requestId,
-          ok,
+          ok: true,
           revision: session.owner.snapshot().revision,
         });
         return;
-      }
+      case "save":
+        // owner.save captures and publishes synchronously before its first await, but the backend request does
+        // not block the host's command queue. Later edits can land while that exact revision is being saved.
+        void save(session, client, message.requestId, message.name);
+        return;
       case "disconnect":
         session.clients.delete(client.id);
         return;

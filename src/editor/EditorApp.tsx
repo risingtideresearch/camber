@@ -4,16 +4,12 @@ import { connectHullStore } from "../core/workerStore";
 import { StoreContext, useHullStore, useSnapshot } from "./hullStore";
 import { EditorUiProvider, useEditorUi } from "./editorUi";
 import { defaultHull } from "../core/hull";
-import { buildJson } from "../core/json";
 import {
   isUnsaved,
-  newDesignId,
   openDesign,
   openedName,
   revertTo,
-  saveDesign,
   saveView,
-  type DesignId,
   type SaveView,
 } from "./save";
 import { Toolbar } from "./Toolbar";
@@ -100,56 +96,30 @@ function Editor({ fresh }: { fresh: boolean }) {
   // URL design (?id=) finishes loading — the columns are sized by flex/layout, so mounting causes no reflow.
   const [booted, setBooted] = useState(false);
 
-  const [name, setName] = useState("");
-  const [saving, setSaving] = useState(false);
-  // The design identity, and the transient "Saving…" / "Saved ✓" that briefly overrides the steady indicator.
-  // The steady one is derived, not polled: `revision !== savedRevision` is exact and costs nothing.
-  const [designId, setDesignId] = useState<DesignId>(newDesignId);
+  const { meta } = snapshot;
+  // "Saving…" / "Saved ✓" briefly overrides the steady indicator, which is derived from shared owner state.
   const [flash, setFlash] = useState<SaveView | null>(null);
-  const save = flash ?? saveView(dirty, designId, name);
+  const save = flash ?? saveView(dirty, meta);
 
-  // A few values the window listeners and the async save read at their latest, kept in refs so those one-time
-  // effects never re-subscribe. Written after commit, which is when the handlers can first run.
-  const idRef = useRef(designId);
-  const nameRef = useRef(name);
+  // Window-level listeners read the latest shared save state without being reinstalled after every publish.
+  const metaRef = useRef(meta);
   const dirtyRef = useRef(dirty);
-  const savingRef = useRef(false);
   useEffect(() => {
-    idRef.current = designId;
-    nameRef.current = name;
+    metaRef.current = meta;
     dirtyRef.current = dirty;
-  }, [designId, name, dirty]);
+  }, [meta, dirty]);
 
   // ---------- boot: load the URL design (if any) once ----------
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      // An already-live session is authoritative. A second window must not overwrite its hull with the
-      // backend's last saved document.
+      // An already-live session carries both its hull and backend identity. A second window only mounts it.
       if (!fresh) {
-        const rowId = new URLSearchParams(window.location.search).get("id");
-        if (rowId) {
-          try {
-            // Load only the backend identity here. The worker's live hull remains authoritative.
-            const opened = await openDesign(rowId);
-            if (cancelled) return;
-            setDesignId({
-              currentId: rowId,
-              savedName: opened.name,
-              savedDocument: opened.document,
-            });
-            setName(openedName(opened.name, opened.version));
-          } catch (e) {
-            console.error("recover design identity failed:", e);
-          }
-        }
-        if (cancelled) return;
         setSelection(null);
         setBooted(true);
         return;
       }
       const rowId = new URLSearchParams(window.location.search).get("id");
-      let id: DesignId = { ...newDesignId(), savedDocument: "" };
       if (rowId) {
         try {
           const opened = await openDesign(rowId);
@@ -159,12 +129,13 @@ function Editor({ fresh }: { fresh: boolean }) {
           // differs from it, so the editor starts out a fork — saving writes a new v2 row and leaves the
           // original untouched. For an up-to-date document the two are the same and Save overwrites.
           const title = openedName(opened.name, opened.version);
-          id = {
+          await store.dispatchMeta({
+            type: "initializeDesign",
             currentId: rowId,
             savedName: opened.name,
-            savedDocument: opened.document,
-          };
-          setName(title);
+            name: title,
+            savedState: opened.state,
+          });
         } catch (e) {
           if (cancelled) return; // a cleaned-up run must not clobber a newer run's load
           console.error("open design failed:", e);
@@ -174,14 +145,24 @@ function Editor({ fresh }: { fresh: boolean }) {
           );
           // discard any partial load; fall back to a clean default hull
           await store.dispatch({ type: "installHull", state: defaultHull() });
-          id = { ...newDesignId(), savedDocument: "" };
+          await store.dispatchMeta({
+            type: "initializeDesign",
+            currentId: null,
+            savedName: null,
+            name: "",
+            savedState: store.snapshot().state,
+          });
         }
+      } else {
+        await store.dispatchMeta({
+          type: "initializeDesign",
+          currentId: null,
+          savedName: null,
+          name: "",
+          savedState: store.snapshot().state,
+        });
       }
       if (cancelled) return;
-      // Whatever was installed is what "saved" means from here: the boot's own load must not read as an edit.
-      id.savedDocument ||= buildJson(store.runtime());
-      store.markSaved(store.snapshot().revision);
-      setDesignId(id);
       setSelection(null);
       setBooted(true); // now mount the views and let them draw the settled hull
     })();
@@ -190,38 +171,30 @@ function Editor({ fresh }: { fresh: boolean }) {
     };
   }, [store, setSelection, fresh]);
 
-  // ---------- the one save action (stable; reads latest state from refs) ----------
+  // ---------- save: browser prompts; the owner captures, serializes, builds, and writes ----------
   const doSave = useCallback(async () => {
-    if (savingRef.current) return;
-    savingRef.current = true;
-    setSaving(true);
+    const current = metaRef.current;
+    if (current.saving) return;
+    let name = current.name.trim();
+    if (current.design.currentId === null && !name) {
+      name = prompt("Name this design:", "")?.trim() ?? "";
+      if (!name) return;
+    }
     setFlash({ buttonLabel: "Save", kind: "", text: "Saving…" });
-    // The revision the document is written AT. `saveDesign` builds the JSON synchronously before its first
-    // await, so nothing can be edited in between — but the marking happens after, so it has to be captured.
-    const at = store.snapshot().revision;
     try {
-      const res = await saveDesign(
-        store.runtime(),
-        idRef.current,
-        nameRef.current,
-      );
-      if (res) {
-        setDesignId(res.id);
-        setName(res.name);
-        store.markSaved(at);
-        setFlash({ buttonLabel: "Save", kind: "saved", text: "Saved ✓" });
-        window.setTimeout(() => setFlash(null), 1400); // hold "Saved ✓" before the steady view returns
-      } else {
-        setFlash(null); // cancelled — back to steady state
+      const result = await store.save(name);
+      if (result.created) {
+        const url = new URL(window.location.href);
+        url.searchParams.set("id", result.currentId);
+        history.replaceState(null, "", url);
       }
+      setFlash({ buttonLabel: "Save", kind: "saved", text: "Saved ✓" });
+      window.setTimeout(() => setFlash(null), 1400);
     } catch (e) {
       setFlash({ buttonLabel: "Save", kind: "dirty", text: "Save failed" });
       alert("Save failed: " + (e instanceof Error ? e.message : String(e)));
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
     }
-  }, [store, setSaving, setFlash, setDesignId, setName]);
+  }, [store, setFlash]);
 
   // ---------- Ctrl/Cmd-S + beforeunload ----------
   useEffect(() => {
@@ -232,8 +205,7 @@ function Editor({ fresh }: { fresh: boolean }) {
       }
     };
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (isUnsaved(dirtyRef.current, idRef.current, nameRef.current))
-        e.preventDefault();
+      if (isUnsaved(dirtyRef.current, metaRef.current)) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("beforeunload", onBeforeUnload);
@@ -243,27 +215,37 @@ function Editor({ fresh }: { fresh: boolean }) {
     };
   }, [doSave]);
 
-  // ---------- keep the document title in sync with the design name ----------
+  // ---------- keep this window's title and backend URL in sync with shared owner identity ----------
   useEffect(() => {
-    document.title = `${name || "Untitled"} — Camber`;
-  }, [name]);
+    document.title = `${meta.name || "Untitled"} — Camber`;
+  }, [meta.name]);
+  useEffect(() => {
+    const id = meta.design.currentId;
+    if (!id) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("id") === id) return;
+    url.searchParams.set("id", id);
+    history.replaceState(null, "", url);
+  }, [meta.design.currentId]);
 
   // ---------- handlers ----------
   // blanking the title on an existing design restores the saved name (a name is required to save)
   const onNameBlur = () => {
-    const saved = idRef.current.savedName;
-    if (!nameRef.current.trim() && saved != null) setName(saved);
+    const current = metaRef.current;
+    const saved = current.design.savedName;
+    if (!current.name.trim() && saved != null)
+      void store.dispatchMeta({ type: "setName", name: saved });
   };
   // Revert is one `installHull`, which means it is itself undoable — a slip of the hand is recoverable now.
   const onRevert = () => {
-    const state = revertTo(dirty, designId);
+    const state = revertTo(dirty, meta);
     if (!state) return;
     setSelection(null);
     void store.dispatch({ type: "installHull", state });
   };
   const onClose = () => {
     if (
-      isUnsaved(dirty, designId, name) &&
+      isUnsaved(dirty, meta) &&
       !confirm("Discard unsaved changes and return to the library?")
     )
       return;
@@ -280,12 +262,12 @@ function Editor({ fresh }: { fresh: boolean }) {
         <CurvatureControls />
         <PerfControls />
         <DesignBar
-          name={name}
+          name={meta.name}
           saveKind={save.kind}
           saveText={save.text}
           saveLabel={save.buttonLabel}
-          saving={saving}
-          onName={setName}
+          saving={meta.saving}
+          onName={(name) => void store.dispatchMeta({ type: "setName", name })}
           onNameBlur={onNameBlur}
           onSave={() => void doSave()}
           onRevert={onRevert}
@@ -295,7 +277,7 @@ function Editor({ fresh }: { fresh: boolean }) {
         <StlControl />
       </div>
       <div className="main">
-        {booted && (
+        {booted && meta.initialized && (
           // Resizable layout: three independent columns — plan / profile, the section editor, and the 3D
           // view / live cut station. Drag any separator to resize. (The middle column used to be split with
           // the blend-weights strip below the section editor; v2 has no blend, so the section editor takes

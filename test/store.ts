@@ -68,7 +68,13 @@ function clock(): { now: () => number; advance: (ms: number) => void } {
     scrubbed.revision === after.revision,
     "scrubbing the cut station does not touch the document's revision",
   );
-  owner.markSaved(scrubbed.revision);
+  owner.dispatchMeta({
+    type: "initializeDesign",
+    currentId: "row-1",
+    savedName: "Test",
+    name: "Test",
+    savedState: scrubbed.state,
+  });
   owner.dispatchSession({ type: "setX0", x: 200 });
   ok(!isDirty(owner.snapshot()), "and never makes a saved design dirty");
   ok(
@@ -177,7 +183,13 @@ function clock(): { now: () => number; advance: (ms: number) => void } {
 
   // Undo bumps the revision like any other change — the document really did move, so a saved design must
   // read as dirty again afterwards.
-  owner.markSaved(owner.snapshot().revision);
+  owner.dispatchMeta({
+    type: "initializeDesign",
+    currentId: "row-1",
+    savedName: "Test",
+    name: "Test",
+    savedState: owner.snapshot().state,
+  });
   ok(!isDirty(owner.snapshot()), "saved at the current revision");
   owner.undo();
   ok(
@@ -189,6 +201,87 @@ function clock(): { now: () => number; advance: (ms: number) => void } {
   c.advance(1000);
   owner.dispatch({ type: "setWaterline", depth: 9 }, "a");
   ok(!owner.snapshot().canRedo, "a new edit clears the redo stack");
+}
+
+// ---- save coordination captures one exact revision while later edits continue ----
+{
+  let releaseSave: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    releaseSave = resolve;
+  });
+  let capturedWaterline = -1;
+  const owner = createOwner({
+    saveBackend: {
+      async save(capture) {
+        capturedWaterline = capture.state.waterline;
+        await gate;
+        return { currentId: "row-1", created: false };
+      },
+    },
+  });
+  owner.dispatchMeta({
+    type: "initializeDesign",
+    currentId: "row-1",
+    savedName: "Test",
+    name: "Test",
+    savedState: owner.snapshot().state,
+  });
+  owner.dispatch({ type: "setWaterline", depth: 100 }, "a");
+  const saving = owner.save("Test");
+  const savingRevision = owner.snapshot().revision;
+  ok(owner.snapshot().meta.saving, "the owner publishes save-in-progress");
+  owner.dispatch({ type: "setWaterline", depth: 200 }, "b");
+  releaseSave?.();
+  const result = await saving;
+  ok(
+    owner.snapshot().savedRevision === result.revision &&
+      result.revision === savingRevision,
+    "save completion marks the captured revision saved",
+  );
+  ok(
+    capturedWaterline === 100 &&
+      owner.snapshot().meta.design.savedState?.waterline === 100,
+    "the saved snapshot is the state used by the backend request",
+  );
+  ok(
+    owner.snapshot().state.waterline === 200 && isDirty(owner.snapshot()),
+    "an edit arriving during save remains current and dirty",
+  );
+  ok(
+    !owner.snapshot().meta.saving,
+    "save completion clears the shared interlock",
+  );
+}
+
+// ---- localStore uses the same pluggable save backend as the worker host ----
+{
+  let backendRevision = -1;
+  const owner = createOwner({
+    saveBackend: {
+      async save(capture) {
+        backendRevision = capture.revision;
+        return { currentId: "row-1", created: false };
+      },
+    },
+  });
+  owner.dispatchMeta({
+    type: "initializeDesign",
+    currentId: "row-1",
+    savedName: "Test",
+    name: "Test",
+    savedState: owner.snapshot().state,
+  });
+  owner.dispatch({ type: "setWaterline", depth: 321 }, "a");
+  const store = localStore(owner);
+  const result = await store.save("Test");
+  ok(
+    result.revision === backendRevision,
+    "localStore saves through the supplied backend",
+  );
+  ok(
+    !isDirty(store.snapshot()),
+    "localStore completes the owner's save transition",
+  );
 }
 
 // ---- a drag is one undo step ----

@@ -27,19 +27,28 @@
 // refused without publishing. Whole snapshots are intentionally used instead of patches: hulls are small,
 // and every publication independently brings a receiver fully up to date.
 //
-// Session commands are fire-and-forget and publish through the same Snapshot channel. Undo, redo, and
-// mark-saved use requestId-correlated `ack` replies. `error` includes a requestId when it rejects one request;
-// without one it is a connection/protocol error. `disconnect` removes only that window from the session.
+// Session commands are fire-and-forget and publish through the same Snapshot channel. Metadata commands,
+// undo, and redo use requestId-correlated `ack` replies. Save has a correlated `save-result`; its
+// backend work is owned and serialized by the session owner. Starting and finishing a save each publish the
+// shared save status. Commands continue while the request is in flight, and completion marks only the
+// captured revision saved. `error` includes a requestId when it rejects one request; without one it is a
+// connection/protocol error. `disconnect` removes only that window from the session.
 
 import type { HullCommand, SessionCommand } from "./commands";
-import type { Snapshot } from "./store";
+import type { MetaCommand } from "./meta";
+import type { SaveResult, Snapshot } from "./store";
 
 /** Increment whenever either message union changes incompatibly. */
 export const PROTOCOL_VERSION = 1;
 
 /** Stable machine-readable categories; `message` carries the human-readable detail. */
 export type ErrorCode =
-  "protocol-version" | "not-connected" | "stale" | "rejected" | "internal";
+  | "protocol-version"
+  | "not-connected"
+  | "stale"
+  | "rejected"
+  | "save-failed"
+  | "internal";
 
 /** A command response omits state because the authoritative state was already sent in `published`. */
 export type DispatchOutcome =
@@ -79,11 +88,18 @@ export type ClientMessage =
       requestId: string;
     }
   | {
-      type: "mark-saved";
+      type: "meta-command";
       sessionId: string;
       windowId: string;
       requestId: string;
-      revision: number;
+      command: MetaCommand;
+    }
+  | {
+      type: "save";
+      sessionId: string;
+      windowId: string;
+      requestId: string;
+      name: string;
     }
   | { type: "disconnect"; sessionId: string; windowId: string };
 
@@ -100,6 +116,7 @@ export type WorkerMessage =
   | { type: "published"; sessionId: string; snapshot: Snapshot }
   | { type: "outcome"; requestId: string; outcome: DispatchOutcome }
   | { type: "ack"; requestId: string; ok: boolean; revision: number }
+  | { type: "save-result"; requestId: string; result: SaveResult }
   | {
       type: "error";
       requestId?: string;
