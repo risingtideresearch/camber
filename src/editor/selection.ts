@@ -2,13 +2,13 @@
 // functions over the model + selection, kept out of the components so the delete/knuckle handlers and the
 // SelectionInfo readout share one source of truth.
 //
-// The selection is WINDOW-LOCAL and must never appear in a command — another window's owner has no idea what
+// The selection is WINDOW-LOCAL and must never appear in a command — the document server has no idea what
 // this window has selected, and two windows may have selected different things. So the two operations that
 // used to reach into the model through a selection now resolve it to a command here, and the caller
 // dispatches that.
 
 import type { Model } from "../core/model";
-import type { HullCommand } from "../core/commands";
+import type { DocumentCommand } from "../core/commands";
 import type {
   ModelSelection,
   ModelSelectionTarget,
@@ -80,7 +80,7 @@ export function knuckleCommand(
   model: Model,
   selection: ModelSelection,
   k: number,
-): HullCommand | null {
+): DocumentCommand | null {
   if (!selection || !selArr(model, selection) || !hasKnuckle(selection))
     return null;
   return selection.tgt === "trim"
@@ -93,7 +93,7 @@ export function knuckleCommand(
 export function deleteCommand(
   model: Model,
   selection: ModelSelection,
-): HullCommand | null {
+): DocumentCommand | null {
   if (!selection || !canDelete(model, selection)) return null;
   if (selection.tgt === "plan")
     return { type: "removePlanPoint", idx: selection.idx };

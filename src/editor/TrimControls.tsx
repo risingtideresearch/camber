@@ -1,6 +1,6 @@
 import { loa } from "../core/model";
 import { UNITS, type Unit } from "../core/document";
-import { useDispatch, useRuntime } from "./hullStore";
+import { useDocumentDispatch, useDocumentRuntime } from "./documentStoreHooks";
 import "./TrimControls.css";
 
 // The design-waterline and deck-rake sliders, plus the document's unit. React-owned: their values are read
@@ -8,8 +8,8 @@ import "./TrimControls.css";
 // redraw everywhere.
 
 export function TrimControls() {
-  const model = useRuntime();
-  const dispatch = useDispatch();
+  const model = useDocumentRuntime();
+  const dispatch = useDocumentDispatch();
   const onWaterline = (depth: number) =>
     void dispatch({ type: "setWaterline", depth });
   const onRake = (deg: number) =>

@@ -7,7 +7,7 @@
 //   - The two LEVELS differ where they are supposed to. A document may be laxer than what the editor writes;
 //     "document" must accept those hulls and "editor" must not.
 //   - The EDIT OPERATIONS keep their end of the bargain. Every one of them is run, and the hull it leaves
-//     behind must satisfy the editor level. This is the bank phase 3 will re-run against `applyCommand`.
+//     behind must satisfy the editor level. This is the bank phase 3 will re-run against `interpretDocumentCommand`.
 //   - ASSEMBLE agrees with the legacy mutable path, geometrically and exactly. Until the editor moves onto the
 //     store there are two ways to build a model, and a hull that differs between them is a bug that would
 //     surface as the 3D view and the exporter disagreeing.
@@ -42,11 +42,11 @@ import {
 } from "../src/core/model";
 import {
   ALL_SLICES,
-  applyCommand,
+  interpretDocumentCommand,
   rejected,
   SLICE,
-  type HullCommand,
-  type Outcome,
+  type DocumentCommand,
+  type CommandOutcome,
 } from "../src/core/commands";
 import { buildJson, parseHullState } from "../src/core/json";
 import { examplesDir } from "./paths";
@@ -268,15 +268,15 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
 // editor, the promoter and (from phase 5) another window's command all go through.
 {
   let model = assemble(defaultHull());
-  const run = (cmd: HullCommand): Outcome => {
-    const out = applyCommand(model, cmd);
+  const run = (cmd: DocumentCommand): CommandOutcome => {
+    const out = interpretDocumentCommand(model, cmd);
     if (!rejected(out)) {
       const session = { ...sessionOf(model), ...out.session };
       model = assemble(out.state, session);
     }
     return out;
   };
-  const idx = (out: Outcome): number =>
+  const idx = (out: CommandOutcome): number =>
     rejected(out) ? -1 : (out.result as number);
   const check = (what: string): void => {
     const bad = hullViolations(model, "editor");
@@ -425,12 +425,12 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
 }
 
 // ---- a command touches the slices it says it touches ----
-// The mask is what the owner bumps revisions from, and `assemble` rebuilds from those — so a mask that
+// The mask is what the server bumps revisions from, and `assemble` rebuilds from those — so a mask that
 // over-reports costs a sampler rebuild per edit, and one that under-reports draws a stale hull.
 {
   const model = assemble(defaultHull());
-  const maskOf = (cmd: HullCommand): number => {
-    const out = applyCommand(model, cmd);
+  const maskOf = (cmd: DocumentCommand): number => {
+    const out = interpretDocumentCommand(model, cmd);
     return rejected(out) ? -1 : out.touched;
   };
   ok(
@@ -475,7 +475,10 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
     ...defaultHull(),
     sheerPlan: defaultHull().sheerPlan.map((p) => ({ x: p.x * 4, y: p.y })),
   };
-  const out = applyCommand(start, { type: "installHull", state: long });
+  const out = interpretDocumentCommand(start, {
+    type: "installHull",
+    state: long,
+  });
   ok(
     !rejected(out) && out.session?.viewLen === loa(long),
     "install restates viewLen",
@@ -488,7 +491,10 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
     ...defaultHull(),
     sheerPlan: defaultHull().sheerPlan.map((p) => ({ x: p.x / 10, y: p.y })),
   };
-  const out2 = applyCommand(start, { type: "installHull", state: shortHull });
+  const out2 = interpretDocumentCommand(start, {
+    type: "installHull",
+    state: shortHull,
+  });
   ok(
     !rejected(out2) && out2.session?.x0 === loa(shortHull),
     "a cut station past the new bow is brought back inside the boat",

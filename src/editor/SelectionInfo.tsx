@@ -7,7 +7,7 @@ import {
   labelFor,
   selArr,
 } from "./selection";
-import { useDispatch, useRuntime } from "./hullStore";
+import { useDocumentDispatch, useDocumentRuntime } from "./documentStoreHooks";
 import { useEditorUi } from "./editorUi";
 import "./SelectionInfo.css";
 
@@ -16,8 +16,8 @@ import "./SelectionInfo.css";
 // selecting a point never reflows the app bar.
 
 export function SelectionInfo() {
-  const model = useRuntime();
-  const dispatch = useDispatch();
+  const model = useDocumentRuntime();
+  const dispatch = useDocumentDispatch();
   const { selection, setSelection } = useEditorUi();
   // The selection is window-local and must never travel in a command, so it is resolved to one here.
   const onKnuckle = (k: number) => {

@@ -4,7 +4,7 @@
 // document's identity. No curves, no samplers, no `x0`, no `viewLen` — those are derived or session state and
 // live in `runtime.ts`. A `HullState` survives `structuredClone` and `JSON.stringify` unchanged, which is the
 // whole point of separating it: it is what a document holds, what a blend produces, and (from phase 5) what
-// crosses a `postMessage` boundary between the owner and a window.
+// crosses a `postMessage` boundary between the server and a window.
 //
 // The `readonly` is load-bearing rather than decorative. It is the migration tool: every in-place mutation of
 // authored data becomes a compile error, so the type checker enumerates the work instead of a grep. The

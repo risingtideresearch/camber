@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { rejected } from "../core/commands";
-import { useDispatch, useRuntime } from "./hullStore";
+import { useDocumentDispatch, useDocumentRuntime } from "./documentStoreHooks";
 import { useEditorUi } from "./editorUi";
 import { drawPlan } from "../core/draw2d";
 import { viewOf } from "../core/view";
@@ -11,8 +11,8 @@ import "./ViewStrip.css";
 // empty space inserts a sheer point there; in "select" mode an empty click clears the selection (clicks on
 // control points are handled by their own node listeners, which stopPropagation before this fires).
 export function PlanView() {
-  const model = useRuntime();
-  const dispatch = useDispatch();
+  const model = useDocumentRuntime();
+  const dispatch = useDocumentDispatch();
   const {
     selection,
     setSelection: onSelect,
@@ -53,7 +53,7 @@ export function PlanView() {
   );
 
   // An insert is the one place the store's asynchrony reaches the UI: the new point's INDEX comes back from
-  // the owner, and the click that made it is what selects it. A click never begins a drag (drags always start
+  // the server, and the click that made it is what selects it. A click never begins a drag (drags always start
   // on an existing node), so the microtask between the two is invisible.
   const onBackgroundClick = async (vx: number, vy: number) => {
     if (tool !== "add") {

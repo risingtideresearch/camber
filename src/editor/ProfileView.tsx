@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { rejected } from "../core/commands";
-import { useDispatch, useRuntime } from "./hullStore";
+import { useDocumentDispatch, useDocumentRuntime } from "./documentStoreHooks";
 import { useEditorUi } from "./editorUi";
 import { drawProfile } from "../core/draw2d";
 import { viewOf } from "../core/view";
@@ -10,8 +10,8 @@ import "./ViewStrip.css";
 // The profile strip (sheer trim, keel/stem, transom in side view). Draws through a shared pan/zoom SvgView.
 // In "add" mode a click on empty space inserts a sheer-trim point.
 export function ProfileView() {
-  const model = useRuntime();
-  const dispatch = useDispatch();
+  const model = useDocumentRuntime();
+  const dispatch = useDocumentDispatch();
   const {
     selection,
     setSelection: onSelect,

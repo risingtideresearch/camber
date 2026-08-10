@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components -- the provider and its hook are one binding */
 // ---------- everything a window owns for itself ----------
 //
-// The store split the hull (the owner's, shared) from the window's own state. This is the window's half,
+// The store split the hull (shared server's, shared) from the window's own state. This is the window's half,
 // gathered behind one provider so that a panel is self-sufficient: it reads what it needs from here and from
 // the store, and takes no props at all. A detached panel (phase 6) then works by being wrapped in the same
 // two providers and nothing else — there is no parent left to hand it anything.
@@ -48,11 +48,11 @@ import {
 import { viewOf } from "../core/view";
 import type { ModelSelection } from "../core/modelSelection";
 import {
-  useDispatch,
-  useHullStore,
-  useRuntime,
-  useSnapshot,
-} from "./hullStore";
+  useDocumentDispatch,
+  useDocumentStore,
+  useDocumentRuntime,
+  useDocumentSnapshot,
+} from "./documentStoreHooks";
 import { deleteCommand } from "./selection";
 import { getVB } from "./svgCoords";
 import { useSvgViewSync, type SvgViewSync } from "./svgViewSync";
@@ -97,10 +97,10 @@ export function useEditorUi(): EditorUi {
 }
 
 export function EditorUiProvider({ children }: { children: ReactNode }) {
-  const store = useHullStore();
-  const snapshot = useSnapshot();
-  const model = useRuntime();
-  const dispatch = useDispatch();
+  const store = useDocumentStore();
+  const snapshot = useDocumentSnapshot();
+  const model = useDocumentRuntime();
+  const dispatch = useDocumentDispatch();
 
   const [tool, setTool] = useState<Tool>("select");
   const [curvature, setCurvature] = useState(defaultCurvature);
@@ -251,7 +251,7 @@ export function EditorUiProvider({ children }: { children: ReactNode }) {
         return;
       }
       // Undo is new with the store: before it, an edit overwrote the hull in place and there was nothing to
-      // step back to. A drag is one step — consecutive moves of the same point coalesce in the owner.
+      // step back to. A drag is one step — consecutive moves of the same point coalesce in the server.
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         perfFrame();

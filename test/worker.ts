@@ -2,12 +2,12 @@ import {
   createSessionHost,
   type HostClient,
   type SessionHost,
-} from "../src/core/sessionHost";
-import {
-  connectHullStore,
-  type TransportFactory,
-} from "../src/core/workerStore";
+} from "../src/document-store/sessionHost";
+import { connectDocumentStore } from "../src/document-store/client";
+import type { StoreTransportFactory } from "../src/document-store/transport/transport";
+import { defaultHull } from "../src/core/hull";
 import { hullViolations } from "../src/core/invariants";
+import { buildJson } from "../src/core/json";
 
 let failures = 0;
 const check = (condition: unknown, message: string) => {
@@ -19,7 +19,7 @@ const check = (condition: unknown, message: string) => {
 };
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-function transportFor(host: SessionHost): TransportFactory {
+function transportFor(host: SessionHost): StoreTransportFactory {
   return (windowId, receive) => {
     const client: HostClient = {
       id: windowId,
@@ -39,40 +39,39 @@ const saveGate = new Promise<void>((resolve) => {
 });
 const host = createSessionHost({
   instanceId: "worker-one",
-  saveBackend: {
-    save: async (capture) => {
+  persistence: {
+    loadDesign: async () => {
+      throw new Error("not used by this test");
+    },
+    saveDesign: async (request) => {
       await saveGate;
       return {
-        currentId: capture.currentId ?? "created-row",
-        created: capture.create,
+        currentId: request.currentId ?? "created-row",
+        created: request.create,
       };
     },
   },
 });
-const a = await connectHullStore({
+const a = await connectDocumentStore({
   sessionId: "shared",
   windowId: "a",
   transport: transportFor(host),
 });
-const b = await connectHullStore({
+const b = await connectDocumentStore({
   sessionId: "shared",
   windowId: "b",
   transport: transportFor(host),
 });
-check(a.fresh && !b.fresh, "only the first window bootstraps a fresh session");
-await a.store.dispatchMeta({
-  type: "initializeDesign",
-  currentId: "row-1",
-  savedName: "Test",
-  name: "Test",
-  savedState: a.store.snapshot().state,
-});
-await b.store.dispatchMeta({ type: "setName", name: "Shared title" });
+check(
+  a.store.snapshot().meta.initialized && b.store.snapshot().meta.initialized,
+  "the host initializes a new session before connecting clients",
+);
+await b.store.setName("Shared title");
 check(
   a.store.snapshot().meta.name === "Shared title",
   "metadata commands publish across windows",
 );
-await b.store.dispatchMeta({ type: "setName", name: "Test" });
+await b.store.setName("Test");
 
 await a.store.dispatch({ type: "setWaterline", depth: 222 });
 await tick();
@@ -82,7 +81,7 @@ check(
 );
 check(
   b.store.snapshot().revision === 1,
-  "both windows observe the owner's revision",
+  "both windows observe the shared server revision",
 );
 check(
   hullViolations(b.store.snapshot().state, "document").length === 0,
@@ -127,7 +126,7 @@ releaseSave?.();
 const saved = await saving;
 check(
   saved.revision === savingRevision,
-  "the owner saves the revision captured before the request",
+  "the server saves the revision captured before the request",
 );
 check(
   a.store.snapshot().revision > a.store.snapshot().savedRevision &&
@@ -143,18 +142,52 @@ check(
   "closing one window leaves the shared session editable",
 );
 
-const isolated = await connectHullStore({
+const isolated = await connectDocumentStore({
   sessionId: "isolated",
   windowId: "c",
   transport: transportFor(host),
 });
 check(
   isolated.store.snapshot().state.waterline !== 333,
-  "a different session has an independent owner",
+  "a different session has an independent server",
 );
 
-b.store.close?.();
-isolated.store.close?.();
+let loads = 0;
+const loadHost = createSessionHost({
+  persistence: {
+    async loadDesign() {
+      loads++;
+      return {
+        name: "Loaded",
+        documentText: buildJson({ ...defaultHull(), waterline: 456 }),
+      };
+    },
+    async saveDesign() {
+      throw new Error("not used by this test");
+    },
+  },
+});
+const loadedA = await connectDocumentStore({
+  sessionId: "loaded",
+  windowId: "loaded-a",
+  source: { type: "design", designId: "row-loaded" },
+  transport: transportFor(loadHost),
+});
+const loadedB = await connectDocumentStore({
+  sessionId: "loaded",
+  windowId: "loaded-b",
+  source: { type: "design", designId: "row-loaded" },
+  transport: transportFor(loadHost),
+});
+check(
+  loads === 1 && loadedB.store.snapshot().state.waterline === 456,
+  "the host loads a design once before exposing the session",
+);
+
+b.store.close();
+isolated.store.close();
+loadedA.store.close();
+loadedB.store.close();
 await host.settled();
 if (failures) process.exitCode = 1;
 else console.log("\nall passed");

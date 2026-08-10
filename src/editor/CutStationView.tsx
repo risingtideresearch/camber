@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { sweptSection, waterlineStats } from "../core/mesh";
 import { drawCutStation } from "../core/draw2d";
-import { useRuntime } from "./hullStore";
+import { useDocumentRuntime } from "./documentStoreHooks";
 import { useEditorUi } from "./editorUi";
 import { STW, STH } from "../core/view";
 import { SvgView } from "./SvgView";
@@ -17,7 +17,7 @@ const fmt = (v: number): string =>
   Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2);
 
 export function CutStationView() {
-  const model = useRuntime();
+  const model = useDocumentRuntime();
   const { selection, curvature } = useEditorUi();
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {

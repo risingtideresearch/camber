@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { NumberInput } from "polymorph-ui";
 import { rejected } from "../core/commands";
-import { useDispatch, useRuntime } from "./hullStore";
+import { useDocumentDispatch, useDocumentRuntime } from "./documentStoreHooks";
 import { useEditorUi } from "./editorUi";
 import { drawStation } from "../core/draw2d";
 import { viewOf, STW, STH } from "../core/view";
@@ -18,8 +18,8 @@ import "./StationView.css";
 // In "add" mode a click inserts a section point (into every station, index-aligned); in "select" mode an
 // empty click clears the selection.
 export function StationView() {
-  const model = useRuntime();
-  const dispatch = useDispatch();
+  const model = useDocumentRuntime();
+  const dispatch = useDocumentDispatch();
   const {
     selection,
     setSelection: onSelect,

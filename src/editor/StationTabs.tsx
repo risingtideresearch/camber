@@ -1,5 +1,5 @@
 import { stationColor } from "../core/colors";
-import { useRuntime } from "./hullStore";
+import { useDocumentRuntime } from "./documentStoreHooks";
 
 // The tab strip over the per-station editors: one tab per station (its accent color; the active one carries
 // a ✕ to remove it), then a "+" to add a station (disabled at the palette cap of 7). Tabs are ordered by the
@@ -17,7 +17,7 @@ export function StationTabs({
   onAddStation,
   onRemoveStation,
 }: StationTabsProps) {
-  const model = useRuntime();
+  const model = useDocumentRuntime();
   const K = model.stations.length;
   return (
     <div className="tabstrip">

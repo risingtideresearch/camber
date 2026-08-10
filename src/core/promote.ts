@@ -43,7 +43,7 @@
 
 import { type Vec2 } from "./math";
 import { loa, type Model } from "./model";
-import { applyCommand, rejected } from "./commands";
+import { interpretDocumentCommand, rejected } from "./commands";
 import { assemble } from "./runtime";
 import type { Writable, HullState, StationCP } from "./hull";
 import { clampedBSplineSamplerX, planCurve } from "./bspline";
@@ -177,7 +177,7 @@ function bsplineRefit(pts: Vec2[], N: number): Vec2[] {
 const modelOf = (data: HullData): Model =>
   assemble({ ...data, waterline: 0, deckRake: 0 });
 
-// The stations of a hull, back in writable form. Promotion builds its hulls up in passes, and `applyCommand`
+// The stations of a hull, back in writable form. Promotion builds its hulls up in passes, and `interpretDocumentCommand`
 // hands back authored state, so this is the crossing between the two.
 const writableStations = (state: HullState): Writable<StationCP>[] =>
   state.stations.map((st) => ({
@@ -250,7 +250,7 @@ function promoteSection(data: HullData, S: number): void {
     }
     // aim at the segment's midpoint; the command finds the nearest segment (this one) and inserts the
     // matching on-curve point into every station
-    const out = applyCommand(m, {
+    const out = interpretDocumentCommand(m, {
       type: "addStationPoint",
       si: 0,
       n: (ref[bi].n + ref[bi + 1].n) / 2,

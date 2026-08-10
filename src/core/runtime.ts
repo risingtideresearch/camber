@@ -17,7 +17,7 @@
 // The samplers are the expensive part, and only one of them is stale after a typical edit: dragging the
 // waterline slider changes no curve at all, and moving a trim point leaves the plan curve and the whole loft
 // intact. `assemble` therefore rebuilds per SLICE, keyed by integer revisions rather than by object identity.
-// Integers are the right key because they survive `structuredClone`: once the owner is in a SharedWorker
+// Integers are the right key because they survive `structuredClone`: once the server is in a SharedWorker
 // (phase 5) every snapshot arrives as fresh objects, and an identity-based cache would rebuild everything on
 // every command. Callers with no revisions to offer fall back to state identity, which is exactly right for
 // an immutable state that is replaced wholesale.
@@ -78,7 +78,7 @@ interface Cached {
   model: Model;
 }
 
-// One cache slot PER READER, not one for the module. The owner assembles a model of its own to feed the
+// One cache slot PER READER, not one for the module. The server assembles a model of its own to feed the
 // reducer, and every window assembles another; with a single slot they evict each other on every command and
 // nothing is ever reused. The slot is found by the caller's `cacheKey`, held weakly so a closed window's
 // samplers go with it. Callers with no key — the exporters, the preview tools, a one-off blend — share the

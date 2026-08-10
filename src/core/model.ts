@@ -81,7 +81,7 @@ export interface Section {
 // The hull as the geometry reads it: the authored state, the two session values the drawing needs, and the
 // three derived curves. Readonly throughout — a model is built complete by `assemble()` (see `runtime.ts`)
 // and never touched again. An edit produces a NEW hull by dispatching a command (see `commands.ts`); there is
-// no way to reach in and move a control point, which is what makes one owner able to order every edit.
+// no way to reach in and move a control point, which is what makes one authoritative server able to order every edit.
 export interface Model extends HullState {
   readonly x0: number; // the cut-station scrubber's position, in x
   // The hull length the 2D views lay their panels out against. It is CAPTURED when a whole hull is installed

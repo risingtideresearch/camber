@@ -1,3 +1,6 @@
+// Shared session metadata reducer. The DocumentStoreServer is its only writer: windows may request a name,
+// while begin/complete/fail save transitions remain server-owned and cannot be forged through the protocol.
+
 import type { HullState } from "./hull";
 
 export interface DesignIdentity {
@@ -13,19 +16,8 @@ export interface SessionMeta {
   readonly saving: boolean;
 }
 
-/** Metadata changes a window may request. Save lifecycle transitions remain owner-only. */
-export type MetaCommand =
-  | {
-      type: "initializeDesign";
-      currentId: string | null;
-      savedName: string | null;
-      name: string;
-      savedState: HullState;
-    }
-  | { type: "setName"; name: string };
-
-type OwnerMetaTransition =
-  | MetaCommand
+export type SessionMetaTransition =
+  | { type: "setName"; name: string }
   | { type: "beginSave"; name: string }
   | {
       type: "completeSave";
@@ -35,30 +27,19 @@ type OwnerMetaTransition =
     }
   | { type: "failSave" };
 
-export const initialSessionMeta = (): SessionMeta => ({
-  initialized: false,
+export const initialSessionMeta = (state: HullState): SessionMeta => ({
+  initialized: true,
   name: "",
-  design: { currentId: null, savedName: null, savedState: null },
+  design: { currentId: null, savedName: null, savedState: state },
   saving: false,
 });
 
-/** Pure metadata reducer used by both window-requested commands and owner save transitions. */
+/** Pure metadata reducer for server-owned session transitions. */
 export function applyMetaCommand(
   before: SessionMeta,
-  command: OwnerMetaTransition,
+  command: SessionMetaTransition,
 ): SessionMeta {
   switch (command.type) {
-    case "initializeDesign":
-      return {
-        initialized: true,
-        name: command.name,
-        design: {
-          currentId: command.currentId,
-          savedName: command.savedName,
-          savedState: command.savedState,
-        },
-        saving: false,
-      };
     case "setName":
       return before.name === command.name
         ? before

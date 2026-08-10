@@ -6,18 +6,18 @@
 // touches and lets each body splice and clamp as before.
 //
 // Two things follow from commands being values. They can cross a `postMessage` boundary, which is what the
-// SharedWorker owner will need. And they can be rejected: `applyCommand` returns an outcome rather than
+// SharedWorker server will need. And they can be rejected: `interpretDocumentCommand` returns an outcome rather than
 // throwing or half-applying, so a hull that would break its invariants is simply never published — the
 // caller sees the refusal and the previous hull is still there, untouched, because nothing was mutated.
 //
 // ---------- commands are NOT replayable ----------
 //
-// `applyCommand` takes the runtime `Model`, not bare `HullState`, and two commands genuinely need it:
+// `interpretDocumentCommand` takes the runtime `Model`, not bare `HullState`, and two commands genuinely need it:
 // `addStation` reads the new station's section off the LOFT of the pre-state, and the two station-point
 // commands clamp against `bounds`, which is measured against the session's `viewLen`. The same command
 // applied at a different revision therefore produces a different hull. So: no command-log persistence, no
-// command-log undo, and no rebase-by-replay. Undo is a snapshot stack (`store.ts`), and the multi-window
-// design orders commands through one owner rather than replaying them per window.
+// command-log undo, and no rebase-by-replay. Undo is a snapshot stack (`document-store/history.ts`), and the multi-window
+// design orders commands through one authoritative server rather than replaying them per window.
 
 import { clamp, lerp } from "./math";
 import { UNIT_MM, type Unit } from "./document";
@@ -39,7 +39,7 @@ import type { SessionState } from "./runtime";
 // Coordinates are MODEL-space: the views map a pointer through their inverse transform before dispatching,
 // so nothing here knows about pixels, pan or zoom.
 
-export type HullCommand =
+export type DocumentCommand =
   // the sheer plan
   | { type: "addPlanPoint"; x: number; y: number }
   | { type: "movePlanPoint"; idx: number; x: number; y: number }
@@ -73,7 +73,7 @@ export type HullCommand =
 export type SessionCommand = { type: "setX0"; x: number };
 
 // ---------- what a command touched ----------
-// A bitmask of the slices whose revisions the owner must bump. `assemble` rebuilds a sampler only for the
+// A bitmask of the slices whose revisions the server must bump. `assemble` rebuilds a sampler only for the
 // slices that moved, so this is what makes a waterline drag cost nothing.
 export const SLICE = {
   plan: 1,
@@ -93,9 +93,9 @@ export interface Applied {
   /** The inserted index for the five adds; `false` where an op declined to do anything. */
   result?: number | boolean;
 }
-export type Outcome = Applied | { rejected: string };
+export type CommandOutcome = Applied | { rejected: string };
 
-export const rejected = (o: Outcome): o is { rejected: string } =>
+export const rejected = (o: CommandOutcome): o is { rejected: string } =>
   "rejected" in o;
 
 // ---------- the draft ----------
@@ -200,7 +200,10 @@ const stationBox = (before: Model) => boundsOf(before.viewLen);
 
 // ---------- the reducer ----------
 
-export function applyCommand(before: Model, cmd: HullCommand): Outcome {
+export function interpretDocumentCommand(
+  before: Model,
+  cmd: DocumentCommand,
+): CommandOutcome {
   const d = draft(before);
   switch (cmd.type) {
     // ---- the sheer plan ----
@@ -499,21 +502,21 @@ export type KnuckleTarget =
 export const setKnuckleCommand = (
   target: KnuckleTarget,
   k: number,
-): HullCommand =>
+): DocumentCommand =>
   target.tgt === "trim"
     ? { type: "setTrimK", idx: target.idx, k }
     : { type: "setStationK", si: target.si, idx: target.idx, k };
 
 // The five commands whose result is an inserted index. Consecutive drags coalesce in the undo stack; these
 // never do, because each one is a distinct structural change.
-export const isInsert = (cmd: HullCommand): boolean =>
+export const isInsert = (cmd: DocumentCommand): boolean =>
   cmd.type === "addPlanPoint" ||
   cmd.type === "addTrimPoint" ||
   cmd.type === "addStation" ||
   cmd.type === "addStationPoint";
 
 /** Structural commands are meaningful only against the collection indices they were composed from. */
-export function requiresCurrentBase(cmd: HullCommand): boolean {
+export function requiresCurrentBase(cmd: DocumentCommand): boolean {
   return (
     cmd.type === "addPlanPoint" ||
     cmd.type === "removePlanPoint" ||
@@ -528,7 +531,7 @@ export function requiresCurrentBase(cmd: HullCommand): boolean {
 }
 
 /** The slices another author must have changed before a structural command is stale. */
-export function commandSlices(cmd: HullCommand): SliceMask {
+export function commandSlices(cmd: DocumentCommand): SliceMask {
   switch (cmd.type) {
     case "addPlanPoint":
     case "movePlanPoint":
@@ -563,7 +566,7 @@ export function commandSlices(cmd: HullCommand): SliceMask {
 // Two commands coalesce into one undo step when they are the same continuous gesture: the same kind of move
 // against the same target. Only the moves qualify — an add or a remove is its own step, and so is every
 // scalar the user typed rather than dragged.
-export function sameGesture(a: HullCommand, b: HullCommand): boolean {
+export function sameGesture(a: DocumentCommand, b: DocumentCommand): boolean {
   if (a.type !== b.type) return false;
   switch (a.type) {
     case "movePlanPoint":

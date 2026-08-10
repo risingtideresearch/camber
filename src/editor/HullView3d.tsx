@@ -6,11 +6,11 @@
 // wherever the window's two providers are.
 
 import { View3d } from "../components/View3d";
-import { useRuntime } from "./hullStore";
+import { useDocumentRuntime } from "./documentStoreHooks";
 import { useEditorUi } from "./editorUi";
 
 export function HullView3d() {
-  const model = useRuntime();
+  const model = useDocumentRuntime();
   const { selection, sampling, curvature, stl } = useEditorUi();
   return (
     <View3d
