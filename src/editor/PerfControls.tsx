@@ -1,17 +1,15 @@
+import { useEditorUi } from "./editorUi";
 import { useState } from "react";
 import { Dropdown } from "../components/Dropdown";
-import { perfReset, type PerfSettings } from "../core/perf";
+import { perfReset } from "../core/perf";
 
 // The app-bar "Performance" control, next to Curvature and built the same way: a toggle button that turns
 // the measurement readout on (recording costs nothing while it is off, so this really is a switch, not just
 // a panel that hides), plus a dropdown for how the numbers are presented. State lives in EditorApp, which
 // also forces a redraw when the toggle flips so the panel fills immediately instead of on the next edit.
-interface PerfControlsProps {
-  value: PerfSettings;
-  onChange: (next: PerfSettings) => void;
-}
 
-export function PerfControls({ value, onChange }: PerfControlsProps) {
+export function PerfControls() {
+  const { perf: value, setPerf: onChange } = useEditorUi();
   const [open, setOpen] = useState(false);
 
   return (

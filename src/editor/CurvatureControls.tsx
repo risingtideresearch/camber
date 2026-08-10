@@ -1,3 +1,4 @@
+import { useEditorUi } from "./editorUi";
 import { useState } from "react";
 import { Dropdown } from "../components/Dropdown";
 import type { CurvatureSettings } from "../core/comb";
@@ -5,10 +6,6 @@ import type { CurvatureSettings } from "../core/comb";
 // The app-bar "Curvature" control: a toggle button that shows / hides the curvature-comb overlays across all
 // views, plus a dropdown that picks which combs are drawn and how dense they are. State lives in EditorApp
 // (so every view can read it); this component just presents it and pushes edits back up through `onChange`.
-interface CurvatureControlsProps {
-  value: CurvatureSettings;
-  onChange: (next: CurvatureSettings) => void;
-}
 
 // the checkbox rows, grouped by view. Each entry is [settings key, label]; a null row starts a new group.
 type BoolKey = {
@@ -103,7 +100,8 @@ const SLIDERS: {
   },
 ];
 
-export function CurvatureControls({ value, onChange }: CurvatureControlsProps) {
+export function CurvatureControls() {
+  const { curvature: value, setCurvature: onChange } = useEditorUi();
   const [open, setOpen] = useState(false);
   const setBool = (k: BoolKey, v: boolean) => onChange({ ...value, [k]: v });
   const setNum = (k: NumKey, v: number) => onChange({ ...value, [k]: v });

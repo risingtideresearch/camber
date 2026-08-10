@@ -1,44 +1,27 @@
 import { useCallback } from "react";
-import type { Model } from "../core/model";
 import { rejected } from "../core/commands";
-import { useHullStore } from "./hullStore";
-import type { HullSampling } from "../core/mesh";
-import type { ModelSelection } from "../core/modelSelection";
-import type { CurvatureSettings } from "../core/comb";
+import { useDispatch, useRuntime } from "./hullStore";
+import { useEditorUi } from "./editorUi";
 import { drawProfile } from "../core/draw2d";
 import { viewOf } from "../core/view";
-import type { RefObject } from "react";
 import { SvgView } from "./SvgView";
-import type { SvgViewSync } from "./svgViewSync";
-import type { Tool } from "./types";
 import "./ViewStrip.css";
 
 // The profile strip (sheer trim, keel/stem, transom in side view). Draws through a shared pan/zoom SvgView.
 // In "add" mode a click on empty space inserts a sheer-trim point.
-interface ProfileViewProps {
-  model: Model;
-  selection: ModelSelection;
-  sampling: HullSampling; // the shared hull sampling; the keel / stem outline is drawn from its trimmedSections
-  tool: Tool;
-  onSelect: (sel: ModelSelection) => void;
-  setTool: (t: Tool) => void;
-  sync?: RefObject<SvgViewSync>; // shared zoom / x-pan with the plan strip
-  curvature: CurvatureSettings;
-  knotLongs: boolean; // the station editor's "Show knot longitudinals" toggle, shared by all three 2D views
-}
-
-export function ProfileView({
-  model,
-  selection,
-  sampling,
-  tool,
-  onSelect,
-  setTool,
-  sync,
-  curvature,
-  knotLongs,
-}: ProfileViewProps) {
-  const store = useHullStore();
+export function ProfileView() {
+  const model = useRuntime();
+  const dispatch = useDispatch();
+  const {
+    selection,
+    setSelection: onSelect,
+    sampling,
+    tool,
+    setTool,
+    curvature,
+    knotLongs,
+    planProfileSync: sync,
+  } = useEditorUi();
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
       drawProfile(
@@ -61,7 +44,7 @@ export function ProfileView({
       return;
     }
     const v = viewOf(model);
-    const out = await store.dispatch({
+    const out = await dispatch({
       type: "addTrimPoint",
       x: v.invX(vx),
       z: v.invZp(vy),

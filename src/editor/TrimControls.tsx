@@ -1,23 +1,34 @@
-import { loa, type Model } from "../core/model";
+import { loa } from "../core/model";
 import { UNITS, type Unit } from "../core/document";
+import { useDispatch, useRuntime } from "./hullStore";
 import "./TrimControls.css";
 
 // The design-waterline and deck-rake sliders, plus the document's unit. React-owned: their values are read
 // from the model (the single source of truth) and each change pushes back to the model, which triggers a
 // redraw everywhere.
-interface TrimControlsProps {
-  model: Model;
-  onWaterline: (d: number) => void;
-  onRake: (deg: number) => void;
-  onUnit: (u: Unit) => void;
-}
 
-export function TrimControls({
-  model,
-  onWaterline,
-  onRake,
-  onUnit,
-}: TrimControlsProps) {
+export function TrimControls() {
+  const model = useRuntime();
+  const dispatch = useDispatch();
+  const onWaterline = (depth: number) =>
+    void dispatch({ type: "setWaterline", depth });
+  const onRake = (deg: number) =>
+    void dispatch({ type: "setDeckRakeDeg", deg });
+  // Changing the unit asks which of the two things the user meant: keep the hull the same PHYSICAL size and
+  // convert the numbers (2000 mm → 2 m), or keep the numbers and reinterpret them at the new unit's scale
+  // (2000 mm → 2000 m). Neither is a safe default, so it is asked rather than assumed.
+  const onUnit = (unit: Unit) => {
+    if (unit === model.unit) return;
+    const rescale = confirm(
+      `Change the unit from ${model.unit} to ${unit}.
+
+` +
+        `OK — convert the numbers, keeping the hull the same size.
+` +
+        `Cancel — keep the numbers, resizing the hull to ${unit}.`,
+    );
+    void dispatch({ type: "setUnit", unit, rescale });
+  };
   const waterline = model.waterline; // depth below the sheer origin (deck datum), in model.unit
   const rakeDeg = (model.deckRake * 180) / Math.PI;
   // the slider's range is a proportion of the hull's own length — the coordinates are absolute in the

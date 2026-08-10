@@ -1,50 +1,30 @@
 import { useCallback } from "react";
-import type { Model } from "../core/model";
 import { rejected } from "../core/commands";
-import { useHullStore } from "./hullStore";
-import type { HullSampling } from "../core/mesh";
-import type { ModelSelection } from "../core/modelSelection";
-import type { CurvatureSettings } from "../core/comb";
+import { useDispatch, useRuntime } from "./hullStore";
+import { useEditorUi } from "./editorUi";
 import { drawPlan } from "../core/draw2d";
 import { viewOf } from "../core/view";
-import type { RefObject } from "react";
 import { SvgView } from "./SvgView";
-import type { SvgViewSync } from "./svgViewSync";
-import type { Tool } from "./types";
 import "./ViewStrip.css";
 
 // The plan strip (deck-edge half-breadth). Draws through a shared pan/zoom SvgView. In "add" mode a click on
 // empty space inserts a sheer point there; in "select" mode an empty click clears the selection (clicks on
 // control points are handled by their own node listeners, which stopPropagation before this fires).
-interface PlanViewProps {
-  model: Model;
-  selection: ModelSelection;
-  sampling: HullSampling; // the shared hull sampling; the outline is drawn from its trimmedSections
-  tool: Tool;
-  onSelect: (sel: ModelSelection) => void;
-  setTool: (t: Tool) => void;
-  sync?: RefObject<SvgViewSync>; // shared zoom / x-pan with the profile strip
-  curvature: CurvatureSettings;
-  knotLongs: boolean; // the station editor's "Show knot longitudinals" toggle, shared by all three 2D views
-  // which station the section editor is on: shown emphasized here, and set by clicking a station's segment
-  activeStation: number;
-  onActivateStation: (si: number) => void;
-}
-
-export function PlanView({
-  model,
-  selection,
-  sampling,
-  tool,
-  onSelect,
-  setTool,
-  sync,
-  curvature,
-  knotLongs,
-  activeStation,
-  onActivateStation,
-}: PlanViewProps) {
-  const store = useHullStore();
+export function PlanView() {
+  const model = useRuntime();
+  const dispatch = useDispatch();
+  const {
+    selection,
+    setSelection: onSelect,
+    sampling,
+    tool,
+    setTool,
+    curvature,
+    knotLongs,
+    activeStation,
+    setActiveStation: onActivateStation,
+    planProfileSync: sync,
+  } = useEditorUi();
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
       drawPlan(
@@ -81,7 +61,7 @@ export function PlanView({
       return;
     }
     const v = viewOf(model);
-    const out = await store.dispatch({
+    const out = await dispatch({
       type: "addPlanPoint",
       x: v.invX(vx),
       y: v.invY(vy),

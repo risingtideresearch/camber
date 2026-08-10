@@ -1,14 +1,11 @@
+import { useEditorUi } from "./editorUi";
 import { Button } from "../components/Button";
-import type { Tool } from "./types";
 import "./Toolbar.css";
 
 // The edit-tool toolbar (Select / Add). React-owned: the active tool comes from state and each click sets it.
-interface ToolbarProps {
-  tool: Tool;
-  onTool: (t: Tool) => void;
-}
 
-export function Toolbar({ tool, onTool }: ToolbarProps) {
+export function Toolbar() {
+  const { tool, setTool: onTool } = useEditorUi();
   return (
     <div className="toolbar">
       <Button

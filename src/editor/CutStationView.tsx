@@ -1,20 +1,14 @@
 import { useCallback, useMemo } from "react";
-import { type Model } from "../core/model";
 import { sweptSection, waterlineStats } from "../core/mesh";
-import type { ModelSelection } from "../core/modelSelection";
-import type { CurvatureSettings } from "../core/comb";
 import { drawCutStation } from "../core/draw2d";
+import { useRuntime } from "./hullStore";
+import { useEditorUi } from "./editorUi";
 import { STW, STH } from "../core/view";
 import { SvgView } from "./SvgView";
 import "./CutStationView.css";
 
 // The live cut-station panel: the lofted section at the red cut x0, plus a draft / WL-beam readout.
 // Both the drawing (drawCutStation into its <svg>) and the readout react to model / selection changes.
-interface CutStationViewProps {
-  model: Model;
-  selection: ModelSelection;
-  curvature: CurvatureSettings;
-}
 
 // A measurement in the model's own unit. The coordinates are absolute now, so a hull may legitimately be
 // 5000 (mm) or 5 (m) long — rounding everything to the nearest integer would erase a metre-unit hull's
@@ -22,11 +16,9 @@ interface CutStationViewProps {
 const fmt = (v: number): string =>
   Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2);
 
-export function CutStationView({
-  model,
-  selection,
-  curvature,
-}: CutStationViewProps) {
+export function CutStationView() {
+  const model = useRuntime();
+  const { selection, curvature } = useEditorUi();
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
       drawCutStation(g, model, selection, [sx, sy], curvature);

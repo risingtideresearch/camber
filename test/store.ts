@@ -20,6 +20,8 @@
 import { createOwner, isDirty, localStore } from "../src/core/store";
 import { defaultHull, loa, type HullState } from "../src/core/hull";
 import { hullViolations } from "../src/core/invariants";
+import { assemble } from "../src/core/runtime";
+import { computeHullSampling } from "../src/core/mesh";
 
 let fails = 0;
 const ok = (c: boolean, m: string): void => {
@@ -229,6 +231,70 @@ function clock(): { now: () => number; advance: (ms: number) => void } {
   ok(
     owner.snapshot().state.waterline === 10,
     "a pause between two edits keeps them apart",
+  );
+}
+
+// ---- the shared sampling's cache key is honest ----
+// The editor memoizes the one hull sampling every view shares on the four AUTHORED-GEOMETRY slice revisions,
+// leaving the waterline, the deck rake and the cut station deliberately out of the dependencies. That is only
+// sound while `computeHullSampling` really does read nothing else — and it is the most expensive thing in the
+// editor, duplicated by every window, so a stray read added to mesh.ts later would be costly and silent. This
+// is the guard: change only the values the key ignores, and the sampling must come out identical.
+{
+  const base = defaultHull();
+  const sample = (
+    state: HullState,
+    session?: { x0: number; viewLen: number },
+  ) =>
+    JSON.stringify(
+      computeHullSampling(assemble(state, session, { cacheKey: {} }), 8, 2),
+    );
+
+  const reference = sample(base);
+  ok(reference.length > 1000, "the sampling produced something to compare");
+  ok(
+    sample({ ...base, waterline: base.waterline * 3 }) === reference,
+    "moving the waterline does not change the hull sampling",
+  );
+  ok(
+    sample({ ...base, deckRake: 0.15 }) === reference,
+    "raking the deck does not change the hull sampling",
+  );
+  ok(
+    sample(base, { x0: 10, viewLen: loa(base) }) === reference,
+    "scrubbing the cut station does not change the hull sampling",
+  );
+  ok(
+    sample({ ...base, name: "renamed" }) === reference,
+    "renaming the design does not change the hull sampling",
+  );
+  // And the controls: things the key DOES watch must change it. Note a station's `keelK` would NOT — it is
+  // authored, lofted and round-tripped, but the mesh does not read it yet (honouring it means deforming the
+  // section near the centerline, which lands as its own change), so it is no use as a canary here.
+  ok(
+    sample({
+      ...base,
+      stations: base.stations.map((st, i) =>
+        i === 0
+          ? {
+              ...st,
+              points: st.points.map((q, j) =>
+                j === 2 ? { ...q, n: q.n * 1.4 } : q,
+              ),
+            }
+          : st,
+      ),
+    }) !== reference,
+    "but moving a station point does",
+  );
+  ok(
+    sample({
+      ...base,
+      sheerTrim: base.sheerTrim.map((q, i) =>
+        i === 1 ? { ...q, z: q.z - 200 } : q,
+      ),
+    }) !== reference,
+    "and so does moving the sheer trim",
   );
 }
 

@@ -1,30 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./Button";
-import {
-  AXES,
-  type Axis,
-  type StlSettings,
-  type StlState,
-} from "../core/stlImport";
+import { AXES, type Axis, type StlSettings } from "../core/stlImport";
+import { useEditorUi } from "../editor/editorUi";
 import "./StlControl.css";
 
 // The appbar STL control. Before a file is loaded it is a single "STL Import" button; once a mesh is
 // imported it becomes a split control: a "Show STL" toggle joined to a ▾ button that opens a dropdown of
 // display settings (axis remap, scale, opacity, wireframe / shaded, and Remove). Purely presentational —
 // EditorApp owns the StlState and applies every change.
-interface StlControlProps {
-  stl: StlState | null;
-  onImport: (file: File) => void;
-  onChange: (patch: Partial<StlSettings>) => void;
-  onRemove: () => void;
-}
 
-export function StlControl({
-  stl,
-  onImport,
-  onChange,
-  onRemove,
-}: StlControlProps) {
+export function StlControl() {
+  const {
+    stl,
+    importStl: onImport,
+    changeStl: onChange,
+    removeStl: onRemove,
+  } = useEditorUi();
   const fileRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);

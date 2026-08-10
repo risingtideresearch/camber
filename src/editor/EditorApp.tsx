@@ -1,28 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { computeHullSampling, type HullSampling } from "../core/mesh";
-import type { Unit } from "../core/document";
-import type { ModelSelection } from "../core/modelSelection";
-import type { HullCommand } from "../core/commands";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createOwner, isDirty, localStore } from "../core/store";
-import {
-  StoreContext,
-  useHullStore,
-  useRuntime,
-  useSnapshot,
-} from "./hullStore";
-import {
-  defaultStlSettings,
-  parseStl,
-  type StlSettings,
-  type StlState,
-} from "../core/stlImport";
-import { getHullBBox } from "../core/hullGeometry";
+import { StoreContext, useHullStore, useSnapshot } from "./hullStore";
+import { EditorUiProvider, useEditorUi } from "./editorUi";
 import { defaultHull } from "../core/hull";
 import { buildJson } from "../core/json";
-import { getDrag, setDrag } from "../core/drag";
-import { viewOf } from "../core/view";
-import { getVB } from "./svgCoords";
-import { deleteCommand, knuckleCommand } from "./selection";
 import {
   isUnsaved,
   newDesignId,
@@ -34,100 +15,46 @@ import {
   type DesignId,
   type SaveView,
 } from "./save";
-import type { Tool } from "./types";
 import { Toolbar } from "./Toolbar";
 import { SelectionInfo } from "./SelectionInfo";
 import { TrimControls } from "./TrimControls";
 import { CurvatureControls } from "./CurvatureControls";
 import { PerfControls } from "./PerfControls";
 import { PerfPanel } from "./PerfPanel";
-import { defaultCurvature } from "../core/comb";
-import {
-  defaultPerf,
-  perfBegin,
-  perfEnd,
-  perfFrame,
-  perfStep,
-  setPerfOn,
-  PERF_SECTIONS,
-  PERF_SAMPLING,
-  type PerfSettings,
-} from "../core/perf";
 import { DesignBar } from "./DesignBar";
-import { View3d } from "../components/View3d";
+import { HullView3d } from "./HullView3d";
 import { PlanView } from "./PlanView";
 import { ProfileView } from "./ProfileView";
-import { useSvgViewSync } from "./svgViewSync";
 import { StationView } from "./StationView";
 import { CutStationView } from "./CutStationView";
 import { StlControl } from "../components/StlControl";
 import { Area, AreaGroup, AreaSeparator } from "polymorph-ui";
 import "./EditorApp.css";
 
-// The editor's window owns the hull. In one window that is the whole story; from phase 5 the owner moves into
-// a SharedWorker and only this line changes — everything below reads the store through the same interface.
+// The editor's window owns the hull, and wraps everything below it in the two providers a panel needs: the
+// STORE (the hull, shared with every other window from phase 5) and the window's own UI state. Every panel
+// under them takes no props at all — which is the point, because in phase 6 a panel moves into a window of
+// its own, where there is no parent left to hand it anything.
 export function EditorApp() {
   const [store] = useState(() => localStore(createOwner()));
   return (
     <StoreContext.Provider value={store}>
-      <Editor />
+      <EditorUiProvider>
+        <Editor />
+      </EditorUiProvider>
     </StoreContext.Provider>
   );
 }
 
 function Editor() {
   const store = useHullStore();
-  // The hull, assembled. Unlike the mutable model this replaces, its IDENTITY changes exactly when something
-  // this window draws has changed — so it is the redraw signal too, and `modelVersion` is gone.
-  const model = useRuntime();
   const snapshot = useSnapshot();
   const dirty = isDirty(snapshot);
-
-  // Every edit goes through here, so this is where the performance readout's FRAME starts: the redraw it sets
-  // off costs far more than the passes inside it (React's own render and commit, three's reconciliation, the
-  // collector), and the frame is what measures the whole of it — see core/perf.
-  const run = useCallback(
-    (cmd: HullCommand) => {
-      perfFrame();
-      return store.dispatch(cmd);
-    },
-    [store],
-  );
-  // The drag and key handlers subscribe once and then read the latest model from here, rather than re-binding
-  // their window listeners on every frame of a drag.
-  const modelRef = useRef(model);
+  const { perf, setSelection } = useEditorUi();
 
   // the views are mounted only once boot has settled the hull, so nothing draws the default hull before a
   // URL design (?id=) finishes loading — the columns are sized by flex/layout, so mounting causes no reflow.
   const [booted, setBooted] = useState(false);
-
-  // the plan and profile strips share one longitudinal zoom / x-pan so they stay lined up
-  const planProfileSync = useSvgViewSync();
-
-  const [tool, setTool] = useState<Tool>("select");
-  const [curvature, setCurvature] = useState(defaultCurvature);
-  const [selection, setSelection] = useState<ModelSelection>(null);
-  // "Show knot longitudinals": every station's knots and the loft curve each knot index traces. One switch
-  // for all three 2D views (plan, profile, and the section editor, whose card carries the checkbox).
-  const [knotLongs, setKnotLongs] = useState(false);
-  // Which station the section editor is showing. It lives here, not in the station view, because two views
-  // set it: its tab over the section editor, and its own segment in the plan. Clamped on read in case the
-  // station it names was removed.
-  const [activeStationRaw, setActiveStation] = useState(0);
-  const activeStation = Math.min(activeStationRaw, model.stations.length - 1);
-  // The performance readout. Its `on` drives the core's recording switch — a module-level flag rather than
-  // state, because the draws that report into it are imperative and must not re-render anything — so the
-  // toggle is pushed there and a redraw is forced, which is what fills the panel.
-  const [perf, setPerf] = useState<PerfSettings>(defaultPerf);
-  const [redraws, setRedraws] = useState(0);
-  const onPerf = (next: PerfSettings) => {
-    if (next.on !== perf.on) {
-      setPerfOn(next.on);
-      perfFrame();
-      setRedraws((v) => v + 1); // no hull changed, so nothing but this will re-run the sampling
-    }
-    setPerf(next);
-  };
 
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -137,156 +64,17 @@ function Editor() {
   const [flash, setFlash] = useState<SaveView | null>(null);
   const save = flash ?? saveView(dirty, designId, name);
 
-  // imported reference STL — session only, never saved. Drawn translucent over the hull in the 3D view.
-  const [stl, setStl] = useState<StlState | null>(null);
-  const onImportStl = useCallback(async (file: File) => {
-    try {
-      const geom = parseStl(await file.arrayBuffer());
-      const designBox = getHullBBox(modelRef.current); // freeze the current hull bounds; the fit scale is relative to them
-      setStl({
-        geom,
-        designBox,
-        settings: defaultStlSettings(geom, designBox),
-      });
-    } catch (e) {
-      alert(
-        "Couldn't import STL: " + (e instanceof Error ? e.message : String(e)),
-      );
-    }
-  }, []);
-  const onChangeStl = useCallback(
-    (patch: Partial<StlSettings>) =>
-      setStl((s) => (s ? { ...s, settings: { ...s.settings, ...patch } } : s)),
-    [],
-  );
-  const onRemoveStl = useCallback(() => setStl(null), []);
-
-  // A few values the window-level listeners and the async save read at their latest, kept in refs so those
-  // one-time effects never re-subscribe. Written after commit, which is when the handlers can first run.
+  // A few values the window listeners and the async save read at their latest, kept in refs so those one-time
+  // effects never re-subscribe. Written after commit, which is when the handlers can first run.
   const idRef = useRef(designId);
-  const selectionRef = useRef(selection);
   const nameRef = useRef(name);
   const dirtyRef = useRef(dirty);
   const savingRef = useRef(false);
   useEffect(() => {
-    modelRef.current = model;
     idRef.current = designId;
-    selectionRef.current = selection;
     nameRef.current = name;
     dirtyRef.current = dirty;
-  }, [model, designId, selection, name, dirty]);
-
-  // Compute the ONE hull sampling every view shares (mesh.ts): the swept sheet and its three trims, sampled at
-  // the Performance control's resolution. Runs during render (before the child views' draw effects) whenever
-  // the hull or that resolution changes, so every view sees the same lattice — nothing re-sweeps the hull for
-  // itself. The 2D strips read its trimmedSections for the outline, the 3D view stitches them into the
-  // surface.
-  //
-  // The model arrives assembled, so there is no "prepare" step to time any more; what the SECTIONS pass now
-  // measures is the assembly the store did on this window's behalf, which is zero when only the cut station
-  // moved.
-  const sampling = useMemo<HullSampling>(() => {
-    perfBegin(PERF_SECTIONS);
-    perfStep("assemble (derived curves)", () => store.runtime());
-    perfEnd(PERF_SECTIONS);
-    perfBegin(PERF_SAMPLING);
-    const out = computeHullSampling(model, perf.numSections, perf.girthSteps);
-    perfEnd(PERF_SAMPLING);
-    return out;
-    // `redraws` carries no data — it is how the Performance toggle forces one more pass through here, so the
-    // panel has something to show when it is switched on without the hull having moved.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store, model, redraws, perf.numSections, perf.girthSteps]);
-
-  // ---------- window-level drag (2D control points) ----------
-  // Drags are begun on the SVG nodes (draw2d's startDrag sets the shared drag + selects); the move is applied
-  // here at the window level, mapping the pointer into model space and dispatching the matching command. The
-  // 3D rotate / zoom drag is handled locally in View3d, so it never reaches this handler.
-  useEffect(() => {
-    const onMove = (e: PointerEvent) => {
-      const drag = getDrag();
-      if (!drag) return;
-      const [vx, vy] = getVB(drag, e);
-      const m = modelRef.current;
-      // the view transforms are held against the length captured when the hull was installed (see view.ts),
-      // so they do not shift mid-drag: a point tracks the pointer even when the drag is what sets the LOA
-      const v = viewOf(m);
-      const idx = drag.idx ?? 0;
-      // The cut station is SESSION state — shared between windows, but neither undoable nor a change to the
-      // document — so it has a dispatch of its own and never reaches the undo stack.
-      if (drag.kind === "slider") {
-        perfFrame();
-        store.dispatchSession({ type: "setX0", x: v.invX(vx) });
-        return;
-      }
-      if (drag.kind === "sheer")
-        void run({
-          type: "movePlanPoint",
-          idx,
-          x: v.invX(vx),
-          y: v.invY(vy),
-        });
-      else if (drag.kind === "trim")
-        void run({ type: "moveTrim", idx, x: v.invX(vx), z: v.invZp(vy) });
-      else if (drag.kind === "transom")
-        void run({ type: "moveTransom", idx, x: v.invX(vx), z: v.invZp(vy) });
-      // a station handle rides the plan curve: the station's u is the plan point NEAREST the pointer, not
-      // the one straight below it. Where the plan turns toward the centerline at the bow, a vertical hit
-      // slides far along the curve for a small sideways move (and stops responding at all once the pointer
-      // passes the stem); the nearest point keeps the handle under the hand. The plan is drawn at the one
-      // isometric scale (view.ts), so nearest in model space is also nearest on screen.
-      else if (drag.kind === "stationU")
-        void run({
-          type: "moveStationU",
-          idx,
-          u: m.plan.uAtPoint([v.invX(vx), v.invY(vy)]),
-        });
-      else if (drag.kind === "stn")
-        void run({
-          type: "moveStationPoint",
-          si: drag.si ?? 0,
-          idx,
-          n: v.invN(vx),
-          z: v.invZ(vy),
-        });
-    };
-    const onUp = () => setDrag(null); // selection persists after a drag, so the point stays editable
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-    };
-  }, [store, run]);
-
-  // ---------- delete the selected point, and undo / redo ----------
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
-      if (e.key === "Delete" || e.key === "Backspace") {
-        const cmd = deleteCommand(modelRef.current, selectionRef.current);
-        if (!cmd) return;
-        e.preventDefault();
-        setSelection(null);
-        void run(cmd);
-        return;
-      }
-      // Undo is new: there was nothing to undo with before the store, because an edit overwrote the hull in
-      // place. A drag is one step — consecutive moves of the same point coalesce in the owner.
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
-        e.preventDefault();
-        perfFrame();
-        setSelection(null);
-        if (e.shiftKey) store.redo();
-        else store.undo();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [store, run]);
+  }, [designId, name, dirty]);
 
   // ---------- boot: load the URL design (if any) once ----------
   useEffect(() => {
@@ -332,7 +120,7 @@ function Editor() {
     return () => {
       cancelled = true;
     };
-  }, [store]);
+  }, [store, setSelection]);
 
   // ---------- the one save action (stable; reads latest state from refs) ----------
   const doSave = useCallback(async () => {
@@ -393,31 +181,6 @@ function Editor() {
   }, [name]);
 
   // ---------- handlers ----------
-  const onWaterline = (depth: number) =>
-    void run({ type: "setWaterline", depth });
-  const onRake = (deg: number) => void run({ type: "setDeckRakeDeg", deg });
-  // Changing the unit asks which of the two things the user meant: keep the hull the same PHYSICAL size and
-  // convert the numbers (2000 mm → 2 m), or keep the numbers and reinterpret them at the new unit's scale
-  // (2000 mm → 2000 m). Neither is a safe default, so it is asked rather than assumed.
-  const onUnit = (unit: Unit) => {
-    if (unit === model.unit) return;
-    const rescale = confirm(
-      `Change the unit from ${model.unit} to ${unit}.\n\n` +
-        `OK — convert the numbers, keeping the hull the same size.\n` +
-        `Cancel — keep the numbers, resizing the hull to ${unit}.`,
-    );
-    void run({ type: "setUnit", unit, rescale });
-  };
-  const onKnuckle = (k: number) => {
-    const cmd = knuckleCommand(model, selection, k);
-    if (cmd) void run(cmd);
-  };
-  const onDelete = () => {
-    const cmd = deleteCommand(model, selection);
-    if (!cmd) return;
-    setSelection(null);
-    void run(cmd);
-  };
   // blanking the title on an existing design restores the saved name (a name is required to save)
   const onNameBlur = () => {
     const saved = idRef.current.savedName;
@@ -428,7 +191,7 @@ function Editor() {
     const state = revertTo(dirty, designId);
     if (!state) return;
     setSelection(null);
-    void run({ type: "installHull", state });
+    void store.dispatch({ type: "installHull", state });
   };
   const onClose = () => {
     if (
@@ -442,22 +205,12 @@ function Editor() {
   return (
     <div className="app">
       <div className="appbar">
-        <Toolbar tool={tool} onTool={setTool} />
-        <SelectionInfo
-          model={model}
-          selection={selection}
-          onKnuckle={onKnuckle}
-          onDelete={onDelete}
-        />
+        <Toolbar />
+        <SelectionInfo />
         <span className="tabsep" />
-        <TrimControls
-          model={model}
-          onWaterline={onWaterline}
-          onRake={onRake}
-          onUnit={onUnit}
-        />
-        <CurvatureControls value={curvature} onChange={setCurvature} />
-        <PerfControls value={perf} onChange={onPerf} />
+        <TrimControls />
+        <CurvatureControls />
+        <PerfControls />
         <DesignBar
           name={name}
           saveKind={save.kind}
@@ -471,12 +224,7 @@ function Editor() {
           onClose={onClose}
         />
         <span className="tabsep" />
-        <StlControl
-          stl={stl}
-          onImport={(f) => void onImportStl(f)}
-          onChange={onChangeStl}
-          onRemove={onRemoveStl}
-        />
+        <StlControl />
       </div>
       <div className="main">
         {booted && (
@@ -492,7 +240,7 @@ function Editor() {
             {perf.on && (
               <>
                 <Area className="area" defaultSize="22%" minSize="240px">
-                  <PerfPanel settings={perf} />
+                  <PerfPanel />
                 </Area>
                 <AreaSeparator className="areasep" />
               </>
@@ -500,70 +248,27 @@ function Editor() {
             <Area className="area" defaultSize="50%">
               <AreaGroup className="areagroup" orientation="vertical">
                 <Area className="area" defaultSize="50%">
-                  <PlanView
-                    model={model}
-                    selection={selection}
-                    sampling={sampling}
-                    tool={tool}
-                    onSelect={setSelection}
-                    setTool={setTool}
-                    sync={planProfileSync}
-                    curvature={curvature}
-                    knotLongs={knotLongs}
-                    activeStation={activeStation}
-                    onActivateStation={setActiveStation}
-                  />
+                  <PlanView />
                 </Area>
                 <AreaSeparator className="areasep" />
                 <Area className="area" defaultSize="50%">
-                  <ProfileView
-                    model={model}
-                    selection={selection}
-                    sampling={sampling}
-                    tool={tool}
-                    onSelect={setSelection}
-                    setTool={setTool}
-                    sync={planProfileSync}
-                    curvature={curvature}
-                    knotLongs={knotLongs}
-                  />
+                  <ProfileView />
                 </Area>
               </AreaGroup>
             </Area>
             <AreaSeparator className="areasep" />
             <Area className="area" defaultSize="25%" minSize="200px">
-              <StationView
-                model={model}
-                selection={selection}
-                tool={tool}
-                onSelect={setSelection}
-                setTool={setTool}
-                curvature={curvature}
-                knotLongs={knotLongs}
-                setKnotLongs={setKnotLongs}
-                activeStation={activeStation}
-                setActiveStation={setActiveStation}
-              />
+              <StationView />
             </Area>
             <AreaSeparator className="areasep" />
             <Area className="area" defaultSize="25%" minSize="200px">
               <AreaGroup className="areagroup" orientation="vertical">
                 <Area className="area" defaultSize="50%">
-                  <View3d
-                    model={model}
-                    selection={selection}
-                    sampling={sampling}
-                    stl={stl}
-                    curvature={curvature}
-                  />
+                  <HullView3d />
                 </Area>
                 <AreaSeparator className="areasep" />
                 <Area className="area" defaultSize="50%">
-                  <CutStationView
-                    model={model}
-                    selection={selection}
-                    curvature={curvature}
-                  />
+                  <CutStationView />
                 </Area>
               </AreaGroup>
             </Area>

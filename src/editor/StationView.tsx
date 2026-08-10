@@ -1,14 +1,11 @@
 import { useCallback } from "react";
 import { NumberInput } from "polymorph-ui";
-import type { Model } from "../core/model";
 import { rejected } from "../core/commands";
-import { useHullStore } from "./hullStore";
-import type { ModelSelection } from "../core/modelSelection";
-import type { CurvatureSettings } from "../core/comb";
+import { useDispatch, useRuntime } from "./hullStore";
+import { useEditorUi } from "./editorUi";
 import { drawStation } from "../core/draw2d";
 import { viewOf, STW, STH } from "../core/view";
 import { SvgView } from "./SvgView";
-import type { Tool } from "./types";
 import { StationTabs } from "./StationTabs";
 import "./StationView.css";
 
@@ -20,33 +17,20 @@ import "./StationView.css";
 // the pan / zoom carries across tabs (sections stay comparable) and the inactive stations cost nothing.
 // In "add" mode a click inserts a section point (into every station, index-aligned); in "select" mode an
 // empty click clears the selection.
-interface StationViewProps {
-  model: Model;
-  selection: ModelSelection;
-  tool: Tool;
-  onSelect: (sel: ModelSelection) => void;
-  setTool: (t: Tool) => void;
-  curvature: CurvatureSettings;
-  // "Show knot longitudinals" — owned above (the plan and profile strips draw it too), toggled here
-  knotLongs: boolean;
-  setKnotLongs: (v: boolean) => void;
-  activeStation: number;
-  setActiveStation: (si: number) => void;
-}
-
-export function StationView({
-  model,
-  selection,
-  tool,
-  onSelect,
-  setTool,
-  curvature,
-  knotLongs,
-  setKnotLongs,
-  activeStation,
-  setActiveStation,
-}: StationViewProps) {
-  const store = useHullStore();
+export function StationView() {
+  const model = useRuntime();
+  const dispatch = useDispatch();
+  const {
+    selection,
+    setSelection: onSelect,
+    tool,
+    setTool,
+    curvature,
+    knotLongs,
+    setKnotLongs,
+    activeStation,
+    setActiveStation,
+  } = useEditorUi();
   const K = model.stations.length;
 
   // A station is added AT THE CUT: it needs a definite position along the sheer (v1's templates had none),
@@ -54,7 +38,7 @@ export function StationView({
   // unchanged by the insert — it just gains a handle where the surface already was.
   const onAddStation = async () => {
     if (K >= 7) return;
-    const out = await store.dispatch({
+    const out = await dispatch({
       type: "addStation",
       u: model.plan.uAtX(model.x0),
     });
@@ -64,17 +48,17 @@ export function StationView({
   };
   const onRemoveStation = (si: number) => {
     if (K <= 1) return;
-    void store.dispatch({ type: "removeStation", idx: si });
+    void dispatch({ type: "removeStation", idx: si });
     onSelect(null);
     setActiveStation(Math.min(activeStation, K - 2));
   };
   const onKeel = (k: number) =>
-    void store.dispatch({ type: "setKeelK", si: activeStation, k });
+    void dispatch({ type: "setKeelK", si: activeStation, k });
   // The same edit as dragging the station's handle in the plan view, typed instead: the model clamps u
   // between the neighbouring stations, so a value past a neighbour lands at the limit and the field
   // redraws showing where the station actually went.
   const onU = (u: number) =>
-    void store.dispatch({ type: "moveStationU", idx: activeStation, u });
+    void dispatch({ type: "moveStationU", idx: activeStation, u });
 
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
@@ -98,7 +82,7 @@ export function StationView({
       return;
     }
     const v = viewOf(model);
-    const out = await store.dispatch({
+    const out = await dispatch({
       type: "addStationPoint",
       si: activeStation,
       n: v.invN(vx),
@@ -117,7 +101,6 @@ export function StationView({
   return (
     <div className="card stationcard">
       <StationTabs
-        model={model}
         activeTab={activeStation}
         onSelectTab={setActiveStation}
         onAddStation={() => void onAddStation()}
