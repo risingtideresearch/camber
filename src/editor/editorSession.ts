@@ -26,3 +26,18 @@ export function sessionDescriptorFromUrl(): SessionDescriptor {
     source: designId ? { type: "design", designId } : { type: "new" },
   };
 }
+
+// The session a DETACHED PANEL window joins. A panel never starts a session of its own: it is opened from an
+// editor window with that window's live session in its URL, and the host ignores a joining window's source
+// anyway. So a missing `session` is something to report, not a scratch session to invent — inventing one
+// would silently give the panel an empty hull of its own and look like the sharing had failed.
+export function joinedSessionFromUrl(): SessionDescriptor | null {
+  const url = new URL(window.location.href);
+  const sessionId = url.searchParams.get("session");
+  if (!sessionId) return null;
+  const designId = url.searchParams.get("id");
+  return {
+    sessionId,
+    source: designId ? { type: "design", designId } : { type: "new" },
+  };
+}

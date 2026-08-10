@@ -7,6 +7,7 @@ import { drawStation } from "../core/draw2d";
 import { viewOf, STW, STH } from "../core/view";
 import { SvgView } from "./SvgView";
 import { StationTabs } from "./StationTabs";
+import { DetachPanelButton } from "./DetachPanelButton";
 import "./StationView.css";
 
 // The section editor card: the tab strip, the section editor for the active station, and the keel-knuckle
@@ -100,12 +101,18 @@ export function StationView() {
 
   return (
     <div className="card stationcard">
-      <StationTabs
-        activeTab={activeStation}
-        onSelectTab={setActiveStation}
-        onAddStation={() => void onAddStation()}
-        onRemoveStation={onRemoveStation}
-      />
+      {/* the tab strip, and — at the far end of its row — the button that opens every station side by side
+          in a window of its own. It sits on the tabs because the tabs are what it replaces: one station at a
+          time here, all of them there. */}
+      <div className="stationhead">
+        <StationTabs
+          activeTab={activeStation}
+          onSelectTab={setActiveStation}
+          onAddStation={() => void onAddStation()}
+          onRemoveStation={onRemoveStation}
+        />
+        <DetachPanelButton kind="stations" />
+      </div>
       <div className="stationbody">
         <SvgView
           contentWidth={STW}

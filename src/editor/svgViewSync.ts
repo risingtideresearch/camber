@@ -15,6 +15,11 @@ export interface SvgViewSync {
   w: number; // shared view width (aligned views live in one column, so they share a width)
   fitted: boolean; // an initial fit has been established
   userAdjusted: boolean; // the user has zoomed / panned → stop auto-fitting on resize
+  // Share the VERTICAL offset too, not just the horizontal one. Off for the plan / profile strips, which sit
+  // one above the other showing different things and only need their longitudinal axes to line up. On for
+  // views showing the SAME content side by side — the station grid — where a column drifting up or down from
+  // its neighbours is exactly the comparison the layout exists to make.
+  linkY: boolean;
   members: Set<SvgMember>;
 }
 
@@ -30,7 +35,8 @@ export interface SvgMember {
 
 // Create a controller. Share the returned ref across SvgViews (via their `sync` prop) to keep them aligned.
 // It's mutable state living outside render — effects / handlers read and write `.current`, never render.
-export function useSvgViewSync(): RefObject<SvgViewSync> {
+// `linkY` is read once, when the controller is created: it is a property of the layout the views are in.
+export function useSvgViewSync(linkY = false): RefObject<SvgViewSync> {
   return useRef<SvgViewSync>({
     sx: 1,
     sy: 1,
@@ -39,8 +45,20 @@ export function useSvgViewSync(): RefObject<SvgViewSync> {
     w: 0,
     fitted: false,
     userAdjusted: false,
+    linkY,
     members: new Set(),
   });
+}
+
+// Move a member vertically — or, on a linked controller, every member with it. The one place `ty` is written
+// outside the initial fit, so linking is a property of the controller rather than something each caller
+// remembers to honour.
+export function setTy(H: SvgViewSync, self: SvgMember, ty: number): void {
+  if (!H.linkY) {
+    self.ty = ty;
+    return;
+  }
+  for (const m of H.members) m.ty = ty;
 }
 
 // this member's fit scale for a given (shared) view width: fit content into the area, minus padding

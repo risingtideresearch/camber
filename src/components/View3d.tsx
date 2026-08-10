@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Canvas3D,
   Canvas3DAxesGizmo,
@@ -162,6 +162,10 @@ interface View3dProps {
   // don't drive it (the interpolation app), where it defaults to all-off
   curvature?: CurvatureSettings;
   title?: string; // optional label overlaid top-left of the canvas (e.g. "Blended Hull")
+  // host-supplied controls, placed ahead of the view's own in the overlay bar. The view owns everything that
+  // changes what is DRAWN and nothing else, so a control about the pane itself — the editor's "open this in
+  // its own window" button — comes from the host and stays out of here.
+  actions?: ReactNode;
 }
 
 export function View3d({
@@ -171,6 +175,7 @@ export function View3d({
   curvature = CURVATURE_OFF,
   stl,
   title,
+  actions,
 }: View3dProps) {
   const [shading, setShading] = useState<ShadingMode>("smooth");
   // one object rather than four useStates: <Scene> keys a rebuild on it, so its identity has to change only
@@ -223,6 +228,7 @@ export function View3d({
       </Canvas3D>
       {title && <div className="view3dtitle">{title}</div>}
       <div className="view3dctl">
+        {actions}
         <Dropdown
           label={orthographic ? "Ortho" : "Persp"}
           active={!orthographic}

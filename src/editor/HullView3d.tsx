@@ -8,6 +8,7 @@
 import { View3d } from "../components/View3d";
 import { useDocumentRuntime } from "./documentStoreHooks";
 import { useEditorUi } from "./editorUi";
+import { DetachPanelButton } from "./DetachPanelButton";
 
 export function HullView3d() {
   const model = useDocumentRuntime();
@@ -19,6 +20,9 @@ export function HullView3d() {
       sampling={sampling}
       curvature={curvature}
       stl={stl}
+      // Detaching a copy of this pane is an editor idea, not a 3D-view one — the interpolation app renders
+      // the same View3d and has no session to open a window on. So it is passed in from here.
+      actions={<DetachPanelButton kind="view3d" />}
     />
   );
 }

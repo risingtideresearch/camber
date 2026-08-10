@@ -1,0 +1,24 @@
+/* The detached panel window's chrome. It reuses the editor's app shell (.app / .appbar / .main, in
+   EditorApp.css) so a panel is framed exactly as it is in the editor; only the bar's contents differ —
+   what it identifies, rather than what it can do to the document. */
+
+/* which panel this window is, and which design it is on */
+.panelcap {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+}
+.paneldesign {
+  font-weight: 600;
+}
+
+/* a panel window opened without a session in its URL — nothing to show, so say so rather than draw an
+   empty hull that looks like the sharing failed */
+.panelblank {
+  align-items: center;
+  justify-content: center;
+  padding: 0 40px;
+  color: var(--mut);
+  text-align: center;
+}
