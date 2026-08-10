@@ -512,6 +512,54 @@ export const isInsert = (cmd: HullCommand): boolean =>
   cmd.type === "addStation" ||
   cmd.type === "addStationPoint";
 
+/** Structural commands are meaningful only against the collection indices they were composed from. */
+export function requiresCurrentBase(cmd: HullCommand): boolean {
+  return (
+    cmd.type === "addPlanPoint" ||
+    cmd.type === "removePlanPoint" ||
+    cmd.type === "addTrimPoint" ||
+    cmd.type === "removeTrimPoint" ||
+    cmd.type === "addStation" ||
+    cmd.type === "removeStation" ||
+    cmd.type === "addStationPoint" ||
+    cmd.type === "removeStationPoint" ||
+    cmd.type === "installHull"
+  );
+}
+
+/** The slices another author must have changed before a structural command is stale. */
+export function commandSlices(cmd: HullCommand): SliceMask {
+  switch (cmd.type) {
+    case "addPlanPoint":
+    case "movePlanPoint":
+    case "removePlanPoint":
+      return SLICE.plan;
+    case "addTrimPoint":
+    case "moveTrim":
+    case "removeTrimPoint":
+    case "setTrimK":
+      return SLICE.trim;
+    case "moveTransom":
+      return SLICE.transom;
+    case "addStation":
+    case "removeStation":
+    case "moveStationU":
+    case "setKeelK":
+    case "addStationPoint":
+    case "moveStationPoint":
+    case "removeStationPoint":
+    case "setStationK":
+      return SLICE.stations;
+    case "setWaterline":
+    case "setDeckRakeDeg":
+    case "setName":
+      return SLICE.scalars;
+    case "setUnit":
+    case "installHull":
+      return ALL_SLICES;
+  }
+}
+
 // Two commands coalesce into one undo step when they are the same continuous gesture: the same kind of move
 // against the same target. Only the moves qualify — an add or a remove is its own step, and so is every
 // scalar the user typed rather than dragged.

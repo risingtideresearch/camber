@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createOwner, isDirty, localStore } from "../core/store";
+import { isDirty, type HullStore } from "../core/store";
+import { connectHullStore } from "../core/workerStore";
 import { StoreContext, useHullStore, useSnapshot } from "./hullStore";
 import { EditorUiProvider, useEditorUi } from "./editorUi";
 import { defaultHull } from "../core/hull";
@@ -35,18 +36,61 @@ import "./EditorApp.css";
 // STORE (the hull, shared with every other window from phase 5) and the window's own UI state. Every panel
 // under them takes no props at all — which is the point, because in phase 6 a panel moves into a window of
 // its own, where there is no parent left to hand it anything.
+const sessionFromUrl = (): string => {
+  const url = new URL(window.location.href);
+  const explicit = url.searchParams.get("session");
+  if (explicit) return explicit;
+  const design = url.searchParams.get("id");
+  const session = design
+    ? `design:${design}`
+    : `scratch:${crypto.randomUUID()}`;
+  url.searchParams.set("session", session);
+  history.replaceState(null, "", url);
+  return session;
+};
+
 export function EditorApp() {
-  const [store] = useState(() => localStore(createOwner()));
+  const [connection, setConnection] = useState<{
+    store: HullStore;
+    fresh: boolean;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    let store: HullStore | undefined;
+    void connectHullStore({ sessionId: sessionFromUrl() }).then(
+      (connected) => {
+        store = connected.store;
+        if (active) setConnection({ store, fresh: connected.fresh });
+        else store.close?.();
+      },
+      (reason) =>
+        active &&
+        setError(reason instanceof Error ? reason.message : String(reason)),
+    );
+    const unload = () => store?.close?.();
+    window.addEventListener("pagehide", unload);
+    return () => {
+      active = false;
+      window.removeEventListener("pagehide", unload);
+      store?.close?.();
+    };
+  }, []);
+  if (error)
+    return (
+      <div className="app">Could not connect to the hull owner: {error}</div>
+    );
+  if (!connection) return <div className="app" />;
   return (
-    <StoreContext.Provider value={store}>
+    <StoreContext.Provider value={connection.store}>
       <EditorUiProvider>
-        <Editor />
+        <Editor fresh={connection.fresh} />
       </EditorUiProvider>
     </StoreContext.Provider>
   );
 }
 
-function Editor() {
+function Editor({ fresh }: { fresh: boolean }) {
   const store = useHullStore();
   const snapshot = useSnapshot();
   const dirty = isDirty(snapshot);
@@ -80,6 +124,30 @@ function Editor() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      // An already-live session is authoritative. A second window must not overwrite its hull with the
+      // backend's last saved document.
+      if (!fresh) {
+        const rowId = new URLSearchParams(window.location.search).get("id");
+        if (rowId) {
+          try {
+            // Load only the backend identity here. The worker's live hull remains authoritative.
+            const opened = await openDesign(rowId);
+            if (cancelled) return;
+            setDesignId({
+              currentId: rowId,
+              savedName: opened.name,
+              savedDocument: opened.document,
+            });
+            setName(openedName(opened.name, opened.version));
+          } catch (e) {
+            console.error("recover design identity failed:", e);
+          }
+        }
+        if (cancelled) return;
+        setSelection(null);
+        setBooted(true);
+        return;
+      }
       const rowId = new URLSearchParams(window.location.search).get("id");
       let id: DesignId = { ...newDesignId(), savedDocument: "" };
       if (rowId) {
@@ -120,7 +188,7 @@ function Editor() {
     return () => {
       cancelled = true;
     };
-  }, [store, setSelection]);
+  }, [store, setSelection, fresh]);
 
   // ---------- the one save action (stable; reads latest state from refs) ----------
   const doSave = useCallback(async () => {

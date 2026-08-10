@@ -10,11 +10,9 @@
 //                                     │
 //              reader: snapshot() · subscribe() · runtime() = memoized assemble()
 //
-// Today the owner is an object in the editor window and `localStore` calls it directly. In phase 5 it moves
-// into a SharedWorker and `workerStore` posts to it instead; nothing above this line changes, which is the
-// whole point of the split. `dispatch` therefore returns a Promise **even here**, where it resolves in a
-// microtask: the handful of call sites that consume an insert's returned index get written once, now, in the
-// shape they will need then.
+// The editor uses `workerStore` to reach this owner in a SharedWorker. `localStore` remains the transport-free
+// reader used by the store tests. Both expose the same API, including asynchronous dispatch, so components do
+// not know which side of a message boundary owns the hull.
 
 import { assertValidHull } from "./invariants";
 import {
@@ -27,6 +25,8 @@ import {
   type SessionCommand,
   type SliceMask,
   SLICE,
+  commandSlices,
+  requiresCurrentBase,
 } from "./commands";
 import { cloneHull, defaultHull, type HullState } from "./hull";
 import type { Model } from "./model";
@@ -55,14 +55,20 @@ export const isDirty = (s: Snapshot): boolean => s.revision !== s.savedRevision;
 
 // ---------- the owner ----------
 
+export interface RevisionAuthor {
+  readonly revision: number;
+  readonly author: string;
+  readonly touched: SliceMask;
+}
+
 export interface HullOwner {
-  dispatch(cmd: HullCommand, author: string): Outcome;
+  dispatch(cmd: HullCommand, author: string, baseRevision?: number): Outcome;
   dispatchSession(cmd: SessionCommand): void;
   snapshot(): Snapshot;
   subscribe(fn: (s: Snapshot) => void): () => void;
   markSaved(revision: number): void;
-  undo(): boolean;
-  redo(): boolean;
+  undo(author?: string): boolean;
+  redo(author?: string): boolean;
 }
 
 // A hull is a few kB of numbers, so a snapshot stack is affordable and a command log is not needed — which is
@@ -98,6 +104,7 @@ export function createOwner(opts: OwnerOptions = {}): HullOwner {
   let sliceRevs = initialSliceRevs();
   const undoStack: HistoryEntry[] = [],
     redoStack: HistoryEntry[] = [];
+  const authors: RevisionAuthor[] = [];
   const listeners = new Set<(s: Snapshot) => void>();
   const now = opts.now ?? Date.now;
   // The owner needs an assembled model to hand `applyCommand` — `addStation` reads the loft, and the station
@@ -138,7 +145,20 @@ export function createOwner(opts: OwnerOptions = {}): HullOwner {
       return () => listeners.delete(fn);
     },
 
-    dispatch(cmd, author) {
+    dispatch(cmd, author, baseRevision = revision) {
+      if (requiresCurrentBase(cmd) && baseRevision < revision) {
+        const slices = commandSlices(cmd);
+        const intervening = authors.find(
+          (entry) =>
+            entry.revision > baseRevision &&
+            entry.author !== author &&
+            (entry.touched & slices) !== 0,
+        );
+        if (intervening)
+          return {
+            rejected: `stale: revision ${intervening.revision} was written by another window`,
+          };
+      }
       const out = applyCommand(runtime(), cmd);
       if (rejected(out)) return out;
       // The check is at the DOCUMENT level, not the editor level, and deliberately so. A hull opened from a
@@ -158,6 +178,7 @@ export function createOwner(opts: OwnerOptions = {}): HullOwner {
       state = out.state;
       if (out.session) session = { ...session, ...out.session };
       revision++;
+      authors.push({ revision, author, touched: out.touched });
       if (out.session) sessionRevision++;
       bump(out.touched);
 
@@ -198,22 +219,24 @@ export function createOwner(opts: OwnerOptions = {}): HullOwner {
       publish();
     },
 
-    undo() {
+    undo(author = "history") {
       const entry = undoStack.pop();
       if (!entry) return false;
       redoStack.push({ ...entry, state });
       state = entry.state;
       revision++;
+      authors.push({ revision, author, touched: entry.touched });
       bump(entry.touched);
       publish();
       return true;
     },
-    redo() {
+    redo(author = "history") {
       const entry = redoStack.pop();
       if (!entry) return false;
       undoStack.push({ ...entry, state });
       state = entry.state;
       revision++;
+      authors.push({ revision, author, touched: entry.touched });
       bump(entry.touched);
       publish();
       return true;
@@ -234,15 +257,18 @@ export function createOwner(opts: OwnerOptions = {}): HullOwner {
 // ---------- the reader ----------
 
 export interface HullStore {
+  readonly sessionId?: string;
+  readonly windowId?: string;
   snapshot(): Snapshot;
   subscribe(fn: () => void): () => void;
   /** The assembled model, memoized: its identity is stable while nothing this window reads has changed. */
   runtime(): Model;
   dispatch(cmd: HullCommand): Promise<Outcome>;
   dispatchSession(cmd: SessionCommand): void;
-  undo(): void;
-  redo(): void;
-  markSaved(revision: number): void;
+  undo(): void | Promise<boolean>;
+  redo(): void | Promise<boolean>;
+  markSaved(revision: number): void | Promise<void>;
+  close?(): void;
 }
 
 /**
