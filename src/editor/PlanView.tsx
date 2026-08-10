@@ -1,5 +1,7 @@
 import { useCallback } from "react";
-import { addPlanPoint, type Model } from "../core/model";
+import type { Model } from "../core/model";
+import { rejected } from "../core/commands";
+import { useHullStore } from "./hullStore";
 import type { HullSampling } from "../core/mesh";
 import type { ModelSelection } from "../core/modelSelection";
 import type { CurvatureSettings } from "../core/comb";
@@ -16,13 +18,11 @@ import "./ViewStrip.css";
 // control points are handled by their own node listeners, which stopPropagation before this fires).
 interface PlanViewProps {
   model: Model;
-  modelVersion: number;
   selection: ModelSelection;
   sampling: HullSampling; // the shared hull sampling; the outline is drawn from its trimmedSections
   tool: Tool;
   onSelect: (sel: ModelSelection) => void;
   setTool: (t: Tool) => void;
-  bumpModel: () => void;
   sync?: RefObject<SvgViewSync>; // shared zoom / x-pan with the profile strip
   curvature: CurvatureSettings;
   knotLongs: boolean; // the station editor's "Show knot longitudinals" toggle, shared by all three 2D views
@@ -33,19 +33,18 @@ interface PlanViewProps {
 
 export function PlanView({
   model,
-  modelVersion,
   selection,
   sampling,
   tool,
   onSelect,
   setTool,
-  bumpModel,
   sync,
   curvature,
   knotLongs,
   activeStation,
   onActivateStation,
 }: PlanViewProps) {
+  const store = useHullStore();
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
       drawPlan(
@@ -61,10 +60,8 @@ export function PlanView({
         knotLongs,
       );
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       model,
-      modelVersion,
       selection,
       sampling,
       onSelect,
@@ -75,17 +72,23 @@ export function PlanView({
     ],
   );
 
-  const onBackgroundClick = (vx: number, vy: number) => {
-    if (tool === "add") {
-      const v = viewOf(model);
-      const idx = addPlanPoint(model, v.invX(vx), v.invY(vy));
-      setTool("select");
-      if (idx < 0) return; // no room at the minimum point spacing — nothing was inserted
-      onSelect({ tgt: "plan", idx });
-      bumpModel();
-    } else {
+  // An insert is the one place the store's asynchrony reaches the UI: the new point's INDEX comes back from
+  // the owner, and the click that made it is what selects it. A click never begins a drag (drags always start
+  // on an existing node), so the microtask between the two is invisible.
+  const onBackgroundClick = async (vx: number, vy: number) => {
+    if (tool !== "add") {
       onSelect(null);
+      return;
     }
+    const v = viewOf(model);
+    const out = await store.dispatch({
+      type: "addPlanPoint",
+      x: v.invX(vx),
+      y: v.invY(vy),
+    });
+    setTool("select");
+    if (rejected(out)) return; // no room at the minimum point spacing — nothing was inserted
+    onSelect({ tgt: "plan", idx: out.result as number });
   };
 
   // the strip's content box is sized for the hull as it was loaded, and stays that size while it is edited —
@@ -100,7 +103,7 @@ export function PlanView({
         draw={draw}
         sync={sync}
         cursor={tool === "add" ? "crosshair" : "default"}
-        onBackgroundClick={onBackgroundClick}
+        onBackgroundClick={(vx, vy) => void onBackgroundClick(vx, vy)}
       />
     </div>
   );

@@ -32,38 +32,22 @@ import {
   defaultSession,
   initialSliceRevs,
   sessionOf,
-  stateOf,
   type SliceRevs,
 } from "../src/core/runtime";
 import {
-  addPlanPoint,
-  addStation,
-  addStationPoint,
-  addTrimPoint,
-  createModel,
-  installHull,
-  movePlanPoint,
-  moveStationPoint,
-  moveStationU,
-  moveTransom,
-  moveTrim,
-  refreshDerived,
-  removePlanPoint,
-  removeStation,
-  removeStationPoint,
-  removeTrimPoint,
-  sectionAt,
-  setDeckRake,
-  setKeelK,
-  setStationK,
-  setTrimK,
-  setUnit,
-  setWaterline,
-  setX0,
   frameAt,
+  sectionAt,
   stationWorld,
   type Model,
 } from "../src/core/model";
+import {
+  ALL_SLICES,
+  applyCommand,
+  rejected,
+  SLICE,
+  type HullCommand,
+  type Outcome,
+} from "../src/core/commands";
 import { buildJson, parseHullState } from "../src/core/json";
 import { examplesDir } from "./paths";
 import type { Vec3 } from "../src/core/math";
@@ -277,149 +261,244 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
   );
 }
 
-// ---- every edit operation leaves an editor-valid hull ----
+// ---- every command leaves an editor-valid hull ----
 // The bank is deliberately aimed at the clamps: coordinates far outside the panel, a station dragged onto its
-// neighbour, points removed down to the floor. What each op RETURNS is checked where it means something (the
-// inserts return an index, or −1 when the segment cannot take a point).
+// neighbour, points removed down to the floor. It is the same bank the in-place edit operations used to be
+// checked against, now driven through the reducer — which is the point, because the reducer is what the
+// editor, the promoter and (from phase 5) another window's command all go through.
 {
-  const m = createModel();
-  const check = (m: Model, what: string): void => {
-    refreshDerived(m);
-    const bad = hullViolations(stateOf(m), "editor");
+  let model = assemble(defaultHull());
+  const run = (cmd: HullCommand): Outcome => {
+    const out = applyCommand(model, cmd);
+    if (!rejected(out)) {
+      const session = { ...sessionOf(model), ...out.session };
+      model = assemble(out.state, session);
+    }
+    return out;
+  };
+  const idx = (out: Outcome): number =>
+    rejected(out) ? -1 : (out.result as number);
+  const check = (what: string): void => {
+    const bad = hullViolations(model, "editor");
     ok(
       bad.length === 0,
       `${what} leaves an editor-valid hull${bad.length ? ` — ${bad[0]}` : ""}`,
     );
   };
-  const L = loa(m);
+  const L = loa(model);
 
-  ok(addPlanPoint(m, 0.4 * L, 0.2 * L) === 2, "addPlanPoint inserts in order");
-  check(m, "addPlanPoint");
   ok(
-    addPlanPoint(m, -100, 0) === -1,
+    idx(run({ type: "addPlanPoint", x: 0.4 * L, y: 0.2 * L })) === 2,
+    "addPlanPoint inserts in order",
+  );
+  check("addPlanPoint");
+  ok(
+    rejected(run({ type: "addPlanPoint", x: -100, y: 0 })),
     "addPlanPoint refuses to go before the pinned first point",
   );
 
-  ok(addTrimPoint(m, 0.5 * L, -0.02 * L) > 0, "addTrimPoint inserts");
-  check(m, "addTrimPoint");
   ok(
-    addTrimPoint(m, -0.5 * L, -0.02 * L) === 0,
+    idx(run({ type: "addTrimPoint", x: 0.5 * L, z: -0.02 * L })) > 0,
+    "addTrimPoint inserts",
+  );
+  check("addTrimPoint");
+  ok(
+    idx(run({ type: "addTrimPoint", x: -0.5 * L, z: -0.02 * L })) === 0,
     "addTrimPoint aft of the first makes a new aft end",
   );
-  check(m, "addTrimPoint at a new aft end");
+  check("addTrimPoint at a new aft end");
 
-  ok(addStation(m, 0.5) === 1, "addStation inserts between the two ends");
-  check(m, "addStation");
   ok(
-    addStation(m, 0.5 + U_GAP / 4) >= 0,
+    idx(run({ type: "addStation", u: 0.5 })) === 1,
+    "addStation inserts between the two ends",
+  );
+  check("addStation");
+  ok(
+    idx(run({ type: "addStation", u: 0.5 + U_GAP / 4 })) >= 0,
     "addStation clamps into the gap it has",
   );
-  check(m, "addStation against its neighbour");
+  check("addStation against its neighbour");
 
   ok(
-    addStationPoint(m, 0, 0.05 * L, -0.1 * L) > 0,
+    idx(run({ type: "addStationPoint", si: 0, n: 0.05 * L, z: -0.1 * L })) > 0,
     "addStationPoint inserts into every station",
   );
   ok(
-    new Set(m.stations.map((s) => s.points.length)).size === 1,
+    new Set(model.stations.map((s) => s.points.length)).size === 1,
     "addStationPoint keeps the stations index-aligned",
   );
-  check(m, "addStationPoint");
+  check("addStationPoint");
 
-  movePlanPoint(m, 0, 9e9, 0.3 * L); // the first point is pinned in x
+  run({ type: "movePlanPoint", idx: 0, x: 9e9, y: 0.3 * L }); // pinned in x
   ok(
-    m.sheerPlan[0].x === 0,
+    model.sheerPlan[0].x === 0,
     "movePlanPoint holds the first point at the transom",
   );
-  check(m, "movePlanPoint on the pinned point");
-  movePlanPoint(m, 2, -9e9, -9e9);
-  check(m, "movePlanPoint driven hard past its neighbour");
+  check("movePlanPoint on the pinned point");
+  run({ type: "movePlanPoint", idx: 2, x: -9e9, y: -9e9 });
+  check("movePlanPoint driven hard past its neighbour");
   // The bow goes forward — that is what lengthens the boat — but not absurdly far: `hair`, the spacing the
   // ordering rules hold, is 1e-6 of the CURRENT length, so a hull dragged to astronomical length grows a hair
   // wider than the real gaps between its trim points and the clamps start pushing points through each other.
-  movePlanPoint(m, m.sheerPlan.length - 1, 2 * L, 0);
-  check(m, "movePlanPoint taking the bow forward");
+  run({
+    type: "movePlanPoint",
+    idx: model.sheerPlan.length - 1,
+    x: 2 * L,
+    y: 0,
+  });
+  check("movePlanPoint taking the bow forward");
 
-  moveTrim(m, 1, -9e9, 9e9);
-  check(m, "moveTrim driven hard past its neighbour");
-  moveTransom(m, 0, 0.1 * L, -9e9); // the top pushed below the bottom
-  check(m, "moveTransom with the top pushed below the bottom");
-  moveTransom(m, 1, 0.1 * L, 9e9);
-  check(m, "moveTransom with the bottom pushed above the top");
+  run({ type: "moveTrim", idx: 1, x: -9e9, z: 9e9 });
+  check("moveTrim driven hard past its neighbour");
+  run({ type: "moveTransom", idx: 0, x: 0.1 * L, z: -9e9 }); // top pushed below the bottom
+  check("moveTransom with the top pushed below the bottom");
+  run({ type: "moveTransom", idx: 1, x: 0.1 * L, z: 9e9 });
+  check("moveTransom with the bottom pushed above the top");
 
-  moveStationU(m, 1, 9e9);
-  check(m, "moveStationU dragged past its neighbour");
-  moveStationU(m, 1, -9e9);
-  check(m, "moveStationU dragged the other way");
+  run({ type: "moveStationU", idx: 1, u: 9e9 });
+  check("moveStationU dragged past its neighbour");
+  run({ type: "moveStationU", idx: 1, u: -9e9 });
+  check("moveStationU dragged the other way");
 
-  moveStationPoint(m, 0, 2, 9e9, 9e9);
-  check(m, "moveStationPoint driven up and inboard");
-  moveStationPoint(m, 0, 2, -9e9, -9e9);
-  check(m, "moveStationPoint driven down and outboard");
+  run({ type: "moveStationPoint", si: 0, idx: 2, n: 9e9, z: 9e9 });
+  check("moveStationPoint driven up and inboard");
+  run({ type: "moveStationPoint", si: 0, idx: 2, n: -9e9, z: -9e9 });
+  check("moveStationPoint driven down and outboard");
 
-  setKeelK(m, 0, 5);
-  ok(m.stations[0].keelK === 1, "setKeelK clamps to 1");
-  setStationK(m, 0, 1, -5);
-  ok(m.stations[0].points[1].k === 0, "setStationK clamps to 0");
-  setTrimK(m, 1, 0.5);
-  setWaterline(m, 0.03 * L);
-  setDeckRake(m, 3);
-  setX0(m, 9e9);
-  ok(m.x0 === loa(m), "setX0 clamps to the hull's length");
-  check(m, "the scalar setters");
+  run({ type: "setKeelK", si: 0, k: 5 });
+  ok(model.stations[0].keelK === 1, "setKeelK clamps to 1");
+  run({ type: "setStationK", si: 0, idx: 1, k: -5 });
+  ok(model.stations[0].points[1].k === 0, "setStationK clamps to 0");
+  run({ type: "setTrimK", idx: 1, k: 0.5 });
+  run({ type: "setWaterline", depth: 0.03 * L });
+  run({ type: "setDeckRakeDeg", deg: 3 });
+  run({ type: "setName", name: "a boat" });
+  ok(model.name === "a boat", "setName reaches the hull");
+  check("the scalar setters");
 
-  const before = loa(m);
-  setUnit(m, "m", true);
+  // A rescaling unit change is the one hull command that also moves a session value: the cut station is a
+  // length, so it converts with everything else.
+  const beforeLen = loa(model),
+    beforeX0 = model.x0;
+  run({ type: "setUnit", unit: "m", rescale: true });
   ok(
-    Math.abs(loa(m) - before / 1000) < 1e-9,
+    Math.abs(loa(model) - beforeLen / 1000) < 1e-9,
     "setUnit with rescale keeps the physical size",
   );
-  check(m, "setUnit with rescale");
-  setUnit(m, "mm", true);
+  ok(
+    Math.abs(model.x0 - beforeX0 / 1000) < 1e-9,
+    "setUnit with rescale carries the cut station",
+  );
+  check("setUnit with rescale");
+  run({ type: "setUnit", unit: "mm", rescale: true });
 
-  removeStationPoint(m, 1);
-  check(m, "removeStationPoint");
-  removePlanPoint(m, 1);
-  check(m, "removePlanPoint");
-  removeTrimPoint(m, 1);
-  check(m, "removeTrimPoint");
-  removeStation(m, 1);
-  check(m, "removeStation");
+  run({ type: "removeStationPoint", idx: 1 });
+  check("removeStationPoint");
+  run({ type: "removePlanPoint", idx: 1 });
+  check("removePlanPoint");
+  run({ type: "removeTrimPoint", idx: 1 });
+  check("removeTrimPoint");
+  run({ type: "removeStation", idx: 1 });
+  check("removeStation");
 
-  // the floors: each remove refuses once it would break the hull's minimum
-  while (m.sheerPlan.length > 3) removePlanPoint(m, 1);
-  removePlanPoint(m, 1);
-  ok(m.sheerPlan.length === 3, "removePlanPoint stops at 3 points");
-  while (m.sheerTrim.length > 3) removeTrimPoint(m, 1);
-  removeTrimPoint(m, 1);
-  ok(m.sheerTrim.length === 3, "removeTrimPoint stops at 3 points");
-  while (m.stations.length > 1) removeStation(m, 0);
-  removeStation(m, 0);
-  ok(m.stations.length === 1, "removeStation stops at 1 station");
-  while (m.stations[0].points.length > 3) removeStationPoint(m, 1);
-  removeStationPoint(m, 1);
-  ok(m.stations[0].points.length === 3, "removeStationPoint stops at 3 points");
-  check(m, "the hull reduced to its floors");
+  // the floors: each remove declines once it would break the hull's minimum, and says so in its result
+  while (model.sheerPlan.length > 3) run({ type: "removePlanPoint", idx: 1 });
+  ok(
+    !rejected(run({ type: "removePlanPoint", idx: 1 })) &&
+      model.sheerPlan.length === 3,
+    "removePlanPoint stops at 3 points",
+  );
+  while (model.sheerTrim.length > 3) run({ type: "removeTrimPoint", idx: 1 });
+  run({ type: "removeTrimPoint", idx: 1 });
+  ok(model.sheerTrim.length === 3, "removeTrimPoint stops at 3 points");
+  while (model.stations.length > 1) run({ type: "removeStation", idx: 0 });
+  run({ type: "removeStation", idx: 0 });
+  ok(model.stations.length === 1, "removeStation stops at 1 station");
+  while (model.stations[0].points.length > 3)
+    run({ type: "removeStationPoint", idx: 1 });
+  run({ type: "removeStationPoint", idx: 1 });
+  ok(
+    model.stations[0].points.length === 3,
+    "removeStationPoint stops at 3 points",
+  );
+  check("the hull reduced to its floors");
 }
 
-// ---- assemble() agrees with the legacy mutable path ----
+// ---- a command touches the slices it says it touches ----
+// The mask is what the owner bumps revisions from, and `assemble` rebuilds from those — so a mask that
+// over-reports costs a sampler rebuild per edit, and one that under-reports draws a stale hull.
 {
-  const legacy = createModel(); // createModel → resetModel → refreshDerived, the pre-store path
-  const built = assemble(defaultHull(), sessionOf(legacy));
+  const model = assemble(defaultHull());
+  const maskOf = (cmd: HullCommand): number => {
+    const out = applyCommand(model, cmd);
+    return rejected(out) ? -1 : out.touched;
+  };
   ok(
-    worstDiff(surface(legacy), surface(built)) === 0,
-    "assemble(defaultHull()) is exactly the model resetModel() builds",
+    maskOf({ type: "setWaterline", depth: 1 }) === SLICE.scalars,
+    "a waterline edit touches the scalars alone",
   );
   ok(
-    deepEq(stateOf(legacy), defaultHull()),
-    "the legacy model's authored state IS the default hull",
+    maskOf({ type: "movePlanPoint", idx: 1, x: 100, y: 100 }) === SLICE.plan,
+    "a plan drag touches the plan alone",
   );
   ok(
-    deepEq(sessionOf(legacy), defaultSession(defaultHull())),
-    "the legacy model's session IS the default session",
+    maskOf({ type: "moveTrim", idx: 1, x: 100, z: -100 }) === SLICE.trim,
+    "a trim drag touches the trim alone",
   );
+  ok(
+    maskOf({ type: "moveTransom", idx: 0, x: 100, z: -100 }) === SLICE.transom,
+    "a transom drag touches the transom alone",
+  );
+  ok(
+    maskOf({ type: "moveStationU", idx: 0, u: 0.1 }) === SLICE.stations,
+    "a station drag touches the stations alone",
+  );
+  ok(
+    maskOf({ type: "installHull", state: defaultHull() }) === ALL_SLICES,
+    "installing a hull touches everything",
+  );
+  // The rescaling unit change is the one that genuinely spans them all.
+  ok(
+    maskOf({ type: "setUnit", unit: "m", rescale: true }) === ALL_SLICES,
+    "a rescaling unit change touches every slice",
+  );
+  ok(
+    maskOf({ type: "setUnit", unit: "m", rescale: false }) === SLICE.scalars,
+    "a non-rescaling unit change touches the scalars alone",
+  );
+}
 
-  // and on a real hull, edited: install authored state into a mutable model, and assemble the same state
+// ---- installing a hull, and what it does to the session ----
+{
+  const start = assemble(defaultHull());
+  const long = {
+    ...defaultHull(),
+    sheerPlan: defaultHull().sheerPlan.map((p) => ({ x: p.x * 4, y: p.y })),
+  };
+  const out = applyCommand(start, { type: "installHull", state: long });
+  ok(
+    !rejected(out) && out.session?.viewLen === loa(long),
+    "install restates viewLen",
+  );
+  ok(
+    !rejected(out) && out.session?.x0 === start.x0,
+    "a cut station already inside the new hull is left where it was",
+  );
+  const shortHull = {
+    ...defaultHull(),
+    sheerPlan: defaultHull().sheerPlan.map((p) => ({ x: p.x / 10, y: p.y })),
+  };
+  const out2 = applyCommand(start, { type: "installHull", state: shortHull });
+  ok(
+    !rejected(out2) && out2.session?.x0 === loa(shortHull),
+    "a cut station past the new bow is brought back inside the boat",
+  );
+}
+
+// ---- assembling the same hull twice gives the same boat ----
+// `assemble` is memoized and shares branches between snapshots, so "same state in, same geometry out" is not
+// free by construction — a cache that reused the wrong sampler would show up here and nowhere else.
+{
   const state = parseHullState(
     readFileSync(
       join(
@@ -429,20 +508,14 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
       "utf8",
     ),
   );
-  const installed = createModel();
-  installHull(installed, state);
+  const a = assemble(state, defaultSession(state), { cacheKey: {} });
+  // an unrelated hull in between, to make the cache miss on the way back
+  assemble(defaultHull(), defaultSession(defaultHull()), { cacheKey: {} });
+  const b = assemble(cloneHull(state), defaultSession(state), { cacheKey: {} });
   ok(
-    worstDiff(
-      surface(installed),
-      surface(assemble(state, sessionOf(installed))),
-    ) === 0,
-    "the two paths agree on an example hull too",
+    worstDiff(surface(a), surface(b)) === 0,
+    "two assemblies of one hull are the same boat, exactly",
   );
-
-  // stateOf is a copy, not a window onto the model
-  const snap = stateOf(installed);
-  movePlanPoint(installed, 1, 0, 9e9);
-  ok(!deepEq(snap, stateOf(installed)), "stateOf() hands back a detached copy");
 }
 
 // ---- memoization: rebuild the slice that moved, reuse the ones that did not ----

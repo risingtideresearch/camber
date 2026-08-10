@@ -24,7 +24,7 @@
 // fixed constants a normalized model could afford — of `viewLen`, the length captured when the hull was
 // installed, so that editing it never moves the drawing under the pointer.
 
-import { clamp, lerp, type Vec2, type Vec3 } from "./math";
+import { clamp, type Vec2, type Vec3 } from "./math";
 import { pchipSlopes, hermiteEval } from "./pchip";
 import { planCurve, type PlanCurve } from "./bspline";
 import {
@@ -35,16 +35,7 @@ import {
   type Bez,
   type Curve,
 } from "./spline";
-import { UNIT_MM, type Unit } from "./document";
-import {
-  boundsOf,
-  cloneHull,
-  defaultHull,
-  loa,
-  U_GAP,
-  type Bounds,
-  type HullState,
-} from "./hull";
+import { boundsOf, type Bounds, type HullState } from "./hull";
 // The authored schema, the domain constants and the defaults live in `hull.ts` now, as plain readonly data.
 // They are re-exported here so that the geometry's callers keep one import.
 export {
@@ -58,29 +49,15 @@ export {
 } from "./hull";
 
 // ---------- types ----------
-export interface PlanCP {
-  x: number;
-  y: number;
-}
-export interface TrimCP {
-  x: number;
-  z: number;
-  k: number; // knuckle ∈ [0,1]: 0 = smooth, 1 = hard corner
-}
-export interface TransomCP {
-  x: number;
-  z: number;
-}
-export interface StationPointCP {
-  n: number; // inboard offset along the station plane's normal
-  z: number; // world height (≤ 0, below the deck datum)
-  k: number; // knuckle ∈ [0,1]; blends along the hull, so a chine can fade
-}
-export interface StationCP {
-  u: number; // [0,1] along the sheer plan
-  keelK: number; // keel crease ∈ [0,1]: 0 = smooth round bottom, 1 = hard V
-  points: StationPointCP[]; // S ≥ 2, the same S for every station
-}
+// The authored control points are `hull.ts`'s, re-exported so that a geometry caller keeps one import. They
+// are readonly there and readonly here: a `Model` is built by `assemble()` and then only ever read.
+export type {
+  PlanCP,
+  TrimCP,
+  TransomCP,
+  StationPointCP,
+  StationCP,
+} from "./hull";
 
 // The station plane at u: origin on the plan curve, `n` its inboard normal, `T` the plan heading.
 export interface Frame {
@@ -101,90 +78,28 @@ export interface Section {
   keelK: number; // the blended keel crease
 }
 
-export interface Model {
-  name: string;
-  unit: Unit;
-  sheerPlan: PlanCP[];
-  sheerTrim: TrimCP[];
-  transom: TransomCP[]; // exactly 2: [top, bottom]
-  stations: StationCP[]; // K ≥ 1, strictly increasing in u
-  waterline: number; // depth (≥ 0) of the design waterline below the deck datum
-  deckRake: number; // deck rake (rad, +ve = bow up): a rigid rotation about y through the sheer origin.
-  // Everything is built deck-flat (z = 0); the boat floats at this rake.
-  x0: number; // the cut-station scrubber's position, in x
+// The hull as the geometry reads it: the authored state, the two session values the drawing needs, and the
+// three derived curves. Readonly throughout — a model is built complete by `assemble()` (see `runtime.ts`)
+// and never touched again. An edit produces a NEW hull by dispatching a command (see `commands.ts`); there is
+// no way to reach in and move a control point, which is what makes one owner able to order every edit.
+export interface Model extends HullState {
+  readonly x0: number; // the cut-station scrubber's position, in x
   // The hull length the 2D views lay their panels out against. It is CAPTURED when a whole hull is installed
   // (reset / load / blend) and then held, rather than read from the live plan: a control point may be dragged
   // anywhere at all, including past the current bow, and the drawing must not rescale and re-centre itself
   // out from under the pointer while it happens. Session state, like x0 — never serialized.
-  viewLen: number;
+  readonly viewLen: number;
 
-  // ---- derived by prepare(); never authored ----
-  plan: PlanCurve; // P(u) = (x, y) and dP/du
-  trimZ: (x: number) => number; // the sheer trim's z at x
-  loft: Loft;
+  // ---- derived by assemble(); never authored ----
+  readonly plan: PlanCurve; // P(u) = (x, y) and dP/du
+  readonly trimZ: (x: number) => number; // the sheer trim's z at x
+  readonly loft: Loft;
 }
 
-// The authored fields the derived curves are read from. Written against the readonly `HullState` so that both
-// a piece of authored state and the mutable `Model` below satisfy it.
+// The authored fields the derived curves are read from — a `HullState` or a whole `Model` alike.
 type Authored = Pick<HullState, "sheerPlan" | "sheerTrim" | "stations">;
 
-// ---------- installing a whole hull ----------
-// The canonical defaults are authored data in `hull.ts`. What is built here is the pre-store editor's
-// MUTABLE shell: one stable object the editor holds for its lifetime and mutates in place. New code assembles
-// a model from a `HullState` instead (`runtime.ts`); this pair goes away with the edit operations below.
-
-export function createModel(): Model {
-  const model = {
-    name: "",
-    unit: "mm",
-    sheerPlan: [],
-    sheerTrim: [],
-    transom: [],
-    stations: [],
-    waterline: 0,
-    deckRake: 0,
-    x0: 0,
-    viewLen: 0,
-  } as unknown as Model;
-  resetModel(model); // a fresh model IS the default hull — never a half-initialized shell
-  return model;
-}
-
-export function resetModel(model: Model): void {
-  installHull(model, defaultHull());
-  model.x0 = loa(model) / 2;
-}
-
-/** Copy authored state into a mutable model, restating what the 2D views are laid out for. */
-export function installHull(model: Model, state: HullState): void {
-  const hull = cloneHull(state);
-  model.name = hull.name;
-  model.unit = hull.unit;
-  model.sheerPlan = hull.sheerPlan as PlanCP[];
-  model.sheerTrim = hull.sheerTrim as TrimCP[];
-  model.transom = hull.transom as TransomCP[];
-  model.stations = hull.stations as StationCP[];
-  model.waterline = hull.waterline;
-  model.deckRake = hull.deckRake;
-  model.x0 = clamp(model.x0, 0, loa(model));
-  captureViewLength(model);
-  refreshDerived(model);
-}
-
-// Capture the length the 2D views draw against (see Model.viewLen). Call it wherever a whole hull is
-// installed — never from an edit, which is the whole point of it being captured rather than derived.
-export function captureViewLength(model: Model): void {
-  model.viewLen = loa(model);
-}
-
 export const bounds = (model: Model): Bounds => boundsOf(model.viewLen);
-
-// The one spacing rule left between neighbouring control points, and it is not a matter of taste: the plan's
-// x(u) and the sheer trim's z(x) are both READ as functions of x (bspline.ts inverts the one, pchip.ts
-// differences the other), so two points that met would make that reading ambiguous — and the trim's PCHIP
-// would divide by their zero spacing. Nothing needs more room than float noise, so this is a hair against the
-// hull's own size: a point may be dragged right up against its neighbour, just not through it.
-const hair = (model: Model): number => 1e-6 * (loa(model) || 1);
 
 // ---------- deck rake (world frame) ----------
 // The hull is built deck-flat (deck = z = 0). The deck rake is a rigid rotation of the whole hull by
@@ -324,15 +239,6 @@ export function buildDerived(
   };
 }
 
-// Refresh a mutable model's derived curves in place — the pre-store editor's path, where one stable model
-// object is edited over and over. An assembled model never needs this; it is built complete.
-export function refreshDerived(model: Model): void {
-  const d = buildDerived(model);
-  model.plan = d.plan;
-  model.trimZ = d.trimZ;
-  model.loft = d.loft;
-}
-
 // ---------- the sweep ----------
 // The frame at u: the plan gives the origin and the heading; the station plane is vertical and normal to it.
 // n̂ = d̂ × T̂ with d̂ = (0,0,−1) straight down, i.e. (Ty, −Tx, 0) — inboard for a hull whose sheer lies to
@@ -458,279 +364,4 @@ export function knotLongitudinalsSection(model: Model, N = 120): Vec2[][] {
     for (let i = 0; i < S; i++) out[i].push(pts[i]);
   }
   return out;
-}
-
-// ---------- edit operations ----------
-// These all take MODEL-space coordinates (the editor maps a pointer's inverse-view coordinates to model
-// space before calling them), so they depend only on the core and live here with the other mutations.
-//
-// The sheer plan and the sheer trim are free: a point goes exactly where it is put, at any half-breadth, any
-// height, and any distance along the hull — including past the bow, which simply makes the hull longer. The
-// only thing held back is the ORDER of a curve's own points in x (see `hair`), because both curves are read
-// as functions of x. The station editor keeps clamping its section points to the box it is drawn in.
-//
-// Every one of them leaves the model's derived curves stale; the caller re-runs `prepare`.
-
-// ---- add (return the inserted index, or −1 when the segment is too degenerate to take a point) ----
-
-// Insert a plan control point at x. The plan is a B-spline control polygon, so the new point is placed where
-// the caller asks rather than on the curve — there is no "on the curve" to land on.
-export function addPlanPoint(model: Model, x: number, y: number): number {
-  const cp = model.sheerPlan,
-    n = cp.length,
-    e = hair(model);
-  let k = cp.findIndex((p) => p.x > x);
-  if (k < 0) k = n;
-  if (k === 0) return -1; // the first point is pinned at the transom; nothing goes before it
-  const lo = cp[k - 1].x + e,
-    hi = k < n ? cp[k].x - e : Infinity;
-  if (lo > hi) return -1;
-  cp.splice(k, 0, { x: clamp(x, lo, hi), y });
-  return k;
-}
-
-// The trim's first point is not pinned to anything, so a click aft of it inserts a new aft end.
-export function addTrimPoint(model: Model, x: number, z: number): number {
-  const cp = model.sheerTrim,
-    n = cp.length,
-    e = hair(model);
-  let k = cp.findIndex((p) => p.x > x);
-  if (k < 0) k = n;
-  const lo = k > 0 ? cp[k - 1].x + e : -Infinity,
-    hi = k < n ? cp[k].x - e : Infinity;
-  if (lo > hi) return -1;
-  cp.splice(k, 0, { x: clamp(x, lo, hi), z, k: 0 });
-  return k;
-}
-
-// Insert a station at u. Its points are read off the LOFT there, so the hull is unchanged by the insert —
-// it just gains a handle, exactly where the surface already was. The spacing it holds, U_GAP, is editor
-// policy and lives in `hull.ts` with the rest of it.
-export function addStation(model: Model, u: number): number {
-  const sts = model.stations,
-    n = sts.length;
-  let k = sts.findIndex((s) => s.u > u);
-  if (k < 0) k = n;
-  const lo = k > 0 ? sts[k - 1].u + U_GAP : 0,
-    hi = k < n ? sts[k].u - U_GAP : 1;
-  if (lo > hi) return -1;
-  const uu = clamp(u, lo, hi),
-    { pts, ks, keelK } = model.loft.at(uu);
-  sts.splice(k, 0, {
-    u: uu,
-    keelK,
-    points: pts.map((p, i) => ({ n: p[0], z: p[1], k: ks[i] })),
-  });
-  return k;
-}
-
-// Insert a section point into EVERY station at the same place along each one's own curve, so the stations
-// stay index-aligned — the loft is built across matching indices, so a point that existed in only some of
-// them would have no curve to ride.
-export function addStationPoint(
-  model: Model,
-  si: number,
-  n: number,
-  z: number,
-): number {
-  const arr = model.stations[si].points,
-    b = bounds(model);
-  // the segment nearest the click, and how far along it
-  let best = 1,
-    bt = 0.5,
-    bd = Infinity;
-  for (let i = 0; i < arr.length - 1; i++) {
-    const an = arr[i].n,
-      az = arr[i].z,
-      vn = arr[i + 1].n - an,
-      vz = arr[i + 1].z - az,
-      l2 = vn * vn + vz * vz || 1,
-      t = clamp(((n - an) * vn + (z - az) * vz) / l2, 0, 1),
-      d = Math.hypot(n - (an + vn * t), z - (az + vz * t));
-    if (d < bd) {
-      bd = d;
-      best = i + 1;
-      bt = t;
-    }
-  }
-  model.stations.forEach((st, j) => {
-    const a = st.points[best - 1],
-      c = st.points[best];
-    if (j === si)
-      st.points.splice(best, 0, {
-        n: clamp(n, b.nMin, b.nMax),
-        z: clamp(z, Math.min(a.z, c.z), Math.max(a.z, c.z)),
-        k: 0,
-      });
-    else
-      st.points.splice(best, 0, {
-        n: lerp(a.n, c.n, bt),
-        z: lerp(a.z, c.z, bt),
-        k: lerp(a.k, c.k, bt),
-      });
-  });
-  return best;
-}
-
-// ---- move ----
-
-// The first plan point is pinned at the transom (x = 0) — it is the hull's origin, not a limit — so it moves
-// only in y; every other point, including the last, follows the pointer in x too, and the last one taken
-// forward simply lengthens the boat. y is free on both sides of the centerline: the plan crosses it to close
-// a tumblehome bow.
-export function movePlanPoint(
-  model: Model,
-  idx: number,
-  mx: number,
-  my: number,
-): void {
-  const cp = model.sheerPlan,
-    n = cp.length,
-    e = hair(model);
-  if (idx > 0)
-    cp[idx].x = clamp(
-      mx,
-      cp[idx - 1].x + e,
-      idx < n - 1 ? cp[idx + 1].x - e : Infinity,
-    );
-  cp[idx].y = my;
-}
-
-// Free in z — above the flat deck as readily as below it — and free in x, both ends included.
-export function moveTrim(
-  model: Model,
-  idx: number,
-  mx: number,
-  mz: number,
-): void {
-  const cp = model.sheerTrim,
-    n = cp.length,
-    e = hair(model);
-  cp[idx].x = clamp(
-    mx,
-    idx > 0 ? cp[idx - 1].x + e : -Infinity,
-    idx < n - 1 ? cp[idx + 1].x - e : Infinity,
-  );
-  cp[idx].z = mz;
-}
-
-// The transom goes anywhere in the profile; only the ORDER of its two points is held, because they are read
-// as a line x(z) through two heights and the plane inverts if the top drops below the bottom.
-export function moveTransom(
-  model: Model,
-  idx: number,
-  mx: number,
-  mz: number,
-): void {
-  const cp = model.transom[idx],
-    e = hair(model);
-  cp.x = mx;
-  cp.z =
-    idx === 0
-      ? Math.max(mz, model.transom[1].z + e)
-      : Math.min(mz, model.transom[0].z - e);
-}
-
-// Drag a station along the sheer. This is the edit v1 had no way to express: a template had no position,
-// only a weight curve, so "where does this section apply" could only be said indirectly.
-export function moveStationU(model: Model, idx: number, u: number): void {
-  const sts = model.stations,
-    lo = idx > 0 ? sts[idx - 1].u + U_GAP : 0,
-    hi = idx < sts.length - 1 ? sts[idx + 1].u - U_GAP : 1;
-  sts[idx].u = clamp(u, Math.min(lo, hi), Math.max(lo, hi));
-}
-
-// Drag a section point: n across the section, z down — kept between its neighbours so the section never
-// curls back up on itself.
-export function moveStationPoint(
-  model: Model,
-  si: number,
-  idx: number,
-  mn: number,
-  mz: number,
-): void {
-  const arr = model.stations[si].points,
-    b = bounds(model),
-    cp = arr[idx];
-  cp.n = clamp(mn, b.nMin, b.nMax);
-  const hi = idx > 0 ? arr[idx - 1].z : 0,
-    lo = idx < arr.length - 1 ? arr[idx + 1].z : b.zMin;
-  cp.z = clamp(mz, lo, hi);
-}
-
-// ---- scalars ----
-export const setX0 = (model: Model, x: number): void => {
-  model.x0 = clamp(x, 0, loa(model));
-};
-export const setWaterline = (model: Model, d: number): void => {
-  model.waterline = d;
-};
-export const setDeckRake = (model: Model, deg: number): void => {
-  model.deckRake = (deg * Math.PI) / 180;
-};
-export const setName = (model: Model, name: string): void => {
-  model.name = name;
-};
-// The keel crease of one station — the active tab's keel slider drives this.
-export function setKeelK(model: Model, si: number, k: number): void {
-  if (si < 0 || si >= model.stations.length) return;
-  model.stations[si].keelK = clamp(k, 0, 1);
-}
-export function setStationK(
-  model: Model,
-  si: number,
-  idx: number,
-  k: number,
-): void {
-  const p = model.stations[si]?.points[idx];
-  if (p) p.k = clamp(k, 0, 1);
-}
-export function setTrimK(model: Model, idx: number, k: number): void {
-  const p = model.sheerTrim[idx];
-  if (p) p.k = clamp(k, 0, 1);
-}
-
-// Change the document's unit. `rescale` keeps the hull the same PHYSICAL size by converting the numbers
-// (2000 mm → 2 m); without it the numbers stand and the hull is reinterpreted at the new unit's size.
-export function setUnit(model: Model, unit: Unit, rescale: boolean): void {
-  if (rescale && model.unit !== unit) {
-    const s = UNIT_MM[model.unit] / UNIT_MM[unit];
-    model.sheerPlan.forEach((p) => ((p.x *= s), (p.y *= s)));
-    model.sheerTrim.forEach((p) => ((p.x *= s), (p.z *= s)));
-    model.transom.forEach((p) => ((p.x *= s), (p.z *= s)));
-    model.stations.forEach((st) =>
-      st.points.forEach((p) => ((p.n *= s), (p.z *= s))),
-    );
-    model.waterline *= s;
-    model.x0 *= s;
-  }
-  model.unit = unit;
-}
-
-// ---- remove ----
-// Each keeps enough of the structure for the hull to remain well-formed: the plan and trim keep both ends
-// and a minimum of three points; a station's points keep the deck point and the deepest one.
-
-export function removePlanPoint(model: Model, idx: number): void {
-  const cp = model.sheerPlan;
-  if (cp.length <= 3 || idx <= 0 || idx >= cp.length - 1) return;
-  cp.splice(idx, 1);
-}
-
-export function removeTrimPoint(model: Model, idx: number): void {
-  const cp = model.sheerTrim;
-  if (cp.length <= 3 || idx <= 0 || idx >= cp.length - 1) return;
-  cp.splice(idx, 1);
-}
-
-// A hull needs at least one station; below that there is no section to sweep at all.
-export function removeStation(model: Model, idx: number): void {
-  if (model.stations.length <= 1) return;
-  model.stations.splice(idx, 1);
-}
-
-export function removeStationPoint(model: Model, idx: number): void {
-  const len = model.stations[0].points.length;
-  if (len <= 3 || idx <= 0 || idx >= len - 1) return;
-  model.stations.forEach((st) => st.points.splice(idx, 1));
 }

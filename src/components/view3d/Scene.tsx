@@ -58,7 +58,6 @@ const TRANSOM_BASE: [number, number, number] = [0.74, 0.55, 0.37];
 
 interface SceneProps {
   model: Model;
-  modelVersion: number;
   selection: ModelSelection;
   shading: ShadingMode; // how the surface is shaded — independent of which curves are drawn on it
   lines: LineToggles; // which curve families to lay over it (a stable object: it is in a rebuild's deps)
@@ -74,7 +73,6 @@ interface SceneProps {
 
 export function Scene({
   model,
-  modelVersion,
   selection,
   shading,
   lines,
@@ -256,10 +254,8 @@ export function Scene({
       trimCurves,
       stationLines,
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     model,
-    modelVersion,
     sampling,
     lines,
     sheet,

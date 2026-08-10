@@ -1,13 +1,8 @@
 import { useCallback } from "react";
 import { NumberInput } from "polymorph-ui";
-import {
-  addStation,
-  addStationPoint,
-  moveStationU,
-  removeStation,
-  setKeelK,
-  type Model,
-} from "../core/model";
+import type { Model } from "../core/model";
+import { rejected } from "../core/commands";
+import { useHullStore } from "./hullStore";
 import type { ModelSelection } from "../core/modelSelection";
 import type { CurvatureSettings } from "../core/comb";
 import { drawStation } from "../core/draw2d";
@@ -27,12 +22,10 @@ import "./StationView.css";
 // empty click clears the selection.
 interface StationViewProps {
   model: Model;
-  modelVersion: number;
   selection: ModelSelection;
   tool: Tool;
   onSelect: (sel: ModelSelection) => void;
   setTool: (t: Tool) => void;
-  bumpModel: () => void;
   curvature: CurvatureSettings;
   // "Show knot longitudinals" — owned above (the plan and profile strips draw it too), toggled here
   knotLongs: boolean;
@@ -43,49 +36,45 @@ interface StationViewProps {
 
 export function StationView({
   model,
-  modelVersion,
   selection,
   tool,
   onSelect,
   setTool,
-  bumpModel,
   curvature,
   knotLongs,
   setKnotLongs,
   activeStation,
   setActiveStation,
 }: StationViewProps) {
+  const store = useHullStore();
   const K = model.stations.length;
 
   // A station is added AT THE CUT: it needs a definite position along the sheer (v1's templates had none),
   // and the cut is where the user is already looking. Its section is read off the loft there, so the hull is
   // unchanged by the insert — it just gains a handle where the surface already was.
-  const onAddStation = () => {
+  const onAddStation = async () => {
     if (K >= 7) return;
-    const idx = addStation(model, model.plan.uAtX(model.x0));
-    if (idx < 0) return; // no room at the minimum station spacing
+    const out = await store.dispatch({
+      type: "addStation",
+      u: model.plan.uAtX(model.x0),
+    });
+    if (rejected(out)) return; // no room at the minimum station spacing
     onSelect(null);
-    setActiveStation(idx); // the freshly added station becomes active
-    bumpModel();
+    setActiveStation(out.result as number); // the freshly added station becomes active
   };
   const onRemoveStation = (si: number) => {
     if (K <= 1) return;
-    removeStation(model, si);
+    void store.dispatch({ type: "removeStation", idx: si });
     onSelect(null);
-    setActiveStation(Math.min(activeStation, model.stations.length - 1));
-    bumpModel();
+    setActiveStation(Math.min(activeStation, K - 2));
   };
-  const onKeel = (k: number) => {
-    setKeelK(model, activeStation, k);
-    bumpModel();
-  };
+  const onKeel = (k: number) =>
+    void store.dispatch({ type: "setKeelK", si: activeStation, k });
   // The same edit as dragging the station's handle in the plan view, typed instead: the model clamps u
   // between the neighbouring stations, so a value past a neighbour lands at the limit and the field
   // redraws showing where the station actually went.
-  const onU = (u: number) => {
-    moveStationU(model, activeStation, u);
-    bumpModel();
-  };
+  const onU = (u: number) =>
+    void store.dispatch({ type: "moveStationU", idx: activeStation, u });
 
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
@@ -100,28 +89,24 @@ export function StationView({
         knotLongs,
       );
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      model,
-      modelVersion,
-      selection,
-      activeStation,
-      onSelect,
-      curvature,
-      knotLongs,
-    ],
+    [model, selection, activeStation, onSelect, curvature, knotLongs],
   );
 
-  const onBackgroundClick = (vx: number, vy: number) => {
-    if (tool === "add") {
-      const v = viewOf(model);
-      const idx = addStationPoint(model, activeStation, v.invN(vx), v.invZ(vy));
-      setTool("select");
-      onSelect({ tgt: "station", idx, si: activeStation });
-      bumpModel();
-    } else {
+  const onBackgroundClick = async (vx: number, vy: number) => {
+    if (tool !== "add") {
       onSelect(null);
+      return;
     }
+    const v = viewOf(model);
+    const out = await store.dispatch({
+      type: "addStationPoint",
+      si: activeStation,
+      n: v.invN(vx),
+      z: v.invZ(vy),
+    });
+    setTool("select");
+    if (rejected(out)) return;
+    onSelect({ tgt: "station", idx: out.result as number, si: activeStation });
   };
 
   const keelK = model.stations[activeStation]?.keelK ?? 0;
@@ -135,7 +120,7 @@ export function StationView({
         model={model}
         activeTab={activeStation}
         onSelectTab={setActiveStation}
-        onAddStation={onAddStation}
+        onAddStation={() => void onAddStation()}
         onRemoveStation={onRemoveStation}
       />
       <div className="stationbody">
@@ -144,7 +129,7 @@ export function StationView({
           contentHeight={STH}
           draw={draw}
           cursor={tool === "add" ? "crosshair" : "default"}
-          onBackgroundClick={onBackgroundClick}
+          onBackgroundClick={(vx, vy) => void onBackgroundClick(vx, vy)}
         />
       </div>
       <div className="keelrow">

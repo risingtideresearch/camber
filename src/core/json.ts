@@ -23,26 +23,19 @@ import {
 } from "./document";
 import { convertV1ToV2 } from "../legacy/v1/convert";
 import type { HullDocument as V1Doc } from "../legacy/v1/document";
-import {
-  installHull,
-  type Model,
-  type PlanCP,
-  type TrimCP,
-  type TransomCP,
-  type StationCP,
-} from "./model";
-import type { HullState } from "./hull";
+import type { HullState, Writable } from "./hull";
 import { assertValidHull } from "./invariants";
 
 // ---------- a parsed hull in the model's coordinates ----------
-export interface HullData {
-  name: string;
-  unit: Unit;
-  sheerPlan: PlanCP[];
-  sheerTrim: TrimCP[];
-  transom: TransomCP[];
-  stations: StationCP[];
-}
+// A hull under construction: everything a `HullState` carries but the two trim scalars, and mutable, because
+// decoding, unit conversion and topology promotion all build it up in passes. It becomes authored state — and
+// stops being writable — at `parseDocument`'s return.
+export type HullData = Writable<Omit<HullState, "waterline" | "deckRake">>;
+
+type PlanCP = HullData["sheerPlan"][number];
+type TrimCP = HullData["sheerTrim"][number];
+type TransomCP = HullData["transom"][number];
+type StationCP = HullData["stations"][number];
 export interface ParsedDoc {
   waterline: number;
   deckRake: number; // radians
@@ -272,17 +265,3 @@ export function parseDocument(text: string): ParsedDoc {
 /** Parse straight to authored state — no runtime curves, no session values. */
 export const parseHullState = (text: string): HullState =>
   parseDocument(text).state;
-
-// load a parsed hull into the live model
-export function loadHull(model: Model, v: HullData): void {
-  installHull(model, {
-    ...v,
-    waterline: model.waterline,
-    deckRake: model.deckRake,
-  });
-}
-
-// editor import: load the document into the model
-export function loadJsonText(model: Model, text: string): void {
-  installHull(model, parseHullState(text));
-}

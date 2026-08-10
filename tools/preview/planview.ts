@@ -3,23 +3,17 @@
 import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import {
-  createModel,
-  loa,
-  bounds,
-  resetModel,
-  refreshDerived,
-} from "../../src/core/model";
+import { loa, bounds } from "../../src/core/model";
 import { sweptSection, forwardLimit } from "../../src/core/mesh";
-import { loadJsonText } from "../../src/core/json";
+import { parseHullState } from "../../src/core/json";
+import { assemble } from "../../src/core/runtime";
+import { defaultHull } from "../../src/core/hull";
 import { viewOf, PXpad } from "../../src/core/view";
 
-const model = createModel();
-
-resetModel(model);
-if (process.env.CAMBER_DOC)
-  loadJsonText(model, readFileSync(process.env.CAMBER_DOC, "utf8"));
-refreshDerived(model);
+const doc = process.env.CAMBER_DOC;
+const model = assemble(
+  doc ? parseHullState(readFileSync(doc, "utf8")) : defaultHull(),
+);
 
 // the view transforms follow the hull's own length now, so they are derived from the model rather than
 // imported as module constants

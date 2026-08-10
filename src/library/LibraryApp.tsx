@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createModel, resetModel } from "../core/model";
 import {
   deleteDesign,
   insertDesign,
@@ -7,7 +6,8 @@ import {
   type DesignRow,
 } from "../core/supabase";
 import { VERSION, documentVersion, isReadableVersion } from "../core/document";
-import { loadJsonText, parseDocument } from "../core/json";
+import { parseDocument, parseHullState } from "../core/json";
+import { assemble } from "../core/runtime";
 import { buildStep } from "../core/step";
 import { buildStl } from "../core/stl";
 import { buildPreviewSvg } from "../core/preview";
@@ -48,10 +48,6 @@ function safeName(name: string): string {
 }
 
 export function LibraryApp() {
-  // one scratch model, shared by the topology reads (during render) and the export paths (on click); every
-  // consumer either only reads counts or resets it first, so a single instance is safe.
-  const [model] = useState(() => createModel());
-
   const [rows, setRows] = useState<DesignRow[]>([]);
   const [loaded, setLoaded] = useState(false); // first list load has resolved (governs the empty / error text)
   const [error, setError] = useState<string | null>(null);
@@ -200,8 +196,10 @@ export function LibraryApp() {
   const exportStep = () => {
     if (!selectedRow) return;
     try {
-      resetModel(model);
-      loadJsonText(model, JSON.stringify(selectedRow.document)); // buildStep fairs + samples it
+      // one model per export, assembled from the stored document — nothing is held between exports
+      const model = assemble(
+        parseHullState(JSON.stringify(selectedRow.document)),
+      );
       const stamp = new Date().toISOString().replace(/\.\d+Z$/, "");
       downloadBlob(
         `${safeName(selectedRow.name)}.step`,
@@ -215,8 +213,9 @@ export function LibraryApp() {
   const exportStl = () => {
     if (!selectedRow) return;
     try {
-      resetModel(model);
-      loadJsonText(model, JSON.stringify(selectedRow.document)); // buildStl fairs + meshes it
+      const model = assemble(
+        parseHullState(JSON.stringify(selectedRow.document)),
+      );
       downloadBlob(
         `${safeName(selectedRow.name)}.stl`,
         buildStl(model, safeName(selectedRow.name)),
@@ -266,9 +265,7 @@ export function LibraryApp() {
       // build the wireframe preview from the imported document (same path the editor uses on save)
       let preview = "";
       try {
-        resetModel(model);
-        loadJsonText(model, text);
-        preview = buildPreviewSvg(model);
+        preview = buildPreviewSvg(assemble(parseHullState(text)));
       } catch {
         /* leave preview empty; the card falls back to a placeholder */
       }

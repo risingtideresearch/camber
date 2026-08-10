@@ -72,14 +72,19 @@ export interface RuntimeLocal {
 interface Cached {
   state: HullState;
   revs: SliceRevs | undefined;
-  cacheKey: object | undefined;
   plan: PlanCurve;
   trimZ: (x: number) => number;
   loft: Loft;
   model: Model;
 }
 
-let last: Cached | undefined;
+// One cache slot PER READER, not one for the module. The owner assembles a model of its own to feed the
+// reducer, and every window assembles another; with a single slot they evict each other on every command and
+// nothing is ever reused. The slot is found by the caller's `cacheKey`, held weakly so a closed window's
+// samplers go with it. Callers with no key — the exporters, the preview tools, a one-off blend — share the
+// anonymous slot and fall back to state identity, which is right for a hull that is assembled once.
+const caches = new WeakMap<object, Cached>();
+const ANON = {};
 
 /**
  * Build the runtime model for `state` in `session`.
@@ -94,11 +99,12 @@ export function assemble(
   local: RuntimeLocal = {},
 ): Model {
   const revs = local.sliceRevs;
+  const slot = local.cacheKey ?? ANON;
+  const last = caches.get(slot);
   // A reader owns one monotonic revision stream. Across worker snapshots the state's identity changes on
-  // every command, but an unchanged slice counter still means that slice's sampler is reusable.
-  const sameSource = revs
-    ? !!local.cacheKey && last?.cacheKey === local.cacheKey
-    : last?.state === state;
+  // every command, but an unchanged slice counter still means that slice's sampler is reusable. Without
+  // revisions there is nothing to compare but the state itself, which is exactly right for an immutable one.
+  const sameSource = !!last && (revs ? !!last.revs : last.state === state);
   const reuse = (slice: keyof SliceRevs): boolean =>
     sameSource && (!revs || last!.revs![slice] === revs[slice]);
 
@@ -140,7 +146,7 @@ export function assemble(
     viewLen: session.viewLen,
     ...derived,
   };
-  last = { state, revs, cacheKey: local.cacheKey, ...derived, model };
+  caches.set(slot, { state, revs, ...derived, model });
   return model;
 }
 

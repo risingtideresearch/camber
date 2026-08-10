@@ -947,7 +947,7 @@ export function drawProfile(
 // comb (the comb needs the original curve definition, not a resample of the drawn polyline)
 function stnEval(
   v: View,
-  pts: StationPointCP[],
+  pts: readonly StationPointCP[],
 ): { f: (t: number) => Vec2; vmax: number } {
   const c = crCurveAuto(
     pts.map((p) => [p.n, p.z]),
@@ -967,7 +967,7 @@ function stnEval(
 export function stnCurve(
   v: View,
   svg: SVGGElement,
-  pts: StationPointCP[],
+  pts: readonly StationPointCP[],
   c: string,
   op: number,
 ): void {
@@ -1069,7 +1069,11 @@ export function drawStation(
   // curvature combs on the station section curves (transverse ⇒ the section hair count), each built from
   // the station's exact curve evaluator (stnEval), not the drawn polyline
   if (curv?.on) {
-    const comb = (pts: StationPointCP[], c: string, op: number): void => {
+    const comb = (
+      pts: readonly StationPointCP[],
+      c: string,
+      op: number,
+    ): void => {
       const { f, vmax } = stnEval(v, pts);
       const cs = perfStep(
         "Combs — sections",

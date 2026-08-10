@@ -1,10 +1,15 @@
-// Design identity + the save / revert / dirty logic. The mutable identity (which row is open, its saved
-// name, the last-saved JSON snapshot) is a plain value the editor keeps in a ref, and these functions are
-// pure over (model, identity, working name).
+// Design identity + the save / revert / dirty logic. The mutable identity (which row is open, its saved name,
+// the document as of that save) is a plain value the editor keeps in a ref, and these functions are pure over
+// (identity, working name, dirty).
+//
+// Dirtiness is no longer measured here. It is `revision !== savedRevision` on the store's snapshot — exact,
+// and free — where it used to be a `buildJson` string comparison run on a 300 ms poll. What is still kept is
+// the saved DOCUMENT, because Revert has to restore it and a revision number cannot be un-parsed into a hull.
 
+import type { HullState } from "../core/hull";
 import type { Model } from "../core/model";
 import { VERSION, documentVersion } from "../core/document";
-import { buildJson, loadJsonText } from "../core/json";
+import { buildJson, parseHullState } from "../core/json";
 import { buildPreviewSvg } from "../core/preview";
 import { getDesign, insertDesign, updateDesign } from "../core/supabase";
 
@@ -19,18 +24,15 @@ export interface SaveView {
 export interface DesignId {
   currentId: string | null; // the open design's row id (null = never saved)
   savedName: string | null; // the name stored for currentId; the working title is the editable copy
-  savedSnapshot: string; // buildJson(model) as of the last successful save / load
+  savedDocument: string; // the document as of the last successful save / load — what Revert restores
 }
 
 export const newDesignId = (): DesignId => ({
   currentId: null,
   savedName: null,
-  savedSnapshot: "",
+  savedDocument: "",
 });
 
-export function isDirty(model: Model, id: DesignId): boolean {
-  return buildJson(model) !== id.savedSnapshot;
-}
 // would saving create a new row? (the working title was changed away from the saved design's name)
 export function isFork(id: DesignId, name: string): boolean {
   return (
@@ -38,22 +40,20 @@ export function isFork(id: DesignId, name: string): boolean {
   );
 }
 // anything unsaved: edited geometry, or a renamed existing design
-export function isUnsaved(model: Model, id: DesignId, name: string): boolean {
-  return isDirty(model, id) || isFork(id, name);
+export function isUnsaved(dirty: boolean, id: DesignId, name: string): boolean {
+  return dirty || isFork(id, name);
 }
 
 // the steady save indicator for the given working title
-export function saveView(model: Model, id: DesignId, name: string): SaveView {
+export function saveView(dirty: boolean, id: DesignId, name: string): SaveView {
   const buttonLabel = isFork(id, name) ? "Save As…" : "Save";
-  if (id.currentId == null) {
-    const dirty = isDirty(model, id);
+  if (id.currentId == null)
     return {
       buttonLabel,
       kind: dirty ? "dirty" : "",
       text: dirty ? "Unsaved" : "Not saved",
     };
-  }
-  if (isUnsaved(model, id, name))
+  if (isUnsaved(dirty, id, name))
     return { buttonLabel, kind: "dirty", text: "Unsaved changes" };
   return { buttonLabel, kind: "saved", text: "Saved" };
 }
@@ -64,17 +64,24 @@ export function saveView(model: Model, id: DesignId, name: string): SaveView {
 export const openedName = (name: string, version: number): string =>
   version < VERSION ? `${name} converted to v${VERSION}` : name;
 
-// Open the design with the given row id into the model; returns its stored name and the format version its
-// document declares (which the load may have converted upward). Throws on failure.
-export async function openDesign(
-  model: Model,
-  rowId: string,
-): Promise<{ name: string; version: number }> {
+/**
+ * Read the design with the given row id. It comes back as authored state for the caller to install through
+ * the store, along with its stored name, the format version its document declares, and the document text
+ * itself (which Revert will want). Throws on failure.
+ */
+export async function openDesign(rowId: string): Promise<{
+  state: HullState;
+  name: string;
+  version: number;
+  document: string;
+}> {
   const opened = await getDesign(rowId);
-  // read the version off the stored document before the load converts it away (a second parse, once per open)
+  // read the version off the stored document before parsing converts it away
   const version = documentVersion(JSON.parse(opened.documentText));
-  loadJsonText(model, opened.documentText);
-  return { name: opened.name, version };
+  const state = parseHullState(opened.documentText);
+  // The document kept for Revert is what this build WRITES, not what it read: a v1 document opens converted,
+  // and reverting to the file on disk would undo the conversion along with the edits.
+  return { state, name: opened.name, version, document: buildJson(state) };
 }
 
 // The one save action: overwrite the open design, or — if the name was changed (fork) or it was never saved
@@ -109,16 +116,18 @@ export async function saveDesign(
     await updateDesign(currentId!, json, preview);
   }
   return {
-    id: { currentId, savedName: finalName, savedSnapshot: json },
+    id: { currentId, savedName: finalName, savedDocument: json },
     name: finalName,
   };
 }
 
-// Revert: discard edits since the last save/open by reloading the saved snapshot into the model. Returns
-// true if it reverted, false if there was nothing to revert or the user cancelled.
-export function revert(model: Model, id: DesignId): boolean {
-  if (!isDirty(model, id)) return false;
-  if (!confirm("Discard changes since the last save?")) return false;
-  loadJsonText(model, id.savedSnapshot);
-  return true;
+/**
+ * Revert: the hull to install to discard every edit since the last save or open, or null when there is
+ * nothing to revert or the user declined. Installing it is the caller's job — one `installHull` command,
+ * which means Revert is itself undoable.
+ */
+export function revertTo(dirty: boolean, id: DesignId): HullState | null {
+  if (!dirty || !id.savedDocument) return null;
+  if (!confirm("Discard changes since the last save?")) return null;
+  return parseHullState(id.savedDocument);
 }

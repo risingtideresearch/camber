@@ -152,7 +152,6 @@ const STATIONS: { key: keyof LineToggles; label: string; title: string }[] = [
 
 interface View3dProps {
   model: Model;
-  modelVersion: number;
   selection: ModelSelection;
   stl?: StlState | null; // optional imported reference mesh, drawn translucent over the hull
   // the shared hull sampling the surface is built from. EditorApp computes it once (at the Performance
@@ -167,7 +166,6 @@ interface View3dProps {
 
 export function View3d({
   model,
-  modelVersion,
   selection,
   sampling,
   curvature = CURVATURE_OFF,
@@ -197,8 +195,8 @@ export function View3d({
       sampling
         ? null
         : computeHullSampling(model, PERF_N_DEFAULT, PERF_R_DEFAULT),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sampling, model, modelVersion],
+
+    [sampling, model],
   );
   const effSampling = sampling ?? fallback;
 
@@ -210,7 +208,6 @@ export function View3d({
         <CameraLens fov={fov} />
         <Scene
           model={model}
-          modelVersion={modelVersion}
           selection={selection}
           shading={shading}
           lines={lines}

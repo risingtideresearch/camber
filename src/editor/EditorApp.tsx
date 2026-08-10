@@ -1,23 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  createModel,
-  loa,
-  movePlanPoint,
-  moveStationPoint,
-  moveStationU,
-  moveTransom,
-  moveTrim,
-  refreshDerived,
-  resetModel,
-  setDeckRake,
-  setUnit,
-  setWaterline,
-  setX0,
-  type Model,
-} from "../core/model";
 import { computeHullSampling, type HullSampling } from "../core/mesh";
 import type { Unit } from "../core/document";
 import type { ModelSelection } from "../core/modelSelection";
+import type { HullCommand } from "../core/commands";
+import { createOwner, isDirty, localStore } from "../core/store";
+import {
+  StoreContext,
+  useHullStore,
+  useRuntime,
+  useSnapshot,
+} from "./hullStore";
 import {
   defaultStlSettings,
   parseStl,
@@ -25,18 +17,18 @@ import {
   type StlState,
 } from "../core/stlImport";
 import { getHullBBox } from "../core/hullGeometry";
+import { defaultHull } from "../core/hull";
 import { buildJson } from "../core/json";
-import { clamp } from "../core/math";
 import { getDrag, setDrag } from "../core/drag";
 import { viewOf } from "../core/view";
 import { getVB } from "./svgCoords";
-import { deleteSelected, setKnuckle } from "./selection";
+import { deleteCommand, knuckleCommand } from "./selection";
 import {
   isUnsaved,
   newDesignId,
   openDesign,
   openedName,
-  revert,
+  revertTo,
   saveDesign,
   saveView,
   type DesignId,
@@ -72,25 +64,40 @@ import { StlControl } from "../components/StlControl";
 import { Area, AreaGroup, AreaSeparator } from "polymorph-ui";
 import "./EditorApp.css";
 
-const INITIAL_SAVE: SaveView = { buttonLabel: "Save", kind: "", text: "" };
-
+// The editor's window owns the hull. In one window that is the whole story; from phase 5 the owner moves into
+// a SharedWorker and only this line changes — everything below reads the store through the same interface.
 export function EditorApp() {
-  // The one hull model: a stable, mutable object (many core functions mutate it in place). It is never
-  // replaced, so reactivity is driven by `modelVersion` — bumped after every edit to trigger a redraw.
-  const [model] = useState<Model>(() => {
-    const m = createModel();
-    resetModel(m);
-    return m;
-  });
-  const [modelVersion, setModelVersion] = useState(0);
+  const [store] = useState(() => localStore(createOwner()));
+  return (
+    <StoreContext.Provider value={store}>
+      <Editor />
+    </StoreContext.Provider>
+  );
+}
+
+function Editor() {
+  const store = useHullStore();
+  // The hull, assembled. Unlike the mutable model this replaces, its IDENTITY changes exactly when something
+  // this window draws has changed — so it is the redraw signal too, and `modelVersion` is gone.
+  const model = useRuntime();
+  const snapshot = useSnapshot();
+  const dirty = isDirty(snapshot);
+
   // Every edit goes through here, so this is where the performance readout's FRAME starts: the redraw it sets
   // off costs far more than the passes inside it (React's own render and commit, three's reconciliation, the
   // collector), and the frame is what measures the whole of it — see core/perf.
-  const bumpModel = useCallback(() => {
-    perfFrame();
-    setModelVersion((v) => v + 1);
-  }, []);
-  // the views are mounted only once boot has settled the model, so nothing draws the default hull before a
+  const run = useCallback(
+    (cmd: HullCommand) => {
+      perfFrame();
+      return store.dispatch(cmd);
+    },
+    [store],
+  );
+  // The drag and key handlers subscribe once and then read the latest model from here, rather than re-binding
+  // their window listeners on every frame of a drag.
+  const modelRef = useRef(model);
+
+  // the views are mounted only once boot has settled the hull, so nothing draws the default hull before a
   // URL design (?id=) finishes loading — the columns are sized by flex/layout, so mounting causes no reflow.
   const [booted, setBooted] = useState(false);
 
@@ -110,41 +117,43 @@ export function EditorApp() {
   const activeStation = Math.min(activeStationRaw, model.stations.length - 1);
   // The performance readout. Its `on` drives the core's recording switch — a module-level flag rather than
   // state, because the draws that report into it are imperative and must not re-render anything — so the
-  // toggle is pushed there and the views are bumped to redraw, which is what fills the panel.
+  // toggle is pushed there and a redraw is forced, which is what fills the panel.
   const [perf, setPerf] = useState<PerfSettings>(defaultPerf);
+  const [redraws, setRedraws] = useState(0);
   const onPerf = (next: PerfSettings) => {
     if (next.on !== perf.on) {
       setPerfOn(next.on);
-      bumpModel();
+      perfFrame();
+      setRedraws((v) => v + 1); // no hull changed, so nothing but this will re-run the sampling
     }
     setPerf(next);
   };
 
   const [name, setName] = useState("");
-  const [save, setSave] = useState<SaveView>(INITIAL_SAVE);
   const [saving, setSaving] = useState(false);
+  // The design identity, and the transient "Saving…" / "Saved ✓" that briefly overrides the steady indicator.
+  // The steady one is derived, not polled: `revision !== savedRevision` is exact and costs nothing.
+  const [designId, setDesignId] = useState<DesignId>(newDesignId);
+  const [flash, setFlash] = useState<SaveView | null>(null);
+  const save = flash ?? saveView(dirty, designId, name);
 
   // imported reference STL — session only, never saved. Drawn translucent over the hull in the 3D view.
   const [stl, setStl] = useState<StlState | null>(null);
-  const onImportStl = useCallback(
-    async (file: File) => {
-      try {
-        const geom = parseStl(await file.arrayBuffer());
-        const designBox = getHullBBox(model); // freeze the current hull bounds; the fit scale is relative to them
-        setStl({
-          geom,
-          designBox,
-          settings: defaultStlSettings(geom, designBox),
-        });
-      } catch (e) {
-        alert(
-          "Couldn't import STL: " +
-            (e instanceof Error ? e.message : String(e)),
-        );
-      }
-    },
-    [model],
-  );
+  const onImportStl = useCallback(async (file: File) => {
+    try {
+      const geom = parseStl(await file.arrayBuffer());
+      const designBox = getHullBBox(modelRef.current); // freeze the current hull bounds; the fit scale is relative to them
+      setStl({
+        geom,
+        designBox,
+        settings: defaultStlSettings(geom, designBox),
+      });
+    } catch (e) {
+      alert(
+        "Couldn't import STL: " + (e instanceof Error ? e.message : String(e)),
+      );
+    }
+  }, []);
   const onChangeStl = useCallback(
     (patch: Partial<StlSettings>) =>
       setStl((s) => (s ? { ...s, settings: { ...s.settings, ...patch } } : s)),
@@ -152,76 +161,94 @@ export function EditorApp() {
   );
   const onRemoveStl = useCallback(() => setStl(null), []);
 
-  // The design identity (which row is open, its saved name, the last-saved JSON) and a few values the
-  // window-level listeners / the poll read at their latest — kept in refs so those one-time effects and async
-  // handlers see fresh state without re-subscribing every render.
-  const idRef = useRef<DesignId>(newDesignId());
+  // A few values the window-level listeners and the async save read at their latest, kept in refs so those
+  // one-time effects never re-subscribe. Written after commit, which is when the handlers can first run.
+  const idRef = useRef(designId);
   const selectionRef = useRef(selection);
   const nameRef = useRef(name);
+  const dirtyRef = useRef(dirty);
   const savingRef = useRef(false);
-  const flashUntilRef = useRef(0); // hold a transient "Saving…" / "Saved ✓" until this timestamp
-  // keep the refs the window listeners / async handlers read in sync with the latest state
   useEffect(() => {
+    modelRef.current = model;
+    idRef.current = designId;
     selectionRef.current = selection;
-  }, [selection]);
-  useEffect(() => {
     nameRef.current = name;
-  }, [name]);
+    dirtyRef.current = dirty;
+  }, [model, designId, selection, name, dirty]);
 
-  // Refresh the model's derived curves, then compute the ONE hull sampling every view shares (mesh.ts): the
-  // swept sheet and its three trims, sampled at the Performance control's resolution. Runs during render
-  // (before the child views' draw effects) whenever the model or that resolution changes, so every view sees a
-  // current model and the same lattice — nothing re-sweeps the hull for itself. The 2D strips read its
-  // trimmedSections for the outline, the 3D view stitches them into the surface.
+  // Compute the ONE hull sampling every view shares (mesh.ts): the swept sheet and its three trims, sampled at
+  // the Performance control's resolution. Runs during render (before the child views' draw effects) whenever
+  // the hull or that resolution changes, so every view sees the same lattice — nothing re-sweeps the hull for
+  // itself. The 2D strips read its trimmedSections for the outline, the 3D view stitches them into the
+  // surface.
   //
-  // Two passes, not one: the sampling is the single most expensive thing an edit sets off and it has phases of
-  // its own worth reading apart (mesh.ts reports them into PERF_SAMPLING, which is why the pass is opened here
-  // rather than timed as one step of the shared work).
+  // The model arrives assembled, so there is no "prepare" step to time any more; what the SECTIONS pass now
+  // measures is the assembly the store did on this window's behalf, which is zero when only the cut station
+  // moved.
   const sampling = useMemo<HullSampling>(() => {
     perfBegin(PERF_SECTIONS);
-    perfStep("derived curves", () => refreshDerived(model));
+    perfStep("assemble (derived curves)", () => store.runtime());
     perfEnd(PERF_SECTIONS);
     perfBegin(PERF_SAMPLING);
     const out = computeHullSampling(model, perf.numSections, perf.girthSteps);
     perfEnd(PERF_SAMPLING);
     return out;
+    // `redraws` carries no data — it is how the Performance toggle forces one more pass through here, so the
+    // panel has something to show when it is switched on without the hull having moved.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, modelVersion, perf.numSections, perf.girthSteps]);
+  }, [store, model, redraws, perf.numSections, perf.girthSteps]);
 
   // ---------- window-level drag (2D control points) ----------
   // Drags are begun on the SVG nodes (draw2d's startDrag sets the shared drag + selects); the move is applied
-  // here at the window level, mapping the pointer into model space and mutating the selected point. The 3D
-  // rotate / zoom drag is handled locally in View3d, so it never reaches this handler.
+  // here at the window level, mapping the pointer into model space and dispatching the matching command. The
+  // 3D rotate / zoom drag is handled locally in View3d, so it never reaches this handler.
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
       const drag = getDrag();
       if (!drag) return;
       const [vx, vy] = getVB(drag, e);
+      const m = modelRef.current;
       // the view transforms are held against the length captured when the hull was installed (see view.ts),
       // so they do not shift mid-drag: a point tracks the pointer even when the drag is what sets the LOA
-      const v = viewOf(model);
-      if (drag.kind === "slider")
-        setX0(model, clamp(v.invX(vx), 0, loa(model)));
-      else if (drag.kind === "sheer")
-        movePlanPoint(model, drag.idx!, v.invX(vx), v.invY(vy));
+      const v = viewOf(m);
+      const idx = drag.idx ?? 0;
+      // The cut station is SESSION state — shared between windows, but neither undoable nor a change to the
+      // document — so it has a dispatch of its own and never reaches the undo stack.
+      if (drag.kind === "slider") {
+        perfFrame();
+        store.dispatchSession({ type: "setX0", x: v.invX(vx) });
+        return;
+      }
+      if (drag.kind === "sheer")
+        void run({
+          type: "movePlanPoint",
+          idx,
+          x: v.invX(vx),
+          y: v.invY(vy),
+        });
       else if (drag.kind === "trim")
-        moveTrim(model, drag.idx!, v.invX(vx), v.invZp(vy));
+        void run({ type: "moveTrim", idx, x: v.invX(vx), z: v.invZp(vy) });
       else if (drag.kind === "transom")
-        moveTransom(model, drag.idx!, v.invX(vx), v.invZp(vy));
+        void run({ type: "moveTransom", idx, x: v.invX(vx), z: v.invZp(vy) });
       // a station handle rides the plan curve: the station's u is the plan point NEAREST the pointer, not
       // the one straight below it. Where the plan turns toward the centerline at the bow, a vertical hit
       // slides far along the curve for a small sideways move (and stops responding at all once the pointer
       // passes the stem); the nearest point keeps the handle under the hand. The plan is drawn at the one
       // isometric scale (view.ts), so nearest in model space is also nearest on screen.
       else if (drag.kind === "stationU")
-        moveStationU(
-          model,
-          drag.idx!,
-          model.plan.uAtPoint([v.invX(vx), v.invY(vy)]),
-        );
+        void run({
+          type: "moveStationU",
+          idx,
+          u: m.plan.uAtPoint([v.invX(vx), v.invY(vy)]),
+        });
       else if (drag.kind === "stn")
-        moveStationPoint(model, drag.si!, drag.idx!, v.invN(vx), v.invZ(vy));
-      bumpModel();
+        void run({
+          type: "moveStationPoint",
+          si: drag.si ?? 0,
+          idx,
+          n: v.invN(vx),
+          z: v.invZ(vy),
+        });
     };
     const onUp = () => setDrag(null); // selection persists after a drag, so the point stays editable
     window.addEventListener("pointermove", onMove);
@@ -232,47 +259,56 @@ export function EditorApp() {
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [model, bumpModel]);
+  }, [store, run]);
 
-  // ---------- delete the selected point with Delete / Backspace ----------
+  // ---------- delete the selected point, and undo / redo ----------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Delete" && e.key !== "Backspace") return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
-      const sel = selectionRef.current;
-      if (sel) {
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const cmd = deleteCommand(modelRef.current, selectionRef.current);
+        if (!cmd) return;
         e.preventDefault();
-        if (deleteSelected(model, sel)) {
-          setSelection(null);
-          bumpModel();
-        }
+        setSelection(null);
+        void run(cmd);
+        return;
+      }
+      // Undo is new: there was nothing to undo with before the store, because an edit overwrote the hull in
+      // place. A drag is one step — consecutive moves of the same point coalesce in the owner.
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        perfFrame();
+        setSelection(null);
+        if (e.shiftKey) store.redo();
+        else store.undo();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [model, bumpModel]);
+  }, [store, run]);
 
-  // ---------- boot: load the URL design (if any) once, after the model is created ----------
+  // ---------- boot: load the URL design (if any) once ----------
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const rowId = new URLSearchParams(window.location.search).get("id");
+      let id: DesignId = { ...newDesignId(), savedDocument: "" };
       if (rowId) {
         try {
-          const { name: nm, version } = await openDesign(model, rowId);
+          const opened = await openDesign(rowId);
           if (cancelled) return;
+          await store.dispatch({ type: "installHull", state: opened.state });
           // The identity keeps the row's OWN name: an older document opens under a converted title, which
           // differs from it, so the editor starts out a fork — saving writes a new v2 row and leaves the
           // original untouched. For an up-to-date document the two are the same and Save overwrites.
-          const title = openedName(nm, version);
-          idRef.current = {
+          const title = openedName(opened.name, opened.version);
+          id = {
             currentId: rowId,
-            savedName: nm,
-            savedSnapshot: buildJson(model),
+            savedName: opened.name,
+            savedDocument: opened.document,
           };
           setName(title);
-          nameRef.current = title;
         } catch (e) {
           if (cancelled) return; // a cleaned-up run must not clobber a newer run's load
           console.error("open design failed:", e);
@@ -280,74 +316,56 @@ export function EditorApp() {
             "Couldn't open that design: " +
               (e instanceof Error ? e.message : String(e)),
           );
-          resetModel(model); // discard any partial load; fall back to a clean default hull
-          idRef.current = { ...newDesignId(), savedSnapshot: buildJson(model) };
+          // discard any partial load; fall back to a clean default hull
+          await store.dispatch({ type: "installHull", state: defaultHull() });
+          id = { ...newDesignId(), savedDocument: "" };
         }
-      } else {
-        idRef.current = { ...newDesignId(), savedSnapshot: buildJson(model) };
       }
       if (cancelled) return;
+      // Whatever was installed is what "saved" means from here: the boot's own load must not read as an edit.
+      id.savedDocument ||= buildJson(store.runtime());
+      store.markSaved(store.snapshot().revision);
+      setDesignId(id);
       setSelection(null);
-      bumpModel();
-      setSave(saveView(model, idRef.current, nameRef.current));
-      setBooted(true); // now mount the views and let them draw the settled model
+      setBooted(true); // now mount the views and let them draw the settled hull
     })();
     return () => {
       cancelled = true;
     };
-  }, [model, bumpModel]);
+  }, [store]);
 
   // ---------- the one save action (stable; reads latest state from refs) ----------
   const doSave = useCallback(async () => {
     if (savingRef.current) return;
     savingRef.current = true;
-    flashUntilRef.current = 0;
     setSaving(true);
-    setSave((v) => ({ ...v, kind: "", text: "Saving…" }));
+    setFlash({ buttonLabel: "Save", kind: "", text: "Saving…" });
+    // The revision the document is written AT. `saveDesign` builds the JSON synchronously before its first
+    // await, so nothing can be edited in between — but the marking happens after, so it has to be captured.
+    const at = store.snapshot().revision;
     try {
-      const res = await saveDesign(model, idRef.current, nameRef.current);
+      const res = await saveDesign(
+        store.runtime(),
+        idRef.current,
+        nameRef.current,
+      );
       if (res) {
-        idRef.current = res.id;
+        setDesignId(res.id);
         setName(res.name);
-        nameRef.current = res.name;
-        flashUntilRef.current = Date.now() + 1400; // hold "Saved ✓" before the poll resumes
-        setSave({
-          buttonLabel: saveView(model, res.id, res.name).buttonLabel,
-          kind: "saved",
-          text: "Saved ✓",
-        });
+        store.markSaved(at);
+        setFlash({ buttonLabel: "Save", kind: "saved", text: "Saved ✓" });
+        window.setTimeout(() => setFlash(null), 1400); // hold "Saved ✓" before the steady view returns
       } else {
-        setSave(saveView(model, idRef.current, nameRef.current)); // cancelled — back to steady state
+        setFlash(null); // cancelled — back to steady state
       }
     } catch (e) {
-      setSave({
-        buttonLabel: saveView(model, idRef.current, nameRef.current)
-          .buttonLabel,
-        kind: "dirty",
-        text: "Save failed",
-      });
+      setFlash({ buttonLabel: "Save", kind: "dirty", text: "Save failed" });
       alert("Save failed: " + (e instanceof Error ? e.message : String(e)));
     } finally {
       savingRef.current = false;
       setSaving(false);
     }
-  }, [model]);
-
-  // ---------- the dirty poll: refresh the save indicator (skips no-op updates to avoid re-renders) ----------
-  useEffect(() => {
-    const iv = setInterval(() => {
-      if (savingRef.current || Date.now() < flashUntilRef.current) return;
-      setSave((prev) => {
-        const next = saveView(model, idRef.current, nameRef.current);
-        return prev.buttonLabel === next.buttonLabel &&
-          prev.kind === next.kind &&
-          prev.text === next.text
-          ? prev
-          : next;
-      });
-    }, 300);
-    return () => clearInterval(iv);
-  }, [model]);
+  }, [store, setSaving, setFlash, setDesignId, setName]);
 
   // ---------- Ctrl/Cmd-S + beforeunload ----------
   useEffect(() => {
@@ -358,10 +376,8 @@ export function EditorApp() {
       }
     };
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (isUnsaved(model, idRef.current, nameRef.current)) {
+      if (isUnsaved(dirtyRef.current, idRef.current, nameRef.current))
         e.preventDefault();
-        e.returnValue = "";
-      }
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("beforeunload", onBeforeUnload);
@@ -369,7 +385,7 @@ export function EditorApp() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("beforeunload", onBeforeUnload);
     };
-  }, [doSave, model]);
+  }, [doSave]);
 
   // ---------- keep the document title in sync with the design name ----------
   useEffect(() => {
@@ -377,14 +393,9 @@ export function EditorApp() {
   }, [name]);
 
   // ---------- handlers ----------
-  const onWaterline = (mm: number) => {
-    setWaterline(model, mm);
-    bumpModel();
-  };
-  const onRake = (deg: number) => {
-    setDeckRake(model, deg);
-    bumpModel();
-  };
+  const onWaterline = (depth: number) =>
+    void run({ type: "setWaterline", depth });
+  const onRake = (deg: number) => void run({ type: "setDeckRakeDeg", deg });
   // Changing the unit asks which of the two things the user meant: keep the hull the same PHYSICAL size and
   // convert the numbers (2000 mm → 2 m), or keep the numbers and reinterpret them at the new unit's scale
   // (2000 mm → 2000 m). Neither is a safe default, so it is asked rather than assumed.
@@ -395,32 +406,33 @@ export function EditorApp() {
         `OK — convert the numbers, keeping the hull the same size.\n` +
         `Cancel — keep the numbers, resizing the hull to ${unit}.`,
     );
-    setUnit(model, unit, rescale);
-    bumpModel();
+    void run({ type: "setUnit", unit, rescale });
   };
   const onKnuckle = (k: number) => {
-    if (setKnuckle(model, selection, k)) bumpModel();
+    const cmd = knuckleCommand(model, selection, k);
+    if (cmd) void run(cmd);
   };
   const onDelete = () => {
-    if (deleteSelected(model, selection)) {
-      setSelection(null);
-      bumpModel();
-    }
+    const cmd = deleteCommand(model, selection);
+    if (!cmd) return;
+    setSelection(null);
+    void run(cmd);
   };
   // blanking the title on an existing design restores the saved name (a name is required to save)
   const onNameBlur = () => {
     const saved = idRef.current.savedName;
     if (!nameRef.current.trim() && saved != null) setName(saved);
   };
+  // Revert is one `installHull`, which means it is itself undoable — a slip of the hand is recoverable now.
   const onRevert = () => {
-    if (revert(model, idRef.current)) {
-      setSelection(null);
-      bumpModel();
-    }
+    const state = revertTo(dirty, designId);
+    if (!state) return;
+    setSelection(null);
+    void run({ type: "installHull", state });
   };
   const onClose = () => {
     if (
-      isUnsaved(model, idRef.current, nameRef.current) &&
+      isUnsaved(dirty, designId, name) &&
       !confirm("Discard unsaved changes and return to the library?")
     )
       return;
@@ -490,13 +502,11 @@ export function EditorApp() {
                 <Area className="area" defaultSize="50%">
                   <PlanView
                     model={model}
-                    modelVersion={modelVersion}
                     selection={selection}
                     sampling={sampling}
                     tool={tool}
                     onSelect={setSelection}
                     setTool={setTool}
-                    bumpModel={bumpModel}
                     sync={planProfileSync}
                     curvature={curvature}
                     knotLongs={knotLongs}
@@ -508,13 +518,11 @@ export function EditorApp() {
                 <Area className="area" defaultSize="50%">
                   <ProfileView
                     model={model}
-                    modelVersion={modelVersion}
                     selection={selection}
                     sampling={sampling}
                     tool={tool}
                     onSelect={setSelection}
                     setTool={setTool}
-                    bumpModel={bumpModel}
                     sync={planProfileSync}
                     curvature={curvature}
                     knotLongs={knotLongs}
@@ -526,12 +534,10 @@ export function EditorApp() {
             <Area className="area" defaultSize="25%" minSize="200px">
               <StationView
                 model={model}
-                modelVersion={modelVersion}
                 selection={selection}
                 tool={tool}
                 onSelect={setSelection}
                 setTool={setTool}
-                bumpModel={bumpModel}
                 curvature={curvature}
                 knotLongs={knotLongs}
                 setKnotLongs={setKnotLongs}
@@ -545,7 +551,6 @@ export function EditorApp() {
                 <Area className="area" defaultSize="50%">
                   <View3d
                     model={model}
-                    modelVersion={modelVersion}
                     selection={selection}
                     sampling={sampling}
                     stl={stl}
@@ -556,7 +561,6 @@ export function EditorApp() {
                 <Area className="area" defaultSize="50%">
                   <CutStationView
                     model={model}
-                    modelVersion={modelVersion}
                     selection={selection}
                     curvature={curvature}
                   />

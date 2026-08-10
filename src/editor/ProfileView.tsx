@@ -1,5 +1,7 @@
 import { useCallback } from "react";
-import { addTrimPoint, type Model } from "../core/model";
+import type { Model } from "../core/model";
+import { rejected } from "../core/commands";
+import { useHullStore } from "./hullStore";
 import type { HullSampling } from "../core/mesh";
 import type { ModelSelection } from "../core/modelSelection";
 import type { CurvatureSettings } from "../core/comb";
@@ -15,13 +17,11 @@ import "./ViewStrip.css";
 // In "add" mode a click on empty space inserts a sheer-trim point.
 interface ProfileViewProps {
   model: Model;
-  modelVersion: number;
   selection: ModelSelection;
   sampling: HullSampling; // the shared hull sampling; the keel / stem outline is drawn from its trimmedSections
   tool: Tool;
   onSelect: (sel: ModelSelection) => void;
   setTool: (t: Tool) => void;
-  bumpModel: () => void;
   sync?: RefObject<SvgViewSync>; // shared zoom / x-pan with the plan strip
   curvature: CurvatureSettings;
   knotLongs: boolean; // the station editor's "Show knot longitudinals" toggle, shared by all three 2D views
@@ -29,17 +29,16 @@ interface ProfileViewProps {
 
 export function ProfileView({
   model,
-  modelVersion,
   selection,
   sampling,
   tool,
   onSelect,
   setTool,
-  bumpModel,
   sync,
   curvature,
   knotLongs,
 }: ProfileViewProps) {
+  const store = useHullStore();
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
       drawProfile(
@@ -53,21 +52,23 @@ export function ProfileView({
         knotLongs,
       );
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [model, modelVersion, selection, sampling, onSelect, curvature, knotLongs],
+    [model, selection, sampling, onSelect, curvature, knotLongs],
   );
 
-  const onBackgroundClick = (vx: number, vy: number) => {
-    if (tool === "add") {
-      const v = viewOf(model);
-      const idx = addTrimPoint(model, v.invX(vx), v.invZp(vy));
-      setTool("select");
-      if (idx < 0) return; // no room at the minimum point spacing — nothing was inserted
-      onSelect({ tgt: "trim", idx });
-      bumpModel();
-    } else {
+  const onBackgroundClick = async (vx: number, vy: number) => {
+    if (tool !== "add") {
       onSelect(null);
+      return;
     }
+    const v = viewOf(model);
+    const out = await store.dispatch({
+      type: "addTrimPoint",
+      x: v.invX(vx),
+      z: v.invZp(vy),
+    });
+    setTool("select");
+    if (rejected(out)) return; // no room at the minimum point spacing — nothing was inserted
+    onSelect({ tgt: "trim", idx: out.result as number });
   };
 
   const ph = viewOf(model).ph; // a fraction of the length the hull was loaded at, held there (see view.ts)
@@ -80,7 +81,7 @@ export function ProfileView({
         draw={draw}
         sync={sync}
         cursor={tool === "add" ? "crosshair" : "default"}
-        onBackgroundClick={onBackgroundClick}
+        onBackgroundClick={(vx, vy) => void onBackgroundClick(vx, vy)}
       />
     </div>
   );

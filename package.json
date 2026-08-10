@@ -18,8 +18,9 @@
     "test:centerline": "tsx test/centerline.ts",
     "test:io": "tsx test/io.ts",
     "test:hull": "tsx test/hull-state.ts",
+    "test:store": "tsx test/store.ts",
     "test:v2": "tsx test/v2core.ts",
-    "test": "npm run test:hull && npm run test:v2 && npm run test:smooth && npm run test:centerline && npm run test:io"
+    "test": "npm run test:hull && npm run test:store && npm run test:v2 && npm run test:smooth && npm run test:centerline && npm run test:io"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

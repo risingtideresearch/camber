@@ -42,14 +42,10 @@
 // user-authored set to `promoteFamily` instead, and the auto pass is only the default.
 
 import { type Vec2 } from "./math";
-import {
-  addStationPoint,
-  createModel,
-  loa,
-  installHull,
-  type Model,
-  type StationCP,
-} from "./model";
+import { loa, type Model } from "./model";
+import { applyCommand, rejected } from "./commands";
+import { assemble } from "./runtime";
+import type { Writable, HullState, StationCP } from "./hull";
 import { clampedBSplineSamplerX, planCurve } from "./bspline";
 import { convertUnits, type HullData } from "./json";
 
@@ -175,15 +171,20 @@ function bsplineRefit(pts: Vec2[], N: number): Vec2[] {
   return out;
 }
 
-// a scratch model over this hull's data, so the promotions can use the core's own curve evaluators (the loft,
-// the trim graph, the section curves) rather than re-deriving them. The hull is copied in, so what a
-// promotion reads is a snapshot: where one runs an edit operation against the scratch model, it assigns the
-// result back to `data` explicitly.
-function modelOf(data: HullData): Model {
-  const m = createModel();
-  installHull(m, { ...data, waterline: 0, deckRake: 0 });
-  return m;
-}
+// A scratch model over this hull's data, so the promotions can use the core's own curve evaluators (the loft,
+// the trim graph, the section curves) rather than re-deriving them. The trim scalars are irrelevant here —
+// nothing below reads the waterline — so they are zeroed rather than carried.
+const modelOf = (data: HullData): Model =>
+  assemble({ ...data, waterline: 0, deckRake: 0 });
+
+// The stations of a hull, back in writable form. Promotion builds its hulls up in passes, and `applyCommand`
+// hands back authored state, so this is the crossing between the two.
+const writableStations = (state: HullState): Writable<StationCP>[] =>
+  state.stations.map((st) => ({
+    u: st.u,
+    keelK: st.keelK,
+    points: st.points.map((p) => ({ ...p })),
+  }));
 
 // Refit the plan curve to N control points, then remap every station's u to hold its x.
 //
@@ -247,15 +248,16 @@ function promoteSection(data: HullData, S: number): void {
         bi = i;
       }
     }
-    // aim at the segment's midpoint; addStationPoint finds the nearest segment (this one) and inserts the
+    // aim at the segment's midpoint; the command finds the nearest segment (this one) and inserts the
     // matching on-curve point into every station
-    addStationPoint(
-      m,
-      0,
-      (ref[bi].n + ref[bi + 1].n) / 2,
-      (ref[bi].z + ref[bi + 1].z) / 2,
-    );
-    data.stations = m.stations;
+    const out = applyCommand(m, {
+      type: "addStationPoint",
+      si: 0,
+      n: (ref[bi].n + ref[bi + 1].n) / 2,
+      z: (ref[bi].z + ref[bi + 1].z) / 2,
+    });
+    if (rejected(out)) return; // the section has no segment left to take a point
+    data.stations = writableStations(out.state);
   }
 }
 
@@ -418,7 +420,7 @@ function promoteStations(datas: HullData[], corr: Correspondence[]): void {
   datas.forEach((data, h) => {
     const m = modelOf(data), // one loft, built BEFORE any insert: every new station is read off the
       loft = m.loft; //        hull as authored, so the inserts never compound
-    const out: StationCP[] = corr.map((c, j) => {
+    const out: Writable<StationCP>[] = corr.map((c, j) => {
       if (c[h] !== null) {
         const found = data.stations.find((s) => s.u === c[h]);
         if (found) return found;
@@ -477,4 +479,4 @@ export function promoteFamily(
 // the family's shared scale, for a caller that wants to report it (the blend of hulls of different lengths is
 // a hull of an intermediate length — legitimate, and worth surfacing)
 export const familyLoa = (datas: HullData[]): number[] =>
-  datas.map((d) => loa({ sheerPlan: d.sheerPlan } as Model));
+  datas.map((d) => loa({ sheerPlan: d.sheerPlan }));

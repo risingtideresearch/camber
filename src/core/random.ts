@@ -5,7 +5,7 @@
 // STATUS: not wired into the UI. The "Randomize" button was removed — the sampled hulls aren't yet
 // convincing enough — and this module is kept as a documented, self-contained reference for the
 // reparameterization approach and as the basis for the next iteration. The exports
-// `randomDoc(adventure)`, `meanDoc()`, and `randomizeModel()` remain, so it can be re-hooked to a
+// `randomDoc(adventure)`, `meanDoc()`, and `randomHull()` remain, so it can be re-hooked to a
 // button or driven from the console / a test without further plumbing.
 //
 // ---- the problem: validity is not realism -------------------------------------------------
@@ -98,7 +98,8 @@
 
 import { boundsOf, loa, type Bounds, type Model } from "./model";
 import { VERSION, type HullDocument } from "./document";
-import { loadJsonText } from "./json";
+import { parseHullState } from "./json";
+import type { HullState } from "./hull";
 
 const clamp = (v: number, lo: number, hi: number): number =>
   v < lo ? lo : v > hi ? hi : v;
@@ -403,6 +404,5 @@ export function meanDoc(model: Model): string {
 // Decode a fresh random variant and load it into the live model (through the canonical json.ts path).
 // NOTE: currently called by nothing — the UI button was removed. Retained so the generator can be
 // re-hooked to a control or invoked from a console/test without re-deriving the wiring.
-export function randomizeModel(model: Model): void {
-  loadJsonText(model, randomDoc(model));
-}
+export const randomHull = (model: Model): HullState =>
+  parseHullState(randomDoc(model));

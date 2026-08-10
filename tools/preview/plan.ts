@@ -4,21 +4,16 @@
 import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import {
-  createModel,
-  loa,
-  resetModel,
-  refreshDerived,
-} from "../../src/core/model";
+import { loa } from "../../src/core/model";
 import { sweptSection, forwardLimit } from "../../src/core/mesh";
-import { loadJsonText } from "../../src/core/json";
-
-const model = createModel();
+import { parseHullState } from "../../src/core/json";
+import { assemble } from "../../src/core/runtime";
+import { defaultHull } from "../../src/core/hull";
 
 const doc = process.env.CAMBER_DOC;
-resetModel(model);
-if (doc) loadJsonText(model, readFileSync(doc, "utf8"));
-refreshDerived(model);
+const model = assemble(
+  doc ? parseHullState(readFileSync(doc, "utf8")) : defaultHull(),
+);
 
 // the hull spans the plan's own parameter u, so both curves are sampled in it and read out in x — the plan
 // is a parametric curve now, not a graph, which is also what lets it be drawn crossing the centerline

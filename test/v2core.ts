@@ -20,16 +20,7 @@
 //     well-formed hull (its plan x, trim x and station u all strictly increasing).
 //
 // Run with `npm run test:v2` (tsx runs this directly under node). Non-zero exit on any failure.
-import {
-  createModel,
-  installHull,
-  refreshDerived,
-  loa,
-  sectionAt,
-  frameAt,
-  bounds,
-  type Model,
-} from "../src/core/model";
+import { loa, sectionAt, frameAt, bounds, type Model } from "../src/core/model";
 import {
   hullGrid,
   sweptSection,
@@ -40,9 +31,11 @@ import {
 import {
   buildJson,
   parseDocument,
-  loadHull,
+  parseHullState,
   type HullData,
 } from "../src/core/json";
+import { assemble } from "../src/core/runtime";
+import { defaultHull, type HullState } from "../src/core/hull";
 import { crCurveAuto } from "../src/core/spline";
 import { convertV1ToV2 } from "../src/legacy/v1/convert";
 import { promoteFamily, autoCorrespondence } from "../src/core/promote";
@@ -89,8 +82,7 @@ const ok = (c: boolean, m: string): void => {
 }
 
 // ---- model ----
-const m = createModel();
-refreshDerived(m);
+const m = assemble(defaultHull());
 ok(Math.abs(loa(m) - 5000) < 1e-6, "default hull is 5000 mm long");
 ok(m.unit === "mm", "default unit is mm");
 ok(m.stations.length === 2, "default has 2 stations");
@@ -203,10 +195,11 @@ ok(m.stations.length === 2, "default has 2 stations");
   const p = parseDocument(text);
   ok(p.topology.stationCount === 2, "round-trip keeps the station count");
   ok(p.hull.unit === "mm", "round-trip keeps the unit");
-  const m2 = createModel();
-  loadHull(m2, p.hull);
-  m2.waterline = p.waterline;
-  refreshDerived(m2);
+  const m2 = assemble({
+    ...p.hull,
+    waterline: p.waterline,
+    deckRake: p.deckRake,
+  });
   let worst = 0;
   for (let i = 0; i <= 20; i++) {
     const a = sectionAt(m, i / 20),
@@ -287,9 +280,7 @@ ok(m.stations.length === 2, "default has 2 stations");
     "transom became two points",
   );
   // the converted hull must actually build
-  const mv = createModel();
-  loadHull(mv, parseDocument(JSON.stringify(v2)).hull);
-  refreshDerived(mv);
+  const mv = assemble(parseHullState(JSON.stringify(v2)));
   const g = hullGrid(mv, 40, 6, true);
   ok(g.rows.length > 20, `converted v1 hull meshes (${g.rows.length} columns)`);
 
@@ -316,9 +307,7 @@ ok(m.stations.length === 2, "default has 2 stations");
 {
   // a hull's surface, densely sampled — the yardstick for "promotion didn't move anything"
   const surface = (d: HullData): number[] => {
-    const mm = createModel();
-    loadHull(mm, structuredClone(d));
-    refreshDerived(mm);
+    const mm = assemble({ ...structuredClone(d), waterline: 0, deckRake: 0 });
     const out: number[] = [];
     for (let i = 0; i <= 24; i++) {
       const s = sweptSection(mm, i / 24, 4, true);
@@ -344,15 +333,17 @@ ok(m.stations.length === 2, "default has 2 stations");
   // hull A: the default (2 stations, mm). hull B: 3 stations, authored in metres — so the family exercises
   // both the station correspondence AND the unit normalization at once.
   const A = hullOf(m);
-  const mB = createModel();
-  mB.stations = [
+  const bStations = [
     structuredClone(m.stations[0]),
-    structuredClone(m.stations[0]),
+    { ...structuredClone(m.stations[0]), u: 0.5 },
     structuredClone(m.stations[1]),
   ];
-  mB.stations[1].u = 0.5;
-  mB.stations[1].points.forEach((p) => (p.n *= 1.15)); // a fuller midship, so B is really a different hull
-  refreshDerived(mB);
+  // a fuller midship, so B is really a different hull
+  bStations[1] = {
+    ...bStations[1],
+    points: bStations[1].points.map((p) => ({ ...p, n: p.n * 1.15 })),
+  };
+  const mB = assemble({ ...defaultHull(), stations: bStations });
   const B = hullOf(mB);
   // rescale every length-dimensioned coordinate of a hull in place (the dimensionless u / k / keelK stay)
   const rescale = (d: HullData, s: number): HullData => {
@@ -428,26 +419,31 @@ ok(m.stations.length === 2, "default has 2 stations");
   );
 
   // the blend's ends must reproduce the inputs, and every interior blend must be well formed
-  const mBl = createModel();
   const hulls = [
     { name: "A", data: fam[0] },
     { name: "B", data: fam[1] },
   ];
-  const TRIM = { waterline: mBl.waterline, deckRake: mBl.deckRake };
-  installHull(mBl, blendState(hulls, [1, 0], TRIM));
-  ok(worstDiff(surfA, surface(hullOf(mBl))) < 1e-6, "blend at t=0 IS hull A");
-  installHull(mBl, blendState(hulls, [0, 1], TRIM));
-  ok(worstDiff(surfB, surface(hullOf(mBl))) < 1e-6, "blend at t=1 IS hull B");
+  const d0 = defaultHull();
+  const TRIM = { waterline: d0.waterline, deckRake: d0.deckRake };
+  const at = (w: number[]): HullState => blendState(hulls, w, TRIM);
+  ok(
+    worstDiff(surfA, surface(hullOf(assemble(at([1, 0]))))) < 1e-6,
+    "blend at t=0 IS hull A",
+  );
+  ok(
+    worstDiff(surfB, surface(hullOf(assemble(at([0, 1]))))) < 1e-6,
+    "blend at t=1 IS hull B",
+  );
   let wellFormed = true;
   for (let i = 0; i <= 10; i++) {
     const t = i / 10;
-    installHull(mBl, blendState(hulls, [1 - t, t], TRIM));
+    const b = at([1 - t, t]);
     const inc = (xs: number[]): boolean =>
       xs.every((v, j) => j === 0 || v > xs[j - 1]);
     if (
-      !inc(mBl.sheerPlan.map((p) => p.x)) ||
-      !inc(mBl.sheerTrim.map((p) => p.x)) ||
-      !inc(mBl.stations.map((s) => s.u))
+      !inc(b.sheerPlan.map((p) => p.x)) ||
+      !inc(b.sheerTrim.map((p) => p.x)) ||
+      !inc(b.stations.map((s) => s.u))
     )
       wellFormed = false;
   }

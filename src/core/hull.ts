@@ -223,5 +223,17 @@ export function withUnit(
 export const knuckleOf = (k: number): number =>
   isFinite(k) ? clamp(k, 0, 1) : 0;
 
+/**
+ * The same shape with every `readonly` stripped, recursively.
+ *
+ * `HullState` is readonly so that a hull cannot be edited in place; but a hull being BUILT — decoded from a
+ * document, rescaled into another unit, lifted to a common topology — is not yet anybody's state, and writing
+ * those passes as pure spreads would be noise. They work on a `Writable<HullState>` and hand back a hull at
+ * the end, which the type system then holds still.
+ */
+export type Writable<T> = T extends object
+  ? { -readonly [K in keyof T]: Writable<T[K]> }
+  : T;
+
 // The invariants these types promise live in `invariants.ts`, imported from there rather than re-exported
 // here: they read this module's policy constants, and a re-export would make the pair a cycle.

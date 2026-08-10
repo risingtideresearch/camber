@@ -4,28 +4,23 @@
 import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import {
-  createModel,
-  loa,
-  resetModel,
-  refreshDerived,
-} from "../../src/core/model";
+import { loa } from "../../src/core/model";
 import {
   computeHullSampling,
   forwardLimit,
   transomOutline,
   type HullColumnV2,
 } from "../../src/core/mesh";
-import { loadJsonText } from "../../src/core/json";
+import { parseHullState } from "../../src/core/json";
+import { assemble } from "../../src/core/runtime";
+import { defaultHull } from "../../src/core/hull";
 import type { Vec3 } from "../../src/core/math";
 import { viewOf } from "../../src/core/view";
 
-const model = createModel();
-
 const doc = process.env.CAMBER_DOC;
-resetModel(model);
-if (doc) loadJsonText(model, readFileSync(doc, "utf8"));
-refreshDerived(model);
+const model = assemble(
+  doc ? parseHullState(readFileSync(doc, "utf8")) : defaultHull(),
+);
 
 // the view transforms follow the hull's own length now, so they come from the model
 const V = viewOf(model),
