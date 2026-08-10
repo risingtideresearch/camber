@@ -37,7 +37,7 @@
 import {
   createModel,
   resetModel,
-  prepare,
+  refreshDerived,
   frameAt,
   sectionAt,
   stationWorld,
@@ -110,7 +110,7 @@ function loadCase(name: string): void {
     const doc = parseDocument(readFileSync(join(examplesDir(), name), "utf8"));
     loadHull(model, doc.hull);
   }
-  prepare(model);
+  refreshDerived(model);
 }
 
 function main(): number {

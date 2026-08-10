@@ -6,7 +6,7 @@
 // draws); the projection reproduces the 3D canvas's orthographic camera (see draw3d.ts VERT_SRC). The drawing
 // is fitted to its own projected bounds, so the model's unit and absolute size are irrelevant here.
 
-import { type Model, prepare } from "./model";
+import { type Model } from "./model";
 import { computeHullSampling, type HullColumnV2 } from "./mesh";
 import { mirrorRow, type Vec3 } from "./math";
 
@@ -15,7 +15,6 @@ const YAW = -0.62,
   PITCH = 0.42;
 
 export function buildPreviewSvg(model: Model): string {
-  prepare(model);
   const NS = 36;
   const sampling = computeHullSampling(model, NS, 3),
     cols = sampling.columns.filter((c) => c.pts.length >= 2),

@@ -8,7 +8,7 @@ import {
   loa,
   bounds,
   resetModel,
-  prepare,
+  refreshDerived,
 } from "../../src/core/model";
 import { sweptSection, forwardLimit } from "../../src/core/mesh";
 import { loadJsonText } from "../../src/core/json";
@@ -19,7 +19,7 @@ const model = createModel();
 resetModel(model);
 if (process.env.CAMBER_DOC)
   loadJsonText(model, readFileSync(process.env.CAMBER_DOC, "utf8"));
-prepare(model);
+refreshDerived(model);
 
 // the view transforms follow the hull's own length now, so they are derived from the model rather than
 // imported as module constants

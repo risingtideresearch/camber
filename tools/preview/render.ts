@@ -20,7 +20,7 @@ import {
   createModel,
   loa,
   resetModel,
-  prepare,
+  refreshDerived,
   worldZ,
   keepAt,
   frameAt,
@@ -490,7 +490,7 @@ if (process.env.CAMBER_KEELK) {
   const k = parseFloat(process.env.CAMBER_KEELK);
   for (const st of model.stations) st.keelK = k;
 }
-prepare(model);
+refreshDerived(model);
 const P = projector(yaw, pitch);
 const sel = process.env.CAMBER_SEL ? parseInt(process.env.CAMBER_SEL, 10) : -1; // station point index to highlight
 // lines family: pass mode "body"|"buttocks"|"waterline" directly, or use mode "lines" + CAMBER_LINES env

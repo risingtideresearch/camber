@@ -4,7 +4,12 @@
 import { Resvg } from "@resvg/resvg-js";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { createModel, loa, resetModel, prepare } from "../../src/core/model";
+import {
+  createModel,
+  loa,
+  resetModel,
+  refreshDerived,
+} from "../../src/core/model";
 import {
   computeHullSampling,
   forwardLimit,
@@ -20,7 +25,7 @@ const model = createModel();
 const doc = process.env.CAMBER_DOC;
 resetModel(model);
 if (doc) loadJsonText(model, readFileSync(doc, "utf8"));
-prepare(model);
+refreshDerived(model);
 
 // the view transforms follow the hull's own length now, so they come from the model
 const V = viewOf(model),

@@ -8,7 +8,7 @@
 // hull's aft edge. Both live in one OPEN_SHELL (the hull is open along the deck/sheer edge).
 
 import { V, type Vec3 } from "./math";
-import { prepare, type Model } from "./model";
+import { type Model } from "./model";
 import { trimmedHullGrid } from "./mesh";
 import { unitScale } from "./json";
 
@@ -406,7 +406,6 @@ function emitTransomFace(
 
 export function buildStep(model: Model, date: string): string {
   DATE = date;
-  prepare(model); // ensure the derived curves are current
   // The grid comes back FULL WIDTH — starboard sheer → keel → port sheer, as one row — so the keel is an
   // INTERIOR column of one surface (C² across the centerline) rather than a seam between two mirrored
   // halves, which only joins smoothly when the keel approach is exactly horizontal and otherwise folds

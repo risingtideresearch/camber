@@ -17,7 +17,9 @@
 // what lets the metric heatmap / scatter sample the whole space on a grid.
 
 import { clamp } from "../core/math";
-import { captureViewLength, prepare, type Model } from "../core/model";
+import type { Model } from "../core/model";
+import type { HullState } from "../core/hull";
+import { assemble } from "../core/runtime";
 import { hydrostatics, type Hydro } from "../core/hydro";
 import type { HullData } from "../core/json";
 
@@ -28,39 +30,58 @@ export interface Hull {
   data: HullData;
 }
 
-// ---------- the blend: Σ wᵢ·Vᵢ componentwise over the shared topology → the given model ----------
-export function blend(model: Model, hulls: Hull[], weights: number[]): void {
+// The two trim scalars a blend does NOT decide. A document carries them, but the family's hulls may disagree
+// and the viewer holds one setting across every blend it shows, so they are supplied rather than mixed.
+export interface Trim {
+  waterline: number;
+  deckRake: number;
+}
+
+// ---------- the blend: Σ wᵢ·Vᵢ componentwise over the shared topology ----------
+// The result is authored state, not a model: a blend is a HULL, and what a caller then does with it — assemble
+// it for hydrostatics, install it in the live model, save it — is a separate question. The name and the two
+// trim scalars are not blended; they belong to whoever is holding the result.
+export function blendState(
+  hulls: Hull[],
+  weights: number[],
+  trim: Trim,
+): HullState {
   const total = weights.reduce((a, x) => a + x, 0) || 1;
   const w = weights.map((x) => x / total); // normalize to Σ = 1 (barycentric)
   const mix = (f: (h: Hull) => number): number =>
     hulls.reduce((a, h, k) => a + w[k] * f(h), 0);
+  const first = hulls[0].data;
 
-  model.unit = hulls[0].data.unit; // the family shares one unit (promoteFamily converted them)
-  model.sheerPlan = hulls[0].data.sheerPlan.map((_, i) => ({
-    x: mix((h) => h.data.sheerPlan[i].x),
-    y: mix((h) => h.data.sheerPlan[i].y),
-  }));
-  model.sheerTrim = hulls[0].data.sheerTrim.map((_, i) => ({
-    x: mix((h) => h.data.sheerTrim[i].x),
-    z: mix((h) => h.data.sheerTrim[i].z),
-    k: mix((h) => h.data.sheerTrim[i].k),
-  }));
-  model.transom = hulls[0].data.transom.map((_, i) => ({
-    x: mix((h) => h.data.transom[i].x),
-    z: mix((h) => h.data.transom[i].z),
-  }));
-  // station j of every hull is the same PLACE on the boat (promote.ts's correspondence), so its position
-  // along the hull blends with its shape
-  model.stations = hulls[0].data.stations.map((st0, j) => ({
-    u: mix((h) => h.data.stations[j].u),
-    keelK: mix((h) => h.data.stations[j].keelK),
-    points: st0.points.map((_, i) => ({
-      n: mix((h) => h.data.stations[j].points[i].n),
-      z: mix((h) => h.data.stations[j].points[i].z),
-      k: mix((h) => h.data.stations[j].points[i].k),
+  return {
+    name: "",
+    unit: first.unit, // the family shares one unit (promoteFamily converted them)
+    sheerPlan: first.sheerPlan.map((_, i) => ({
+      x: mix((h) => h.data.sheerPlan[i].x),
+      y: mix((h) => h.data.sheerPlan[i].y),
     })),
-  }));
-  captureViewLength(model); // a blend installs a whole hull, so it restates what the 2D views draw against
+    sheerTrim: first.sheerTrim.map((_, i) => ({
+      x: mix((h) => h.data.sheerTrim[i].x),
+      z: mix((h) => h.data.sheerTrim[i].z),
+      k: mix((h) => h.data.sheerTrim[i].k),
+    })),
+    transom: first.transom.map((_, i) => ({
+      x: mix((h) => h.data.transom[i].x),
+      z: mix((h) => h.data.transom[i].z),
+    })),
+    // station j of every hull is the same PLACE on the boat (promote.ts's correspondence), so its position
+    // along the hull blends with its shape
+    stations: first.stations.map((st0, j) => ({
+      u: mix((h) => h.data.stations[j].u),
+      keelK: mix((h) => h.data.stations[j].keelK),
+      points: st0.points.map((_, i) => ({
+        n: mix((h) => h.data.stations[j].points[i].n),
+        z: mix((h) => h.data.stations[j].points[i].z),
+        k: mix((h) => h.data.stations[j].points[i].k),
+      })),
+    })),
+    waterline: trim.waterline,
+    deckRake: trim.deckRake,
+  };
 }
 
 // ---------- the blend control: a slider param (2 hulls) / a polygon pad puck (3+ hulls) ----------
@@ -155,8 +176,9 @@ export function weightsFromControl(
 // ---------- blend-space sampling (feeds both the heatmap and the scatter explorer) ----------
 // One expensive pass per family: sample the blend space (the polygon interior for 3+ hulls, the slider param
 // for 2) and store the full hydrostatics at each sample. The heatmap colours the pad by one metric; the
-// scatter plots two metrics against each other. Resampled only when the family changes. A dedicated scratch
-// model is used so the live blend is never disturbed.
+// scatter plots two metrics against each other. Resampled only when the family changes. Each sample assembles
+// its own model from its own blended state, so the live blend is never disturbed and there is no scratch model
+// to keep clear of.
 export interface Sample {
   gx: number;
   gy: number; // pad grid cell (3+ hulls)
@@ -166,25 +188,25 @@ export interface Sample {
 }
 export const HEAT_G = 31; // pad grid resolution (cells per side) — ~3× the samples of an 18-grid (count ∝ G²)
 const SAMPLE_NS = 72, // hydrostatics resolution for the sampling pass (the live metrics panel uses full
-  SAMPLE_M = 20; //     resolution). The per-cell cost is dominated by blend()+prepare(), not this, so the
-//                       grid runs ~1 s (triangle) to ~3 s (pentagon) — done off the critical path.
+  SAMPLE_M = 20; //     resolution). The per-cell cost is dominated by the blend and its samplers, not this, so
+//                       the grid runs ~1 s (triangle) to ~3 s (pentagon) — done off the critical path.
 
-export function computeSamples(model: Model, hulls: Hull[]): Sample[] {
+export function computeSamples(hulls: Hull[], trim: Trim): Sample[] {
   const samples: Sample[] = [];
   const n = hulls.length;
   if (n < 2) return samples;
+  const at = (weights: number[]): Model =>
+    assemble(blendState(hulls, weights, trim));
   if (n === 2) {
     const N = 120;
     for (let i = 0; i <= N; i++) {
       const t = i / N;
-      blend(model, hulls, [1 - t, t]);
-      prepare(model);
       samples.push({
         gx: i,
         gy: 0,
         pos: { x: 0, y: 0 },
         t,
-        h: hydrostatics(model, SAMPLE_NS, SAMPLE_M),
+        h: hydrostatics(at([1 - t, t]), SAMPLE_NS, SAMPLE_M),
       });
     }
   } else {
@@ -195,8 +217,7 @@ export function computeSamples(model: Model, hulls: Hull[]): Sample[] {
         const cx = (gx + 0.5) * cell,
           cy = (gy + 0.5) * cell;
         if (!insidePoly({ x: cx, y: cy }, V)) continue;
-        blend(model, hulls, meanValue({ x: cx, y: cy }, V));
-        prepare(model);
+        const model = at(meanValue({ x: cx, y: cy }, V));
         samples.push({
           gx,
           gy,

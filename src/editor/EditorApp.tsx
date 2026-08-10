@@ -7,7 +7,7 @@ import {
   moveStationU,
   moveTransom,
   moveTrim,
-  prepare,
+  refreshDerived,
   resetModel,
   setDeckRake,
   setUnit,
@@ -168,18 +168,18 @@ export function EditorApp() {
     nameRef.current = name;
   }, [name]);
 
-  // prepare() the model, then compute the ONE hull sampling every view shares (mesh.ts): the swept sheet and
-  // its three trims, sampled at the Performance control's resolution. Runs during render (before the child
-  // views' draw effects) whenever the model or that resolution changes, so every view sees a prepared model
-  // and the same lattice — nothing re-sweeps the hull for itself. The 2D strips read its trimmedSections for
-  // the outline, the 3D view stitches them into the surface.
+  // Refresh the model's derived curves, then compute the ONE hull sampling every view shares (mesh.ts): the
+  // swept sheet and its three trims, sampled at the Performance control's resolution. Runs during render
+  // (before the child views' draw effects) whenever the model or that resolution changes, so every view sees a
+  // current model and the same lattice — nothing re-sweeps the hull for itself. The 2D strips read its
+  // trimmedSections for the outline, the 3D view stitches them into the surface.
   //
   // Two passes, not one: the sampling is the single most expensive thing an edit sets off and it has phases of
   // its own worth reading apart (mesh.ts reports them into PERF_SAMPLING, which is why the pass is opened here
   // rather than timed as one step of the shared work).
   const sampling = useMemo<HullSampling>(() => {
     perfBegin(PERF_SECTIONS);
-    perfStep("prepare (derived curves)", () => prepare(model));
+    perfStep("derived curves", () => refreshDerived(model));
     perfEnd(PERF_SECTIONS);
     perfBegin(PERF_SAMPLING);
     const out = computeHullSampling(model, perf.numSections, perf.girthSteps);

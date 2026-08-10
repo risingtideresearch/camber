@@ -46,12 +46,12 @@ import {
   addStationPoint,
   createModel,
   loa,
-  prepare,
+  installHull,
   type Model,
   type StationCP,
 } from "./model";
 import { clampedBSplineSamplerX, planCurve } from "./bspline";
-import { convertUnits, loadHull, type HullData } from "./json";
+import { convertUnits, type HullData } from "./json";
 
 // ---- minimal clamped-B-spline machinery for the least-squares refit (NURBS Book A2.1/A2.2) ----
 function findSpan(n: number, p: number, u: number, U: number[]): number {
@@ -175,13 +175,13 @@ function bsplineRefit(pts: Vec2[], N: number): Vec2[] {
   return out;
 }
 
-// a prepared scratch model over this hull's data, so the promotions can use the core's own curve evaluators
-// (the loft, the trim graph, the section curves) rather than re-deriving them. loadHull assigns the arrays by
-// reference, so what the model builds from IS the hull's data.
+// a scratch model over this hull's data, so the promotions can use the core's own curve evaluators (the loft,
+// the trim graph, the section curves) rather than re-deriving them. The hull is copied in, so what a
+// promotion reads is a snapshot: where one runs an edit operation against the scratch model, it assigns the
+// result back to `data` explicitly.
 function modelOf(data: HullData): Model {
   const m = createModel();
-  loadHull(m, data);
-  prepare(m);
+  installHull(m, { ...data, waterline: 0, deckRake: 0 });
   return m;
 }
 

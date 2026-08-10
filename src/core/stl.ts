@@ -9,7 +9,7 @@
 // authored in another unit is converted on the way out — the model's coordinates are absolute in `model.unit`
 // now, so "the model's native units" is no longer a synonym for millimetres.
 
-import { type Model, prepare } from "./model";
+import { type Model } from "./model";
 import { computeHullSampling } from "./mesh";
 import { buildHullMesh, buildTransomMesh, type Mesh } from "./hullGeometry";
 import { unitScale } from "./json";
@@ -30,9 +30,9 @@ function facet(a: Vec3, b: Vec3, c: Vec3): string {
   );
 }
 
-// build an ASCII STL string for the current model (call after resetModel + loadJsonText, as STEP export does)
+// build an ASCII STL string for the given model. Like every geometry consumer it takes a model whose derived
+// curves are current — one that `assemble()` built, or the editor's own, refreshed after its last edit.
 export function buildStl(model: Model, name = "camber"): string {
-  prepare(model); // ensure the derived curves are current
   // R = 6 on the default 5-point section gives a 24-column half, as v1's M did
   const sampling = computeHullSampling(model, 80, 6);
   const { hull } = buildHullMesh(sampling, true, false, false);

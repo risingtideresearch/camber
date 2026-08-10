@@ -36,6 +36,26 @@ import {
   type Curve,
 } from "./spline";
 import { UNIT_MM, type Unit } from "./document";
+import {
+  boundsOf,
+  cloneHull,
+  defaultHull,
+  loa,
+  U_GAP,
+  type Bounds,
+  type HullState,
+} from "./hull";
+// The authored schema, the domain constants and the defaults live in `hull.ts` now, as plain readonly data.
+// They are re-exported here so that the geometry's callers keep one import.
+export {
+  boundsOf,
+  loa,
+  MIN_PLAN_CP,
+  MIN_STATION_PTS,
+  MIN_TRIM_CP,
+  U_GAP,
+  type Bounds,
+} from "./hull";
 
 // ---------- types ----------
 export interface PlanCP {
@@ -104,60 +124,14 @@ export interface Model {
   loft: Loft;
 }
 
-// ---------- defaults ----------
-// A 5 m hull in millimetres. The v1 defaults at their original numbers, reading the old unitless 1000-long
-// scale as millimetres and scaling ×5 to a believable boat — the same shape at a size the unit makes sense
-// of. Stations sit where v1's two templates had their weight peaks: the ends.
-const DEF_LEN = 5000;
-const S = (v: number): number => (v * DEF_LEN) / 1000; // v1 units → this default's millimetres
+// The authored fields the derived curves are read from. Written against the readonly `HullState` so that both
+// a piece of authored state and the mutable `Model` below satisfy it.
+type Authored = Pick<HullState, "sheerPlan" | "sheerTrim" | "stations">;
 
-const PLAN_DEF: [number, number][] = [
-  [0, 205],
-  [250, 225],
-  [500, 220],
-  [750, 160],
-  [1000, 0],
-];
-const TRIM_DEF: [number, number][] = [
-  [0, -15],
-  [333, -70],
-  [667, -65],
-  [1000, -10],
-];
-const TRANSOM_DEF: [number, number][] = [
-  [38, -14],
-  [95, -180],
-];
-// [n, z, k] per point, aft station then forward. The bilge (index 2) is a hard chine aft (k=1) fading to a
-// round bilge forward (k=0): a hard-chine planing stern blending into a soft bow along the one hull.
-const STATION_DEFS: {
-  u: number;
-  keelK: number;
-  pts: [number, number, number][];
-}[] = [
-  {
-    u: 0,
-    keelK: 0,
-    pts: [
-      [0, 0, 0],
-      [23, -80, 0],
-      [65, -160, 1],
-      [140, -220, 0],
-      [245, -250, 0],
-    ],
-  },
-  {
-    u: 1,
-    keelK: 0,
-    pts: [
-      [0, 0, 0],
-      [38, -108, 0],
-      [100, -210, 0],
-      [180, -280, 0],
-      [255, -305, 0],
-    ],
-  },
-];
+// ---------- installing a whole hull ----------
+// The canonical defaults are authored data in `hull.ts`. What is built here is the pre-store editor's
+// MUTABLE shell: one stable object the editor holds for its lifetime and mutates in place. New code assembles
+// a model from a `HullState` instead (`runtime.ts`); this pair goes away with the edit operations below.
 
 export function createModel(): Model {
   const model = {
@@ -177,27 +151,25 @@ export function createModel(): Model {
 }
 
 export function resetModel(model: Model): void {
-  model.name = "";
-  model.unit = "mm";
-  model.sheerPlan = PLAN_DEF.map(([x, y]) => ({ x: S(x), y: S(y) }));
-  model.sheerTrim = TRIM_DEF.map(([x, z]) => ({ x: S(x), z: S(z), k: 0 }));
-  model.transom = TRANSOM_DEF.map(([x, z]) => ({ x: S(x), z: S(z) }));
-  model.stations = STATION_DEFS.map((st) => ({
-    u: st.u,
-    keelK: st.keelK,
-    points: st.pts.map(([n, z, k]) => ({ n: S(n), z: S(z), k })),
-  }));
-  model.waterline = S(150);
-  model.deckRake = 0;
-  model.x0 = S(500);
-  captureViewLength(model);
-  prepare(model);
+  installHull(model, defaultHull());
+  model.x0 = loa(model) / 2;
 }
 
-// ---------- the hull's own scale ----------
-// The plan's first control point is pinned at the transom (x = 0), so its last one is the length overall.
-export const loa = (model: Model): number =>
-  model.sheerPlan[model.sheerPlan.length - 1].x - model.sheerPlan[0].x;
+/** Copy authored state into a mutable model, restating what the 2D views are laid out for. */
+export function installHull(model: Model, state: HullState): void {
+  const hull = cloneHull(state);
+  model.name = hull.name;
+  model.unit = hull.unit;
+  model.sheerPlan = hull.sheerPlan as PlanCP[];
+  model.sheerTrim = hull.sheerTrim as TrimCP[];
+  model.transom = hull.transom as TransomCP[];
+  model.stations = hull.stations as StationCP[];
+  model.waterline = hull.waterline;
+  model.deckRake = hull.deckRake;
+  model.x0 = clamp(model.x0, 0, loa(model));
+  captureViewLength(model);
+  refreshDerived(model);
+}
 
 // Capture the length the 2D views draw against (see Model.viewLen). Call it wherever a whole hull is
 // installed — never from an edit, which is the whole point of it being captured rather than derived.
@@ -205,31 +177,6 @@ export function captureViewLength(model: Model): void {
   model.viewLen = loa(model);
 }
 
-// How big the 2D panels are drawn: the half-breadth band the plan strip reserves, and the box the station
-// editor is fitted to. A normalized model could hard-code these; an absolute one can't, so they are
-// fractions of a hull length, chosen to reproduce the original numbers on a 1000-long hull.
-//
-// They are NOT limits on the sheer plan or the sheer trim — those two are dragged freely, and a control
-// point taken past the edge of its panel simply lands outside it, to be reached by panning or zooming out.
-// The station editor still clamps its section points to this box, which is why the drawn box and those
-// clamps come from one place.
-export interface Bounds {
-  yMax: number; // plan half-breadth the strip is sized for
-  yMin: number; // band below the centerline, where a tumblehome bow's plan crosses
-  nMin: number; // outboard (tumblehome) limit of a station point
-  nMax: number; // inboard limit
-  zMin: number; // deepest a station point may go
-}
-export function boundsOf(len: number): Bounds {
-  const l = len || 1;
-  return {
-    yMax: 0.275 * l,
-    yMin: -0.055 * l,
-    nMin: -0.113 * l,
-    nMax: 0.338 * l,
-    zMin: -0.338 * l,
-  };
-}
 export const bounds = (model: Model): Bounds => boundsOf(model.viewLen);
 
 // The one spacing rule left between neighbouring control points, and it is not a matter of taste: the plan's
@@ -270,14 +217,13 @@ export const immersion = (model: Model, x: number, z: number): number =>
 //     so a chine fading from 1 to 0 fades monotonically and stops.
 //
 //   • keelK — PCHIP, for the same reason.
-interface Loft {
+export interface Loft {
   S: number; // points per station
   at: (u: number) => { pts: Vec2[]; ks: number[]; keelK: number };
 }
 
-function buildLoft(model: Model): Loft {
-  const sts = model.stations,
-    K = sts.length,
+function buildLoft(sts: Authored["stations"]): Loft {
+  const K = sts.length,
     n = sts[0].points.length;
   // one station: the section is the same everywhere, so there is nothing to interpolate
   if (K === 1) {
@@ -346,7 +292,7 @@ function buildLoft(model: Model): Loft {
 // exact shape shifts slightly from the old fit and a trim point's knuckle `k` no longer bends the curve
 // (PCHIP is shape-preserving, with no corner to author). The 2-D profile view draws the trim through this
 // same `trimZ`, so what is cut and what is drawn stay identical.
-function trimGraph(pts: TrimCP[]): (x: number) => number {
+function trimGraph(pts: Authored["sheerTrim"]): (x: number) => number {
   const xs = pts.map((p) => p.x),
     zs = pts.map((p) => p.z),
     x0 = xs[0],
@@ -356,10 +302,35 @@ function trimGraph(pts: TrimCP[]): (x: number) => number {
   return (x: number) => hermiteEval(xs, zs, m, clamp(x, x0, x1));
 }
 
-export function prepare(model: Model): void {
-  model.plan = planCurve(model.sheerPlan.map((p): Vec2 => [p.x, p.y]));
-  model.trimZ = trimGraph(model.sheerTrim);
-  model.loft = buildLoft(model);
+// ---------- deriving the curves ----------
+// The three samplers a `Model` carries, built from authored data alone. `assemble()` in `runtime.ts` is the
+// caller that matters: it passes back whichever of the three its slice revisions say are still good, so a
+// waterline drag rebuilds none of them and a trim drag rebuilds one.
+
+export interface Derived {
+  plan: PlanCurve;
+  trimZ: (x: number) => number;
+  loft: Loft;
+}
+
+export function buildDerived(
+  hull: Authored,
+  reuse: Partial<Derived> = {},
+): Derived {
+  return {
+    plan: reuse.plan ?? planCurve(hull.sheerPlan.map((p): Vec2 => [p.x, p.y])),
+    trimZ: reuse.trimZ ?? trimGraph(hull.sheerTrim),
+    loft: reuse.loft ?? buildLoft(hull.stations),
+  };
+}
+
+// Refresh a mutable model's derived curves in place — the pre-store editor's path, where one stable model
+// object is edited over and over. An assembled model never needs this; it is built complete.
+export function refreshDerived(model: Model): void {
+  const d = buildDerived(model);
+  model.plan = d.plan;
+  model.trimZ = d.trimZ;
+  model.loft = d.loft;
 }
 
 // ---------- the sweep ----------
@@ -533,9 +504,8 @@ export function addTrimPoint(model: Model, x: number, z: number): number {
 }
 
 // Insert a station at u. Its points are read off the LOFT there, so the hull is unchanged by the insert —
-// it just gains a handle, exactly where the surface already was.
-export const U_GAP = 0.02; // minimum spacing between stations, in the plan's parameter
-
+// it just gains a handle, exactly where the surface already was. The spacing it holds, U_GAP, is editor
+// policy and lives in `hull.ts` with the rest of it.
 export function addStation(model: Model, u: number): number {
   const sts = model.stations,
     n = sts.length;

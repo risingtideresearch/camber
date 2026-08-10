@@ -36,7 +36,7 @@
 import {
   createModel,
   resetModel,
-  prepare,
+  refreshDerived,
   loa,
   sectionAt,
 } from "../src/core/model";
@@ -236,7 +236,7 @@ function worstKeelButtock(): { curv: number; x: number; y: number } {
 function loadCase(path: string | null): void {
   resetModel(model);
   if (path) loadHull(model, parseDocument(readFileSync(path, "utf8")).hull);
-  prepare(model);
+  refreshDerived(model);
 }
 
 function listJson(dir: string): string[] {
