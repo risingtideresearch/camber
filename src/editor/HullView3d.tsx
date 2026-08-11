@@ -17,7 +17,9 @@ export function HullView3d() {
     <View3d
       model={model}
       selection={selection}
-      sampling={sampling}
+      // Asking for it here is what makes this window pay for a hull sweep at all; the identity it returns is
+      // stable while the hull is, so View3d keeps memoizing its mesh on it exactly as before.
+      sampling={sampling()}
       curvature={curvature}
       stl={stl}
       // Detaching a copy of this pane is an editor idea, not a 3D-view one — the interpolation app renders

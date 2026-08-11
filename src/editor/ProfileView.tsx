@@ -15,13 +15,15 @@ export function ProfileView() {
   const {
     selection,
     setSelection: onSelect,
-    sampling,
+    sampling: hullSampling,
     tool,
     setTool,
     curvature,
     knotLongs,
     planProfileSync: sync,
   } = useEditorUi();
+  // Read during render — see PlanView: the sweep is shared between the views, not owned by one.
+  const sampling = hullSampling();
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
       drawProfile(

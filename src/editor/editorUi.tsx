@@ -20,23 +20,19 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ReactNode,
   type RefObject,
 } from "react";
-import { computeHullSampling, type HullSampling } from "../core/mesh";
+import type { HullSampling } from "../core/mesh";
 import { defaultCurvature, type CurvatureSettings } from "../core/comb";
 import { getDrag, setDrag } from "../core/drag";
 import { getHullBBox } from "../core/hullGeometry";
 import {
   defaultPerf,
-  perfBegin,
-  perfEnd,
   perfFrame,
   setPerfOn,
-  PERF_SAMPLING,
   type PerfSettings,
 } from "../core/perf";
 import {
@@ -53,6 +49,7 @@ import {
   useDocumentRuntime,
   useDocumentSnapshot,
 } from "./documentStoreHooks";
+import { useHullSampling } from "./hullSampling";
 import { deleteCommand } from "./selection";
 import { getVB } from "./svgCoords";
 import { useSvgViewSync, type SvgViewSync } from "./svgViewSync";
@@ -77,8 +74,14 @@ export interface EditorUi {
   setActiveStation: (si: number) => void;
   perf: PerfSettings;
   setPerf: (p: PerfSettings) => void;
-  /** The one hull sampling every view in this window shares. */
-  sampling: HullSampling;
+  /**
+   * The one hull sampling every view in this window shares — CALLED, not held, and computed on the first call
+   * that finds it stale. Only the plan, the profile and the 3D view ask for it, so a window showing none of
+   * them (the station grid, the history) never sweeps a hull at all; it used to sweep one per edit and throw
+   * it away. Successive calls in a render return the identical object, which is what lets the 3D view keep
+   * memoizing its mesh on the sampling's identity.
+   */
+  sampling: () => HullSampling;
   /** Imported reference STL — session only, never saved. */
   stl: StlState | null;
   importStl: (file: File) => void;
@@ -140,34 +143,11 @@ export function EditorUiProvider({ children }: { children: ReactNode }) {
   }, [model, selection]);
 
   // ---------- the one hull sampling every view shares ----------
-  // The swept sheet and its three trims (mesh.ts), sampled at the Performance control's resolution. Computed
-  // during render, before the child views' draw effects, so every view sees the same lattice and nothing
-  // re-sweeps the hull for itself. The 2D strips read its trimmed sections for the outline; the 3D view
-  // stitches them into the surface.
-  //
-  // Keyed on the four AUTHORED-GEOMETRY slice revisions, not on the model's identity. `computeHullSampling`
-  // reads the plan curve, the trim graph, the transom and the loft, and nothing else — so the waterline, the
-  // deck rake and the cut station are deliberately absent from the dependencies. Keying on the model would
-  // rebuild the whole sampling for every frame of a waterline drag or a cut-station scrub, which is the most
-  // expensive thing in the editor and the thing every extra window would duplicate.
-  const { plan, trim, transom, stations } = snapshot.sliceRevs;
-  const sampling = useMemo<HullSampling>(() => {
-    perfBegin(PERF_SAMPLING);
-    const out = computeHullSampling(model, perf.numSections, perf.girthSteps);
-    perfEnd(PERF_SAMPLING);
-    return out;
-    // `model` is read but intentionally not a dependency: the slice revisions above say when its geometry
-    // changed, and `redraws` is how the Performance toggle forces one more pass with nothing having moved.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    plan,
-    trim,
-    transom,
-    stations,
-    redraws,
-    perf.numSections,
-    perf.girthSteps,
-  ]);
+  // The swept sheet and its three trims (mesh.ts) — asked for rather than computed. `useHullSampling` owns all
+  // of it: which worker sweeps, how finely, and what the views are handed while a sweep is in flight. This
+  // provider hands it the two things it cannot know, the document to sweep and the resolution the Performance
+  // control asks for at rest, and passes the getter on. Nothing about meshing is decided here.
+  const sampling = useHullSampling(snapshot, model, perf, redraws);
 
   // ---------- window-level drag (2D control points) ----------
   // Drags are begun on the SVG nodes (draw2d's startDrag sets the shared drag + selects); the move is applied

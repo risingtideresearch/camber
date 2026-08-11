@@ -16,7 +16,7 @@ export function PlanView() {
   const {
     selection,
     setSelection: onSelect,
-    sampling,
+    sampling: hullSampling,
     tool,
     setTool,
     curvature,
@@ -25,6 +25,9 @@ export function PlanView() {
     setActiveStation: onActivateStation,
     planProfileSync: sync,
   } = useEditorUi();
+  // Read during render, not inside `draw`: the sweep is shared, so it must happen where the other views can
+  // find it already done rather than inside one view's effect.
+  const sampling = hullSampling();
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
       drawPlan(
