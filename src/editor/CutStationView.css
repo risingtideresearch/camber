@@ -15,30 +15,5 @@
   position: relative;
 }
 
-/* card caption: an uppercase label with an optional value / tag on the right */
-.cap {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--mut);
-  margin: 0 0 8px;
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-}
-.cap .val {
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 600;
-  color: var(--ink);
-  font-size: 13px;
-}
-.cap .tag {
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 700;
-  font-size: 12px;
-  padding: 1px 8px;
-  border-radius: 10px;
-  color: #fff;
-}
+/* `.cap`, the card caption this and three other panels use, is a shared primitive and lives with the other
+   ones in EditorApp.css — a panel that draws no cut station still has a caption to style. */

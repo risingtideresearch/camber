@@ -588,5 +588,60 @@ export function sameGesture(a: DocumentCommand, b: DocumentCommand): boolean {
   }
 }
 
+// A gesture's human name, for the history panel's timeline.
+//
+// It lives with the command vocabulary because it is that vocabulary's own reading, and it is applied on the
+// SERVER: a history entry carries this string instead of the command it describes, so a timeline can cross
+// the worker boundary without dragging a hull per entry along with it (`installHull` carries a whole state,
+// and there can be 200 entries).
+//
+// Points are named from 1 to match what the editors label them; a station is "S1" as its tab reads.
+export function describeCommand(cmd: DocumentCommand): string {
+  switch (cmd.type) {
+    case "addPlanPoint":
+      return "Add a sheer point";
+    case "movePlanPoint":
+      return `Move sheer point ${cmd.idx + 1}`;
+    case "removePlanPoint":
+      return `Remove sheer point ${cmd.idx + 1}`;
+    case "addTrimPoint":
+      return "Add a trim point";
+    case "moveTrim":
+      return `Move trim point ${cmd.idx + 1}`;
+    case "removeTrimPoint":
+      return `Remove trim point ${cmd.idx + 1}`;
+    case "setTrimK":
+      return `Knuckle trim point ${cmd.idx + 1}`;
+    case "moveTransom":
+      return `Move transom point ${cmd.idx + 1}`;
+    case "addStation":
+      return "Add a station";
+    case "removeStation":
+      return `Remove station S${cmd.idx + 1}`;
+    case "moveStationU":
+      return `Move S${cmd.idx + 1} along the sheer`;
+    case "setKeelK":
+      return `Keel knuckle, S${cmd.si + 1}`;
+    case "addStationPoint":
+      return "Add a section point";
+    case "moveStationPoint":
+      return `Move S${cmd.si + 1} point ${cmd.idx + 1}`;
+    case "removeStationPoint":
+      return `Remove section point ${cmd.idx + 1}`;
+    case "setStationK":
+      return `Knuckle S${cmd.si + 1} point ${cmd.idx + 1}`;
+    case "setWaterline":
+      return "Set the waterline";
+    case "setDeckRakeDeg":
+      return "Set the deck rake";
+    case "setName":
+      return "Rename the hull";
+    case "setUnit":
+      return `Unit → ${cmd.unit}${cmd.rescale ? ", rescaled" : ""}`;
+    case "installHull":
+      return "Replace the whole hull";
+  }
+}
+
 // Re-exported so a caller building a command need not also import the authored types.
 export type { StationPointCP };

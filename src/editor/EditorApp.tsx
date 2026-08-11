@@ -14,6 +14,7 @@ import { SelectionInfo } from "./SelectionInfo";
 import { TrimControls } from "./TrimControls";
 import { CurvatureControls } from "./CurvatureControls";
 import { PerfControls } from "./PerfControls";
+import { DetachPanelButton } from "./DetachPanelButton";
 import { PerfPanel } from "./PerfPanel";
 import { DesignBar } from "./DesignBar";
 import { HullView3d } from "./HullView3d";
@@ -146,6 +147,9 @@ function Editor() {
         <TrimControls />
         <CurvatureControls />
         <PerfControls />
+        {/* The history has no pane here to hang a ⧉ off — it is a window and nothing else — so its opener
+            sits with the other inspectors in the bar. */}
+        <DetachPanelButton kind="history" label="History" />
         <DesignBar
           name={meta.name}
           saveKind={save.kind}

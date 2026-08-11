@@ -264,6 +264,15 @@ export function createSessionHost(
         });
         return;
       }
+      case "timeline":
+        // A pure read, answered from the session's own history. It joins the same ordered queue as every
+        // mutation, so the timeline a window receives is the one that goes with the snapshot it last saw.
+        client.post({
+          type: "timeline-result",
+          requestId: message.requestId,
+          timeline: session.server.timeline(),
+        });
+        return;
       case "set-name":
         session.server.setName(message.name);
         client.post({

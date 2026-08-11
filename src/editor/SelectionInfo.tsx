@@ -30,9 +30,14 @@ export function SelectionInfo() {
     setSelection(null);
     void dispatch(cmd);
   };
+  // The selected point may have stopped existing without this window touching anything: the selection is
+  // window-local but the hull is shared, so another window's undo — or a jump in the history panel — can take
+  // back the very insert that created it. So the point is resolved and its ABSENCE is a state, not a crash;
+  // the readout simply falls back to "nothing to knuckle" until the selection is set again.
   const arr = selArr(model, selection);
-  const knuckle = !!(selection && arr && hasKnuckle(selection));
-  const knuckleVal = knuckle ? arr![selection!.idx].k : 0;
+  const point = selection && arr ? arr[selection.idx] : undefined;
+  const knuckle = !!(selection && point && hasKnuckle(selection));
+  const knuckleVal = point?.k ?? 0;
   const deletable = !!selection && canDelete(model, selection);
 
   return (

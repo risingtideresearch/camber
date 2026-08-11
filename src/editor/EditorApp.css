@@ -122,6 +122,36 @@ svg {
   border-radius: 10px;
   padding: 12px 16px;
 }
+
+/* card caption: an uppercase label with an optional value / tag on the right. Shared by the cut station, the
+   performance readout and the history panel, so it lives here with .card rather than in any one of them —
+   a detached window loads this shell stylesheet and its own panel's, and nothing else. */
+.cap {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+  margin: 0 0 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.cap .val {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 13px;
+}
+.cap .tag {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  color: #fff;
+}
 /* thin vertical divider between app-bar groups */
 .tabsep {
   width: 1px;

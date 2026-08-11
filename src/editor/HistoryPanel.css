@@ -1,0 +1,129 @@
+/* The history explorer, which exists only as a detached window and so fills it. */
+.historycard {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Undo / Redo, and the hint that the list itself is clickable */
+.historyacts {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.historyhint {
+  font-size: 12px;
+  color: var(--mut);
+}
+
+/* the steps, oldest first; the list is what scrolls, so the caption and the buttons stay put */
+.historylist {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One row per step, as a button: the whole row is the target for travelling to that point. A rail runs down
+   the left of the list through every dot, so the sequence reads as one thread. */
+.historystep {
+  position: relative;
+}
+.historysteprow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.historysteprow:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+.historysteprow:disabled {
+  cursor: default;
+}
+
+/* the author's dot on the rail. Its hue is the window's own (set per row), so a session edited from two
+   windows reads as two colours down the margin. */
+.historydot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: hsl(var(--hue, 210) 55% 55%);
+  /* the rail: a line from this dot up to the previous one */
+  box-shadow: 0 0 0 2px var(--panel);
+}
+.historystep:not(:first-child) .historydot::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: -8px;
+  width: 1px;
+  height: 14px;
+  background: var(--line);
+}
+
+.historylabel {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* which window made the edit — its short handle in its own hue, or the words for this one */
+.historyauthor {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 9px;
+  color: hsl(var(--hue, 210) 45% 35%);
+  background: hsl(var(--hue, 210) 70% 94%);
+}
+.historyauthor.self {
+  font-weight: 400;
+  color: var(--mut);
+  background: none;
+}
+.historydetail {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--mut);
+  font-variant-numeric: tabular-nums;
+}
+
+/* where the document stands: the one row that is not a destination */
+.historystep.current > .historysteprow {
+  border-color: var(--accent);
+  background: #eff6ff;
+  font-weight: 600;
+}
+/* undone steps are still there and still reachable — drawn as standing by, not as absent */
+.historystep.undone > .historysteprow {
+  color: var(--mut);
+}
+.historystep.undone .historydot {
+  background: var(--panel);
+  border: 1px solid hsl(var(--hue, 210) 40% 70%);
+}
+
+.historyempty {
+  flex: 0 0 auto;
+  margin: 0;
+  padding-top: 4px;
+  font-size: 12px;
+  color: var(--mut);
+}

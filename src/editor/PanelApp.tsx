@@ -5,6 +5,7 @@ import { DocumentStoreProvider } from "./DocumentStoreProvider";
 import { EditorUiProvider } from "./editorUi";
 import { joinedSessionFromUrl } from "./editorSession";
 import { PANELS, panelKindFromUrl, type PanelKind } from "./externalPanels";
+import { HistoryPanel } from "./HistoryPanel";
 import { HullView3d } from "./HullView3d";
 import { SelectionInfo } from "./SelectionInfo";
 import { StationsGrid } from "./StationsGrid";
@@ -58,22 +59,54 @@ function Panel({ kind }: { readonly kind: PanelKind }) {
       <div className="appbar">
         <span className="panelcap">{spec.title}</span>
         <span className="paneldesign">{meta.name || "Untitled"}</span>
-        <span className="tabsep" />
-        {/* The station grid is an EDITOR — points are added and selected in it — so it carries the tool
-            toolbar and the selection readout. The 3D view is a look at the hull and needs neither. */}
-        {kind === "stations" && (
-          <>
-            <Toolbar />
-            <SelectionInfo />
-            <span className="tabsep" />
-          </>
-        )}
-        <CurvatureControls />
+        <PanelControls kind={kind} />
       </div>
       <div className="main">
-        {meta.initialized &&
-          (kind === "view3d" ? <HullView3d /> : <StationsGrid />)}
+        {meta.initialized && <PanelBody kind={kind} />}
       </div>
     </div>
   );
+}
+
+// The window's one panel. A switch rather than a lookup table, so adding a kind to PanelKind fails to compile
+// until this window knows what to draw for it.
+function PanelBody({ kind }: { readonly kind: PanelKind }) {
+  switch (kind) {
+    case "view3d":
+      return <HullView3d />;
+    case "stations":
+      return <StationsGrid />;
+    case "history":
+      return <HistoryPanel />;
+  }
+}
+
+// What each panel's bar needs, which is only what the panel itself uses. Each case opens with its own
+// separator, so the kind that needs nothing leaves none dangling after the design's name.
+function PanelControls({ kind }: { readonly kind: PanelKind }) {
+  switch (kind) {
+    // The station grid is an EDITOR — points are added and selected in it — so it carries the tool toolbar
+    // and the selection readout.
+    case "stations":
+      return (
+        <>
+          <span className="tabsep" />
+          <Toolbar />
+          <SelectionInfo />
+          <span className="tabsep" />
+          <CurvatureControls />
+        </>
+      );
+    // The 3D view is a look at the hull: nothing to select, but the combs are drawn on it.
+    case "view3d":
+      return (
+        <>
+          <span className="tabsep" />
+          <CurvatureControls />
+        </>
+      );
+    // The history draws no hull. Its controls — Undo, Redo, and the steps themselves — are the panel.
+    case "history":
+      return null;
+  }
 }

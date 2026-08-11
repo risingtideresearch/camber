@@ -10,6 +10,7 @@ import type {
   SessionCommand,
 } from "../core/commands";
 import type { Model } from "../core/model";
+import type { HistoryTimeline } from "./history";
 import type { DocumentSnapshot } from "./snapshot";
 
 /** How the server initializes a session the first time it sees its session ID. */
@@ -26,6 +27,11 @@ export interface SaveResult {
 
 /** Transport-neutral document API exposed to the editor. */
 export interface DocumentStore {
+  /**
+   * This window's identity in the session — the `author` the server stamps on the revisions it writes. Exposed
+   * so a view can tell this window's own edits from another window's; nothing else needs it.
+   */
+  readonly windowId: string;
   snapshot(): DocumentSnapshot;
   subscribe(listener: () => void): () => void;
   runtime(): Model;
@@ -33,6 +39,12 @@ export interface DocumentStore {
   dispatchSession(command: SessionCommand): void;
   undo(): Promise<boolean>;
   redo(): Promise<boolean>;
+  /**
+   * Both history stacks, described — the shared undo history as data, so a window can show it. Asynchronous
+   * and pulled rather than part of the snapshot: only a window displaying the history wants it, and it changes
+   * on exactly the publications that would carry it.
+   */
+  timeline(): Promise<HistoryTimeline>;
   setName(name: string): Promise<void>;
   save(name?: string): Promise<SaveResult>;
   close(): void;

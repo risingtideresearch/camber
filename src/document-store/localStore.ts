@@ -30,6 +30,9 @@ export function createLocalDocumentStore(
   let closed = false;
 
   return {
+    // The author is this facade's window identity: it is what the server stamps on the revisions it writes,
+    // which is exactly what `windowId` means to a view reading the timeline.
+    windowId: author,
     snapshot: () => seen,
     subscribe(listener) {
       listeners.add(listener);
@@ -44,6 +47,7 @@ export function createLocalDocumentStore(
     dispatchSession: (command) => server.executeSession(command),
     undo: () => Promise.resolve(server.undo(author)),
     redo: () => Promise.resolve(server.redo(author)),
+    timeline: () => Promise.resolve(server.timeline()),
     setName: (name) => {
       server.setName(name);
       return Promise.resolve();

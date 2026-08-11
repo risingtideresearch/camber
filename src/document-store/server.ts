@@ -37,6 +37,7 @@ import {
   createDocumentHistory,
   type DocumentHistory,
   type DocumentHistoryOptions,
+  type HistoryTimeline,
 } from "./history";
 import type { PersistenceResult } from "./persistence/persistenceAdapter";
 import type { DocumentSnapshot } from "./snapshot";
@@ -72,6 +73,11 @@ export interface DocumentStoreServer {
   executeSession(command: SessionCommand): void;
   undo(author?: string): boolean;
   redo(author?: string): boolean;
+  /**
+   * Both history stacks, described. A read, not a transition: it is how a window can SHOW the history without
+   * being given it, which is what keeps the stacks — and the states in them — private to this authority.
+   */
+  timeline(): HistoryTimeline;
   setName(name: string): void;
   beginSave(name?: string): SaveCapture;
   completeSave(capture: SaveCapture, result: PersistenceResult): SaveResult;
@@ -247,6 +253,7 @@ export function createDocumentStoreServer(
       install(transition.state, transition.touched, author);
       return true;
     },
+    timeline: () => history.timeline(),
     setName(name) {
       // Design identity is shared metadata, not authored hull geometry, so naming publishes without revision.
       const next = applyMetaCommand(meta, { type: "setName", name });

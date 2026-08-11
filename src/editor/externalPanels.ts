@@ -12,7 +12,11 @@
 // Only the editor opens them, and only from the panel being duplicated (DetachPanelButton). A panel window
 // carries no way to open another: it is one view of the hull, not a place to navigate from.
 
-export type PanelKind = "view3d" | "stations";
+// `history` has no pane in the editor to duplicate — it is a window and nothing else. It is a view of the
+// SESSION rather than of the hull, and it is only useful beside an editor: you click a step in it and watch
+// the hull move in the window next door. Its button therefore lives in the editor's app bar (labelled, since
+// there is no pane under it to say what it is) rather than on a panel of its own.
+export type PanelKind = "view3d" | "stations" | "history";
 
 export interface PanelSpec {
   /** Caption in the panel window's own bar, and in its document title. */
@@ -36,6 +40,13 @@ export const PANELS: Record<PanelKind, PanelSpec> = {
     hint: "Open every station side by side in a window of its own, instead of one at a time behind tabs. The editor keeps its own tabbed section editor; both windows edit the same session.",
     width: 1280,
     height: 720,
+  },
+  history: {
+    title: "History",
+    hint: "Open this session's edit history in a window of its own — every gesture, which window made it, and what it touched. Click a step to travel to it and watch the hull follow here.",
+    // A list of one-line steps: tall and narrow, and meant to sit alongside the editor rather than over it.
+    width: 560,
+    height: 820,
   },
 };
 

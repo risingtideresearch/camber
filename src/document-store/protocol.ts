@@ -6,10 +6,11 @@
 
 import type { DocumentCommand, SessionCommand } from "../core/commands";
 import type { SaveResult, SessionSource } from "./api";
+import type { HistoryTimeline } from "./history";
 import type { DocumentSnapshot } from "./snapshot";
 
 /** Increment whenever either message union changes incompatibly. */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export type ErrorCode =
   | "protocol-version"
@@ -58,6 +59,9 @@ export type ClientMessage =
       windowId: string;
       requestId: string;
     }
+  // A pull, not a subscription: the timeline is wanted by the one window showing it, so it is asked for rather
+  // than broadcast with every snapshot to every window that would throw it away.
+  | { type: "timeline"; sessionId: string; windowId: string; requestId: string }
   | {
       type: "set-name";
       sessionId: string;
@@ -87,6 +91,7 @@ export type ServerMessage =
   | { type: "outcome"; requestId: string; outcome: DispatchOutcome }
   | { type: "ack"; requestId: string; ok: boolean; revision: number }
   | { type: "save-result"; requestId: string; result: SaveResult }
+  | { type: "timeline-result"; requestId: string; timeline: HistoryTimeline }
   | {
       type: "error";
       requestId?: string;

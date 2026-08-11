@@ -142,6 +142,32 @@ check(
   "closing one window leaves the shared session editable",
 );
 
+// ---------- the history, read over the protocol ----------
+const shared = await b.store.timeline();
+check(
+  shared.done.some((step) => step.author === "a") &&
+    shared.done.some((step) => step.author === "b"),
+  "one window reads the shared history, the other window's gestures included",
+);
+check(
+  shared.done.every((step) => step.label.length > 0) &&
+    !shared.done.some((step) => "state" in step),
+  "a timeline step describes its gesture and carries no hull",
+);
+await b.store.undo();
+const afterUndo = await b.store.timeline();
+check(
+  afterUndo.undone.length === 1 &&
+    afterUndo.done.length === shared.done.length - 1,
+  "undo moves a step to the undone side of the shared timeline",
+);
+await b.store.redo();
+check(
+  (await b.store.timeline()).undone.length === 0 &&
+    b.store.snapshot().state.waterline === 333,
+  "redo walks back and the timeline follows",
+);
+
 const isolated = await connectDocumentStore({
   sessionId: "isolated",
   windowId: "c",
