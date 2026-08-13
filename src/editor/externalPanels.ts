@@ -3,19 +3,21 @@
 // A detached panel is a second BROWSER WINDOW on the same editing session, not a copy of the document. It
 // carries the editor's `session` (and `id`, if the design has one) in its URL, joins the SharedWorker-hosted
 // session the editor is already on, and from then on edits through the same authoritative store — so a point
-// dragged in either window moves in both, and one undo stack covers the pair.
+// dragged in either window moves in both, and one history covers the pair.
 //
 // Opening one never closes or empties the panel it duplicates: the editor keeps its own 3D view and its own
 // station editor. The point is a second look at the same hull — a big 3D view on another monitor, or every
 // station laid out side by side instead of behind tabs.
 //
-// Only the editor opens them, and only from the panel being duplicated (DetachPanelButton). A panel window
-// carries no way to open another: it is one view of the hull, not a place to navigate from.
+// A view of the hull is opened only from the pane being duplicated (DetachPanelButton), which is to say only
+// from the editor: a panel window carries no way to open another one, being one view of the hull rather than
+// a place to navigate from. The history is not a view of the hull and is not subject to that — see below.
 
 // `history` has no pane in the editor to duplicate — it is a window and nothing else. It is a view of the
-// SESSION rather than of the hull, and it is only useful beside an editor: you click a step in it and watch
-// the hull move in the window next door. Its button therefore lives in the editor's app bar (labelled, since
-// there is no pane under it to say what it is) rather than on a panel of its own.
+// SESSION rather than of the hull, and it is only useful beside another window: you click a moment in it and
+// watch the hull move in the window next door. Its opener therefore lives in an app bar (labelled, since
+// there is no pane under it to say what it is) rather than on a pane of its own — and in EVERY window's bar
+// but its own, alongside Undo and Redo, because wherever you are editing is where you may want it.
 export type PanelKind = "view3d" | "stations" | "history";
 
 export interface PanelSpec {
@@ -43,8 +45,8 @@ export const PANELS: Record<PanelKind, PanelSpec> = {
   },
   history: {
     title: "History",
-    hint: "Open this session's edit history in a window of its own — every gesture, which window made it, and what it touched. Click a step to travel to it and watch the hull follow here.",
-    // A list of one-line steps: tall and narrow, and meant to sit alongside the editor rather than over it.
+    hint: "Open this session's edit history in a window of its own — every moment as a tree, including the branches going back and editing again left behind. Click one to jump to it and watch the hull follow here.",
+    // A tree of moments: tall and narrow, and meant to sit alongside the editor rather than over it.
     width: 560,
     height: 820,
   },

@@ -10,7 +10,7 @@ import type { HistoryTimeline } from "./history";
 import type { DocumentSnapshot } from "./snapshot";
 
 /** Increment whenever either message union changes incompatibly. */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 export type ErrorCode =
   | "protocol-version"
@@ -58,6 +58,15 @@ export type ClientMessage =
       sessionId: string;
       windowId: string;
       requestId: string;
+    }
+  // Going to a moment by name rather than by counting steps to it. The history is a tree, so a destination
+  // may be off the line the document is on and unreachable by any number of undos.
+  | {
+      type: "travel";
+      sessionId: string;
+      windowId: string;
+      requestId: string;
+      nodeId: number;
     }
   // A pull, not a subscription: the timeline is wanted by the one window showing it, so it is asked for rather
   // than broadcast with every snapshot to every window that would throw it away.

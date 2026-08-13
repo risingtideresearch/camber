@@ -250,12 +250,16 @@ export function createSessionHost(
         session.server.executeSession(message.command);
         return;
       case "undo":
-      case "redo": {
-        // The host contributes author identity only; DocumentHistory remains private to the server.
+      case "redo":
+      case "travel": {
+        // The host contributes author identity only; DocumentHistory remains private to the server. A jump is
+        // routed exactly like an undo because it IS one to the server: a single authoritative transition.
         const ok =
-          message.type === "undo"
-            ? session.server.undo(message.windowId)
-            : session.server.redo(message.windowId);
+          message.type === "travel"
+            ? session.server.travel(message.nodeId, message.windowId)
+            : message.type === "undo"
+              ? session.server.undo(message.windowId)
+              : session.server.redo(message.windowId);
         client.post({
           type: "ack",
           requestId: message.requestId,

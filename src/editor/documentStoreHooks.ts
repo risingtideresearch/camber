@@ -63,7 +63,7 @@ export function useDocumentHistory() {
 }
 
 /**
- * The shared undo history as data, refreshed after the document changes. `null` until the first answer.
+ * The shared history tree as data, refreshed after the document changes. `null` until the first answer.
  *
  * The timeline is PULLED rather than published with the snapshot: only a window showing the history wants it,
  * and it is a per-look request, so no other window pays for it. The fetch is also deliberately late. A pointer

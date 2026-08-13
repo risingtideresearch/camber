@@ -5,6 +5,7 @@ import { DocumentStoreProvider } from "./DocumentStoreProvider";
 import { EditorUiProvider } from "./editorUi";
 import { joinedSessionFromUrl } from "./editorSession";
 import { PANELS, panelKindFromUrl, type PanelKind } from "./externalPanels";
+import { HistoryControls } from "./HistoryControls";
 import { HistoryPanel } from "./HistoryPanel";
 import { HullView3d } from "./HullView3d";
 import { SelectionInfo } from "./SelectionInfo";
@@ -81,8 +82,12 @@ function PanelBody({ kind }: { readonly kind: PanelKind }) {
   }
 }
 
-// What each panel's bar needs, which is only what the panel itself uses. Each case opens with its own
-// separator, so the kind that needs nothing leaves none dangling after the design's name.
+// What each panel's bar needs, which is only what the panel itself uses, followed by the session's own
+// controls. Each case opens with its own separator, so the kind that needs nothing leaves none dangling after
+// the design's name.
+//
+// HistoryControls goes LAST in every bar, after the controls of the view: undo does not belong to the pane
+// under it, and putting it beside the drawing tools would read as one more of them.
 function PanelControls({ kind }: { readonly kind: PanelKind }) {
   switch (kind) {
     // The station grid is an EDITOR — points are added and selected in it — so it carries the tool toolbar
@@ -95,6 +100,8 @@ function PanelControls({ kind }: { readonly kind: PanelKind }) {
           <SelectionInfo />
           <span className="tabsep" />
           <CurvatureControls />
+          <span className="tabsep" />
+          <HistoryControls />
         </>
       );
     // The 3D view is a look at the hull: nothing to select, but the combs are drawn on it.
@@ -103,9 +110,12 @@ function PanelControls({ kind }: { readonly kind: PanelKind }) {
         <>
           <span className="tabsep" />
           <CurvatureControls />
+          <span className="tabsep" />
+          <HistoryControls />
         </>
       );
-    // The history draws no hull. Its controls — Undo, Redo, and the steps themselves — are the panel.
+    // The history draws no hull, and needs no miniature of itself: the tree IS undo and redo — the row below
+    // the current moment is one step back, and a click reaches any moment rather than only the next one.
     case "history":
       return null;
   }

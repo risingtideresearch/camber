@@ -14,7 +14,7 @@ import { SelectionInfo } from "./SelectionInfo";
 import { TrimControls } from "./TrimControls";
 import { CurvatureControls } from "./CurvatureControls";
 import { PerfControls } from "./PerfControls";
-import { DetachPanelButton } from "./DetachPanelButton";
+import { HistoryControls } from "./HistoryControls";
 import { PerfPanel } from "./PerfPanel";
 import { DesignBar } from "./DesignBar";
 import { HullView3d } from "./HullView3d";
@@ -147,9 +147,11 @@ function Editor() {
         <TrimControls />
         <CurvatureControls />
         <PerfControls />
-        {/* The history has no pane here to hang a ⧉ off — it is a window and nothing else — so its opener
-            sits with the other inspectors in the bar. */}
-        <DetachPanelButton kind="history" label="History" />
+        {/* Undo, Redo, and the opener for the whole history. They come after the separator because they are
+            not controls of any view in this window: they act on the session, which is also why the history
+            has no pane here to hang a ⧉ off — it is a window and nothing else. */}
+        <span className="tabsep" />
+        <HistoryControls />
         <DesignBar
           name={meta.name}
           saveKind={save.kind}

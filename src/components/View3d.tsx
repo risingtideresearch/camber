@@ -18,6 +18,7 @@ import {
   type TrimToggles,
 } from "../core/view3dDisplay";
 import { Button } from "./Button";
+import { ButtonGroup } from "./ButtonGroup";
 import { Dropdown } from "./Dropdown";
 import { CameraLens } from "./view3d/CameraLens";
 import { Scene } from "./view3d/Scene";
@@ -411,7 +412,10 @@ export function View3d({
             ))}
           </div>
         </Dropdown>
-        <div className="view3dshading">
+        {/* Only the shading is a pick-one choice, so only it is joined into one bar — every independent
+            toggle beside it (Sheet, the line families, the Mesh dropdown) stays a standalone rounded
+            control, because two lit segments in a joined bar read as a broken radio group. */}
+        <ButtonGroup>
           {SHADINGS.map((s) => (
             <Button
               key={s.shading}
@@ -422,7 +426,7 @@ export function View3d({
               {s.label}
             </Button>
           ))}
-        </div>
+        </ButtonGroup>
       </div>
     </div>
   );

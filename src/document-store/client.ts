@@ -212,6 +212,16 @@ export async function connectDocumentStore(
     },
     undo: () => history("undo"),
     redo: () => history("redo"),
+    async travel(nodeId) {
+      const reply = await request((requestId) => ({
+        type: "travel",
+        sessionId,
+        windowId,
+        requestId,
+        nodeId,
+      }));
+      return reply.type === "ack" && reply.ok;
+    },
     async timeline() {
       const reply = await request((requestId) => ({
         type: "timeline",
@@ -221,8 +231,14 @@ export async function connectDocumentStore(
       }));
       if (reply.type === "timeline-result") return reply.timeline;
       // A closed or unreachable store has no history to report rather than a broken one. The caller is a view
-      // that would only have to render "no history" anyway, so it is given an empty timeline, not an error.
-      return { done: [], undone: [], depth: 0 };
+      // that would only have to render "no history" anyway, so it is given an empty tree, not an error.
+      return {
+        steps: [],
+        root: null,
+        current: null,
+        depth: 0,
+        truncated: false,
+      };
     },
     async setName(name) {
       const reply = await request((requestId) => ({

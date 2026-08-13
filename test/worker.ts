@@ -145,27 +145,36 @@ check(
 // ---------- the history, read over the protocol ----------
 const shared = await b.store.timeline();
 check(
-  shared.done.some((step) => step.author === "a") &&
-    shared.done.some((step) => step.author === "b"),
+  shared.steps.some((step) => step.author === "a") &&
+    shared.steps.some((step) => step.author === "b"),
   "one window reads the shared history, the other window's gestures included",
 );
 check(
-  shared.done.every((step) => step.label.length > 0) &&
-    !shared.done.some((step) => "state" in step),
+  shared.steps.every((step) => step.kind === null || step.label.length > 0) &&
+    !shared.steps.some((step) => "state" in step),
   "a timeline step describes its gesture and carries no hull",
 );
+const at333 = shared.current!;
 await b.store.undo();
 const afterUndo = await b.store.timeline();
 check(
-  afterUndo.undone.length === 1 &&
-    afterUndo.done.length === shared.done.length - 1,
-  "undo moves a step to the undone side of the shared timeline",
+  afterUndo.steps.length === shared.steps.length &&
+    afterUndo.current ===
+      shared.steps.find((step) => step.id === at333)!.parent,
+  "undo moves where the document stands without dropping a moment from the tree",
 );
-await b.store.redo();
 check(
-  (await b.store.timeline()).undone.length === 0 &&
-    b.store.snapshot().state.waterline === 333,
-  "redo walks back and the timeline follows",
+  await b.store.travel(at333),
+  "a window travels straight to a moment by naming it",
+);
+check(
+  b.store.snapshot().state.waterline === 333 &&
+    (await b.store.timeline()).current === at333,
+  "the jump is an ordinary authoritative transition, and lands where it was aimed",
+);
+check(
+  !(await b.store.travel(-1)),
+  "travelling to a moment the history does not hold is refused",
 );
 
 const isolated = await connectDocumentStore({

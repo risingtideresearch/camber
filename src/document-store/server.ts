@@ -74,8 +74,13 @@ export interface DocumentStoreServer {
   undo(author?: string): boolean;
   redo(author?: string): boolean;
   /**
-   * Both history stacks, described. A read, not a transition: it is how a window can SHOW the history without
-   * being given it, which is what keeps the stacks — and the states in them — private to this authority.
+   * Go straight to a kept moment, however far away in the history tree it is. One authoritative transition:
+   * the states are absolute, so a jump across a branch costs no more than a single undo.
+   */
+  travel(id: number, author?: string): boolean;
+  /**
+   * The history tree, described. A read, not a transition: it is how a window can SHOW the history without
+   * being given it, which is what keeps the tree — and the states in it — private to this authority.
    */
   timeline(): HistoryTimeline;
   setName(name: string): void;
@@ -125,9 +130,12 @@ export function createDocumentStoreServer(
   let sliceRevs: SliceRevs = initialSliceRevs();
   let meta = options.meta ? cloneMeta(options.meta) : initialSessionMeta(state);
   let activeSaveToken: string | null = null;
-  // History owns stacks and coalescing; the server owns installation, revision bumps, and publication.
+  // History owns the tree and coalescing; the server owns installation, revision bumps, and publication. It
+  // is planted with the opening state, so a window asking for the history before anything has been edited is
+  // still shown the moment the session started from.
   const history =
-    options.history ?? createDocumentHistory(options.historyOptions);
+    options.history ??
+    createDocumentHistory({ ...options.historyOptions, initial: state });
   // Accepted revision authors are retained for overlapping-slice stale-command checks.
   const authors: RevisionAuthor[] = [];
   const listeners = new Set<(snapshot: DocumentSnapshot) => void>();
@@ -225,6 +233,7 @@ export function createDocumentStoreServer(
       }
       history.record({
         before,
+        after: outcome.state,
         touched: outcome.touched,
         command: request.command,
         author: request.author,
@@ -242,13 +251,21 @@ export function createDocumentStoreServer(
     },
     undo(author = "history") {
       // History chooses the snapshot; install() makes its restoration an ordinary authoritative revision.
-      const transition = history.undo(state);
+      const transition = history.undo();
       if (!transition) return false;
       install(transition.state, transition.touched, author);
       return true;
     },
     redo(author = "history") {
-      const transition = history.redo(state);
+      const transition = history.redo();
+      if (!transition) return false;
+      install(transition.state, transition.touched, author);
+      return true;
+    },
+    travel(id, author = "history") {
+      // A jump is the same kind of transition as an undo, and goes through the same door: history names the
+      // state and the slices the journey crossed, and install() makes it an ordinary authoritative revision.
+      const transition = history.travel(id);
       if (!transition) return false;
       install(transition.state, transition.touched, author);
       return true;

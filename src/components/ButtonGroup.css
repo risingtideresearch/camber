@@ -1,0 +1,22 @@
+/* The joined segmented bar (src/components/ButtonGroup). Shared Buttons drawn as one control: each keeps its
+   own border, the neighbouring pair is pulled onto a single shared line, and only the two outer ends are
+   rounded. Built on .btn rather than around it, so every variant and state below still applies. */
+.btngroup {
+  display: inline-flex;
+}
+.btngroup > .btn {
+  border-radius: 0;
+  margin-left: -1px;
+}
+.btngroup > .btn:first-child {
+  border-radius: 8px 0 0 8px;
+  margin-left: 0;
+}
+.btngroup > .btn:last-child {
+  border-radius: 0 8px 8px 0;
+}
+/* lift the selected button so its ink border sits above its neighbours' rather than under them */
+.btngroup > .btn.active {
+  position: relative;
+  z-index: 1;
+}

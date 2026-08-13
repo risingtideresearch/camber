@@ -1,0 +1,21 @@
+/* Undo / Redo / History (HistoryControls) — the session's own controls, in the app bar of every window that is
+   not already showing the history. Held tighter than the bar's own spacing so the three read as one group
+   rather than as three more buttons among the view's controls; a .tabsep before it does the rest. */
+.historyctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The two arrows are one movement taken in either direction, so they are a ButtonGroup — the joining is that
+   component's business (components/ButtonGroup.css) and all that is left here is what makes these two
+   particular buttons what they are: icon-only, and so squarer than the bar's others. What the glyphs mean is
+   carried by the accessible name and the tooltip, not by the drawing. */
+.undoredo > .btn {
+  padding: 6px 9px;
+}
+.undoredo > .btn svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+}

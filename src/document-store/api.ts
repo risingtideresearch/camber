@@ -40,9 +40,14 @@ export interface DocumentStore {
   undo(): Promise<boolean>;
   redo(): Promise<boolean>;
   /**
-   * Both history stacks, described — the shared undo history as data, so a window can show it. Asynchronous
-   * and pulled rather than part of the snapshot: only a window displaying the history wants it, and it changes
-   * on exactly the publications that would carry it.
+   * Go straight to a moment in the history, named by its step id. `false` if that moment is gone — the depth
+   * cap drops old branches, and the window holding the id learns about it here.
+   */
+  travel(nodeId: number): Promise<boolean>;
+  /**
+   * The shared history tree, described, so a window can show it. Asynchronous and pulled rather than part of
+   * the snapshot: only a window displaying the history wants it, and it changes on exactly the publications
+   * that would carry it.
    */
   timeline(): Promise<HistoryTimeline>;
   setName(name: string): Promise<void>;

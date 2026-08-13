@@ -47,6 +47,7 @@ export function createLocalDocumentStore(
     dispatchSession: (command) => server.executeSession(command),
     undo: () => Promise.resolve(server.undo(author)),
     redo: () => Promise.resolve(server.redo(author)),
+    travel: (nodeId) => Promise.resolve(server.travel(nodeId, author)),
     timeline: () => Promise.resolve(server.timeline()),
     setName: (name) => {
       server.setName(name);
