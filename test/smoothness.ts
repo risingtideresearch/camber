@@ -34,21 +34,16 @@
 // Run with `npm run test:smooth` (tsx runs this directly under node). Exit code is
 // non-zero on any failure so it can gate CI.
 
-import {
-  createModel,
-  resetModel,
-  prepare,
-  frameAt,
-  sectionAt,
-  stationWorld,
-} from "../src/core/model";
+import { frameAt, sectionAt, stationWorld } from "../src/core/model";
 import { keptSpan } from "../src/core/mesh";
-import { parseDocument, loadHull } from "../src/core/json";
+import { parseHullState } from "../src/core/json";
+import { assemble } from "../src/core/runtime";
+import { defaultHull } from "../src/core/hull";
 import { examplesDir } from "./paths";
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 
-const model = createModel();
+let model = assemble(defaultHull());
 
 // the largest jump in keel deadrise (degrees) between adjacent stations we accept as "smooth". A fair keel
 // lands well under 1°; the old stepped construction spiked above 20°. Deadrise is an ANGLE — scale-invariant
@@ -105,12 +100,11 @@ function worstStep(): { jump: number; u: number } {
 
 // load a named case into the live model; "default" is the built-in reset model
 function loadCase(name: string): void {
-  resetModel(model);
-  if (name !== "default") {
-    const doc = parseDocument(readFileSync(join(examplesDir(), name), "utf8"));
-    loadHull(model, doc.hull);
-  }
-  prepare(model);
+  model = assemble(
+    name === "default"
+      ? defaultHull()
+      : parseHullState(readFileSync(join(examplesDir(), name), "utf8")),
+  );
 }
 
 function main(): number {

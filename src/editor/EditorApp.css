@@ -104,12 +104,53 @@ svg {
   width: 84px;
 }
 
+/* The "open this panel in a window of its own" button a panel carries (DetachPanelButton). Icon-only — the
+   ⧉ marks it as opening a window rather than toggling something in this one — and sized to sit level with a
+   tab (or with the 3D view's overlay controls) rather than to compete with the panel it belongs to: it acts
+   on the pane, it is not part of the drawing. */
+.detachbtn {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  line-height: 1.4;
+  color: var(--mut);
+}
+
 /* generic card surface, shared by the station view and the cut panel */
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 12px 16px;
+}
+
+/* card caption: an uppercase label with an optional value / tag on the right. Shared by the cut station, the
+   performance readout and the history panel, so it lives here with .card rather than in any one of them —
+   a detached window loads this shell stylesheet and its own panel's, and nothing else. */
+.cap {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+  margin: 0 0 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.cap .val {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 13px;
+}
+.cap .tag {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  color: #fff;
 }
 /* thin vertical divider between app-bar groups */
 .tabsep {

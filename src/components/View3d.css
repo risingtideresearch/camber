@@ -26,13 +26,6 @@
 .view3dctl .dd-row .dd-name {
   min-width: 0;
 }
-/* Only the shading is a pick-one choice, so only it is drawn as a joined segmented bar — every independent
-   toggle (Sheet, the line families, and the Mesh dropdown, whose split-button + popover styling lives in the
-   shared components/Dropdown.css) stays a standalone rounded control. */
-.view3dshading {
-  display: flex;
-  gap: 0;
-}
 /* optional label overlaid at the top-left of the canvas (e.g. "Blended Hull") */
 .view3dtitle {
   position: absolute;
@@ -44,21 +37,4 @@
   letter-spacing: 0.06em;
   color: var(--mut);
   pointer-events: none;
-}
-/* segmented control: shared Buttons joined into one bar; the active one is inked by Button's `active` prop */
-.view3dshading .btn {
-  border-radius: 0;
-  margin-left: -1px;
-}
-.view3dshading .btn:first-child {
-  border-radius: 8px 0 0 8px;
-  margin-left: 0;
-}
-.view3dshading .btn:last-child {
-  border-radius: 0 8px 8px 0;
-}
-/* lift the active button so its ink border sits above its neighbours' */
-.view3dshading .btn.active {
-  position: relative;
-  z-index: 1;
 }

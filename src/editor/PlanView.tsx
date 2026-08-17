@@ -1,51 +1,33 @@
 import { useCallback } from "react";
-import { addPlanPoint, type Model } from "../core/model";
-import type { HullSampling } from "../core/mesh";
-import type { ModelSelection } from "../core/modelSelection";
-import type { CurvatureSettings } from "../core/comb";
+import { rejected } from "../core/commands";
+import { useDocumentDispatch, useDocumentRuntime } from "./documentStoreHooks";
+import { useEditorUi } from "./editorUi";
 import { drawPlan } from "../core/draw2d";
 import { viewOf } from "../core/view";
-import type { RefObject } from "react";
 import { SvgView } from "./SvgView";
-import type { SvgViewSync } from "./svgViewSync";
-import type { Tool } from "./types";
 import "./ViewStrip.css";
 
 // The plan strip (deck-edge half-breadth). Draws through a shared pan/zoom SvgView. In "add" mode a click on
 // empty space inserts a sheer point there; in "select" mode an empty click clears the selection (clicks on
 // control points are handled by their own node listeners, which stopPropagation before this fires).
-interface PlanViewProps {
-  model: Model;
-  modelVersion: number;
-  selection: ModelSelection;
-  sampling: HullSampling; // the shared hull sampling; the outline is drawn from its trimmedSections
-  tool: Tool;
-  onSelect: (sel: ModelSelection) => void;
-  setTool: (t: Tool) => void;
-  bumpModel: () => void;
-  sync?: RefObject<SvgViewSync>; // shared zoom / x-pan with the profile strip
-  curvature: CurvatureSettings;
-  knotLongs: boolean; // the station editor's "Show knot longitudinals" toggle, shared by all three 2D views
-  // which station the section editor is on: shown emphasized here, and set by clicking a station's segment
-  activeStation: number;
-  onActivateStation: (si: number) => void;
-}
-
-export function PlanView({
-  model,
-  modelVersion,
-  selection,
-  sampling,
-  tool,
-  onSelect,
-  setTool,
-  bumpModel,
-  sync,
-  curvature,
-  knotLongs,
-  activeStation,
-  onActivateStation,
-}: PlanViewProps) {
+export function PlanView() {
+  const model = useDocumentRuntime();
+  const dispatch = useDocumentDispatch();
+  const {
+    selection,
+    setSelection: onSelect,
+    sampling: hullSampling,
+    tool,
+    setTool,
+    curvature,
+    knotLongs,
+    activeStation,
+    setActiveStation: onActivateStation,
+    planProfileSync: sync,
+  } = useEditorUi();
+  // Read during render, not inside `draw`: the sweep is shared, so it must happen where the other views can
+  // find it already done rather than inside one view's effect.
+  const sampling = hullSampling();
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
       drawPlan(
@@ -61,10 +43,8 @@ export function PlanView({
         knotLongs,
       );
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       model,
-      modelVersion,
       selection,
       sampling,
       onSelect,
@@ -75,17 +55,23 @@ export function PlanView({
     ],
   );
 
-  const onBackgroundClick = (vx: number, vy: number) => {
-    if (tool === "add") {
-      const v = viewOf(model);
-      const idx = addPlanPoint(model, v.invX(vx), v.invY(vy));
-      setTool("select");
-      if (idx < 0) return; // no room at the minimum point spacing — nothing was inserted
-      onSelect({ tgt: "plan", idx });
-      bumpModel();
-    } else {
+  // An insert is the one place the store's asynchrony reaches the UI: the new point's INDEX comes back from
+  // the server, and the click that made it is what selects it. A click never begins a drag (drags always start
+  // on an existing node), so the microtask between the two is invisible.
+  const onBackgroundClick = async (vx: number, vy: number) => {
+    if (tool !== "add") {
       onSelect(null);
+      return;
     }
+    const v = viewOf(model);
+    const out = await dispatch({
+      type: "addPlanPoint",
+      x: v.invX(vx),
+      y: v.invY(vy),
+    });
+    setTool("select");
+    if (rejected(out)) return; // no room at the minimum point spacing — nothing was inserted
+    onSelect({ tgt: "plan", idx: out.result as number });
   };
 
   // the strip's content box is sized for the hull as it was loaded, and stays that size while it is edited —
@@ -100,7 +86,7 @@ export function PlanView({
         draw={draw}
         sync={sync}
         cursor={tool === "add" ? "crosshair" : "default"}
-        onBackgroundClick={onBackgroundClick}
+        onBackgroundClick={(vx, vy) => void onBackgroundClick(vx, vy)}
       />
     </div>
   );

@@ -3,6 +3,7 @@ import { clamp } from "../core/math";
 import { svgPoint } from "./svgCoords";
 import {
   refit,
+  setTy,
   useSvgViewSync,
   type SvgMember,
   type SvgViewSync,
@@ -143,7 +144,7 @@ export function SvgView({
       } else if (prevH === 0) {
         // a sibling (or an earlier interaction) already set the shared zoom — adopt it, just center this
         // view vertically at the shared scale
-        self.ty = (h - H.sy * contentHeight) / 2;
+        setTy(H, self, (h - H.sy * contentHeight) / 2);
         self.repaint();
       } else {
         // keep the user's zoom; hold the same content point centered as the view resizes. The x-shift is
@@ -152,7 +153,7 @@ export function SvgView({
           H.tx += (w - H.w) / 2;
           H.w = w;
         }
-        self.ty += (h - prevH) / 2;
+        setTy(H, self, self.ty + (h - prevH) / 2);
         // scale is unchanged, so every aligned view only needs its transform rewritten
         for (const m of H.members) m.apply();
       }
@@ -192,12 +193,13 @@ export function SvgView({
       H.sx = s;
       H.sy = s;
       H.tx = mx - cx * s; // keep the content x under the cursor fixed (shared)
-      self.ty = my - cy * s; // keep the content y under the cursor fixed (this view only)
+      setTy(H, self, my - cy * s); // keep the content y under the cursor fixed (linked views come along)
       H.userAdjusted = true;
       // scale changed → every aligned view redraws. The view under the cursor anchors on the cursor (above);
-      // the others zoom about their own vertical center, so their current vertical framing is preserved.
+      // the others zoom about their own vertical center, so their current vertical framing is preserved —
+      // unless the controller links y, in which case setTy has already put them all on the cursor's anchor.
       for (const m of H.members) {
-        if (m !== self) {
+        if (m !== self && !H.linkY) {
           const half = m.h / 2;
           m.ty = half - (s / sPrev) * (half - m.ty);
         }
@@ -229,7 +231,7 @@ export function SvgView({
       if (!moved && Math.hypot(dx, dy) > 3) moved = true;
       if (moved && mode === "zoom") {
         H.tx = tx0 + dx; // x-pan is shared across aligned views
-        self.ty = ty0 + dy; // y-pan is this view's own
+        setTy(H, self, ty0 + dy); // y-pan is this view's own, unless the controller links it
         H.userAdjusted = true;
         for (const m of H.members) m.apply(); // scale unchanged → transform-only
       }

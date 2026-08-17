@@ -1,20 +1,13 @@
 import { useCallback } from "react";
 import { NumberInput } from "polymorph-ui";
-import {
-  addStation,
-  addStationPoint,
-  moveStationU,
-  removeStation,
-  setKeelK,
-  type Model,
-} from "../core/model";
-import type { ModelSelection } from "../core/modelSelection";
-import type { CurvatureSettings } from "../core/comb";
+import { rejected } from "../core/commands";
+import { useDocumentDispatch, useDocumentRuntime } from "./documentStoreHooks";
+import { useEditorUi } from "./editorUi";
 import { drawStation } from "../core/draw2d";
 import { viewOf, STW, STH } from "../core/view";
 import { SvgView } from "./SvgView";
-import type { Tool } from "./types";
 import { StationTabs } from "./StationTabs";
+import { DetachPanelButton } from "./DetachPanelButton";
 import "./StationView.css";
 
 // The section editor card: the tab strip, the section editor for the active station, and the keel-knuckle
@@ -25,67 +18,48 @@ import "./StationView.css";
 // the pan / zoom carries across tabs (sections stay comparable) and the inactive stations cost nothing.
 // In "add" mode a click inserts a section point (into every station, index-aligned); in "select" mode an
 // empty click clears the selection.
-interface StationViewProps {
-  model: Model;
-  modelVersion: number;
-  selection: ModelSelection;
-  tool: Tool;
-  onSelect: (sel: ModelSelection) => void;
-  setTool: (t: Tool) => void;
-  bumpModel: () => void;
-  curvature: CurvatureSettings;
-  // "Show knot longitudinals" — owned above (the plan and profile strips draw it too), toggled here
-  knotLongs: boolean;
-  setKnotLongs: (v: boolean) => void;
-  activeStation: number;
-  setActiveStation: (si: number) => void;
-}
-
-export function StationView({
-  model,
-  modelVersion,
-  selection,
-  tool,
-  onSelect,
-  setTool,
-  bumpModel,
-  curvature,
-  knotLongs,
-  setKnotLongs,
-  activeStation,
-  setActiveStation,
-}: StationViewProps) {
+export function StationView() {
+  const model = useDocumentRuntime();
+  const dispatch = useDocumentDispatch();
+  const {
+    selection,
+    setSelection: onSelect,
+    tool,
+    setTool,
+    curvature,
+    knotLongs,
+    setKnotLongs,
+    activeStation,
+    setActiveStation,
+  } = useEditorUi();
   const K = model.stations.length;
 
   // A station is added AT THE CUT: it needs a definite position along the sheer (v1's templates had none),
   // and the cut is where the user is already looking. Its section is read off the loft there, so the hull is
   // unchanged by the insert — it just gains a handle where the surface already was.
-  const onAddStation = () => {
+  const onAddStation = async () => {
     if (K >= 7) return;
-    const idx = addStation(model, model.plan.uAtX(model.x0));
-    if (idx < 0) return; // no room at the minimum station spacing
+    const out = await dispatch({
+      type: "addStation",
+      u: model.plan.uAtX(model.x0),
+    });
+    if (rejected(out)) return; // no room at the minimum station spacing
     onSelect(null);
-    setActiveStation(idx); // the freshly added station becomes active
-    bumpModel();
+    setActiveStation(out.result as number); // the freshly added station becomes active
   };
   const onRemoveStation = (si: number) => {
     if (K <= 1) return;
-    removeStation(model, si);
+    void dispatch({ type: "removeStation", idx: si });
     onSelect(null);
-    setActiveStation(Math.min(activeStation, model.stations.length - 1));
-    bumpModel();
+    setActiveStation(Math.min(activeStation, K - 2));
   };
-  const onKeel = (k: number) => {
-    setKeelK(model, activeStation, k);
-    bumpModel();
-  };
+  const onKeel = (k: number) =>
+    void dispatch({ type: "setKeelK", si: activeStation, k });
   // The same edit as dragging the station's handle in the plan view, typed instead: the model clamps u
   // between the neighbouring stations, so a value past a neighbour lands at the limit and the field
   // redraws showing where the station actually went.
-  const onU = (u: number) => {
-    moveStationU(model, activeStation, u);
-    bumpModel();
-  };
+  const onU = (u: number) =>
+    void dispatch({ type: "moveStationU", idx: activeStation, u });
 
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
@@ -100,28 +74,24 @@ export function StationView({
         knotLongs,
       );
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      model,
-      modelVersion,
-      selection,
-      activeStation,
-      onSelect,
-      curvature,
-      knotLongs,
-    ],
+    [model, selection, activeStation, onSelect, curvature, knotLongs],
   );
 
-  const onBackgroundClick = (vx: number, vy: number) => {
-    if (tool === "add") {
-      const v = viewOf(model);
-      const idx = addStationPoint(model, activeStation, v.invN(vx), v.invZ(vy));
-      setTool("select");
-      onSelect({ tgt: "station", idx, si: activeStation });
-      bumpModel();
-    } else {
+  const onBackgroundClick = async (vx: number, vy: number) => {
+    if (tool !== "add") {
       onSelect(null);
+      return;
     }
+    const v = viewOf(model);
+    const out = await dispatch({
+      type: "addStationPoint",
+      si: activeStation,
+      n: v.invN(vx),
+      z: v.invZ(vy),
+    });
+    setTool("select");
+    if (rejected(out)) return;
+    onSelect({ tgt: "station", idx: out.result as number, si: activeStation });
   };
 
   const keelK = model.stations[activeStation]?.keelK ?? 0;
@@ -131,20 +101,25 @@ export function StationView({
 
   return (
     <div className="card stationcard">
-      <StationTabs
-        model={model}
-        activeTab={activeStation}
-        onSelectTab={setActiveStation}
-        onAddStation={onAddStation}
-        onRemoveStation={onRemoveStation}
-      />
+      {/* the tab strip, and — at the far end of its row — the button that opens every station side by side
+          in a window of its own. It sits on the tabs because the tabs are what it replaces: one station at a
+          time here, all of them there. */}
+      <div className="stationhead">
+        <StationTabs
+          activeTab={activeStation}
+          onSelectTab={setActiveStation}
+          onAddStation={() => void onAddStation()}
+          onRemoveStation={onRemoveStation}
+        />
+        <DetachPanelButton kind="stations" />
+      </div>
       <div className="stationbody">
         <SvgView
           contentWidth={STW}
           contentHeight={STH}
           draw={draw}
           cursor={tool === "add" ? "crosshair" : "default"}
-          onBackgroundClick={onBackgroundClick}
+          onBackgroundClick={(vx, vy) => void onBackgroundClick(vx, vy)}
         />
       </div>
       <div className="keelrow">

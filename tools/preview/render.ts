@@ -17,10 +17,7 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { readFileSync } from "node:fs";
 import {
-  createModel,
   loa,
-  resetModel,
-  prepare,
   worldZ,
   keepAt,
   frameAt,
@@ -28,10 +25,10 @@ import {
 } from "../../src/core/model";
 import { hullGrid, trimmedHullGrid } from "../../src/core/mesh";
 import { buildStep } from "../../src/core/step";
-import { loadJsonText } from "../../src/core/json";
+import { parseHullState } from "../../src/core/json";
+import { assemble } from "../../src/core/runtime";
+import { defaultHull } from "../../src/core/hull";
 import { type Vec3 } from "../../src/core/math";
-
-const model = createModel();
 
 type P2 = { x: number; y: number; d: number };
 
@@ -476,7 +473,6 @@ if (a2 in PRESETS) {
 }
 const out = outArg ?? `out/${mode}-${a2}.png`;
 
-resetModel(model);
 // CAMBER_DOC=<path> loads a specific HullDocument JSON instead of the default boat; CAMBER_KEELK overrides
 // the keel knuckle on every station.
 //
@@ -484,13 +480,20 @@ resetModel(model);
 // round-tripped, but the mesh deliberately does not read it yet — the keel gets no crease row, because
 // honouring it means DEFORMING the section near the centerline (a hard V has to be built, not merely
 // shaded), which lands as its own change. The override is kept wired so it is ready to A/B then.
-if (process.env.CAMBER_DOC)
-  loadJsonText(model, readFileSync(process.env.CAMBER_DOC, "utf8"));
-if (process.env.CAMBER_KEELK) {
-  const k = parseFloat(process.env.CAMBER_KEELK);
-  for (const st of model.stations) st.keelK = k;
-}
-prepare(model);
+const loaded = process.env.CAMBER_DOC
+  ? parseHullState(readFileSync(process.env.CAMBER_DOC, "utf8"))
+  : defaultHull();
+const keelK = process.env.CAMBER_KEELK
+  ? parseFloat(process.env.CAMBER_KEELK)
+  : null;
+const model = assemble(
+  keelK === null
+    ? loaded
+    : {
+        ...loaded,
+        stations: loaded.stations.map((st) => ({ ...st, keelK })),
+      },
+);
 const P = projector(yaw, pitch);
 const sel = process.env.CAMBER_SEL ? parseInt(process.env.CAMBER_SEL, 10) : -1; // station point index to highlight
 // lines family: pass mode "body"|"buttocks"|"waterline" directly, or use mode "lines" + CAMBER_LINES env

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Canvas3D,
   Canvas3DAxesGizmo,
@@ -18,6 +18,7 @@ import {
   type TrimToggles,
 } from "../core/view3dDisplay";
 import { Button } from "./Button";
+import { ButtonGroup } from "./ButtonGroup";
 import { Dropdown } from "./Dropdown";
 import { CameraLens } from "./view3d/CameraLens";
 import { Scene } from "./view3d/Scene";
@@ -152,7 +153,6 @@ const STATIONS: { key: keyof LineToggles; label: string; title: string }[] = [
 
 interface View3dProps {
   model: Model;
-  modelVersion: number;
   selection: ModelSelection;
   stl?: StlState | null; // optional imported reference mesh, drawn translucent over the hull
   // the shared hull sampling the surface is built from. EditorApp computes it once (at the Performance
@@ -163,16 +163,20 @@ interface View3dProps {
   // don't drive it (the interpolation app), where it defaults to all-off
   curvature?: CurvatureSettings;
   title?: string; // optional label overlaid top-left of the canvas (e.g. "Blended Hull")
+  // host-supplied controls, placed ahead of the view's own in the overlay bar. The view owns everything that
+  // changes what is DRAWN and nothing else, so a control about the pane itself — the editor's "open this in
+  // its own window" button — comes from the host and stays out of here.
+  actions?: ReactNode;
 }
 
 export function View3d({
   model,
-  modelVersion,
   selection,
   sampling,
   curvature = CURVATURE_OFF,
   stl,
   title,
+  actions,
 }: View3dProps) {
   const [shading, setShading] = useState<ShadingMode>("smooth");
   // one object rather than four useStates: <Scene> keys a rebuild on it, so its identity has to change only
@@ -197,8 +201,8 @@ export function View3d({
       sampling
         ? null
         : computeHullSampling(model, PERF_N_DEFAULT, PERF_R_DEFAULT),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sampling, model, modelVersion],
+
+    [sampling, model],
   );
   const effSampling = sampling ?? fallback;
 
@@ -210,7 +214,6 @@ export function View3d({
         <CameraLens fov={fov} />
         <Scene
           model={model}
-          modelVersion={modelVersion}
           selection={selection}
           shading={shading}
           lines={lines}
@@ -226,6 +229,7 @@ export function View3d({
       </Canvas3D>
       {title && <div className="view3dtitle">{title}</div>}
       <div className="view3dctl">
+        {actions}
         <Dropdown
           label={orthographic ? "Ortho" : "Persp"}
           active={!orthographic}
@@ -408,7 +412,10 @@ export function View3d({
             ))}
           </div>
         </Dropdown>
-        <div className="view3dshading">
+        {/* Only the shading is a pick-one choice, so only it is joined into one bar — every independent
+            toggle beside it (Sheet, the line families, the Mesh dropdown) stays a standalone rounded
+            control, because two lit segments in a joined bar read as a broken radio group. */}
+        <ButtonGroup>
           {SHADINGS.map((s) => (
             <Button
               key={s.shading}
@@ -419,7 +426,7 @@ export function View3d({
               {s.label}
             </Button>
           ))}
-        </div>
+        </ButtonGroup>
       </div>
     </div>
   );

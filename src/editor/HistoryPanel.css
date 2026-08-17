@@ -1,0 +1,324 @@
+/* The history explorer, which exists only as a detached window and so fills it. */
+.historycard {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Where a dot's centre sits inside its row, which is what every thread and elbow is aimed at. Down: the
+     row's 1px border, its 6px padding, the dot's own 4px offset, and half of the 9px dot. Across: the same
+     border and padding, plus half the dot — and the thread is 1px wide, so its left edge is that less a half.
+     Get these wrong by a pixel and the thread misses the dots, which is the one thing this drawing is. */
+  --dotmid: 15.5px;
+  --rail: 13px;
+  /* The breathing room under a branch group, before the moment it grew from. The elbow has to cross it to reach
+     that row's thread, so the two are one number rather than two that agree by luck. */
+  --branchgap: 3px;
+  /* The thread, in its two readings. A path the document is not on is dashed and faint; the line it IS on is
+     drawn solid and a shade stronger, so the route from the current moment back to the start is one unbroken
+     stroke down the drawing — the same thing the filled dots say, said continuously. */
+  --thread: var(--line);
+  --thread-on: #b9c5d2;
+}
+
+/* The one line of chrome between the caption and the tree: what the tree is FOR, and whether a jump is in
+   flight. There are no Undo / Redo buttons here — see HistoryPanel.tsx — so it is a caption's worth of height
+   rather than a button's, and the rule under it is what separates the header from the drawing. */
+.historyacts {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+}
+.historyhint {
+  font-size: 12px;
+  color: var(--mut);
+}
+
+/* the tree, oldest at the top; the list is what scrolls, so the caption and the buttons stay put */
+.historylist {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px 0 0;
+  list-style: none;
+
+  /* On a system with overlay scrollbars this is a hairline that fades out; on one that always shows them it is
+     permanent chrome down the edge of a panel whose whole subject is a thin vertical line — so it is styled
+     rather than left to the platform: a slim quiet thumb over no track at all. `stable` holds the gutter open
+     so a history growing past the window's height does not reflow the rows already drawn. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--deck) transparent;
+  scrollbar-gutter: stable;
+
+  /* What the pills further down measure themselves against. It is the list rather than the row, even though the
+     row is what they sit in, because `container-type` brings layout containment with it and layout containment
+     makes a STACKING CONTEXT — on a row that would trap the dot's layer inside the button, and on a branch list
+     it would trap the elbow's, undoing the ordering the threads depend on. Up here it encloses every one of
+     those pieces, so their layering is untouched, and it still measures the panel's own content width rather
+     than the window's: the card's padding and the scrollbar gutter are already taken out. */
+  container-type: inline-size;
+}
+.historylist:hover {
+  scrollbar-color: var(--station) transparent;
+}
+/* The same again for engines that predate the two properties above (older Safari and Chrome). Where both are
+   understood the standard ones win and these are ignored, so the two never fight. */
+.historylist::-webkit-scrollbar {
+  width: 11px;
+}
+.historylist::-webkit-scrollbar-track {
+  background: transparent;
+}
+.historylist::-webkit-scrollbar-thumb {
+  /* a transparent border with the background clipped to the padding box: the thumb reads as a slim pill
+     floating in the gutter rather than as a bar filling it */
+  border: 3px solid transparent;
+  border-radius: 6px;
+  background: var(--deck);
+  background-clip: padding-box;
+}
+.historylist:hover::-webkit-scrollbar-thumb {
+  background: var(--station);
+  background-clip: padding-box;
+}
+
+/* One row per moment, as a button: the whole row is the target for jumping to it. A thread runs down the left
+   of each list through every dot, so a line of edits reads as one stroke. */
+.historystep {
+  position: relative;
+}
+
+/* Where two threads run over the same stretch — a branch's elbow shares the trunk's x with the trunk's own
+   thread, see below — the SOLID one has to be the one you see: a dashed line drawn over a solid one breaks it
+   into a dotted line and says the opposite of what it means. Painting order would otherwise be decided by which
+   element happens to come later in the markup, so the two readings are layered instead: every dashed thread at
+   the bottom, every solid one over it, and the dots over both. */
+.historythread,
+.historybranchwrap::after,
+.historybranch > .historystep:last-child::after {
+  z-index: 0;
+}
+.historythread.onspine,
+.historybranchwrap.onspine::after,
+.historybranch > .historystep:last-child:not(.other)::after {
+  z-index: 1;
+}
+
+/* The thread, in two halves meeting at the dot — which half exists, and which is on the active line, is decided
+   per row in HistoryPanel.tsx. Splitting it there is what lets the active line stop AT the current moment
+   instead of overshooting half a row past it. */
+.historythread {
+  position: absolute;
+  left: var(--rail);
+  width: 0;
+  border-left: 1px dashed var(--thread);
+}
+.historythread.up {
+  top: 0;
+  height: var(--dotmid);
+}
+.historythread.down {
+  top: var(--dotmid);
+  bottom: 0;
+}
+.historythread.onspine {
+  border-left-style: solid;
+  border-left-color: var(--thread-on);
+}
+
+/* A branch: the moments that grew out of a fork the document did not take. The list reads newest-first, so a
+   branch stands ABOVE the moment it left from, indented and joined back down to it by an elbow — an abandoned
+   exploration reads as a departure from the line below rather than as part of it. */
+.historybranchwrap {
+  position: relative;
+}
+.historybranch {
+  margin: 0 0 0 16px;
+  padding: 0 0 var(--branchgap);
+  list-style: none;
+}
+/* The elbow, from the OLDEST moment in the branch — its last row, at the foot of the group — down and across
+   to the trunk's thread, where the moment it grew from is waiting. It is the link between the two, so it reads
+   as one when the document's line is what left by this branch: a jump into a branch makes its elbow, and the
+   thread above it, the solid stroke, and leaves the trunk it forked from dashed.
+   Its vertical stroke stands ON the trunk's x and covers the stretch the trunk's own thread covers, which is
+   the shared run the layering above sorts out. The two are never both solid: the document's line leaves a fork
+   either by the trunk or by one branch, never both. */
+.historybranch > .historystep:last-child::after {
+  content: "";
+  position: absolute;
+  /* the trunk's thread, one indent out from this row's own */
+  left: calc(var(--rail) - 16px);
+  top: var(--dotmid);
+  /* Down past the foot of the group, not merely to the foot of this row: the branch list's bottom padding sits
+     between the two, and stopping at the row would leave the active line broken by that much just where it
+     rejoins the trunk. Negative, because this row — not the group — is what the elbow is positioned against. */
+  bottom: calc(-1 * var(--branchgap));
+  width: 16px;
+  border-left: 1px dashed var(--thread);
+  border-top: 1px dashed var(--thread);
+  border-top-left-radius: 8px;
+}
+.historybranch > .historystep:last-child:not(.other)::after {
+  border-left: 1px solid var(--thread-on);
+  border-top: 1px solid var(--thread-on);
+}
+/* The trunk runs on past the branch, from the moments after it down to the one it grew from. It carries the
+   active line only when the document left that fork by the trunk — see PlacedBranch.onSpine. */
+.historybranchwrap::after {
+  content: "";
+  position: absolute;
+  left: var(--rail);
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dashed var(--thread);
+}
+.historybranchwrap.onspine::after {
+  border-left-style: solid;
+  border-left-color: var(--thread-on);
+}
+
+/* Two lines: when it happened, loudly, and what happened, quietly underneath. Browsing your own history is
+   remembering, and the time is how a memory is addressed. */
+.historysteprow {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas:
+    "dot when tools"
+    "dot what what";
+  align-items: baseline;
+  column-gap: 8px;
+  width: 100%;
+  padding: 6px 8px 7px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  font: inherit;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.historysteprow:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+.historysteprow:disabled {
+  cursor: default;
+}
+
+/* the dot on the thread. Its hue is that of the part of the hull the gesture worked on (set per row), so a run
+   of work on one part of the boat reads as one colour down the margin. */
+.historydot {
+  grid-area: dot;
+  align-self: start;
+  width: 9px;
+  height: 9px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: hsl(var(--hue, 210) 55% 55%);
+  /* The threads are positioned, so without a layer of its own a dot would be painted UNDER the one running
+     through it. Lift it above both thread layers, and let its ring punch them out from behind it. */
+  position: relative;
+  z-index: 2;
+  box-shadow: 0 0 0 2px var(--panel);
+}
+/* the root worked on nothing: it is the state the gestures were applied to */
+.historydot.plain {
+  background: var(--mut);
+}
+
+.historywhen {
+  grid-area: when;
+  font-size: 14px;
+  line-height: 1.15;
+  color: var(--ink);
+}
+/* what the gesture was */
+.historywhat {
+  grid-area: what;
+  min-width: 0;
+  padding-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.3;
+  color: var(--mut);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* what the gesture worked on: one pill per part of the hull it touched, in that part's own hue. Most gestures
+   name one; a few reach two, and then both are worth seeing. */
+.historytools {
+  grid-area: tools;
+  display: flex;
+  gap: 4px;
+}
+.historytool {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 9px;
+  color: hsl(var(--hue, 210) 45% 32%);
+  background: hsl(var(--hue, 210) 68% 93%);
+  /* the pills are the first thing to give up room: never wrapped, and dropped outright below */
+  white-space: nowrap;
+}
+/* Narrow the window and the pills stop fitting beside the time. Rather than let them push the time into
+   wrapping, the row keeps the FIRST one — the part of the hull the dot is already coloured for — and drops the
+   rest; narrower still, all of them go and the dot carries it alone. The gesture's own line underneath says what
+   it did either way, so nothing is lost, only abbreviated. */
+@container (max-width: 320px) {
+  .historytool:not(:first-child) {
+    display: none;
+  }
+  /* Say that something is being held back, rather than leaving a gesture that reached across the hull looking
+     like it only touched one part. The mark is earned only when there IS a pill behind this one, which is what
+     `:has` asks: a following sibling exists. (It costs nothing to ask — any engine that understands the
+     container query around it understands `:has` too, so the two arrive together.) */
+  .historytool:first-child:has(~ .historytool)::after {
+    content: "+";
+    margin-left: 3px;
+    opacity: 0.6;
+  }
+}
+@container (max-width: 240px) {
+  .historytools {
+    display: none;
+  }
+}
+
+/* where the document stands: the one row that is not a destination */
+.historystep.current > .historysteprow {
+  border-color: var(--accent);
+  background: #eff6ff;
+}
+.historystep.current .historywhen {
+  font-weight: 600;
+}
+/* moments the document is not on — ahead of it, or down a branch it left. Still there and still reachable,
+   so they are drawn as standing by rather than as absent. */
+.historystep.other > .historysteprow {
+  color: var(--mut);
+}
+.historystep.other .historywhen {
+  color: var(--mut);
+}
+.historystep.other .historydot {
+  background: var(--panel);
+  border: 1px solid hsl(var(--hue, 210) 40% 70%);
+}
+.historystep.other .historytool {
+  color: hsl(var(--hue, 210) 25% 45%);
+  background: hsl(var(--hue, 210) 30% 95%);
+}
+
+.historyempty {
+  flex: 0 0 auto;
+  margin: 0;
+  padding-top: 4px;
+  font-size: 12px;
+  color: var(--mut);
+}

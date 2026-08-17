@@ -74,6 +74,20 @@
   -webkit-user-select: text;
 }
 
+/* the tab strip's row: the tabs, then the detach button pushed to the far end. The tabs wrap within their
+   own share of the row, so the button stays put on the first line however many stations there are. */
+.stationhead {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.stationhead .tabstrip {
+  flex: 1 1 auto;
+  margin-bottom: 0;
+}
+
 /* the tab strip over the per-station editors */
 .tabstrip {
   display: flex;

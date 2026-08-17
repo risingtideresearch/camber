@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createModel, loa, prepare, type Model } from "../core/model";
+import type { Model } from "../core/model";
+import { assemble } from "../core/runtime";
+import { defaultHull } from "../core/hull";
 import { hydrostatics, type Hydro } from "../core/hydro";
 import { parseDocument, type ParsedDoc } from "../core/json";
 import { promoteFamily } from "../core/promote";
@@ -8,7 +10,7 @@ import { View3d } from "../components/View3d";
 import { Button } from "../components/Button";
 import { FilenameInput } from "../components/FilenameInput";
 import {
-  blend,
+  blendState,
   computeSamples,
   weightsFromControl,
   PADC,
@@ -60,14 +62,6 @@ function addParsedDoc(
 }
 
 export function InterpolateApp() {
-  // the one hull model: a stable, mutable object (the blend is written into it). It is never replaced; the
-  // blend is (re)computed during render (below), so the model is always current before any child effect draws.
-  const [model] = useState<Model>(() => {
-    const m = createModel();
-    m.x0 = loa(m) / 2; // amidships; the blend overwrites the geometry, so this only seeds the cut
-    return m;
-  });
-
   // the loaded family + whether the last load needed topology promotion (surfaced in the status line)
   const [hulls, setHulls] = useState<Hull[]>([]);
   const [promoted, setPromoted] = useState(false);
@@ -81,21 +75,26 @@ export function InterpolateApp() {
     [n, tTwo, puck],
   );
 
-  // (re)blend + prepare during render, and read the live hydrostatics. Doing this in a render-phase memo (like
-  // the editor's section sampling) keeps the model current before the 3D view's draw effect runs.
-  const [modelVersion, setModelVersion] = useState(0);
-  const liveHydro = useMemo<Hydro | null>(() => {
-    if (!hulls.length) return null;
-    blend(model, hulls, weights);
-    prepare(model);
-    return hydrostatics(model);
-  }, [model, hulls, weights]);
-  // bump modelVersion after each blend so View3d's draw effect re-runs with the updated model
-  useEffect(() => {
-    if (!liveHydro) return;
-    const id = window.setTimeout(() => setModelVersion((v) => v + 1), 0);
-    return () => clearTimeout(id);
-  }, [liveHydro]);
+  // The two trim scalars a blend does not decide (the family's hulls may disagree). This viewer holds one
+  // setting for every blend it shows — the live one and every sample of the blend space — so they are
+  // captured once and never move.
+  const [trim] = useState(() => {
+    const d = defaultHull();
+    return { waterline: d.waterline, deckRake: d.deckRake };
+  });
+
+  // The blend, assembled. This app holds no store and needs none: there is one writer (the blend control) and
+  // nothing to undo, so the hull is simply a value derived from the family and the weights. Its identity
+  // changes with the blend, which is the redraw signal the 3D view reads — there is no version counter.
+  const model = useMemo<Model>(
+    () =>
+      assemble(hulls.length ? blendState(hulls, weights, trim) : defaultHull()),
+    [hulls, weights, trim],
+  );
+  const liveHydro = useMemo<Hydro | null>(
+    () => (hulls.length ? hydrostatics(model) : null),
+    [model, hulls.length],
+  );
 
   // ---------- the metric heatmap / scatter axes + the shared blend-space sampling ----------
   const [heatMetric, setHeatMetric] = useState("none");
@@ -116,23 +115,18 @@ export function InterpolateApp() {
     samplesRef.current = samples;
   }, [samples]);
 
-  // one expensive sampling pass per family, off the critical path (show the pad + 3D first, then fill). Uses a
-  // dedicated scratch model so the live blend is never disturbed.
-  const scratch = useMemo<Model>(() => {
-    const m = createModel();
-    m.x0 = loa(m) / 2;
-    return m;
-  }, []);
+  // one expensive sampling pass per family, off the critical path (show the pad + 3D first, then fill). Each
+  // sample assembles its own model, so the live blend is never disturbed.
   useEffect(() => {
     if (hulls.length < 2) return;
     const id = window.setTimeout(() => {
       setSamplesState({
         forHulls: hulls,
-        data: computeSamples(scratch, hulls),
+        data: computeSamples(hulls, trim),
       });
     }, 20);
     return () => clearTimeout(id);
-  }, [hulls, scratch]);
+  }, [hulls, trim]);
 
   // ---------- the metrics readout unit (geometry-independent; just reformats the readout — the hull's real
   // size comes from the document's own unit now) ----------
@@ -407,12 +401,7 @@ export function InterpolateApp() {
           <div className="main">
             <div className="view3dwrap">
               {n >= 1 ? (
-                <View3d
-                  title="Blended Hull"
-                  model={model}
-                  modelVersion={modelVersion}
-                  selection={null}
-                />
+                <View3d title="Blended Hull" model={model} selection={null} />
               ) : (
                 <div className="top3d">
                   <div className="view3dtitle">Blended Hull</div>

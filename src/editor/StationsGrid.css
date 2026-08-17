@@ -1,0 +1,34 @@
+/* The detached "all stations side by side" panel: one column per station, in a single row.
+
+   The columns share the width evenly (flex: 1 1 0) but never squeeze below a width a section is still
+   readable at — past that the row scrolls sideways rather than crushing seven stations into a strip. Their
+   pan / zoom is shared by the one controller in StationsGrid.tsx, not by CSS; equal column widths and heights
+   are what make that shared transform mean the same thing in every column. */
+.stationsgrid {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+}
+.stationcol {
+  flex: 1 1 0;
+  min-width: 200px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* the station's name over its square, in its own accent colour (--tab, set per column from stationColor) */
+.stationcolhead {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.stationcolname {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tab);
+}

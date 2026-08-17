@@ -23,24 +23,19 @@ import {
 } from "./document";
 import { convertV1ToV2 } from "../legacy/v1/convert";
 import type { HullDocument as V1Doc } from "../legacy/v1/document";
-import {
-  captureViewLength,
-  type Model,
-  type PlanCP,
-  type TrimCP,
-  type TransomCP,
-  type StationCP,
-} from "./model";
+import type { HullState, Writable } from "./hull";
+import { assertValidHull } from "./invariants";
 
 // ---------- a parsed hull in the model's coordinates ----------
-export interface HullData {
-  name: string;
-  unit: Unit;
-  sheerPlan: PlanCP[];
-  sheerTrim: TrimCP[];
-  transom: TransomCP[];
-  stations: StationCP[];
-}
+// A hull under construction: everything a `HullState` carries but the two trim scalars, and mutable, because
+// decoding, unit conversion and topology promotion all build it up in passes. It becomes authored state — and
+// stops being writable — at `parseDocument`'s return.
+export type HullData = Writable<Omit<HullState, "waterline" | "deckRake">>;
+
+type PlanCP = HullData["sheerPlan"][number];
+type TrimCP = HullData["sheerTrim"][number];
+type TransomCP = HullData["transom"][number];
+type StationCP = HullData["stations"][number];
 export interface ParsedDoc {
   waterline: number;
   deckRake: number; // radians
@@ -51,20 +46,24 @@ export interface ParsedDoc {
     stationCount: number;
   };
   hull: HullData;
+  /** The same hull as plain authored state — what new consumers take. */
+  state: HullState;
 }
 
 // ---------- export ----------
-export function buildJson(model: Model): string {
+// Takes authored state, so a document can be written from a `HullState` that was never assembled. A mutable
+// `Model` satisfies the same shape, which is what the pre-store editor passes.
+export function buildJson(hull: HullState): string {
   const doc: HullDocument = {
     version: VERSION,
-    name: model.name,
-    unit: model.unit,
-    waterline: model.waterline,
-    deckRakeDeg: (model.deckRake * 180) / Math.PI,
-    sheerPlan: model.sheerPlan.map((p) => ({ x: p.x, y: p.y })),
-    sheerTrim: model.sheerTrim.map((p) => ({ x: p.x, z: p.z, k: p.k })),
-    transom: model.transom.map((p) => ({ x: p.x, z: p.z })),
-    stations: model.stations.map((s) => ({
+    name: hull.name,
+    unit: hull.unit,
+    waterline: hull.waterline,
+    deckRakeDeg: (hull.deckRake * 180) / Math.PI,
+    sheerPlan: hull.sheerPlan.map((p) => ({ x: p.x, y: p.y })),
+    sheerTrim: hull.sheerTrim.map((p) => ({ x: p.x, z: p.z, k: p.k })),
+    transom: hull.transom.map((p) => ({ x: p.x, z: p.z })),
+    stations: hull.stations.map((s) => ({
       u: s.u,
       keelK: s.keelK,
       points: s.points.map((p) => ({ z: p.z, n: p.n, k: p.k })),
@@ -239,10 +238,19 @@ export function parseDocument(text: string): ParsedDoc {
       ? doc.deckRakeDeg
       : 0;
   const hull = decodeHull(doc);
-
-  return {
+  const state: HullState = {
+    ...hull,
     waterline,
     deckRake: (deckRakeDeg * Math.PI) / 180,
+  };
+  // The structural validators above are the format's rules; this is the model's. A document may be laxer than
+  // what the editor writes — fewer control points, stations packed tighter than U_GAP — and still be a hull
+  // worth opening, so it is checked at the "document" level only.
+  assertValidHull(state, "document");
+
+  return {
+    waterline: state.waterline,
+    deckRake: state.deckRake,
     topology: {
       sheerPlan: hull.sheerPlan.length,
       sheerTrim: hull.sheerTrim.length,
@@ -250,25 +258,10 @@ export function parseDocument(text: string): ParsedDoc {
       stationCount: hull.stations.length,
     },
     hull,
+    state,
   };
 }
 
-// load a parsed hull into the live model
-export function loadHull(model: Model, v: HullData): void {
-  model.name = v.name;
-  model.unit = v.unit;
-  model.sheerPlan = v.sheerPlan;
-  model.sheerTrim = v.sheerTrim;
-  model.transom = v.transom;
-  model.stations = v.stations;
-  model.x0 = clamp(model.x0, 0, v.sheerPlan[v.sheerPlan.length - 1].x);
-  captureViewLength(model); // this hull, not the one it replaced, is what the 2D views are laid out for
-}
-
-// editor import: load the document into the model
-export function loadJsonText(model: Model, text: string): void {
-  const parsed = parseDocument(text);
-  loadHull(model, parsed.hull);
-  model.waterline = parsed.waterline;
-  model.deckRake = parsed.deckRake;
-}
+/** Parse straight to authored state — no runtime curves, no session values. */
+export const parseHullState = (text: string): HullState =>
+  parseDocument(text).state;

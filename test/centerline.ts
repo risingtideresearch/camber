@@ -33,21 +33,17 @@
 // Run with `npm run test:centerline` (tsx runs this directly under node). Non-zero exit on any
 // failure so it can gate CI alongside the keel-smoothness test.
 
-import {
-  createModel,
-  resetModel,
-  prepare,
-  loa,
-  sectionAt,
-} from "../src/core/model";
+import { loa, sectionAt } from "../src/core/model";
 import { hullGrid } from "../src/core/mesh";
-import { parseDocument, loadHull } from "../src/core/json";
+import { parseHullState } from "../src/core/json";
+import { assemble } from "../src/core/runtime";
+import { defaultHull } from "../src/core/hull";
 import { type Vec3 } from "../src/core/math";
 import { examplesDir } from "./paths";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { dirname, join } from "path";
 
-const model = createModel();
+let model = assemble(defaultHull());
 
 // The tolerances below are stated at the scale the example hulls are drawn to (v1 documents of length 1000,
 // whose numbers carry across as millimetres). The built-in default hull is 5000, so every LENGTH-dimensioned
@@ -234,9 +230,9 @@ function worstKeelButtock(): { curv: number; x: number; y: number } {
 }
 
 function loadCase(path: string | null): void {
-  resetModel(model);
-  if (path) loadHull(model, parseDocument(readFileSync(path, "utf8")).hull);
-  prepare(model);
+  model = assemble(
+    path ? parseHullState(readFileSync(path, "utf8")) : defaultHull(),
+  );
 }
 
 function listJson(dir: string): string[] {

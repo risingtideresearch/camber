@@ -1,14 +1,14 @@
 // Selection-derived helpers: what a given selection can do (delete / knuckle) and how it reads. Pure
 // functions over the model + selection, kept out of the components so the delete/knuckle handlers and the
 // SelectionInfo readout share one source of truth.
+//
+// The selection is WINDOW-LOCAL and must never appear in a command — the document server has no idea what
+// this window has selected, and two windows may have selected different things. So the two operations that
+// used to reach into the model through a selection now resolve it to a command here, and the caller
+// dispatches that.
 
-import {
-  removePlanPoint,
-  removeStationPoint,
-  removeTrimPoint,
-  type Model,
-} from "../core/model";
-import { clamp } from "../core/math";
+import type { Model } from "../core/model";
+import type { DocumentCommand } from "../core/commands";
 import type {
   ModelSelection,
   ModelSelectionTarget,
@@ -19,7 +19,7 @@ import type {
 export function selArr(
   model: Model,
   selection: ModelSelection,
-): { k: number }[] | null {
+): readonly { readonly k: number }[] | null {
   if (!selection) return null;
   if (selection.tgt === "station" && selection.si !== undefined)
     return model.stations[selection.si]?.points ?? null;
@@ -74,27 +74,30 @@ export function labelFor(s: {
   return `${name} · point ${s.idx + 1}`;
 }
 
-// set the knuckle k of the selected point (a sheer-trim point, or a station point). Returns true if a
-// knuckle-carrying point was set. (Kept here rather than in a component so it may mutate the model directly.)
-export function setKnuckle(
+// The command that sets the knuckle k of the selected point (a sheer-trim point, or a station point), or null
+// where the selection carries no knuckle.
+export function knuckleCommand(
   model: Model,
   selection: ModelSelection,
   k: number,
-): boolean {
-  const arr = selArr(model, selection);
-  if (!selection || !arr || !hasKnuckle(selection)) return false;
-  arr[selection.idx].k = clamp(k, 0, 1);
-  return true;
+): DocumentCommand | null {
+  if (!selection || !selArr(model, selection) || !hasKnuckle(selection))
+    return null;
+  return selection.tgt === "trim"
+    ? { type: "setTrimK", idx: selection.idx, k }
+    : { type: "setStationK", si: selection.si ?? 0, idx: selection.idx, k };
 }
 
-// delete the selected control point (if it may be deleted). Returns true if a point was removed.
-export function deleteSelected(
+// The command that deletes the selected control point, or null where it may not be deleted. This is where
+// one window-local selection becomes one of the three remove commands.
+export function deleteCommand(
   model: Model,
   selection: ModelSelection,
-): boolean {
-  if (!selection || !canDelete(model, selection)) return false;
-  if (selection.tgt === "plan") removePlanPoint(model, selection.idx);
-  else if (selection.tgt === "trim") removeTrimPoint(model, selection.idx);
-  else removeStationPoint(model, selection.idx); // removes the index from every station
-  return true;
+): DocumentCommand | null {
+  if (!selection || !canDelete(model, selection)) return null;
+  if (selection.tgt === "plan")
+    return { type: "removePlanPoint", idx: selection.idx };
+  if (selection.tgt === "trim")
+    return { type: "removeTrimPoint", idx: selection.idx };
+  return { type: "removeStationPoint", idx: selection.idx }; // from every station
 }

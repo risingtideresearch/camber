@@ -17,7 +17,8 @@
 // Run with `npm run test:io` (tsx runs this directly under node). Non-zero exit on any failure so
 // it can gate CI alongside the geometry tests.
 
-import { createModel, resetModel } from "../src/core/model";
+import { assemble } from "../src/core/runtime";
+import { defaultHull } from "../src/core/hull";
 import { buildStl } from "../src/core/stl";
 import { parseStl } from "../src/core/stlImport";
 import { pchipSlopes, hermiteEval } from "../src/core/pchip";
@@ -52,8 +53,7 @@ function binaryStl(tris: number[][][]): ArrayBuffer {
 
 // STL round-trip: default hull → ASCII text → parse; triangles present, bbox symmetric in y
 function stlRoundTrip(): { ok: boolean; detail: string } {
-  const model = createModel();
-  resetModel(model);
+  const model = assemble(defaultHull());
   const geom = parseStl(asciiBuffer(buildStl(model)));
   const asym = Math.abs(geom.bbox[1] + geom.bbox[4]); // bbox = [x0,y0,z0, x1,y1,z1]
   const ok = geom.triangleCount > 0 && asym <= 1e-6;

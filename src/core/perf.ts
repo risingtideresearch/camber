@@ -54,8 +54,12 @@ export const defaultPerf = (): PerfSettings => ({
 });
 
 // The pass names. Exported where two modules must agree on one: mesh.ts reports sub-steps into two passes it
-// does not open — the hull rebuild's (the 3D view opens it) and the shared sampling's (EditorApp does, around
-// the one `computeHullSampling` every view reads). Each 2D view names its own on the way in.
+// does not open — the hull rebuild's (the 3D view opens it) and the shared sampling's (`useHullSampling`
+// does). Each 2D view names its own on the way in.
+//
+// The sampling's sub-steps only appear when the sweep runs on THIS thread, which is now just a window's first
+// one and the fallback where no worker could be made. A sweep taken on the worker reports a single round-trip
+// step instead: the phases happen where this registry is a different module with recording off.
 // PERF_FRAME is not a pass at all: it is the whole edit, which the panel reads as the total rather than as
 // one more part of it.
 export const PERF_FRAME = "Frame";

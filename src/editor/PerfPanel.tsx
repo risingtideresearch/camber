@@ -1,5 +1,6 @@
+import { useEditorUi } from "./editorUi";
 import { useSyncExternalStore } from "react";
-import { perfSnapshot, perfSubscribe, type PerfSettings } from "../core/perf";
+import { perfSnapshot, perfSubscribe } from "../core/perf";
 import "./PerfPanel.css";
 
 // The Performance readout: what the last redraw of each view cost, step by step. It is a card in its own
@@ -15,14 +16,12 @@ import "./PerfPanel.css";
 // only the part of it this app times. The difference between the two is the "React, three.js & the
 // collector" row of the frame's own block: under the dev server it is most of the frame, since StrictMode
 // runs every useMemo twice (the passes that ran twice say so with a ×2) on top of React's development build.
-interface PerfPanelProps {
-  settings: PerfSettings;
-}
 
 const fmtMs = (v: number): string =>
   Number.isNaN(v) ? "—" : v < 10 ? v.toFixed(2) : v.toFixed(1);
 
-export function PerfPanel({ settings }: PerfPanelProps) {
+export function PerfPanel() {
+  const { perf: settings } = useEditorUi();
   const { frame, groups } = useSyncExternalStore(perfSubscribe, perfSnapshot);
   // the smoothed number is the honest one to read live; the raw one is there for a single deliberate edit
   const val = (m: { ms: number; avg: number }): number =>
