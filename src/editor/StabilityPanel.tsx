@@ -5,7 +5,8 @@ import {
   gzCurve,
   limitingKgAt,
   vcgForGzArea,
-  GZ_AREA_HEEL,
+  GZ_AREA_HEEL_30,
+  GZ_AREA_HEEL_40,
   type GzAreaTerms,
   type LimitingKgPoint,
 } from "../core/stability";
@@ -22,7 +23,9 @@ interface Condition {
 
 const EMPTY_LIMIT: readonly LimitingKgPoint[] = [];
 const DEG = 180 / Math.PI;
-const AREA_HEEL = GZ_AREA_HEEL * DEG; // the heel the shaded area runs out to, in degrees for this chart
+const sub = (n: number): string =>
+  String(n).replace(/\d/g, (d) => "₀₁₂₃₄₅₆₇₈₉"[Number(d)]);
+const fmtArea = (value: number): string => value.toFixed(3);
 const fmt = (value: number): string =>
   Math.abs(value) >= 1000
     ? value.toLocaleString(undefined, { maximumFractionDigits: 0 })
@@ -30,49 +33,89 @@ const fmt = (value: number): string =>
 
 // ---------- how the displacement / KG plane is shaded ----------
 
-type Coloring = "gmt" | "gz30";
+type Coloring = "gmt" | "gz30" | "gz40";
 
 interface AreaBand {
   readonly key: string;
-  readonly min: number; // the band's lower bound in m·rad (−∞ for the failing one)
-  readonly label: string;
-  readonly note: string;
+  readonly min: number; // the band's lower bound in m·rad (−∞ for the non-compliant one)
+  readonly range: string;
+  readonly name: string;
+  readonly note: string; // the reading, shown against the selected condition
 }
 
-// IMO A.749 asks for at least 0.055 m·rad under GZ out to 30°. What is above that line is MARGIN, not a
-// score — a very large area for a given size usually comes with a stiff, snappy roll — so the top band is
-// marked out rather than made the greenest one.
-const GZ30_BANDS: readonly AreaBand[] = [
+// The five readings are the same whichever heel the area is taken to; only where the thresholds sit moves,
+// because the standard asks for more area the further out it looks. `edges` are those four thresholds in
+// m·rad, ascending.
+const bandsAt = (
+  edges: readonly [number, number, number, number],
+): readonly AreaBand[] => [
   {
     key: "fail",
     min: -Infinity,
-    label: "< 0.055",
-    note: "fails the standard IMO criterion",
+    range: `< ${fmtArea(edges[0])}`,
+    name: "Non-compliant",
+    note: `below the ${fmtArea(edges[0])} m·rad IMO minimum`,
   },
   {
-    key: "slim",
-    min: 0.055,
-    label: "0.055 – 0.065",
+    key: "limited",
+    min: edges[0],
+    range: `${fmtArea(edges[0])} – ${fmtArea(edges[1])}`,
+    name: "Limited margin",
     note: "compliant, but with relatively little margin",
   },
   {
-    key: "margin",
-    min: 0.065,
-    label: "0.065 – 0.09",
-    note: "appreciable margin above the minimum",
+    key: "comfortable",
+    min: edges[1],
+    range: `${fmtArea(edges[1])} – ${fmtArea(edges[2])}`,
+    name: "Comfortable margin",
+    note: "an appreciable margin above the minimum",
   },
   {
-    key: "ample",
-    min: 0.09,
-    label: "> 0.09",
-    note: "a large area for this range, but not automatically better",
+    key: "large",
+    min: edges[2],
+    range: `${fmtArea(edges[2])} – ${fmtArea(edges[3])}`,
+    name: "Large static area",
+    note: "a large static area for this range",
+  },
+  {
+    key: "vast",
+    min: edges[3],
+    range: `> ${fmtArea(edges[3])}`,
+    name: "Very large static area",
+    note: "assess stiffness and dynamics separately",
   },
 ];
-const PASS_AREA = GZ30_BANDS[1].min; // the pass/fail contour the standard actually draws
 
-const bandFor = (area: number): AreaBand | null =>
+// IMO A.749's two area criteria. Everything above each minimum is MARGIN, not a score: the ramp runs
+// red → amber → green and then LEAVES the ramp, because a large static area is a finding to be read rather
+// than a better boat — it usually buys reserve energy with a stiff, snappy roll, which is a dynamics
+// question these bands do not answer.
+interface AreaCriterion {
+  readonly key: Coloring;
+  readonly deg: number; // the heel it runs out to, for labels
+  readonly upTo: number; // the same heel in radians, for the integration
+  readonly bands: readonly AreaBand[];
+}
+const AREA_CRITERIA: readonly AreaCriterion[] = [
+  {
+    key: "gz30",
+    deg: 30,
+    upTo: GZ_AREA_HEEL_30,
+    bands: bandsAt([0.055, 0.07, 0.12, 0.2]),
+  },
+  {
+    key: "gz40",
+    deg: 40,
+    upTo: GZ_AREA_HEEL_40,
+    bands: bandsAt([0.09, 0.115, 0.2, 0.33]),
+  },
+];
+/** The pass/fail contour the standard actually draws — the first band's floor. */
+const passArea = (criterion: AreaCriterion): number => criterion.bands[1].min;
+
+const bandFor = (criterion: AreaCriterion, area: number): AreaBand | null =>
   Number.isFinite(area)
-    ? GZ30_BANDS.reduce((best, band) => (area >= band.min ? band : best))
+    ? criterion.bands.reduce((best, band) => (area >= band.min ? band : best))
     : null;
 
 const clamp = (value: number, lo: number, hi: number): number =>
@@ -137,6 +180,10 @@ export function StabilityPanel() {
     lowestSheerKg = analysis?.lowestSheerKg ?? NaN;
   const [condition, setCondition] = useState<Condition | null>(null);
   const [coloring, setColoring] = useState<Coloring>("gmt");
+  // The criterion being shaded by, or null under the initial-stability reading. The readout keeps an area on
+  // screen either way, falling back to the standard's first one, so switching the shading never blanks it.
+  const criterion = AREA_CRITERIA.find((c) => c.key === coloring) ?? null;
+  const readout = criterion ?? AREA_CRITERIA[0];
   // Metric tonnes of seawater per model-volume unit: 1.025 t/m³.
   const unit = snapshot.state.unit;
   const metres = unitScale(unit, "m");
@@ -162,13 +209,13 @@ export function StabilityPanel() {
   // chart exactly — see `gzAreaTerms`. The whole field costs a handful of table lookups per column.
   const areaField = useMemo<readonly { x: number; terms: GzAreaTerms }[]>(
     () =>
-      curves
+      curves && criterion
         ? limit.map((point) => ({
             x: point.vol * tonsPerVolume,
-            terms: gzAreaTerms(curves, point.vol),
+            terms: gzAreaTerms(curves, point.vol, criterion.upTo),
           }))
         : [],
-    [curves, limit, tonsPerVolume],
+    [curves, criterion, limit, tonsPerVolume],
   );
 
   if (!curves || limit.length < 2)
@@ -209,10 +256,10 @@ export function StabilityPanel() {
     gzDomain: readonly [number, number] = [gzMin - gzPad, gzMax + gzPad];
 
   // the selected condition's own area, converted out of model units into the m·rad the criteria are stated in
-  const selectedTerms = gzAreaTerms(curves, selected.vol);
+  const selectedTerms = gzAreaTerms(curves, selected.vol, readout.upTo);
   const selectedArea =
     (selectedTerms.kn - selected.kg * selectedTerms.vcg) * metres;
-  const selectedBand = bandFor(selectedArea);
+  const selectedBand = bandFor(readout, selectedArea);
   // KG at a stated area, per column of the chart — the inverse is closed form, so these are contours, not
   // searches. Areas are given in m·rad and converted back into the model's own units to land on the axis.
   const kgAtArea = (terms: GzAreaTerms, area: number): number =>
@@ -231,7 +278,11 @@ export function StabilityPanel() {
                 onChange={(e) => setColoring(e.target.value as Coloring)}
               >
                 <option value="gmt">Initial stability</option>
-                <option value="gz30">GZ area to 30°</option>
+                {AREA_CRITERIA.map((c) => (
+                  <option key={c.key} value={c.key}>
+                    GZ area to {c.deg}°
+                  </option>
+                ))}
               </select>
             </label>
             <span className={`tag ${safe ? "issafe" : "isunsafe"}`}>
@@ -240,9 +291,9 @@ export function StabilityPanel() {
           </span>
         </div>
         <p className="stabilityhint">
-          {coloring === "gmt"
-            ? "Green is where the transverse metacenter M is above G (GMt > 0)."
-            : "Shaded by the area under GZ out to 30°, which the IMO criterion puts at 0.055 m·rad or more."}{" "}
+          {criterion
+            ? `Shaded by the area under GZ out to ${criterion.deg}°, which the IMO criterion puts at ${fmtArea(passArea(criterion))} m·rad or more.`
+            : "Green is where the transverse metacenter M is above G (GMt > 0)."}{" "}
           Click anywhere to inspect that displacement and KG.
         </p>
         <ChartFrame
@@ -253,9 +304,9 @@ export function StabilityPanel() {
           formatX={fmt}
           formatY={fmt}
           ariaLabel={
-            coloring === "gmt"
-              ? "Limiting KG by displacement; green below the curve is safe and red above it is unsafe"
-              : "Limiting KG by displacement, shaded by the area under the GZ curve out to 30 degrees"
+            criterion
+              ? `Limiting KG by displacement, shaded by the area under the GZ curve out to ${criterion.deg} degrees`
+              : "Limiting KG by displacement; green below the curve is safe and red above it is unsafe"
           }
           onPlotClick={(tons, kg) =>
             setCondition({ vol: tons / tonsPerVolume, kg })
@@ -270,13 +321,15 @@ export function StabilityPanel() {
             const passLine = runsOf(
               areaField.map((column) => ({
                 x: column.x,
-                y: kgAtArea(column.terms, PASS_AREA),
+                y: criterion
+                  ? kgAtArea(column.terms, passArea(criterion))
+                  : NaN,
               })),
               (p) => Number.isFinite(p.y) && p.y >= 0 && p.y <= yMax,
             );
             return (
               <>
-                {coloring === "gmt" ? (
+                {!criterion ? (
                   <>
                     <rect
                       className="unsafearea"
@@ -292,7 +345,7 @@ export function StabilityPanel() {
                   </>
                 ) : (
                   <>
-                    {GZ30_BANDS.map((band, i) => (
+                    {criterion.bands.map((band, i) => (
                       <path
                         key={band.key}
                         className={`gzband ${band.key}`}
@@ -302,7 +355,7 @@ export function StabilityPanel() {
                             lo: clamp(
                               kgAtArea(
                                 column.terms,
-                                GZ30_BANDS[i + 1]?.min ?? Infinity,
+                                criterion.bands[i + 1]?.min ?? Infinity,
                               ),
                               0,
                               yMax,
@@ -316,7 +369,7 @@ export function StabilityPanel() {
                           scale,
                         )}
                       >
-                        <title>{`${band.label} m·rad — ${band.note}`}</title>
+                        <title>{`${band.name} · ${band.range} m·rad — ${band.note}`}</title>
                       </path>
                     ))}
                     {passLine.map((run, i) => (
@@ -398,18 +451,18 @@ export function StabilityPanel() {
             );
           }}
         </ChartFrame>
-        {coloring === "gz30" && (
+        {criterion && (
           <div className="bandlegend">
-            {GZ30_BANDS.map((band) => (
+            {criterion.bands.map((band) => (
               <span
                 key={band.key}
                 className={`bandkey ${band.key}`}
-                title={`${band.label} m·rad — ${band.note}`}
+                title={`${band.name} · ${band.range} m·rad — ${band.note}`}
               >
-                {band.label}
+                {band.name}
+                <small>{band.range}</small>
               </span>
             ))}
-            <span className="bandunit">m·rad</span>
           </div>
         )}
         <div className="conditionreadout">
@@ -435,14 +488,17 @@ export function StabilityPanel() {
             </strong>
           </span>
           <span>
-            A<sub>30</sub>{" "}
+            A<sub>{readout.deg}</sub>{" "}
             <strong className={selectedBand ? `area ${selectedBand.key}` : ""}>
               {Number.isFinite(selectedArea)
                 ? `${selectedArea.toFixed(3)} m·rad`
                 : "n/a"}
             </strong>
             {selectedBand && (
-              <span className="areanote"> — {selectedBand.note}</span>
+              <span className="areanote" title={selectedBand.name}>
+                {" "}
+                — {selectedBand.note}
+              </span>
             )}
           </span>
         </div>
@@ -467,21 +523,24 @@ export function StabilityPanel() {
         >
           {(scale) => {
             // The area the other chart shades, drawn where it is actually measured — so it appears only when
-            // that chart is shading by it. Under initial stability the whole curve is the subject and a
-            // filled 0–30° corner would single out an angle nothing there is about.
-            const upTo = gz.filter((p) => p.heel * DEG <= AREA_HEEL + 1e-9),
+            // that chart is shading by it, and out to whichever heel that criterion uses. Under initial
+            // stability the whole curve is the subject and a filled corner would single out an angle nothing
+            // there is about.
+            const heel = criterion?.deg ?? 0;
+            const upTo = gz.filter((p) => p.heel * DEG <= heel + 1e-9),
+              last = upTo[upTo.length - 1],
               next = gz[upTo.length];
+            // close the fill on the chord where the criterion's heel falls between two table angles
             const edge =
-              next && upTo.length
+              next && last
                 ? [
                     {
-                      x: AREA_HEEL,
+                      x: heel,
                       y:
-                        upTo[upTo.length - 1].gz +
-                        ((AREA_HEEL - upTo[upTo.length - 1].heel * DEG) /
-                          (next.heel * DEG -
-                            upTo[upTo.length - 1].heel * DEG)) *
-                          (next.gz - upTo[upTo.length - 1].gz),
+                        last.gz +
+                        ((heel - last.heel * DEG) /
+                          (next.heel * DEG - last.heel * DEG)) *
+                          (next.gz - last.gz),
                     },
                   ]
                 : [];
@@ -489,9 +548,10 @@ export function StabilityPanel() {
               ...upTo.map((p) => ({ x: p.heel * DEG, y: p.gz })),
               ...edge,
             ];
+            const label = `A${sub(heel)}`;
             return (
               <>
-                {coloring === "gz30" && (
+                {criterion && (
                   <>
                     {under.length >= 2 && (
                       <path
@@ -501,19 +561,19 @@ export function StabilityPanel() {
                     )}
                     <line
                       className="areaedge"
-                      x1={scale.x(AREA_HEEL)}
+                      x1={scale.x(heel)}
                       y1={scale.top}
-                      x2={scale.x(AREA_HEEL)}
+                      x2={scale.x(heel)}
                       y2={scale.bottom}
                     />
                     <text
                       className="areaedgelabel"
-                      x={scale.x(AREA_HEEL) + 5}
+                      x={scale.x(heel) + 5}
                       y={scale.top + 14}
                     >
                       {Number.isFinite(selectedArea)
-                        ? `A₃₀ ${selectedArea.toFixed(3)} m·rad`
-                        : "A₃₀ n/a"}
+                        ? `${label} ${fmtArea(selectedArea)} m·rad`
+                        : `${label} n/a`}
                     </text>
                   </>
                 )}

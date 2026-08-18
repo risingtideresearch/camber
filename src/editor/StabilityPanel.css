@@ -69,14 +69,17 @@
 .gzband.fail {
   fill: #fecaca;
 }
-.gzband.slim {
+.gzband.limited {
   fill: #fed7aa;
 }
-.gzband.margin {
+.gzband.comfortable {
   fill: #bbf7d0;
 }
-.gzband.ample {
+.gzband.large {
   fill: #bfdbfe;
+}
+.gzband.vast {
+  fill: #ddd6fe;
 }
 .passcontour {
   fill: none;
@@ -92,14 +95,17 @@
 .gzarea.fail {
   fill: #fecaca;
 }
-.gzarea.slim {
+.gzarea.limited {
   fill: #fed7aa;
 }
-.gzarea.margin {
+.gzarea.comfortable {
   fill: #bbf7d0;
 }
-.gzarea.ample {
+.gzarea.large {
   fill: #bfdbfe;
+}
+.gzarea.vast {
+  fill: #ddd6fe;
 }
 .areaedge {
   stroke: var(--station);
@@ -227,39 +233,52 @@
   font-size: 11px;
   color: var(--ink);
 }
+/* a band's key carries its NAME, with the range it stands for under it — the name is the reading, the
+   numbers are the evidence for it, and neither is much use without the other */
 .bandkey {
-  padding: 1px 7px;
+  display: inline-flex;
+  flex-direction: column;
+  padding: 2px 8px 3px;
   border: 1px solid var(--line);
-  border-radius: 9px;
-  font-variant-numeric: tabular-nums;
+  border-radius: 8px;
+  line-height: 1.25;
   cursor: help;
+}
+.bandkey small {
+  font-size: 10px;
+  color: #334155;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
 }
 .bandkey.fail {
   background: #fecaca;
 }
-.bandkey.slim {
+.bandkey.limited {
   background: #fed7aa;
 }
-.bandkey.margin {
+.bandkey.comfortable {
   background: #bbf7d0;
 }
-.bandkey.ample {
+.bandkey.large {
   background: #bfdbfe;
 }
-.bandunit {
-  color: var(--mut);
+.bandkey.vast {
+  background: #ddd6fe;
 }
 .conditionreadout .area.fail {
   color: #b91c1c;
 }
-.conditionreadout .area.slim {
+.conditionreadout .area.limited {
   color: #c2410c;
 }
-.conditionreadout .area.margin {
+.conditionreadout .area.comfortable {
   color: #15803d;
 }
-.conditionreadout .area.ample {
+.conditionreadout .area.large {
   color: #1d4ed8;
+}
+.conditionreadout .area.vast {
+  color: #6d28d9;
 }
 .conditionreadout .areanote {
   color: var(--mut);

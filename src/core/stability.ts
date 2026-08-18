@@ -196,8 +196,9 @@ export function gzCurve(cc: CrossCurves, vol: number, vcg: number): GzPoint[] {
 // ---------- the area under the GZ curve ----------
 //
 // The dynamic criteria measure WORK, not arm: the area under GZ out to a stated heel is the energy the hull
-// can absorb before it gives way, which is what a gust or a wave actually spends. IMO A.749 states the first
-// of them as an area of at least 0.055 m·rad out to 30°.
+// can absorb before it gives way, which is what a gust or a wave actually spends. IMO A.749 states two of
+// them this way — at least 0.055 m·rad out to 30°, and at least 0.09 m·rad out to 40° (or to the
+// downflooding angle, which is not modelled here). `upTo` is which of those is being asked for.
 //
 // The same KN identity that makes a second GZ curve free makes a whole FIELD of these free. Integrating
 // GZ(φ) = KN(φ) − VCG·sin φ over 0…φ₁ splits into a term that depends only on the hull and the displacement
@@ -213,8 +214,9 @@ export function gzCurve(cc: CrossCurves, vol: number, vcg: number): GzPoint[] {
 // curve the panel plots rather than a separately sampled one. A φ₁ that falls between two heel angles closes
 // the last interval on the straight line between them.
 
-/** The heel the first area criterion runs out to, in radians. */
-export const GZ_AREA_HEEL = 30 * DEG;
+/** The heels the standard's area criteria run out to, in radians: 0.055 m·rad by 30°, 0.09 m·rad by 40°. */
+export const GZ_AREA_HEEL_30 = 30 * DEG;
+export const GZ_AREA_HEEL_40 = 40 * DEG;
 
 /** The two terms of A(∇, VCG) = kn − VCG·vcg, in MODEL units·radians. */
 export interface GzAreaTerms {
@@ -225,7 +227,7 @@ export interface GzAreaTerms {
 export function gzAreaTerms(
   cc: CrossCurves,
   vol: number,
-  upTo: number = GZ_AREA_HEEL,
+  upTo: number = GZ_AREA_HEEL_30,
 ): GzAreaTerms {
   const vcg = 1 - Math.cos(upTo);
   const phis: number[] = [],
@@ -277,7 +279,7 @@ export function gzArea(
   cc: CrossCurves,
   vol: number,
   vcg: number,
-  upTo: number = GZ_AREA_HEEL,
+  upTo: number = GZ_AREA_HEEL_30,
 ): number {
   const terms = gzAreaTerms(cc, vol, upTo);
   return terms.kn - vcg * terms.vcg;
