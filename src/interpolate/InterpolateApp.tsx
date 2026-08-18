@@ -3,6 +3,8 @@ import type { Model } from "../core/model";
 import { assemble } from "../core/runtime";
 import { defaultHull } from "../core/hull";
 import { hydrostatics, type Hydro } from "../core/hydro";
+import { computeHullSampling } from "../core/mesh";
+import { PERF_N_DEFAULT, PERF_R_DEFAULT } from "../core/perf";
 import { parseDocument, type ParsedDoc } from "../core/json";
 import { promoteFamily } from "../core/promote";
 import { getDesign } from "../core/supabase";
@@ -91,9 +93,17 @@ export function InterpolateApp() {
       assemble(hulls.length ? blendState(hulls, weights, trim) : defaultHull()),
     [hulls, weights, trim],
   );
+  // ONE sweep of the blended hull, shared by the metrics and the 3D view. It is waterline-independent, so
+  // the hydrostatics and the surface can read the same lattice; at the view's resolution, which is finer
+  // than the hydrostatics used to sample at on their own. Without this both would sweep the hull separately
+  // on every blend change.
+  const hullSampling = useMemo(
+    () => computeHullSampling(model, PERF_N_DEFAULT, PERF_R_DEFAULT),
+    [model],
+  );
   const liveHydro = useMemo<Hydro | null>(
-    () => (hulls.length ? hydrostatics(model) : null),
-    [model, hulls.length],
+    () => (hulls.length ? hydrostatics(model, hullSampling) : null),
+    [model, hullSampling, hulls.length],
   );
 
   // ---------- the metric heatmap / scatter axes + the shared blend-space sampling ----------
@@ -401,7 +411,12 @@ export function InterpolateApp() {
           <div className="main">
             <div className="view3dwrap">
               {n >= 1 ? (
-                <View3d title="Blended Hull" model={model} selection={null} />
+                <View3d
+                  title="Blended Hull"
+                  model={model}
+                  selection={null}
+                  sampling={hullSampling}
+                />
               ) : (
                 <div className="top3d">
                   <div className="view3dtitle">Blended Hull</div>

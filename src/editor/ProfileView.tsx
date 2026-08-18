@@ -26,6 +26,7 @@ export function ProfileView() {
   const sampling = hullSampling();
   const draw = useCallback(
     (g: SVGGElement, sx: number, sy: number) => {
+      if (!sampling) return;
       drawProfile(
         g,
         model,

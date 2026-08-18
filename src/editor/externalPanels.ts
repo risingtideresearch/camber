@@ -9,16 +9,10 @@
 // station editor. The point is a second look at the same hull — a big 3D view on another monitor, or every
 // station laid out side by side instead of behind tabs.
 //
-// A view of the hull is opened only from the pane being duplicated (DetachPanelButton), which is to say only
-// from the editor: a panel window carries no way to open another one, being one view of the hull rather than
-// a place to navigate from. The history is not a view of the hull and is not subject to that — see below.
-
-// `history` has no pane in the editor to duplicate — it is a window and nothing else. It is a view of the
-// SESSION rather than of the hull, and it is only useful beside another window: you click a moment in it and
-// watch the hull move in the window next door. Its opener therefore lives in an app bar (labelled, since
-// there is no pane under it to say what it is) rather than on a pane of its own — and in EVERY window's bar
-// but its own, alongside Undo and Redo, because wherever you are editing is where you may want it.
-export type PanelKind = "view3d" | "stations" | "history";
+// Hull views are opened from the pane being duplicated (DetachPanelButton). The two window-only analytical
+// panels are labelled in an app bar instead: History travels with the session's undo controls, while Stability
+// is opened from the main editor because it is a reading of the complete design rather than of one pane.
+export type PanelKind = "view3d" | "stations" | "history" | "stability";
 
 export interface PanelSpec {
   /** Caption in the panel window's own bar, and in its document title. */
@@ -49,6 +43,12 @@ export const PANELS: Record<PanelKind, PanelSpec> = {
     // A tree of moments: tall and narrow, and meant to sit alongside the editor rather than over it.
     width: 560,
     height: 820,
+  },
+  stability: {
+    title: "Stability",
+    hint: "Open the limiting KG envelope and inspect the GZ curve for any displacement and VCG.",
+    width: 1280,
+    height: 760,
   },
 };
 

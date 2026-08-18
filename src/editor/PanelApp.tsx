@@ -10,6 +10,7 @@ import { HistoryPanel } from "./HistoryPanel";
 import { HullView3d } from "./HullView3d";
 import { SelectionInfo } from "./SelectionInfo";
 import { StationsGrid } from "./StationsGrid";
+import { StabilityPanel } from "./StabilityPanel";
 import { Toolbar } from "./Toolbar";
 import "./EditorApp.css";
 import "./PanelApp.css";
@@ -79,6 +80,8 @@ function PanelBody({ kind }: { readonly kind: PanelKind }) {
       return <StationsGrid />;
     case "history":
       return <HistoryPanel />;
+    case "stability":
+      return <StabilityPanel />;
   }
 }
 
@@ -117,6 +120,7 @@ function PanelControls({ kind }: { readonly kind: PanelKind }) {
     // The history draws no hull, and needs no miniature of itself: the tree IS undo and redo — the row below
     // the current moment is one step back, and a click reaches any moment rather than only the next one.
     case "history":
+    case "stability":
       return null;
   }
 }

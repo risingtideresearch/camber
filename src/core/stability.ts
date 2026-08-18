@@ -193,6 +193,101 @@ export function gzCurve(cc: CrossCurves, vol: number, vcg: number): GzPoint[] {
   });
 }
 
+// ---------- the area under the GZ curve ----------
+//
+// The dynamic criteria measure WORK, not arm: the area under GZ out to a stated heel is the energy the hull
+// can absorb before it gives way, which is what a gust or a wave actually spends. IMO A.749 states the first
+// of them as an area of at least 0.055 m·rad out to 30°.
+//
+// The same KN identity that makes a second GZ curve free makes a whole FIELD of these free. Integrating
+// GZ(φ) = KN(φ) − VCG·sin φ over 0…φ₁ splits into a term that depends only on the hull and the displacement
+// and a term that depends only on VCG:
+//
+//     A(∇, VCG) = ∫₀^φ₁ KN(φ, ∇) dφ − VCG·(1 − cos φ₁)
+//
+// So one integration per displacement answers the criterion at EVERY VCG, and — because A is exactly linear
+// and strictly decreasing in VCG — the VCG that meets a stated area inverts in closed form. A contour of
+// constant area on the displacement/KG chart is therefore drawn, not searched for.
+//
+// The integral is taken over the table's own heel angles, PCHIP-interpolated between them, so it is the same
+// curve the panel plots rather than a separately sampled one. A φ₁ that falls between two heel angles closes
+// the last interval on the straight line between them.
+
+/** The heel the first area criterion runs out to, in radians. */
+export const GZ_AREA_HEEL = 30 * DEG;
+
+/** The two terms of A(∇, VCG) = kn − VCG·vcg, in MODEL units·radians. */
+export interface GzAreaTerms {
+  readonly kn: number; // ∫ KN dφ at this displacement; NaN where the displacement is off the table
+  readonly vcg: number; // 1 − cos φ₁ — the coefficient the centre of gravity enters with
+}
+
+export function gzAreaTerms(
+  cc: CrossCurves,
+  vol: number,
+  upTo: number = GZ_AREA_HEEL,
+): GzAreaTerms {
+  const vcg = 1 - Math.cos(upTo);
+  const phis: number[] = [],
+    kns: number[] = [];
+  for (let i = 0; i < cc.heel.length; i++) {
+    const phi = cc.heel[i],
+      kn = knAt(cc, i, vol);
+    if (phi > upTo) {
+      // φ₁ lands inside this interval: close it on the chord to the angle past it. When φ₁ IS a table
+      // angle it has already been pushed, and adding it again would repeat an abscissa.
+      if (
+        phis.length &&
+        phis[phis.length - 1] < upTo - 1e-12 &&
+        Number.isFinite(kn)
+      ) {
+        const phi0 = phis[phis.length - 1],
+          kn0 = kns[kns.length - 1],
+          t = (upTo - phi0) / (phi - phi0);
+        phis.push(upTo);
+        kns.push(kn0 + t * (kn - kn0));
+      }
+      break;
+    }
+    if (!Number.isFinite(kn)) return { kn: NaN, vcg };
+    phis.push(phi);
+    kns.push(kn);
+  }
+  // the table must actually span 0…φ₁; anything less would be a partial area reported as a whole one
+  if (
+    phis.length < 2 ||
+    phis[0] > 1e-12 ||
+    phis[phis.length - 1] < upTo - 1e-12
+  )
+    return { kn: NaN, vcg };
+
+  // integrate the interpolant exactly: over one interval the cubic Hermite has area h·(y₀+y₁)/2 +
+  // h²·(m₀−m₁)/12, which is the trapezoid plus the correction the end slopes imply.
+  const m = pchipSlopes(phis, kns);
+  let kn = 0;
+  for (let i = 0; i < phis.length - 1; i++) {
+    const h = phis[i + 1] - phis[i];
+    kn += (h * (kns[i] + kns[i + 1])) / 2 + (h * h * (m[i] - m[i + 1])) / 12;
+  }
+  return { kn, vcg };
+}
+
+/** The area under GZ out to `upTo` for one loading condition (model units·radians). */
+export function gzArea(
+  cc: CrossCurves,
+  vol: number,
+  vcg: number,
+  upTo: number = GZ_AREA_HEEL,
+): number {
+  const terms = gzAreaTerms(cc, vol, upTo);
+  return terms.kn - vcg * terms.vcg;
+}
+
+/** The VCG at which this displacement's area is exactly `area` — the inverse of `gzArea`, in closed form. */
+export function vcgForGzArea(terms: GzAreaTerms, area: number): number {
+  return (terms.kn - area) / terms.vcg;
+}
+
 // ---------- limiting KG for intact, upright stability ----------
 //
 // A floating condition is initially stable when M is above G: GMt = KMt − KG > 0. Therefore the limiting

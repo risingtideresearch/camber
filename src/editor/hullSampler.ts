@@ -30,9 +30,6 @@
 //   faster than the worker can answer, and every superseded request describes a hull that is already gone;
 //   queueing them would spend the worker on hulls nobody will ever see and deliver the current one last.
 //
-// The FIRST sweep of a window is taken on the calling thread instead: there is no last good sampling to show,
-// and a first paint with no hull in it is worse than one that costs a frame.
-//
 // Nothing here knows about pointers. An earlier version took a "a drag is happening in this window" flag from
 // the editor so that the first frame of a local drag went straight to draft instead of spending one sweep at
 // full resolution. That was worth a signal when the sweep blocked the main thread for 47 ms; now that it runs
@@ -44,7 +41,6 @@ import {
   perfAdd,
   perfBegin,
   perfEnd,
-  perfMark,
   PERF_SAMPLING,
   type PerfSettings,
 } from "../core/perf";
@@ -53,6 +49,7 @@ import type {
   SamplingRequest,
   SamplingResponse,
 } from "../worker/hullSamplingProtocol";
+import { createWorkerTaskQueue } from "../worker/taskWorker";
 
 /** Two geometry changes closer together than this are one gesture; this long after the last, it is over. */
 export const BURST_MS = 150,
@@ -151,10 +148,13 @@ export interface HullSampler {
   /**
    * The sampling for `request.key`.
    *
-   * Returns the cached one when it is current, the last good one while the worker replaces it, and — when
-   * there is no last good one, or no worker to be had — whatever `sweepHere` produces, on this thread.
+   * Returns the cached one when it is current, the last good one while the worker replaces it, and null while
+   * the first worker task is still building. Main-thread computation is only the unavailable-worker fallback.
    */
-  get(request: SamplingRequest, sweepHere: () => HullSampling): HullSampling;
+  get(
+    request: SamplingRequest,
+    sweepHere: () => HullSampling,
+  ): HullSampling | null;
   dispose(): void;
 }
 
@@ -163,91 +163,44 @@ export interface HullSampler {
  * owner's cue to show it; nothing else is published, because everything else is asked for through `get`.
  */
 export function createHullSampler(onSettled: () => void): HullSampler {
-  let worker: Worker | null = null;
-  let noWorker = false;
   let cache: { key: string; value: HullSampling } | null = null;
-  let inflight: string | null = null;
-  let queued: SamplingRequest | null = null;
-  let sentAt = 0;
-
-  const receive = (event: MessageEvent<SamplingResponse>): void => {
-    const { key, sampling } = event.data;
-    // The readout's "Hull sampling" pass is nearly free ON THIS THREAD now, which is the point, so what it
-    // reports is the round trip instead — the wait a view actually sees. The per-phase breakdown lives in the
-    // worker, where this registry is a different module with recording off; the pass's own time stays
-    // main-thread time, and is honest at ~0.
-    const ms = perfMark() - sentAt;
-    perfBegin(PERF_SAMPLING);
-    perfAdd(
-      PERF_SAMPLING,
-      "Swept off-thread (round trip)",
-      ms,
-      sampling.sheet.length * (sampling.sheet[0]?.length ?? 0),
-      "pts",
-    );
-    perfEnd(PERF_SAMPLING);
-    cache = { key, value: sampling };
-    inflight = null;
-    // Whatever came in while the worker was busy is the only one still worth having.
-    const next = queued;
-    queued = null;
-    if (next) send(next);
-    onSettled();
-  };
-
-  // Made for the first sweep somebody asks for and not before. `null` means this window cannot have one — a
-  // browser that refuses, a policy that forbids them — and the caller sweeps for itself instead: slower, and
-  // still a correct hull, which is the right way to fail.
-  const ensureWorker = (): Worker | null => {
-    if (worker || noWorker) return worker;
-    try {
-      const made = new Worker(
-        new URL("../worker/hullSamplingWorker.ts", import.meta.url),
-        { type: "module" },
+  const tasks = createWorkerTaskQueue<SamplingRequest, SamplingResponse>(
+    () =>
+      new Worker(new URL("../worker/hullSamplingWorker.ts", import.meta.url), {
+        type: "module",
+      }),
+    ({ key, sampling }, roundTripMs) => {
+      // The readout's "Hull sampling" pass is nearly free ON THIS THREAD now, which is the point, so what it
+      // reports is the round trip instead — the wait a view actually sees.
+      perfBegin(PERF_SAMPLING);
+      perfAdd(
+        PERF_SAMPLING,
+        "Swept off-thread (round trip)",
+        roundTripMs,
+        sampling.sheet.length * (sampling.sheet[0]?.length ?? 0),
+        "pts",
       );
-      made.onmessage = receive;
-      worker = made;
-    } catch (error) {
-      noWorker = true;
-      console.error("camber: sweeping the hull on the main thread —", error);
-    }
-    return worker;
-  };
-
-  const send = (request: SamplingRequest): void => {
-    if (inflight !== null) {
-      queued = request; // newest only — see LATEST WINS above
-      return;
-    }
-    const w = ensureWorker();
-    if (!w) return;
-    inflight = request.key;
-    sentAt = perfMark();
-    w.postMessage(request);
-  };
+      perfEnd(PERF_SAMPLING);
+      cache = { key, value: sampling };
+      onSettled();
+    },
+    (error) =>
+      console.error("camber: sweeping the hull on the main thread —", error),
+  );
 
   return {
     get(request, sweepHere) {
       const hit = cache;
-      if (hit && hit.key === request.key) return hit.value;
-      // A stale sampling may stand in only if there is a worker coming along behind it with the real one.
-      const w = hit ? ensureWorker() : null;
-      if (!w || !hit) {
-        perfBegin(PERF_SAMPLING);
-        const value = sweepHere();
-        perfEnd(PERF_SAMPLING);
-        cache = { key: request.key, value };
-        return value;
-      }
-      if (inflight !== request.key && queued?.key !== request.key)
-        send(request);
-      return hit.value; // the last good sweep, until the new one lands
+      if (hit?.key === request.key) return hit.value;
+      // A normal first paint is empty for one worker turn rather than sweeping on the UI thread. A stale
+      // lattice remains visible on later edits. Only a browser that cannot create the worker computes here.
+      if (tasks.post(request)) return hit?.value ?? null;
+      perfBegin(PERF_SAMPLING);
+      const value = sweepHere();
+      perfEnd(PERF_SAMPLING);
+      cache = { key: request.key, value };
+      return value;
     },
-    dispose() {
-      worker?.terminate();
-      worker = null;
-      queued = null;
-      inflight = null;
-    },
+    dispose: tasks.dispose,
   };
 }

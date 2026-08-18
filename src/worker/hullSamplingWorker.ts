@@ -21,9 +21,8 @@
 // intact rather than exploded into copies. That is what makes this a transport change and not a rewrite of
 // everything downstream of the sampling.
 
-import { computeHullSampling } from "../core/mesh";
-import { assemble } from "../core/runtime";
 import type { SamplingRequest, SamplingResponse } from "./hullSamplingProtocol";
+import { requestedHull } from "./hullComputation";
 
 // One cache slot for this worker's own assemblies, so a sweep whose plan and trim have not moved reuses their
 // samplers across messages instead of rebuilding them per edit (see runtime.ts — the key is per READER, and
@@ -31,10 +30,8 @@ import type { SamplingRequest, SamplingResponse } from "./hullSamplingProtocol";
 const cacheKey = {};
 
 self.onmessage = (event: MessageEvent<SamplingRequest>) => {
-  const { key, state, session, sliceRevs, numSections, girthSteps } =
-    event.data;
-  const model = assemble(state, session, { sliceRevs, cacheKey });
-  const sampling = computeHullSampling(model, numSections, girthSteps);
+  const { key } = event.data;
+  const { sampling } = requestedHull(event.data, cacheKey);
   const response: SamplingResponse = { key, sampling };
   (self as unknown as Worker).postMessage(response);
 };

@@ -1,0 +1,281 @@
+/* The stability window is two readings of one selected loading condition. Both charts keep their captions and
+   scale together; in a narrow window they stack and the panel itself scrolls. */
+.stabilitypanel {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+.stabilitycard {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.stabilityempty {
+  flex: 1 1 0;
+  color: var(--mut);
+}
+.stabilityhint,
+.decknote {
+  margin: 0 0 5px;
+  color: var(--mut);
+  font-size: 12px;
+}
+.decknote {
+  margin: 4px 0 0;
+}
+.stabilitychart {
+  flex: 1 1 auto;
+  min-height: 230px;
+  overflow: visible;
+}
+.stabilitychart.clickable {
+  cursor: crosshair;
+}
+.chartgrid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.chartborder {
+  fill: none;
+  stroke: var(--station);
+  stroke-width: 1;
+}
+.charttick,
+.chartlabel {
+  fill: var(--mut);
+  font-family: inherit;
+  font-size: 12px;
+  user-select: none;
+}
+.chartlabel {
+  fill: var(--ink);
+  font-weight: 600;
+}
+.unsafearea {
+  fill: #fee2e2;
+}
+.safearea {
+  fill: #bbf7d0;
+}
+
+/* The GZ-area shading. The scale is not a ramp from bad to good: red fails the criterion, amber clears it
+   with little to spare, green is the comfortable band — and blue, deliberately off the ramp, is a large area
+   that is not automatically a better boat (it usually buys reserve energy with a stiff, snappy roll). */
+.gzband.fail {
+  fill: #fecaca;
+}
+.gzband.slim {
+  fill: #fed7aa;
+}
+.gzband.margin {
+  fill: #bbf7d0;
+}
+.gzband.ample {
+  fill: #bfdbfe;
+}
+.passcontour {
+  fill: none;
+  stroke: #b91c1c;
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+/* the same shading under the curve it is measured from */
+.gzarea {
+  fill: #e2e8f0;
+  opacity: 0.75;
+}
+.gzarea.fail {
+  fill: #fecaca;
+}
+.gzarea.slim {
+  fill: #fed7aa;
+}
+.gzarea.margin {
+  fill: #bbf7d0;
+}
+.gzarea.ample {
+  fill: #bfdbfe;
+}
+.areaedge {
+  stroke: var(--station);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+.areaedgelabel {
+  fill: var(--mut);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: white;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.limitline {
+  fill: none;
+  stroke: #15803d;
+  stroke-width: 3;
+}
+.lowestsheerguide {
+  stroke: var(--sheer);
+  stroke-width: 2;
+  stroke-dasharray: 7 4;
+}
+.lowestsheerlabel {
+  fill: #9a3412;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: white;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.designwlguide {
+  stroke: var(--wl);
+  stroke-width: 2;
+}
+.designwllabel {
+  fill: #0369a1;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: white;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.selectionguide {
+  stroke: var(--mut);
+  stroke-width: 1;
+  stroke-dasharray: 4 5;
+}
+.condition {
+  stroke: white;
+  stroke-width: 2;
+}
+.condition.safe {
+  fill: #15803d;
+}
+.condition.unsafe {
+  fill: var(--danger);
+}
+.zeroline {
+  stroke: var(--station);
+  stroke-width: 1.5;
+}
+.gzline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+.deckdownpoint {
+  fill: var(--sheer);
+  stroke: white;
+  stroke-width: 1;
+}
+.conditionreadout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+  color: var(--mut);
+  font-size: 12px;
+}
+.conditionreadout strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.tag.issafe {
+  background: #15803d;
+}
+.tag.isunsafe {
+  background: var(--danger);
+}
+
+/* what shading is on, and what its bands mean — a strip of swatches reading the same order as the chart */
+.capctls {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.shadepick {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--mut);
+}
+.shadepick select {
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+}
+.bandlegend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  padding-top: 6px;
+  font-size: 11px;
+  color: var(--ink);
+}
+.bandkey {
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+.bandkey.fail {
+  background: #fecaca;
+}
+.bandkey.slim {
+  background: #fed7aa;
+}
+.bandkey.margin {
+  background: #bbf7d0;
+}
+.bandkey.ample {
+  background: #bfdbfe;
+}
+.bandunit {
+  color: var(--mut);
+}
+.conditionreadout .area.fail {
+  color: #b91c1c;
+}
+.conditionreadout .area.slim {
+  color: #c2410c;
+}
+.conditionreadout .area.margin {
+  color: #15803d;
+}
+.conditionreadout .area.ample {
+  color: #1d4ed8;
+}
+.conditionreadout .areanote {
+  color: var(--mut);
+}
+
+@media (max-width: 850px) {
+  .stabilitypanel {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .stabilitycard {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+  .stabilitychart {
+    min-height: 260px;
+  }
+}

@@ -16,13 +16,10 @@ const THIS_WINDOW = panelKindFromUrl();
 // hull, not a place to navigate from, and a bar of openers in every window is how you end up with four of
 // everything.
 //
-// The history is the exception, and it is one because it is not a view of the hull at all: it is the session's
-// own window, there is exactly one of it per session, and opening it twice raises the window already there
-// (openPanelWindow names the window). So its opener travels with Undo and Redo in HistoryControls and appears
-// in every window but its own — nothing is duplicated by reaching it from wherever you happen to be working.
-// `label` is for the one button that sits in the app bar instead of on a panel: the history has no pane of its
-// own, so a bare ⧉ there would name nothing. On a panel the glyph alone is enough — the pane under it says
-// which view is being opened.
+// Window-only panels are the exception: History travels with Undo and Redo, and Stability is opened from the
+// main editor. `label` is for these app-bar buttons, which have no pane underneath to name them; on a panel the
+// glyph alone is enough because the pane says which view is being opened. openPanelWindow names every window,
+// so opening the same kind twice raises it rather than duplicating it.
 export function DetachPanelButton({
   kind,
   label,

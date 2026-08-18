@@ -21,6 +21,8 @@
 //     continuous through it.
 //   - low displacement: the sparse end of the table still tracks directly computed cuts, and KN tends to the
 //     limit it should (the heeled lowest point's offset from K — NOT zero, except upright).
+//   - the area under GZ: the split into a hull term and a VCG term is the exact identity it claims, the
+//     integral over the 5° table tracks a 0.25° one, and the closed-form inverse really inverts it.
 //   - past 90°: the curve runs to a vanishing angle and closes at exactly 0 at 180°.
 //   - a 3D mesh: ∇ and KN checked against the triangle mesh the STL exporter writes, integrated by the
 //     divergence theorem — no shared integration code. This is the real oracle, and it is what caught the
@@ -34,12 +36,15 @@ import { computeHullSampling, type HullSampling } from "../src/core/mesh";
 import { worldZ, type Model } from "../src/core/model";
 import {
   crossCurves,
+  gzArea,
+  gzAreaTerms,
   gzCurve,
   stationGeometry,
   immersedAt,
   knAt,
   limitingKgAt,
   limitingKgCurve,
+  vcgForGzArea,
 } from "../src/core/stability";
 import { meshImmersed } from "./support/meshIntegral";
 
@@ -613,6 +618,93 @@ const sample = (model: Model): HullSampling => {
   ok(
     Math.abs(coarse - fine) < 5e-3 && Math.abs(fine - 1) < 0.01,
     `both methods converge to the same ∇ under 5x refinement (${((coarse - 1) * 100).toFixed(2)}% → ${((fine - 1) * 100).toFixed(2)}%)`,
+  );
+}
+
+// ---- the area under GZ: one integration per displacement, exact in VCG ----
+//
+// `gzAreaTerms` splits A(∇, VCG) into a hull term and a VCG term so the whole (∇, VCG) field — and every
+// contour drawn on it — comes off ONE integration per displacement. What has to hold: the split is the
+// identity it claims, the integral itself tracks a far finer one, and the inverse really is an inverse.
+{
+  const model = assemble(defaultHull());
+  const h = hydrostatics(model, sample(model))!;
+  const cc = crossCurves(model, sample(model), { steps: 40 })!;
+  const upTo = 30 * DEG;
+  const vcg = h.kb;
+
+  const area = gzArea(cc, h.vol, vcg);
+  ok(
+    Number.isFinite(area) && area > 0,
+    `the area out to 30° is finite and positive (${area.toFixed(3)} units·rad)`,
+  );
+
+  // the VCG term is exact: two centres of gravity differ by ΔVCG·(1 − cos φ₁) and by nothing else
+  const dv = 0.3 * Math.max(1e-6, h.kb);
+  ok(
+    Math.abs(gzArea(cc, h.vol, vcg + dv) - area + dv * (1 - Math.cos(upTo))) <
+      1e-12 * Math.max(1, Math.abs(area)),
+    "raising the VCG costs exactly ΔVCG·(1 − cos φ₁) of area",
+  );
+
+  // the inverse is a real inverse, at an area the hull does not otherwise sit at
+  const terms = gzAreaTerms(cc, h.vol);
+  const target = area * 0.6;
+  const needed = vcgForGzArea(terms, target);
+  ok(
+    Math.abs(gzArea(cc, h.vol, needed) - target) <
+      1e-12 * Math.max(1, Math.abs(target)),
+    `vcgForGzArea inverts gzArea exactly (VCG ${needed.toFixed(3)} for ${target.toFixed(3)})`,
+  );
+  ok(
+    needed > vcg,
+    "a smaller area needs a higher VCG — the field decreases in KG",
+  );
+
+  // and the integral tracks a far finer one: 0.5° steps, summed with the trapezoid rule, against the 5°
+  // table the panel actually draws from. This is the claim that the shading's contours sit where they say.
+  const fine = crossCurves(model, sample(model), {
+    steps: 40,
+    heel: Array.from({ length: 121 }, (_, i) => i * 0.25),
+  })!;
+  let worst = 0;
+  for (const frac of [0.3, 0.6, 1, 1.4]) {
+    const vol = h.vol * frac;
+    const gz = gzCurve(fine, vol, vcg).filter((p) => p.heel <= upTo + 1e-12);
+    if (gz.length < 2 || gz.some((p) => !Number.isFinite(p.gz))) continue;
+    let ref = 0;
+    for (let i = 1; i < gz.length; i++)
+      ref += ((gz[i].heel - gz[i - 1].heel) * (gz[i].gz + gz[i - 1].gz)) / 2;
+    const mine = gzArea(cc, vol, vcg);
+    worst = Math.max(
+      worst,
+      Math.abs(mine - ref) / Math.max(1e-9, Math.abs(ref)),
+    );
+  }
+  ok(
+    worst < 0.01,
+    `the 5° table's area matches a 0.25° integration to 1% (worst ${(100 * worst).toFixed(2)}%)`,
+  );
+
+  // off the table there is no area to report, and none is invented
+  ok(
+    !Number.isFinite(gzArea(cc, h.vol * 1e6, vcg)),
+    "an impossible displacement has no area rather than an extrapolated one",
+  );
+  // a table that stops short of φ₁ reports nothing rather than a partial area
+  const short = crossCurves(model, sample(model), {
+    steps: 20,
+    heel: [0, 5, 10],
+  })!;
+  ok(
+    !Number.isFinite(gzArea(short, h.vol, vcg)),
+    "a table that stops before 30° reports no area rather than a partial one",
+  );
+  // φ₁ between two heel angles is closed on the chord, not dropped
+  const between = gzArea(cc, h.vol, vcg, 27.5 * DEG);
+  ok(
+    Number.isFinite(between) && between > 0 && between < area,
+    `a heel limit between two table angles integrates to just under the 30° area (${between.toFixed(3)} vs ${area.toFixed(3)})`,
   );
 }
 

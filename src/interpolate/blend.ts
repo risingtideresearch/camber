@@ -21,6 +21,7 @@ import type { Model } from "../core/model";
 import type { HullState } from "../core/hull";
 import { assemble } from "../core/runtime";
 import { hydrostatics, type Hydro } from "../core/hydro";
+import { computeHullSampling } from "../core/mesh";
 import type { HullData } from "../core/json";
 
 // a loaded hull: a name plus its decoded absolute-coordinate data. Weights are NOT stored here — they are
@@ -191,6 +192,10 @@ const SAMPLE_NS = 72, // hydrostatics resolution for the sampling pass (the live
   SAMPLE_M = 20; //     resolution). The per-cell cost is dominated by the blend and its samplers, not this, so
 //                       the grid runs ~1 s (triangle) to ~3 s (pentagon) — done off the critical path.
 
+// every cell is a different blended hull, so each one sweeps once and is thrown away — nothing to share
+const hydroOf = (model: Model): Hydro | null =>
+  hydrostatics(model, computeHullSampling(model, SAMPLE_NS, SAMPLE_M));
+
 export function computeSamples(hulls: Hull[], trim: Trim): Sample[] {
   const samples: Sample[] = [];
   const n = hulls.length;
@@ -206,7 +211,7 @@ export function computeSamples(hulls: Hull[], trim: Trim): Sample[] {
         gy: 0,
         pos: { x: 0, y: 0 },
         t,
-        h: hydrostatics(at([1 - t, t]), SAMPLE_NS, SAMPLE_M),
+        h: hydroOf(at([1 - t, t])),
       });
     }
   } else {
@@ -223,7 +228,7 @@ export function computeSamples(hulls: Hull[], trim: Trim): Sample[] {
           gy,
           pos: { x: cx, y: cy },
           t: 0,
-          h: hydrostatics(model, SAMPLE_NS, SAMPLE_M),
+          h: hydroOf(model),
         });
       }
   }
