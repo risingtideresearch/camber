@@ -264,6 +264,7 @@ export interface Cut {
   wsa: number; // wetted surface area
   draft: number; // deepest immersion below the waterplane
   deckDown: boolean; // the sheer is under somewhere, so the watertight deck cap is carrying load
+  sheerZ: number; // lowest heeled height of the sheer, independent of this cut's waterline
   // set only when `detail` was asked for
   area: number[]; // full immersed sectional area per column (both halves), aligned with cols
   // The waterplane, integrated in the SAME sweep coordinates as the volume — not shoelaced off the waterline
@@ -347,7 +348,8 @@ export function cut(
     pU = 0,
     have = false;
   let draft = 0,
-    deckDown = false;
+    deckDown = false,
+    sheerZ = Infinity;
   const area: number[] = [],
     wet: boolean[] = [],
     wlStbd: Vec3[] = [],
@@ -393,7 +395,11 @@ export function cut(
     curW.fill(0);
     for (const side of [1, -1]) {
       const [C0, C1, C2] = heightCoeffs(g, c, side, cosPhi, sinPhi);
-      if (c.topIsSheer && c.topZ * C2 + c.topA * C1 + C0 < wlZ) deckDown = true;
+      if (c.topIsSheer) {
+        const topZ = c.topZ * C2 + c.topA * C1 + C0;
+        if (topZ < sheerZ) sheerZ = topZ;
+        if (topZ < wlZ) deckDown = true;
+      }
       const poly = c.poly,
         f = c.f;
       let anyWet = false,
@@ -524,6 +530,7 @@ export function cut(
     wsa,
     draft,
     deckDown,
+    sheerZ,
     area,
     // aft centreline cap → starboard skin forward → forward cap → port skin back
     waterline: ([] as Vec3[])

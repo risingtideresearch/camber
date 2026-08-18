@@ -87,6 +87,24 @@
   stroke-width: 2;
   stroke-dasharray: 6 4;
 }
+.earlysheerarea {
+  fill: url(#early-sheer-hatch);
+  pointer-events: none;
+}
+.earlysheerstroke {
+  stroke: #0f766e;
+  stroke-width: 2;
+  opacity: 0.45;
+}
+.earlypeakarea {
+  fill: url(#early-maximum-hatch);
+  pointer-events: none;
+}
+.earlypeakstroke {
+  stroke: #7c2d12;
+  stroke-width: 2;
+  opacity: 0.55;
+}
 /* the same shading under the curve it is measured from */
 .gzarea {
   fill: #e2e8f0;
@@ -185,7 +203,41 @@
   stroke: white;
   stroke-width: 1;
 }
-.conditionreadout {
+.sheerangle {
+  stroke: #0f766e;
+  stroke-width: 1.5;
+  stroke-dasharray: 7 4;
+}
+.sheerpoint {
+  fill: #0f766e;
+  stroke: white;
+  stroke-width: 2;
+}
+.maximumguide {
+  stroke: var(--accent);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+.maximumpoint {
+  fill: var(--accent);
+  stroke: white;
+  stroke-width: 2;
+}
+.maximumpoint.deckdown {
+  fill: var(--sheer);
+}
+.maximumlabel {
+  fill: var(--accent);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: white;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.conditionreadout,
+.sheerimmersionreadout {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 18px;
@@ -194,7 +246,8 @@
   color: var(--mut);
   font-size: 12px;
 }
-.conditionreadout strong {
+.conditionreadout strong,
+.sheerimmersionreadout strong {
   color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
@@ -222,6 +275,29 @@
 .shadepick select {
   font: inherit;
   font-size: 12px;
+  color: var(--ink);
+}
+.sheerreferencebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: -2px 0 5px;
+  color: var(--mut);
+  font-size: 11px;
+}
+.sheerreferencectl {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
+.sheerreferencectl input[type="checkbox"] {
+  margin: 0;
+}
+.sheerreferenceinput {
+  width: 48px;
+  font: inherit;
   color: var(--ink);
 }
 .bandlegend {
@@ -264,6 +340,26 @@
 }
 .bandkey.vast {
   background: #ddd6fe;
+}
+.hatchkey {
+  padding: 3px 8px;
+  border: 1px solid #9a3412;
+  border-radius: 8px;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 4px,
+      rgb(154 52 18 / 30%) 4px,
+      rgb(154 52 18 / 30%) 6px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 4px,
+      rgb(154 52 18 / 30%) 4px,
+      rgb(154 52 18 / 30%) 6px
+    );
 }
 .conditionreadout .area.fail {
   color: #b91c1c;

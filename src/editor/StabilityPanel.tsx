@@ -2,9 +2,13 @@ import { useMemo, useState } from "react";
 import { unitScale } from "../core/json";
 import {
   gzAreaTerms,
+  gzAtHeel,
   gzCurve,
   limitingKgAt,
+  maximumGz,
+  sheerImmersionAngle,
   vcgForGzArea,
+  vcgForMaximumGz,
   GZ_AREA_HEEL_30,
   GZ_AREA_HEEL_40,
   type GzAreaTerms,
@@ -33,11 +37,11 @@ const fmt = (value: number): string =>
 
 // ---------- how the displacement / KG plane is shaded ----------
 
-type Coloring = "gmt" | "gz30" | "gz40";
+type Coloring = "gmt" | "gzmax" | "gz30" | "gz40";
 
 interface AreaBand {
   readonly key: string;
-  readonly min: number; // the band's lower bound in m·rad (−∞ for the non-compliant one)
+  readonly min: number; // the band's lower bound in the displayed metric (−∞ for the lowest one)
   readonly range: string;
   readonly name: string;
   readonly note: string; // the reading, shown against the selected condition
@@ -113,6 +117,40 @@ const AREA_CRITERIA: readonly AreaCriterion[] = [
 /** The pass/fail contour the standard actually draws — the first band's floor. */
 const passArea = (criterion: AreaCriterion): number => criterion.bands[1].min;
 
+const MAX_GZ_MIN = 0.2; // metres, at a heel of at least 30°
+const MAX_GZ_MIN_HEEL = 30 / DEG;
+const MAX_GZ_MIN_PEAK_HEEL = 25 / DEG;
+const MAX_GZ_BANDS: readonly AreaBand[] = [
+  {
+    key: "fail",
+    min: -Infinity,
+    range: "< 0.20",
+    name: "Below 0.20 m",
+    note: "maximum righting lever below 0.20 m",
+  },
+  {
+    key: "limited",
+    min: 0.2,
+    range: "0.20 – 0.30",
+    name: "Limited margin",
+    note: "maximum righting lever from 0.20 to 0.30 m",
+  },
+  {
+    key: "comfortable",
+    min: 0.3,
+    range: "0.30 – 0.50",
+    name: "Substantial lever",
+    note: "maximum righting lever from 0.30 to 0.50 m",
+  },
+  {
+    key: "vast",
+    min: 0.5,
+    range: "> 0.50",
+    name: "Very large lever",
+    note: "assess stiffness and dynamics separately",
+  },
+];
+
 const bandFor = (criterion: AreaCriterion, area: number): AreaBand | null =>
   Number.isFinite(area)
     ? criterion.bands.reduce((best, band) => (area >= band.min ? band : best))
@@ -180,9 +218,14 @@ export function StabilityPanel() {
     lowestSheerKg = analysis?.lowestSheerKg ?? NaN;
   const [condition, setCondition] = useState<Condition | null>(null);
   const [coloring, setColoring] = useState<Coloring>("gmt");
-  // The criterion being shaded by, or null under the initial-stability reading. The readout keeps an area on
-  // screen either way, falling back to the standard's first one, so switching the shading never blanks it.
+  const [showSheerReference, setShowSheerReference] = useState(true);
+  const [sheerReferenceDeg, setSheerReferenceDeg] = useState(30);
+  const [sheerReferenceInput, setSheerReferenceInput] = useState("30");
+  // The area criterion being shaded by, or null for the initial-stability and maximum-GZ readings. The area
+  // readout falls back to the standard's first one, so switching away from area shading never blanks it.
   const criterion = AREA_CRITERIA.find((c) => c.key === coloring) ?? null;
+  const isInitial = coloring === "gmt";
+  const isMaximum = coloring === "gzmax";
   const readout = criterion ?? AREA_CRITERIA[0];
   // Metric tonnes of seawater per model-volume unit: 1.025 t/m³.
   const unit = snapshot.state.unit;
@@ -217,6 +260,64 @@ export function StabilityPanel() {
         : [],
     [curves, criterion, limit, tonsPerVolume],
   );
+  // Sample only the warning overlay. The coloured maximum-GZ bands and the 0.20 m criterion contour below
+  // are exact envelopes of the tabulated heel lines; this modest grid cross-hatches the secondary finding
+  // that the peak occurs before 25°.
+  const earlyPeakCells = useMemo(() => {
+    if (!curves || !isMaximum) return [];
+    const cells: { x0: number; x1: number; y0: number; y1: number }[] = [],
+      nx = 40,
+      ny = 24;
+    for (let ix = 0; ix < nx; ix++) {
+      const v0 =
+          volumeDomain[0] + ((volumeDomain[1] - volumeDomain[0]) * ix) / nx,
+        v1 =
+          volumeDomain[0] +
+          ((volumeDomain[1] - volumeDomain[0]) * (ix + 1)) / nx,
+        vol = (v0 + v1) / 2;
+      for (let iy = 0; iy < ny; iy++) {
+        const y0 = (yMax * iy) / ny,
+          y1 = (yMax * (iy + 1)) / ny,
+          peak = maximumGz(curves, vol, (y0 + y1) / 2),
+          beyond30 = maximumGz(curves, vol, (y0 + y1) / 2, MAX_GZ_MIN_HEEL);
+        if (
+          beyond30.gz * metres >= MAX_GZ_MIN &&
+          peak.heel < MAX_GZ_MIN_PEAK_HEEL
+        )
+          cells.push({
+            x0: v0 * tonsPerVolume,
+            x1: v1 * tonsPerVolume,
+            y0,
+            y1,
+          });
+      }
+    }
+    return cells;
+  }, [curves, isMaximum, metres, tonsPerVolume, volumeDomain, yMax]);
+  // Sheer immersion is independent of VCG in the fixed-trim model, so its comparison with a reference angle
+  // occupies whole displacement columns. Sample those columns for a light warning hatch over every shading.
+  const earlySheerCells = useMemo(() => {
+    if (!curves || !showSheerReference) return [];
+    const cells: { x0: number; x1: number }[] = [],
+      nx = 80;
+    for (let i = 0; i < nx; i++) {
+      const v0 =
+          volumeDomain[0] + ((volumeDomain[1] - volumeDomain[0]) * i) / nx,
+        v1 =
+          volumeDomain[0] +
+          ((volumeDomain[1] - volumeDomain[0]) * (i + 1)) / nx,
+        heel = sheerImmersionAngle(curves, (v0 + v1) / 2) * DEG;
+      if (Number.isFinite(heel) && heel < sheerReferenceDeg)
+        cells.push({ x0: v0 * tonsPerVolume, x1: v1 * tonsPerVolume });
+    }
+    return cells;
+  }, [
+    curves,
+    sheerReferenceDeg,
+    showSheerReference,
+    tonsPerVolume,
+    volumeDomain,
+  ]);
 
   if (!curves || limit.length < 2)
     return (
@@ -250,6 +351,29 @@ export function StabilityPanel() {
   const gz = gzCurve(curves, selected.vol, selected.kg).filter((p) =>
     Number.isFinite(p.gz),
   );
+  const selectedMaximum = maximumGz(curves, selected.vol, selected.kg),
+    selectedBeyond30 = maximumGz(
+      curves,
+      selected.vol,
+      selected.kg,
+      MAX_GZ_MIN_HEEL,
+    ),
+    maximumMetres = selectedMaximum.gz * metres,
+    selectedMaximumBand = MAX_GZ_BANDS.reduce((best, band) =>
+      maximumMetres >= band.min ? band : best,
+    ),
+    maximumPass =
+      selectedBeyond30.gz * metres >= MAX_GZ_MIN &&
+      selectedMaximum.heel >= MAX_GZ_MIN_PEAK_HEEL,
+    displayedPass = isMaximum ? maximumPass : safe,
+    selectedSheerHeel = sheerImmersionAngle(curves, selected.vol),
+    selectedSheerDeg = selectedSheerHeel * DEG,
+    selectedSheerGz = gzAtHeel(
+      curves,
+      selected.vol,
+      selected.kg,
+      selectedSheerHeel,
+    );
   const gzMin = Math.min(0, ...gz.map((p) => p.gz)),
     gzMax = Math.max(0, ...gz.map((p) => p.gz)),
     gzPad = Math.max((gzMax - gzMin) * 0.1, yMax * 0.01),
@@ -278,6 +402,7 @@ export function StabilityPanel() {
                 onChange={(e) => setColoring(e.target.value as Coloring)}
               >
                 <option value="gmt">Initial stability</option>
+                <option value="gzmax">Maximum GZ</option>
                 {AREA_CRITERIA.map((c) => (
                   <option key={c.key} value={c.key}>
                     GZ area to {c.deg}°
@@ -285,15 +410,62 @@ export function StabilityPanel() {
                 ))}
               </select>
             </label>
-            <span className={`tag ${safe ? "issafe" : "isunsafe"}`}>
-              {safe ? "SAFE" : "UNSAFE"}
+            <span className={`tag ${displayedPass ? "issafe" : "isunsafe"}`}>
+              {isMaximum
+                ? displayedPass
+                  ? "PASS"
+                  : "FAIL"
+                : safe
+                  ? "SAFE"
+                  : "UNSAFE"}
             </span>
+          </span>
+        </div>
+        <div className="sheerreferencebar">
+          <label className="sheerreferencectl">
+            <input
+              type="checkbox"
+              checked={showSheerReference}
+              onChange={(e) => setShowSheerReference(e.target.checked)}
+            />
+            Sheer reference
+            <input
+              className="sheerreferenceinput"
+              type="number"
+              min="5"
+              max="90"
+              step="1"
+              value={sheerReferenceInput}
+              disabled={!showSheerReference}
+              aria-label="Sheer immersion reference angle in degrees"
+              onChange={(e) => setSheerReferenceInput(e.target.value)}
+              onBlur={() => {
+                const value = Number(sheerReferenceInput),
+                  next =
+                    sheerReferenceInput.trim() && Number.isFinite(value)
+                      ? clamp(value, 5, 90)
+                      : sheerReferenceDeg;
+                setSheerReferenceDeg(next);
+                setSheerReferenceInput(String(next));
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+            />
+            °
+          </label>
+          <span>
+            {showSheerReference
+              ? `Hatched where the sheer immerses before ${sheerReferenceDeg}°; clear where it immerses at or after it.`
+              : "Sheer-reference hatching hidden."}
           </span>
         </div>
         <p className="stabilityhint">
           {criterion
             ? `Shaded by the area under GZ out to ${criterion.deg}°, which the IMO criterion puts at ${fmtArea(passArea(criterion))} m·rad or more.`
-            : "Green is where the transverse metacenter M is above G (GMt > 0)."}{" "}
+            : isMaximum
+              ? "Shaded by maximum GZ. The dashed contour requires GZ ≥ 0.20 m at or beyond 30°; cross-hatching marks a qualifying lever whose peak occurs before 25°."
+              : "Green is where the transverse metacenter M is above G (GMt > 0)."}{" "}
           Click anywhere to inspect that displacement and KG.
         </p>
         <ChartFrame
@@ -306,7 +478,9 @@ export function StabilityPanel() {
           ariaLabel={
             criterion
               ? `Limiting KG by displacement, shaded by the area under the GZ curve out to ${criterion.deg} degrees`
-              : "Limiting KG by displacement; green below the curve is safe and red above it is unsafe"
+              : isMaximum
+                ? "Displacement and VCG conditions shaded by maximum righting lever, with the 0.20 metre criterion and early peak warning"
+                : "Limiting KG by displacement; green below the curve is safe and red above it is unsafe"
           }
           onPlotClick={(tons, kg) =>
             setCondition({ vol: tons / tonsPerVolume, kg })
@@ -318,7 +492,7 @@ export function StabilityPanel() {
               y: p.kg,
             }));
             const safeArea = `${linePath(points, scale)} L${scale.x(xDomain[1])},${scale.bottom} L${scale.x(xDomain[0])},${scale.bottom} Z`;
-            const passLine = runsOf(
+            const areaPassLine = runsOf(
               areaField.map((column) => ({
                 x: column.x,
                 y: criterion
@@ -327,9 +501,42 @@ export function StabilityPanel() {
               })),
               (p) => Number.isFinite(p.y) && p.y >= 0 && p.y <= yMax,
             );
+            const maximumColumns = limit.map((point) => ({
+              x: point.vol * tonsPerVolume,
+              vol: point.vol,
+            }));
+            const maximumPassLine = runsOf(
+              maximumColumns.map((column) => ({
+                x: column.x,
+                y: vcgForMaximumGz(
+                  curves,
+                  column.vol,
+                  MAX_GZ_MIN / metres,
+                  MAX_GZ_MIN_HEEL,
+                ),
+              })),
+              (p) => Number.isFinite(p.y) && p.y >= 0 && p.y <= yMax,
+            );
             return (
               <>
-                {!criterion ? (
+                <defs>
+                  <pattern
+                    id="early-sheer-hatch"
+                    width="8"
+                    height="8"
+                    patternUnits="userSpaceOnUse"
+                    patternTransform="rotate(45)"
+                  >
+                    <line
+                      className="earlysheerstroke"
+                      x1="0"
+                      y1="0"
+                      x2="0"
+                      y2="8"
+                    />
+                  </pattern>
+                </defs>
+                {isInitial ? (
                   <>
                     <rect
                       className="unsafearea"
@@ -343,7 +550,83 @@ export function StabilityPanel() {
                         with the reading it belongs to rather than over every one of them. */}
                     <path className="limitline" d={linePath(points, scale)} />
                   </>
-                ) : (
+                ) : isMaximum ? (
+                  <>
+                    <defs>
+                      <pattern
+                        id="early-maximum-hatch"
+                        width="8"
+                        height="8"
+                        patternUnits="userSpaceOnUse"
+                      >
+                        <line
+                          className="earlypeakstroke"
+                          x1="0"
+                          y1="0"
+                          x2="8"
+                          y2="8"
+                        />
+                        <line
+                          className="earlypeakstroke"
+                          x1="8"
+                          y1="0"
+                          x2="0"
+                          y2="8"
+                        />
+                      </pattern>
+                    </defs>
+                    {MAX_GZ_BANDS.map((band, i) => (
+                      <path
+                        key={band.key}
+                        className={`gzband ${band.key}`}
+                        d={bandPath(
+                          maximumColumns.map((column) => ({
+                            x: column.x,
+                            lo: clamp(
+                              vcgForMaximumGz(
+                                curves,
+                                column.vol,
+                                (MAX_GZ_BANDS[i + 1]?.min ?? Infinity) / metres,
+                              ),
+                              0,
+                              yMax,
+                            ),
+                            hi: clamp(
+                              vcgForMaximumGz(
+                                curves,
+                                column.vol,
+                                band.min / metres,
+                              ),
+                              0,
+                              yMax,
+                            ),
+                          })),
+                          scale,
+                        )}
+                      >
+                        <title>{`${band.name} · ${band.range} m — ${band.note}`}</title>
+                      </path>
+                    ))}
+                    <path
+                      className="earlypeakarea"
+                      d={earlyPeakCells
+                        .map(
+                          (cell) =>
+                            `M${scale.x(cell.x0)},${scale.y(cell.y0)} L${scale.x(cell.x1)},${scale.y(cell.y0)} L${scale.x(cell.x1)},${scale.y(cell.y1)} L${scale.x(cell.x0)},${scale.y(cell.y1)} Z`,
+                        )
+                        .join(" ")}
+                    >
+                      <title>Maximum GZ occurs before 25°</title>
+                    </path>
+                    {maximumPassLine.map((run, i) => (
+                      <path
+                        key={i}
+                        className="passcontour"
+                        d={linePath(run, scale)}
+                      />
+                    ))}
+                  </>
+                ) : criterion ? (
                   <>
                     {criterion.bands.map((band, i) => (
                       <path
@@ -372,7 +655,7 @@ export function StabilityPanel() {
                         <title>{`${band.name} · ${band.range} m·rad — ${band.note}`}</title>
                       </path>
                     ))}
-                    {passLine.map((run, i) => (
+                    {areaPassLine.map((run, i) => (
                       <path
                         key={i}
                         className="passcontour"
@@ -380,7 +663,18 @@ export function StabilityPanel() {
                       />
                     ))}
                   </>
-                )}
+                ) : null}
+                <path
+                  className="earlysheerarea"
+                  d={earlySheerCells
+                    .map(
+                      (cell) =>
+                        `M${scale.x(cell.x0)},${scale.top} L${scale.x(cell.x1)},${scale.top} L${scale.x(cell.x1)},${scale.bottom} L${scale.x(cell.x0)},${scale.bottom} Z`,
+                    )
+                    .join(" ")}
+                >
+                  <title>{`Sheer immersion before ${sheerReferenceDeg}°`}</title>
+                </path>
                 {lowestSheerKg >= 0 && lowestSheerKg <= yMax && (
                   <>
                     <line
@@ -442,7 +736,9 @@ export function StabilityPanel() {
                   y2={scale.bottom}
                 />
                 <circle
-                  className={safe ? "condition safe" : "condition unsafe"}
+                  className={
+                    displayedPass ? "condition safe" : "condition unsafe"
+                  }
                   cx={scale.x(selected.vol * tonsPerVolume)}
                   cy={scale.y(selected.kg)}
                   r={6}
@@ -451,18 +747,23 @@ export function StabilityPanel() {
             );
           }}
         </ChartFrame>
-        {criterion && (
+        {(criterion || isMaximum) && (
           <div className="bandlegend">
-            {criterion.bands.map((band) => (
+            {(criterion?.bands ?? MAX_GZ_BANDS).map((band) => (
               <span
                 key={band.key}
                 className={`bandkey ${band.key}`}
-                title={`${band.name} · ${band.range} m·rad — ${band.note}`}
+                title={`${band.name} · ${band.range} ${criterion ? "m·rad" : "m"} — ${band.note}`}
               >
                 {band.name}
-                <small>{band.range}</small>
+                <small>
+                  {band.range} {criterion ? "m·rad" : "m"}
+                </small>
               </span>
             ))}
+            {isMaximum && (
+              <span className="hatchkey">Cross-hatched: peak before 25°</span>
+            )}
           </div>
         )}
         <div className="conditionreadout">
@@ -487,20 +788,46 @@ export function StabilityPanel() {
               {fmt(bound - selected.kg)} {unit}
             </strong>
           </span>
-          <span>
-            A<sub>{readout.deg}</sub>{" "}
-            <strong className={selectedBand ? `area ${selectedBand.key}` : ""}>
-              {Number.isFinite(selectedArea)
-                ? `${selectedArea.toFixed(3)} m·rad`
-                : "n/a"}
-            </strong>
-            {selectedBand && (
-              <span className="areanote" title={selectedBand.name}>
-                {" "}
-                — {selectedBand.note}
+          {isMaximum ? (
+            <>
+              <span>
+                GZmax{" "}
+                <strong className={`area ${selectedMaximumBand.key}`}>
+                  {Number.isFinite(maximumMetres)
+                    ? `${maximumMetres.toFixed(3)} m`
+                    : "n/a"}
+                </strong>
               </span>
-            )}
-          </span>
+              <span>
+                Peak{" "}
+                <strong>
+                  {Number.isFinite(selectedMaximum.heel)
+                    ? `${Math.round(selectedMaximum.heel * DEG)}°`
+                    : "n/a"}
+                </strong>
+                {selectedMaximum.deckDown && (
+                  <span className="areanote"> — after sheer immersion</span>
+                )}
+              </span>
+            </>
+          ) : (
+            <span>
+              A<sub>{readout.deg}</sub>{" "}
+              <strong
+                className={selectedBand ? `area ${selectedBand.key}` : ""}
+              >
+                {Number.isFinite(selectedArea)
+                  ? `${selectedArea.toFixed(3)} m·rad`
+                  : "n/a"}
+              </strong>
+              {selectedBand && (
+                <span className="areanote" title={selectedBand.name}>
+                  {" "}
+                  — {selectedBand.note}
+                </span>
+              )}
+            </span>
+          )}
         </div>
       </section>
 
@@ -577,6 +904,15 @@ export function StabilityPanel() {
                     </text>
                   </>
                 )}
+                {Number.isFinite(selectedSheerGz) && (
+                  <line
+                    className="sheerangle"
+                    x1={scale.x(selectedSheerDeg)}
+                    y1={scale.top}
+                    x2={scale.x(selectedSheerDeg)}
+                    y2={scale.bottom}
+                  />
+                )}
                 <line
                   className="zeroline"
                   x1={scale.left}
@@ -602,10 +938,62 @@ export function StabilityPanel() {
                       r={3}
                     />
                   ))}
+                {Number.isFinite(selectedSheerGz) && (
+                  <circle
+                    className="sheerpoint"
+                    cx={scale.x(selectedSheerDeg)}
+                    cy={scale.y(selectedSheerGz)}
+                    r={5}
+                  >
+                    <title>{`Sheer immersion ${selectedSheerDeg.toFixed(1)}° · GZ ${(selectedSheerGz * metres).toFixed(3)} m`}</title>
+                  </circle>
+                )}
+                {isMaximum && Number.isFinite(selectedMaximum.gz) && (
+                  <>
+                    <line
+                      className="maximumguide"
+                      x1={scale.x(selectedMaximum.heel * DEG)}
+                      y1={scale.y(0)}
+                      x2={scale.x(selectedMaximum.heel * DEG)}
+                      y2={scale.y(selectedMaximum.gz)}
+                    />
+                    <circle
+                      className={`maximumpoint ${selectedMaximum.deckDown ? "deckdown" : ""}`}
+                      cx={scale.x(selectedMaximum.heel * DEG)}
+                      cy={scale.y(selectedMaximum.gz)}
+                      r={6}
+                    >
+                      <title>{`Maximum GZ ${maximumMetres.toFixed(3)} m at ${Math.round(selectedMaximum.heel * DEG)}°${selectedMaximum.deckDown ? ", after sheer immersion" : ""}`}</title>
+                    </circle>
+                    <text
+                      className="maximumlabel"
+                      x={scale.x(selectedMaximum.heel * DEG) + 8}
+                      y={scale.y(selectedMaximum.gz) - 8}
+                    >
+                      {`max ${maximumMetres.toFixed(3)} m · ${Math.round(selectedMaximum.heel * DEG)}°`}
+                    </text>
+                  </>
+                )}
               </>
             );
           }}
         </ChartFrame>
+        <div className="sheerimmersionreadout">
+          <span>
+            Sheer immersion{" "}
+            <strong>
+              {Number.isFinite(selectedSheerDeg)
+                ? `${selectedSheerDeg.toFixed(1)}°`
+                : "> 90°"}
+            </strong>
+          </span>
+          {Number.isFinite(selectedSheerGz) && (
+            <span>
+              GZ at immersion{" "}
+              <strong>{(selectedSheerGz * metres).toFixed(3)} m</strong>
+            </span>
+          )}
+        </div>
         {gz.some((p) => p.deckDown) && (
           <div className="decknote">
             Orange points use the watertight sheer cap after deck-edge

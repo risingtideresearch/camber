@@ -59,7 +59,9 @@ export interface CrossCurves {
   kn: number[][]; // KN at each step (model units)
   wl: number[][]; // the waterline's world height at each step
   deckDown: boolean[][]; // the sheer is submerged somewhere — the watertight cap is carrying load
+  sheerZ: number[]; // lowest heeled sheer height at each heel angle
   knSlope: number[][]; // PCHIP slopes of kn against vol, precomputed so many lookups stay cheap
+  wlSlope: number[][]; // PCHIP slopes of waterline height against vol, for sheer-clearance lookup
 }
 
 export interface CrossCurveOpts {
@@ -74,6 +76,7 @@ export interface Immersed {
   zB: number; // vertical centre of buoyancy ABOVE the keel baseline
   kn: number; // y_B·cos φ + z_B·sin φ
   deckDown: boolean; // the lowest sheer point is under the waterline
+  sheerZ: number; // lowest heeled sheer height
 }
 
 export { stationGeometry, type StationGeom };
@@ -93,6 +96,7 @@ export function immersedAt(
     zB,
     kn: c.yB * Math.cos(heelRad) + zB * Math.sin(heelRad),
     deckDown: c.deckDown,
+    sheerZ: c.sheerZ,
   };
 }
 
@@ -126,7 +130,9 @@ export function crossCurves(
     kn: [],
     wl: [],
     deckDown: [],
+    sheerZ: [],
     knSlope: [],
+    wlSlope: [],
   };
 
   for (const phi of heel) {
@@ -135,9 +141,11 @@ export function crossCurves(
       kn: number[] = [],
       wl: number[] = [],
       dd: boolean[] = [];
+    let sheerZ = Infinity;
     for (let k = 0; k <= steps; k++) {
       const wlZ = hMin + ((hMax - hMin) * k) / steps,
         im = immersedAt(geom, phi, wlZ);
+      sheerZ = im.sheerZ;
       // keep the table strictly increasing in ∇ so it inverts: a fine keel or a flat bottom can hold ∇
       // still over several steps, and a repeated abscissa has no inverse.
       if (vol.length && im.vol <= vol[vol.length - 1] + 1e-12) continue;
@@ -150,7 +158,9 @@ export function crossCurves(
     out.kn.push(kn);
     out.wl.push(wl);
     out.deckDown.push(dd);
+    out.sheerZ.push(sheerZ);
     out.knSlope.push(vol.length >= 2 ? pchipSlopes(vol, kn) : [0]);
+    out.wlSlope.push(vol.length >= 2 ? pchipSlopes(vol, wl) : [0]);
   }
   return out;
 }
@@ -191,6 +201,132 @@ export function gzCurve(cc: CrossCurves, vol: number, vcg: number): GzPoint[] {
       deckDown: cc.deckDown[i][k] ?? false,
     };
   });
+}
+
+// ---------- values and envelopes at a chosen heel ----------
+
+/** KN at an arbitrary heel, linearly interpolated between the cross-curve heel rows. */
+export function knAtHeel(cc: CrossCurves, vol: number, heel: number): number {
+  if (
+    !cc.heel.length ||
+    !Number.isFinite(heel) ||
+    heel < cc.heel[0] ||
+    heel > cc.heel[cc.heel.length - 1]
+  )
+    return NaN;
+  let hi = 0;
+  while (hi < cc.heel.length && cc.heel[hi] < heel) hi++;
+  if (hi === 0 || Math.abs(cc.heel[hi] - heel) < 1e-12)
+    return knAt(cc, hi, vol);
+  const lo = hi - 1,
+    kn0 = knAt(cc, lo, vol),
+    kn1 = knAt(cc, hi, vol),
+    t = (heel - cc.heel[lo]) / (cc.heel[hi] - cc.heel[lo]);
+  return Number.isFinite(kn0) && Number.isFinite(kn1)
+    ? kn0 + t * (kn1 - kn0)
+    : NaN;
+}
+
+/** GZ at a chosen heel for one displacement and VCG. */
+export function gzAtHeel(
+  cc: CrossCurves,
+  vol: number,
+  vcg: number,
+  heel: number,
+): number {
+  return knAtHeel(cc, vol, heel) - vcg * Math.sin(heel);
+}
+
+/** VCG at which GZ is exactly `target` at the chosen heel. */
+export function vcgForGzAtHeel(
+  cc: CrossCurves,
+  vol: number,
+  heel: number,
+  target = 0,
+): number {
+  const sine = Math.sin(heel),
+    kn = knAtHeel(cc, vol, heel);
+  return sine > 1e-12 && Number.isFinite(kn) ? (kn - target) / sine : NaN;
+}
+
+/** Waterline clearance below the lowest sheer at one tabulated heel; negative means immersed. */
+export function sheerClearanceAt(
+  cc: CrossCurves,
+  heelIndex: number,
+  vol: number,
+): number {
+  const xs = cc.vol[heelIndex],
+    ys = cc.wl[heelIndex];
+  if (!xs || xs.length < 2 || vol < xs[0] || vol > xs[xs.length - 1])
+    return NaN;
+  const wl = hermiteEval(xs, ys, cc.wlSlope[heelIndex], vol);
+  return cc.sheerZ[heelIndex] - wl;
+}
+
+/** First positive heel at which the lowest sheer reaches the waterline, interpolated between heel rows. */
+export function sheerImmersionAngle(cc: CrossCurves, vol: number): number {
+  let previousHeel = NaN,
+    previousClearance = NaN;
+  for (let i = 0; i < cc.heel.length; i++) {
+    const heel = cc.heel[i];
+    if (heel < -1e-12) continue;
+    const clearance = sheerClearanceAt(cc, i, vol);
+    if (!Number.isFinite(clearance)) continue;
+    if (clearance <= 0) {
+      if (!Number.isFinite(previousClearance) || previousClearance <= 0)
+        return heel;
+      const t = previousClearance / (previousClearance - clearance);
+      return previousHeel + t * (heel - previousHeel);
+    }
+    previousHeel = heel;
+    previousClearance = clearance;
+  }
+  return NaN;
+}
+
+// ---------- maximum righting lever ----------
+
+/** The largest tabulated righting lever and the heel at which it occurs. */
+export function maximumGz(
+  cc: CrossCurves,
+  vol: number,
+  vcg: number,
+  minHeel = 0,
+): GzPoint {
+  let best: GzPoint = { heel: NaN, gz: NaN, deckDown: false };
+  for (const point of gzCurve(cc, vol, vcg))
+    if (
+      point.heel >= minHeel - 1e-12 &&
+      Number.isFinite(point.gz) &&
+      (!Number.isFinite(best.gz) || point.gz > best.gz)
+    )
+      best = point;
+  return best;
+}
+
+/**
+ * VCG at which the largest GZ at or beyond `minHeel` is exactly `target`.
+ *
+ * Each heel contributes the straight boundary VCG = (KN − target) / sin φ. The condition only needs one
+ * heel to reach the target, so their upper envelope is the limiting VCG. Zero heel is omitted because its
+ * righting lever is identically zero and cannot be inverted against VCG.
+ */
+export function vcgForMaximumGz(
+  cc: CrossCurves,
+  vol: number,
+  target: number,
+  minHeel = 0,
+): number {
+  let vcg = -Infinity;
+  for (let i = 0; i < cc.heel.length; i++) {
+    const heel = cc.heel[i],
+      sine = Math.sin(heel),
+      kn = knAt(cc, i, vol);
+    if (heel < minHeel - 1e-12 || sine <= 1e-12 || !Number.isFinite(kn))
+      continue;
+    vcg = Math.max(vcg, (kn - target) / sine);
+  }
+  return vcg;
 }
 
 // ---------- the area under the GZ curve ----------

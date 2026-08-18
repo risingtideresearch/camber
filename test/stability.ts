@@ -38,13 +38,20 @@ import {
   crossCurves,
   gzArea,
   gzAreaTerms,
+  gzAtHeel,
   gzCurve,
   stationGeometry,
   immersedAt,
   knAt,
+  knAtHeel,
   limitingKgAt,
   limitingKgCurve,
+  maximumGz,
+  sheerClearanceAt,
+  sheerImmersionAngle,
   vcgForGzArea,
+  vcgForGzAtHeel,
+  vcgForMaximumGz,
 } from "../src/core/stability";
 import { meshImmersed } from "./support/meshIntegral";
 
@@ -206,6 +213,58 @@ const sample = (model: Model): HullSampling => {
   ok(
     range(gz2) <= range(gz),
     "raising the VCG never widens the range of positive stability",
+  );
+
+  // ---- interpolation at a chosen heel and its positive-GZ contour ----
+  const chosenHeel = 35 * DEG,
+    i30 = cc.heel.findIndex((heel) => Math.abs(heel - 30 * DEG) < 1e-12),
+    i40 = cc.heel.findIndex((heel) => Math.abs(heel - 40 * DEG) < 1e-12),
+    kn35 = knAtHeel(cc, h.vol, chosenHeel);
+  ok(
+    Math.abs(kn35 - (knAt(cc, i30, h.vol) + knAt(cc, i40, h.vol)) / 2) < 1e-12,
+    "KN at a chosen heel interpolates between heel rows",
+  );
+  const chosenHeelLimit = vcgForGzAtHeel(cc, h.vol, chosenHeel);
+  ok(
+    Math.abs(gzAtHeel(cc, h.vol, chosenHeelLimit, chosenHeel)) < 1e-12,
+    "the chosen-heel VCG contour is where GZ reaches zero at that angle",
+  );
+
+  // ---- sheer immersion angle ----
+  const sheerHeel = sheerImmersionAngle(cc, h.vol),
+    above = cc.heel.findIndex((heel) => heel >= sheerHeel - 1e-12),
+    below = above - 1;
+  ok(
+    Number.isFinite(sheerHeel) && sheerHeel > 0 && sheerHeel <= 90 * DEG,
+    `sheer immersion is found inside the heel table (${(sheerHeel / DEG).toFixed(1)}°)`,
+  );
+  ok(
+    below >= 0 &&
+      sheerClearanceAt(cc, below, h.vol) > 0 &&
+      sheerClearanceAt(cc, above, h.vol) <= 0,
+    "the interpolated sheer angle lies between a clear and an immersed heel row",
+  );
+
+  // ---- maximum righting lever and its closed-form VCG contour ----
+  const peak = maximumGz(cc, h.vol, vcg),
+    sampledPeak = gz.reduce((best, point) =>
+      point.gz > best.gz ? point : best,
+    );
+  ok(
+    peak.gz === sampledPeak.gz && peak.heel === sampledPeak.heel,
+    `maximum GZ reports the tabulated peak (${peak.gz.toFixed(3)} at ${(peak.heel / DEG).toFixed(0)}°)`,
+  );
+  const target = peak.gz * 0.8,
+    minHeel = 30 * DEG,
+    contourVcg = vcgForMaximumGz(cc, h.vol, target, minHeel),
+    onContour = maximumGz(cc, h.vol, contourVcg, minHeel);
+  ok(
+    Math.abs(onContour.gz - target) < 1e-12,
+    "the maximum-GZ VCG envelope inverts the target lever exactly",
+  );
+  ok(
+    maximumGz(cc, h.vol, contourVcg + 0.01, minHeel).gz < target,
+    "raising VCG above the maximum-GZ contour fails its lever target",
   );
 
   // ---- limiting KG envelope: static stability means M above G ----
