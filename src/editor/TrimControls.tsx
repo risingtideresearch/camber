@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { loa } from "../core/model";
 import { UNITS, type Unit } from "../core/document";
 import { useDocumentDispatch, useDocumentRuntime } from "./documentStoreHooks";
@@ -28,6 +29,19 @@ export function TrimControls() {
         `Cancel — keep the numbers, resizing the hull to ${unit}.`,
     );
     void dispatch({ type: "setUnit", unit, rescale });
+  };
+  // The hull's own size, typed rather than dragged. A document is often authored as a SHAPE — the plan
+  // running 0…1000 — and every dimensional answer taken off it (displacement in tonnes, KG, the area under
+  // GZ) is that shape's number times however long the boat really is. Stating the length overall here is
+  // that multiplication, applied to the hull itself: it scales every coordinate by one factor, so the shape
+  // is untouched and the numbers become the real ones. Held locally until Enter or blur, because rescaling
+  // the whole boat on every keystroke of "37000" would walk it through 3, 37, 370 mm on the way.
+  const [typedLoa, setTypedLoa] = useState<string | null>(null);
+  const commitLoa = () => {
+    const length = parseFloat(typedLoa ?? "");
+    setTypedLoa(null);
+    if (Number.isFinite(length) && length > 0 && length !== loa(model))
+      void dispatch({ type: "setLoa", length });
   };
   const waterline = model.waterline; // depth below the sheer origin (deck datum), in model.unit
   const rakeDeg = (model.deckRake * 180) / Math.PI;
@@ -70,6 +84,25 @@ export function TrimControls() {
           onChange={(e) => onRake(parseFloat(e.target.value))}
         />
         <span className="ctlval">{rakeDeg.toFixed(1)}°</span>
+      </label>
+      <label
+        className="ctl"
+        title="Length overall — scales the whole hull to this length, keeping its shape exactly. Every dimensional result (displacement, KG, the area under GZ) is read against it."
+      >
+        LOA
+        <input
+          className="ctlnum"
+          type="number"
+          min="0"
+          step={len / 100}
+          value={typedLoa ?? (len >= 100 ? len.toFixed(0) : len.toFixed(2))}
+          onChange={(e) => setTypedLoa(e.target.value)}
+          onBlur={commitLoa}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+            if (e.key === "Escape") setTypedLoa(null);
+          }}
+        />
       </label>
       <label
         className="ctl"
