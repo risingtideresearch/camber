@@ -292,6 +292,9 @@ function SpreadHandle({
       }}
       onPointerMove={(event) => {
         if (!dragging.current) return;
+        // The frame reads its hover off this same move, and a ghost curve chasing the handle being dragged
+        // is noise: while a handle has the pointer, it is not a question about somewhere else on the plane.
+        event.stopPropagation();
         const at = grab.locate(event.clientX, event.clientY);
         if (at) onMove(at);
       }}
@@ -391,6 +394,9 @@ export function StabilityPanel() {
   const [condition, setCondition] = useState<Condition | null>(null);
   // null is the range switched off, which is the panel this one grew out of: one condition, one curve.
   const [spread, setSpread] = useState<Spread | null>(null);
+  // Where the pointer is over the plane, if anywhere. Clicking pins a condition; merely pointing at one is
+  // enough to see its curve, so the plane can be read continuously without committing to a selection.
+  const [hover, setHover] = useState<Condition | null>(null);
   const [coloring, setColoring] = useState<Coloring>("gmt");
   const [showSheerReference, setShowSheerReference] = useState(true);
   const [sheerReferenceDeg, setSheerReferenceDeg] = useState(30);
@@ -728,6 +734,14 @@ export function StabilityPanel() {
           ? "fail"
           : null;
 
+  // The hovered condition's own curve, drawn faintly against the pinned one. It deliberately does NOT enter
+  // the framing below: the axis belongs to the condition that was chosen, and GZ swings widely enough across
+  // the plane — at VCG 0 it is KN itself — that letting a passing pointer into the scale would leave the
+  // pinned curve growing and shrinking under the reading being taken from it. A ghost that runs out of the
+  // chart is clipped at the plot edge instead, which says plainly that it is off the scale being read.
+  const ghost = hover
+    ? gzCurve(curves, hover.vol, hover.kg).filter((p) => Number.isFinite(p.gz))
+    : [];
   const bandLo = envelope.map((b) => b.lo).filter(Number.isFinite),
     bandHi = envelope.map((b) => b.hi).filter(Number.isFinite);
   const gzMin = Math.min(0, ...gz.map((p) => p.gz), ...bandLo),
@@ -900,7 +914,7 @@ export function StabilityPanel() {
             : isMaximum
               ? "Shaded by maximum GZ. The dashed contour requires GZ ≥ 0.20 m at or beyond 30°; cross-hatching marks a qualifying lever whose peak occurs before 25°."
               : "Green is where the transverse metacenter M is above G (GMt > 0)."}{" "}
-          Click anywhere to inspect that displacement and KG.
+          Point anywhere to see that condition’s curve, and click to pin it.
         </p>
         <ChartFrame
           xDomain={xDomain}
@@ -922,6 +936,9 @@ export function StabilityPanel() {
           }
           onPlotClick={(tons, kg) =>
             setCondition({ vol: tons / tonsPerVolume, kg })
+          }
+          onPlotHover={(at) =>
+            setHover(at ? { vol: at.x / tonsPerVolume, kg: at.y } : null)
           }
         >
           {(scale, grab) => {
@@ -1355,6 +1372,12 @@ export function StabilityPanel() {
         <div className="cap">
           {region ? "GZ curve and range" : "GZ curve"}
           <span className="val">
+            {hover && (
+              <span className="ghostval">
+                pointing at Δ {fmt(hover.vol * tonsPerVolume)} t · VCG{" "}
+                {fmt(hover.kg)} {unit}
+              </span>
+            )}
             Δ {fmt(selected.vol * tonsPerVolume)} t · VCG {fmt(selected.kg)}{" "}
             {unit}
           </span>
@@ -1501,6 +1524,15 @@ export function StabilityPanel() {
                   x2={scale.right}
                   y2={scale.y(0)}
                 />
+                {ghost.length > 1 && (
+                  <path
+                    className="gzghost"
+                    d={linePath(
+                      ghost.map((p) => ({ x: p.heel * DEG, y: p.gz })),
+                      scale,
+                    )}
+                  />
+                )}
                 <path
                   className="gzline"
                   d={linePath(

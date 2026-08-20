@@ -621,3 +621,20 @@
   font: inherit;
   color: var(--ink);
 }
+
+/* The hovered condition's curve, drawn against the pinned one. Thinner and much quieter than `.gzline`: it
+   is context for the curve being read, not a second subject competing with it. */
+.gzghost {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  opacity: 0.32;
+  pointer-events: none;
+}
+/* The hovered condition named beside the pinned one, in the quieter of the two weights, so the pinned
+   reading does not shift on the line as the pointer moves. */
+.ghostval {
+  margin-right: 10px;
+  opacity: 0.6;
+  font-weight: 400;
+}

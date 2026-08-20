@@ -55,6 +55,8 @@ interface ChartFrameProps {
   readonly xTickStep?: number;
   readonly yTickStep?: number;
   readonly onPlotClick?: (x: number, y: number) => void;
+  /** Where the pointer is over the plot, in data coordinates, or null once it is not over it. */
+  readonly onPlotHover?: (at: { x: number; y: number } | null) => void;
   readonly ariaLabel: string;
   readonly children: (scale: ChartScale, grab: PlotGrab) => ReactNode;
 }
@@ -349,6 +351,7 @@ interface NavigationOptions {
   readonly svgRef: RefObject<SVGSVGElement | null>;
   readonly enabled: boolean;
   readonly onPlotClick?: (x: number, y: number) => void;
+  readonly onPlotHover?: (at: { x: number; y: number } | null) => void;
 }
 
 function useChartNavigation({
@@ -360,6 +363,7 @@ function useChartNavigation({
   svgRef,
   enabled,
   onPlotClick,
+  onPlotHover,
 }: NavigationOptions) {
   const viewportKey = [...xDomain, ...yDomain, ...initialX, ...initialY].join(
       "|",
@@ -475,12 +479,25 @@ function useChartNavigation({
     // DOMPoint coordinates are prototype accessors rather than enumerable own properties, so spreading the
     // point drops x/y and poisons the first pan delta with NaN. Copy the coordinates explicitly.
     drag.current = { x: point.x, y: point.y, viewport, moved: false };
+    onPlotHover?.(null);
     setIsDragging(true);
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const pointerMove = (event: PointerEvent<SVGSVGElement>) => {
     const start = drag.current,
       point = localPoint(event.clientX, event.clientY);
+    // A touch has no hover state, so reporting one would strand a reading on screen after the finger lifts.
+    // Panning and dragging own the pointer while they last, and neither is asking a question about a place.
+    if (onPlotHover)
+      onPlotHover(
+        !start &&
+          !panActive &&
+          point &&
+          pointInPlot(point, layout) &&
+          event.pointerType !== "touch"
+          ? dataAt(event.clientX, event.clientY)
+          : null,
+      );
     if (!start || !point) return;
     const dx = point.x - start.x,
       dy = point.y - start.y;
@@ -564,7 +581,10 @@ function useChartNavigation({
       onPointerCancel: (event: PointerEvent<SVGSVGElement>) =>
         finishPointer(event, false),
       onPointerEnter: temporaryPan.enter,
-      onPointerLeave: temporaryPan.leave,
+      onPointerLeave: () => {
+        temporaryPan.leave();
+        onPlotHover?.(null);
+      },
     },
   };
 }
@@ -801,6 +821,7 @@ export function ChartFrame({
   xTickStep,
   yTickStep,
   onPlotClick,
+  onPlotHover,
   ariaLabel,
   children,
 }: ChartFrameProps) {
@@ -835,6 +856,7 @@ export function ChartFrame({
       svgRef,
       enabled: panZoom,
       onPlotClick,
+      onPlotHover,
     }),
     clipId = useId().replace(/:/g, "");
 
