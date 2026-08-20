@@ -78,7 +78,10 @@ export interface Column {
 
 export interface StationGeom {
   cols: Column[];
-  keelZ: number; // the lowest world height anywhere on the hull — the baseline K
+  // K — the lowest world height anywhere on the hull, and the ONE datum every vertical height in the
+  // program is measured above: hydro's KB / KMt / KMl and stability's KN, KG and VCG alike. It is pure
+  // geometry, so it does not move when the design waterline does, and it is defined at every heel.
+  keelZ: number;
   lowestSheerZ: number; // lowest actual sheer-edge point in world height
   cosRake: number;
   sinRake: number;

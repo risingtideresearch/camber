@@ -336,36 +336,52 @@ export function vcgForMaximumGz(
 // them this way — at least 0.055 m·rad out to 30°, and at least 0.09 m·rad out to 40° (or to the
 // downflooding angle, which is not modelled here). `upTo` is which of those is being asked for.
 //
-// The same KN identity that makes a second GZ curve free makes a whole FIELD of these free. Integrating
-// GZ(φ) = KN(φ) − VCG·sin φ over 0…φ₁ splits into a term that depends only on the hull and the displacement
-// and a term that depends only on VCG:
+// ONLY POSITIVE GZ COUNTS. Past the angle of vanishing stability the hull is no longer storing energy a gust
+// has to spend to push it further — it is spending its own, and it capsizes. Netting that lobe off against
+// the reserve earned below would report one number for two quite different hulls: one that never gives way,
+// and one that gives way and is then credited back for how hard it goes over. So the integrand is
+// max(GZ, 0), and the range closes itself at the vanishing angle whether or not φ₁ has been reached.
 //
-//     A(∇, VCG) = ∫₀^φ₁ KN(φ, ∇) dφ − VCG·(1 − cos φ₁)
+// The price is the closed form. Signed, the integral splits into a hull term and VCG·(1 − cos φ₁), and the
+// VCG meeting a stated area inverts in one line. Clipping breaks the split, because the upper limit of
+// integration becomes itself a function of VCG. What survives is MONOTONICITY: raising VCG lowers GZ at
+// every heel, so it lowers max(GZ, 0) at every heel too, so A is non-increasing in VCG and reaches exactly
+// zero once the whole range is non-positive. That is enough to invert by bisection — and the signed closed
+// form still earns its keep as the bracket to start from, since max(GZ, 0) ≥ GZ makes the signed answer a
+// VCG that already has at least the area asked for.
 //
-// So one integration per displacement answers the criterion at EVERY VCG, and — because A is exactly linear
-// and strictly decreasing in VCG — the VCG that meets a stated area inverts in closed form. A contour of
-// constant area on the displacement/KG chart is therefore drawn, not searched for.
+// What is still bought once per displacement is the KN curve itself, which is where the table lookups are;
+// that part does not depend on VCG, so the whole field on the chart is one lookup pass plus arithmetic.
 //
-// The integral is taken over the table's own heel angles, PCHIP-interpolated between them, so it is the same
-// curve the panel plots rather than a separately sampled one. A φ₁ that falls between two heel angles closes
-// the last interval on the straight line between them.
+// The interpolant is the table's own heel angles, PCHIP in φ — the same curve the panel plots rather than a
+// separately sampled one. Each interval integrates exactly, off the Hermite cubic's own coefficients; where
+// GZ changes sign inside one, the crossing is bisected and only the positive side contributes. A curve that
+// went negative and back within a single 5° interval would be missed, which no righting arm does.
 
 /** The heels the standard's area criteria run out to, in radians: 0.055 m·rad by 30°, 0.09 m·rad by 40°. */
 export const GZ_AREA_HEEL_30 = 30 * DEG;
 export const GZ_AREA_HEEL_40 = 40 * DEG;
 
-/** The two terms of A(∇, VCG) = kn − VCG·vcg, in MODEL units·radians. */
+/**
+ * One displacement's KN curve over 0…φ₁, prepared for integration at any VCG.
+ *
+ * `phi` is empty where the displacement is off the table, or where the table does not span the whole range —
+ * a partial area must not be reported as a whole one.
+ */
 export interface GzAreaTerms {
-  readonly kn: number; // ∫ KN dφ at this displacement; NaN where the displacement is off the table
-  readonly vcg: number; // 1 − cos φ₁ — the coefficient the centre of gravity enters with
+  readonly phi: readonly number[]; // heel abscissae, radians, 0…φ₁
+  readonly kn: readonly number[]; // KN at each
+  readonly slope: readonly number[]; // dKN/dφ — the PCHIP slopes the interpolant is drawn with
+  readonly upTo: number; // φ₁
 }
+
+const NO_GZ_AREA: GzAreaTerms = { phi: [], kn: [], slope: [], upTo: NaN };
 
 export function gzAreaTerms(
   cc: CrossCurves,
   vol: number,
   upTo: number = GZ_AREA_HEEL_30,
 ): GzAreaTerms {
-  const vcg = 1 - Math.cos(upTo);
   const phis: number[] = [],
     kns: number[] = [];
   for (let i = 0; i < cc.heel.length; i++) {
@@ -387,7 +403,7 @@ export function gzAreaTerms(
       }
       break;
     }
-    if (!Number.isFinite(kn)) return { kn: NaN, vcg };
+    if (!Number.isFinite(kn)) return NO_GZ_AREA;
     phis.push(phi);
     kns.push(kn);
   }
@@ -397,33 +413,108 @@ export function gzAreaTerms(
     phis[0] > 1e-12 ||
     phis[phis.length - 1] < upTo - 1e-12
   )
-    return { kn: NaN, vcg };
-
-  // integrate the interpolant exactly: over one interval the cubic Hermite has area h·(y₀+y₁)/2 +
-  // h²·(m₀−m₁)/12, which is the trapezoid plus the correction the end slopes imply.
-  const m = pchipSlopes(phis, kns);
-  let kn = 0;
-  for (let i = 0; i < phis.length - 1; i++) {
-    const h = phis[i + 1] - phis[i];
-    kn += (h * (kns[i] + kns[i + 1])) / 2 + (h * h * (m[i] - m[i + 1])) / 12;
-  }
-  return { kn, vcg };
+    return NO_GZ_AREA;
+  return { phi: phis, kn: kns, slope: pchipSlopes(phis, kns), upTo };
 }
 
-/** The area under GZ out to `upTo` for one loading condition (model units·radians). */
+/**
+ * The area under the POSITIVE part of GZ, for one prepared displacement at one VCG (model units·radians).
+ *
+ * Per interval, KN is the cubic Hermite c₀ + c₁t + c₂t² + c₃t³ in the local parameter t ∈ [0, 1], so
+ * GZ(t) = that − VCG·sin(φ₀ + h·t) — a cubic and a sine, both of which integrate in closed form over any
+ * part of the interval. All that is needed to clip is where GZ crosses zero.
+ */
+export function gzAreaOf(terms: GzAreaTerms, vcg: number): number {
+  const { phi, kn, slope } = terms;
+  if (phi.length < 2 || !Number.isFinite(vcg)) return NaN;
+  let total = 0;
+  for (let i = 0; i < phi.length - 1; i++) {
+    const phi0 = phi[i],
+      h = phi[i + 1] - phi[i],
+      y0 = kn[i],
+      y1 = kn[i + 1],
+      m0 = slope[i] * h,
+      m1 = slope[i + 1] * h,
+      c0 = y0,
+      c1 = m0,
+      c2 = -3 * y0 + 3 * y1 - 2 * m0 - m1,
+      c3 = 2 * y0 - 2 * y1 + m0 + m1;
+    const gzAt = (t: number) =>
+      c0 + t * (c1 + t * (c2 + t * c3)) - vcg * Math.sin(phi0 + h * t);
+    // ∫ GZ dφ over t ∈ [a, b]: the cubic term by term (dφ = h·dt), the sine as the difference of cosines
+    const piece = (a: number, b: number) =>
+      h *
+        (c0 * (b - a) +
+          (c1 * (b * b - a * a)) / 2 +
+          (c2 * (b * b * b - a * a * a)) / 3 +
+          (c3 * (b * b * b * b - a * a * a * a)) / 4) -
+      vcg * (Math.cos(phi0 + h * a) - Math.cos(phi0 + h * b));
+
+    const g0 = gzAt(0),
+      g1 = gzAt(1);
+    if (g0 >= 0 && g1 >= 0) {
+      total += piece(0, 1);
+      continue;
+    }
+    if (g0 <= 0 && g1 <= 0) continue; // wholly past the vanishing angle: contributes nothing
+    // one sign change inside the interval — bisect for it and keep only the positive side
+    let lo = 0,
+      hi = 1;
+    for (let k = 0; k < 48; k++) {
+      const mid = (lo + hi) / 2;
+      if (gzAt(mid) > 0 === g0 > 0) lo = mid;
+      else hi = mid;
+    }
+    const cross = (lo + hi) / 2;
+    total += g0 > 0 ? piece(0, cross) : piece(cross, 1);
+  }
+  return total;
+}
+
+/** The area under the positive part of GZ out to `upTo` for one loading condition (model units·radians). */
 export function gzArea(
   cc: CrossCurves,
   vol: number,
   vcg: number,
   upTo: number = GZ_AREA_HEEL_30,
 ): number {
-  const terms = gzAreaTerms(cc, vol, upTo);
-  return terms.kn - vcg * terms.vcg;
+  return gzAreaOf(gzAreaTerms(cc, vol, upTo), vcg);
 }
 
-/** The VCG at which this displacement's area is exactly `area` — the inverse of `gzArea`, in closed form. */
+/**
+ * The VCG at which this displacement's positive-GZ area is exactly `area` — the inverse of `gzAreaOf`.
+ *
+ * A is non-increasing in VCG and falls to zero at the VCG whose curve has no positive lobe left, so every
+ * area above zero has exactly one crossing to find. The bracket below it comes for free: clipping can only
+ * ADD area, so the signed integral's closed-form answer already has at least `area`. From there the search
+ * doubles outward until it runs out of area, then bisects. An area of zero or less asks instead for the
+ * vanishing point itself, which is the same search against a strictly positive lobe.
+ */
 export function vcgForGzArea(terms: GzAreaTerms, area: number): number {
-  return (terms.kn - area) / terms.vcg;
+  if (terms.phi.length < 2) return NaN;
+  if (area === -Infinity) return Infinity; // every VCG clears it — the open end of a shading band
+  if (area === Infinity) return -Infinity; // no VCG reaches it — the other open end
+  const target = area > 0 ? area : 0;
+  // A(VCG) with no clipping is ∫KN dφ − VCG·(1 − cos φ₁), and KN ≥ 0, so A(0) is that first term outright
+  const knArea = gzAreaOf(terms, 0),
+    coefficient = 1 - Math.cos(terms.upTo);
+  if (!Number.isFinite(knArea) || coefficient <= 0) return NaN;
+  let lo = (knArea - target) / coefficient;
+  if (!(gzAreaOf(terms, lo) > target)) return lo;
+  // outward until the area is gone; the lobe vanishes at a finite VCG, so this terminates
+  let span = Math.max(Math.abs(lo), knArea / coefficient, 1e-9);
+  let hi = lo + span;
+  for (let k = 0; gzAreaOf(terms, hi) > target; k++) {
+    if (k > 60) return NaN;
+    span *= 2;
+    hi = lo + span;
+  }
+  for (let k = 0; k < 60 && hi - lo > 1e-12 * Math.max(1, Math.abs(hi)); k++) {
+    const mid = (lo + hi) / 2;
+    if (gzAreaOf(terms, mid) > target) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
 }
 
 // ---------- limiting KG for intact, upright stability ----------

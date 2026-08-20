@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { unitScale } from "../core/json";
 import {
+  gzAreaOf,
   gzAreaTerms,
   gzAtHeel,
   gzCurve,
@@ -159,6 +160,25 @@ const bandFor = (criterion: AreaCriterion, area: number): AreaBand | null =>
 const clamp = (value: number, lo: number, hi: number): number =>
   Math.min(hi, Math.max(lo, value));
 
+// Put a useful-width window around the design displacement, shifting rather than shrinking it when it meets
+// either end of the complete analysis range. Very light designs still get at least a quarter of that range.
+const focusAround = (domain: readonly [number, number], center: number) => {
+  const fullSpan = domain[1] - domain[0];
+  if (!(fullSpan > 0) || !Number.isFinite(center)) return domain;
+  const span = Math.min(fullSpan, Math.max(center, fullSpan * 0.25));
+  let lo = center - span / 2,
+    hi = center + span / 2;
+  if (lo < domain[0]) {
+    lo = domain[0];
+    hi = lo + span;
+  }
+  if (hi > domain[1]) {
+    hi = domain[1];
+    lo = hi - span;
+  }
+  return [lo, hi] as const;
+};
+
 // Split samples into the maximal runs of consecutive usable ones, so a displacement the KN table cannot
 // answer for — or a contour that has left the plot — breaks the path instead of being bridged across.
 const runsOf = <T,>(
@@ -235,10 +255,10 @@ export function StabilityPanel() {
     if (!limit.length) return [0, 1];
     return [limit[0].vol, limit[limit.length - 1].vol];
   }, [limit]);
-  const xDomain: readonly [number, number] = [
-    volumeDomain[0] * tonsPerVolume,
-    volumeDomain[1] * tonsPerVolume,
-  ];
+  const xDomain = useMemo<readonly [number, number]>(
+    () => [volumeDomain[0] * tonsPerVolume, volumeDomain[1] * tonsPerVolume],
+    [tonsPerVolume, volumeDomain],
+  );
   const yMax = useMemo(
     () =>
       Math.max(
@@ -248,8 +268,35 @@ export function StabilityPanel() {
       ) * 1.18,
     [hydro, limit],
   );
-  // The area under GZ is linear in KG, so ONE integration per displacement places every contour on this
-  // chart exactly — see `gzAreaTerms`. The whole field costs a handful of table lookups per column.
+  const designXDomain = useMemo<readonly [number, number]>(
+    () =>
+      focusAround(
+        xDomain,
+        (hydro?.vol ?? (volumeDomain[0] + volumeDomain[1]) / 2) * tonsPerVolume,
+      ),
+    [hydro, tonsPerVolume, volumeDomain, xDomain],
+  );
+  // KMt commonly rises sharply as displacement tends to zero. Base the design framing on only the useful
+  // displacement window so that this physically valid extreme does not flatten normal loading conditions.
+  const designYMax = useMemo(() => {
+    const x0 = designXDomain[0] / tonsPerVolume,
+      x1 = designXDomain[1] / tonsPerVolume,
+      local = limit
+        .filter((point) => point.vol >= x0 && point.vol <= x1)
+        .map((point) => point.kg)
+        .filter(Number.isFinite),
+      edgeValues = [limitingKgAt(limit, x0), limitingKgAt(limit, x1)].filter(
+        Number.isFinite,
+      ),
+      usefulMax = Math.max(
+        ...[hydro?.kb ?? 0, lowestSheerKg, ...local, ...edgeValues].filter(
+          Number.isFinite,
+        ),
+      );
+    return Math.min(yMax, Math.max(yMax / 1000, usefulMax * 1.18));
+  }, [designXDomain, hydro, limit, lowestSheerKg, tonsPerVolume, yMax]);
+  // Only the KN curve behind the area costs table lookups, and it does not depend on KG — so ONE pass per
+  // displacement carries every contour on this chart. See `gzAreaTerms`.
   const areaField = useMemo<readonly { x: number; terms: GzAreaTerms }[]>(
     () =>
       curves && criterion
@@ -381,11 +428,11 @@ export function StabilityPanel() {
 
   // the selected condition's own area, converted out of model units into the m·rad the criteria are stated in
   const selectedTerms = gzAreaTerms(curves, selected.vol, readout.upTo);
-  const selectedArea =
-    (selectedTerms.kn - selected.kg * selectedTerms.vcg) * metres;
+  const selectedArea = gzAreaOf(selectedTerms, selected.kg) * metres;
   const selectedBand = bandFor(readout, selectedArea);
-  // KG at a stated area, per column of the chart — the inverse is closed form, so these are contours, not
-  // searches. Areas are given in m·rad and converted back into the model's own units to land on the axis.
+  // KG at a stated area, per column of the chart. Clipping GZ at zero costs the closed-form inverse, so each
+  // of these is a bisection down the column — see `vcgForGzArea`. Areas are given in m·rad and converted
+  // back into the model's own units to land on the axis.
   const kgAtArea = (terms: GzAreaTerms, area: number): number =>
     vcgForGzArea(terms, area / metres);
 
@@ -471,6 +518,10 @@ export function StabilityPanel() {
         <ChartFrame
           xDomain={xDomain}
           yDomain={[0, yMax]}
+          initialXDomain={designXDomain}
+          initialYDomain={[0, designYMax]}
+          initialViewLabel="Design"
+          panZoom
           xLabel="Displacement Δ (t, seawater)"
           yLabel={`KG / VCG (${unit})`}
           formatX={fmt}
@@ -792,7 +843,7 @@ export function StabilityPanel() {
             <>
               <span>
                 GZmax{" "}
-                <strong className={`area ${selectedMaximumBand.key}`}>
+                <strong className={`bandvalue ${selectedMaximumBand.key}`}>
                   {Number.isFinite(maximumMetres)
                     ? `${maximumMetres.toFixed(3)} m`
                     : "n/a"}
@@ -814,7 +865,7 @@ export function StabilityPanel() {
             <span>
               A<sub>{readout.deg}</sub>{" "}
               <strong
-                className={selectedBand ? `area ${selectedBand.key}` : ""}
+                className={selectedBand ? `bandvalue ${selectedBand.key}` : ""}
               >
                 {Number.isFinite(selectedArea)
                   ? `${selectedArea.toFixed(3)} m·rad`
@@ -842,6 +893,7 @@ export function StabilityPanel() {
         <ChartFrame
           xDomain={[0, 90]}
           yDomain={gzDomain}
+          xTickStep={15}
           xLabel="Heel (degrees)"
           yLabel={`GZ (${unit})`}
           formatX={(v) => `${Math.round(v)}°`}
@@ -875,17 +927,42 @@ export function StabilityPanel() {
               ...upTo.map((p) => ({ x: p.heel * DEG, y: p.gz })),
               ...edge,
             ];
+            // Only positive GZ is counted, so only positive GZ is shaded — the fill has to BE the region the
+            // number reports, or the picture argues with it. Runs are cut at the crossing between plotted
+            // points; past the vanishing angle nothing is drawn at all.
+            const lobes: { x: number; y: number }[][] = [];
+            let lobe: { x: number; y: number }[] = [];
+            const close = () => {
+              if (lobe.length >= 2) lobes.push(lobe);
+              lobe = [];
+            };
+            for (let i = 0; i < under.length; i++) {
+              const p = under[i],
+                q = under[i + 1];
+              if (p.y >= 0) lobe.push(p);
+              if (!q || !Number.isFinite(p.y) || !Number.isFinite(q.y)) {
+                close();
+                continue;
+              }
+              if (p.y >= 0 !== q.y >= 0) {
+                const t = p.y / (p.y - q.y);
+                lobe.push({ x: p.x + t * (q.x - p.x), y: 0 });
+                if (p.y >= 0) close();
+              }
+            }
+            close();
             const label = `A${sub(heel)}`;
             return (
               <>
                 {criterion && (
                   <>
-                    {under.length >= 2 && (
+                    {lobes.map((points, i) => (
                       <path
+                        key={i}
                         className={`gzarea ${selectedBand?.key ?? ""}`}
-                        d={`${linePath(under, scale)} L${scale.x(under[under.length - 1].x)},${scale.y(0)} L${scale.x(under[0].x)},${scale.y(0)} Z`}
+                        d={`${linePath(points, scale)} L${scale.x(points[points.length - 1].x)},${scale.y(0)} L${scale.x(points[0].x)},${scale.y(0)} Z`}
                       />
-                    )}
+                    ))}
                     <line
                       className="areaedge"
                       x1={scale.x(heel)}

@@ -135,8 +135,12 @@ export function hydrostatics(
   const toModelX = (X: number): number => X * cr + wlZ * sr;
 
   const lcb = c.xB,
-    // KB above the keel baseline — the deepest immersed point, not the deck datum
-    kb = c.zBWorld - (wlZ - c.draft);
+    // KB above K — `stationGeometry`'s keel baseline, which is the ONE vertical datum the whole hull is
+    // measured from: hydro's KB / KMt / KMl and stability's KN, KG and VCG all count upward from it, so the
+    // two modules' heights are directly comparable. Reading the datum off this cut instead (wlZ − draft, the
+    // deepest immersed point) would tie it to the waterline — it agrees only while the hull's lowest point
+    // happens to be submerged, and a heeled cut has no such point to read at all.
+    kb = c.zBWorld - geom.keelZ;
 
   // A submerged deck edge invalidates the waterplane, not just a missing one: where the sheer is under, the
   // solid is capped by the deck and contributes NO free surface, so a curve traced through the skin

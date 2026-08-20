@@ -1,6 +1,8 @@
 /* The stability window is two readings of one selected loading condition. Both charts keep their captions and
    scale together; in a narrow window they stack and the panel itself scrolls. */
 .stabilitypanel {
+  container-name: stability-panel;
+  container-type: size;
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
@@ -28,14 +30,78 @@
 .decknote {
   margin: 4px 0 0;
 }
-.stabilitychart {
+.chartframe {
+  position: relative;
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 230px;
+  display: flex;
+  flex-direction: column;
+}
+/* The overlaid toolbar takes no height of its own; the frame allows only for the wider top margin the plot
+   keeps beneath it. */
+.chartframe.navigable {
+  min-height: 242px;
+}
+.stabilitychart {
+  flex: 1 1 0;
+  width: 100%;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
   overflow: visible;
+}
+/* Preserve authored stroke weights even if an embedding context scales the responsive SVG. */
+.stabilitychart line,
+.stabilitychart path,
+.stabilitychart rect,
+.stabilitychart circle {
+  vector-effect: non-scaling-stroke;
 }
 .stabilitychart.clickable {
   cursor: crosshair;
 }
+.stabilitychart.pannable {
+  cursor: grab;
+  touch-action: none;
+}
+.stabilitychart.dragging {
+  cursor: grabbing;
+}
+/* Chart navigation (ChartFrame's toolbar) — the shared Button and ButtonGroup, held to the size of a chart
+   caption rather than of an app bar. It sits in the plot's own top margin, at the trailing corner: a row of its
+   own above the frame cost the chart a band of empty white as tall as the buttons themselves, on top of the
+   margin the plot already keeps there. ChartFrame widens that margin for a navigable chart instead, so the
+   controls land in space the drawing was never going to use and nothing below them moves down.
+
+   Sizing and placement are all this file has to say: what the buttons look like, when one is lit and when one
+   is dim, is the shared component's business, which is the point of it being the shared component. */
+.chartnav {
+  position: absolute;
+  top: 2px;
+  /* `right` comes from ChartFrame: the plot's own right margin, so the two trailing edges line up. */
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+/* Icon-only throughout, so the buttons are square-ish: the text padding would leave each glyph adrift in its
+   own button. */
+.chartnav .btn {
+  padding: 3px 6px;
+}
+.chartnav .btn svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+}
+/* The hand fills its own drawing to the edges, where the others keep a margin, so it is set a size smaller to
+   weigh the same as the icons beside it. */
+.chartnav .chartpan svg {
+  width: 13px;
+  height: 13px;
+}
+
 .chartgrid {
   stroke: var(--line);
   stroke-width: 1;
@@ -49,11 +115,14 @@
 .chartlabel {
   fill: var(--mut);
   font-family: inherit;
-  font-size: 12px;
   user-select: none;
+}
+.charttick {
+  font-size: 10px;
 }
 .chartlabel {
   fill: var(--ink);
+  font-size: 12px;
   font-weight: 600;
 }
 .unsafearea {
@@ -65,21 +134,35 @@
 
 /* The GZ-area shading. The scale is not a ramp from bad to good: red fails the criterion, amber clears it
    with little to spare, green is the comfortable band — and blue, deliberately off the ramp, is a large area
-   that is not automatically a better boat (it usually buys reserve energy with a stiff, snappy roll). */
-.gzband.fail {
-  fill: #fecaca;
+   that is not automatically a better boat (it usually buys reserve energy with a stiff, snappy roll).
+
+   Each band's two colours are said once, here, and carried by its key class: `--band` is the wash the chart
+   is shaded in, `--bandink` the darker relative of it that the same colour can be written in. Everything that
+   speaks of a band then asks for the band rather than for a hex — the envelope's shading, the area under the
+   GZ curve, the legend key, the selected condition's own reading — so none of them can drift out of agreement
+   with the drawing they are describing. */
+.fail {
+  --band: #fecaca;
+  --bandink: #b91c1c;
 }
-.gzband.limited {
-  fill: #fed7aa;
+.limited {
+  --band: #fed7aa;
+  --bandink: #c2410c;
 }
-.gzband.comfortable {
-  fill: #bbf7d0;
+.comfortable {
+  --band: #bbf7d0;
+  --bandink: #15803d;
 }
-.gzband.large {
-  fill: #bfdbfe;
+.large {
+  --band: #bfdbfe;
+  --bandink: #1d4ed8;
 }
-.gzband.vast {
-  fill: #ddd6fe;
+.vast {
+  --band: #ddd6fe;
+  --bandink: #6d28d9;
+}
+.gzband {
+  fill: var(--band);
 }
 .passcontour {
   fill: none;
@@ -105,25 +188,10 @@
   stroke-width: 2;
   opacity: 0.55;
 }
-/* the same shading under the curve it is measured from */
+/* the same shading under the curve it is measured from; slate where no band applies */
 .gzarea {
-  fill: #e2e8f0;
+  fill: var(--band, #e2e8f0);
   opacity: 0.75;
-}
-.gzarea.fail {
-  fill: #fecaca;
-}
-.gzarea.limited {
-  fill: #fed7aa;
-}
-.gzarea.comfortable {
-  fill: #bbf7d0;
-}
-.gzarea.large {
-  fill: #bfdbfe;
-}
-.gzarea.vast {
-  fill: #ddd6fe;
 }
 .areaedge {
   stroke: var(--station);
@@ -246,10 +314,32 @@
   color: var(--mut);
   font-size: 12px;
 }
+/* The readout's rule is there to part the numbers from the drawing above them. A legend already does that —
+   a row of bordered, filled keys is a firmer edge than a hairline — so where one sits between the two, the
+   rule would be a second horizontal line a few pixels under the first, and the pair of them read as a loose
+   empty band. Drop it there and close the gap; the GZ card, whose readout follows its chart directly, keeps
+   its rule. */
+.bandlegend + .conditionreadout {
+  padding-top: 4px;
+  border-top: 0;
+}
 .conditionreadout strong,
 .sheerimmersionreadout strong {
   color: var(--ink);
   font-variant-numeric: tabular-nums;
+}
+/* Each quantity is one unbreakable unit — the name and the number that answers it — so the row breaks between
+   quantities and never through the middle of one. Without this the flex items shrink to their longest word and
+   the last quantity, which is the longest, comes apart into a name, a number and a reading on three lines of
+   its own while the four beside it sit on one. */
+.conditionreadout > span,
+.sheerimmersionreadout > span {
+  white-space: nowrap;
+}
+/* The exception is the reading at the end, which is a sentence and breaks like one. It keeps the row's own
+   column gap from its chip, and takes what is left of the line before wrapping under it. */
+.conditionreadout .areanote {
+  white-space: normal;
 }
 .tag.issafe {
   background: #15803d;
@@ -303,48 +393,79 @@
 .bandlegend {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 6px;
-  padding-top: 6px;
-  font-size: 11px;
+  align-items: stretch;
+  width: 100%;
+  gap: 2px;
+  padding-top: 5px;
+  font-size: 10px;
   color: var(--ink);
 }
-/* a band's key carries its NAME, with the range it stands for under it — the name is the reading, the
-   numbers are the evidence for it, and neither is much use without the other */
+/* Share the available width equally between the colour keys. They shrink with the card rather than retaining
+   content-sized pills which wrap early and make the legend disproportionately tall. */
 .bandkey {
+  position: relative;
   display: inline-flex;
+  flex: 1 1 0;
+  min-width: 0;
   flex-direction: column;
-  padding: 2px 8px 3px;
+  justify-content: center;
+  padding: 2px 3px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  line-height: 1.25;
+  border-radius: 4px;
+  line-height: 1.1;
+  text-align: center;
+  overflow-wrap: anywhere;
+  background: var(--band);
   cursor: help;
 }
 .bandkey small {
-  font-size: 10px;
+  display: none;
+  margin-top: 1px;
+  font-size: 9px;
   color: #334155;
   opacity: 0.75;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.bandkey.fail {
-  background: #fecaca;
+/* In a tall panel the evidence fits under each name. In a compact panel it becomes a hover label instead,
+   keeping the legend to one short row without making the numeric range inaccessible. */
+@container stability-panel (min-height: 600px) {
+  .bandkey small {
+    display: block;
+  }
 }
-.bandkey.limited {
-  background: #fed7aa;
-}
-.bandkey.comfortable {
-  background: #bbf7d0;
-}
-.bandkey.large {
-  background: #bfdbfe;
-}
-.bandkey.vast {
-  background: #ddd6fe;
+@container stability-panel (max-height: 599px) {
+  .bandkey:hover small {
+    position: absolute;
+    z-index: 2;
+    top: 50%;
+    left: 50%;
+    display: block;
+    width: max-content;
+    max-width: none;
+    margin: 0;
+    padding: 3px 5px;
+    transform: translate(-50%, -50%);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--panel);
+    color: var(--ink);
+    opacity: 1;
+    overflow: visible;
+    text-overflow: clip;
+    pointer-events: none;
+  }
 }
 .hatchkey {
-  padding: 3px 8px;
+  flex: 1 0 100%;
+  box-sizing: border-box;
+  padding: 2px 5px;
   border: 1px solid #9a3412;
-  border-radius: 8px;
+  border-radius: 4px;
+  font-size: 9px;
+  text-align: center;
   background:
     repeating-linear-gradient(
       45deg,
@@ -361,20 +482,15 @@
       rgb(154 52 18 / 30%) 6px
     );
 }
-.conditionreadout .area.fail {
-  color: #b91c1c;
-}
-.conditionreadout .area.limited {
-  color: #c2410c;
-}
-.conditionreadout .area.comfortable {
-  color: #15803d;
-}
-.conditionreadout .area.large {
-  color: #1d4ed8;
-}
-.conditionreadout .area.vast {
-  color: #6d28d9;
+/* The one number that says which shade the selected condition is standing in, written in that band's ink.
+
+   It is `bandvalue` and not `area` because the shell owns `.area`: that is the resizable pane primitive
+   (EditorApp.css), a full-height COLUMN FLEX CONTAINER, and every window carrying this panel loads the shell
+   stylesheet too. Under the old name this one <strong> was quietly turned into a flex column — which is why
+   it stretched the width of the row and broke its own quantity across three lines while the four numbers
+   beside it stayed on one. */
+.conditionreadout .bandvalue {
+  color: var(--bandink);
 }
 .conditionreadout .areanote {
   color: var(--mut);
@@ -390,7 +506,10 @@
     flex: 0 0 auto;
     overflow: visible;
   }
-  .stabilitychart {
+  .chartframe {
     min-height: 260px;
+  }
+  .chartframe.navigable {
+    min-height: 272px;
   }
 }

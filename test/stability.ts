@@ -21,8 +21,8 @@
 //     continuous through it.
 //   - low displacement: the sparse end of the table still tracks directly computed cuts, and KN tends to the
 //     limit it should (the heeled lowest point's offset from K — NOT zero, except upright).
-//   - the area under GZ: the split into a hull term and a VCG term is the exact identity it claims, the
-//     integral over the 5° table tracks a 0.25° one, and the closed-form inverse really inverts it.
+//   - the area under GZ: only the positive lobe counts, the integral over the 5° table tracks a 0.25° one
+//     on curves that do and do not cross zero, and the inverse really inverts it on both.
 //   - past 90°: the curve runs to a vanishing angle and closes at exactly 0 at 180°.
 //   - a 3D mesh: ∇ and KN checked against the triangle mesh the STL exporter writes, integrated by the
 //     divergence theorem — no shared integration code. This is the real oracle, and it is what caught the
@@ -680,11 +680,13 @@ const sample = (model: Model): HullSampling => {
   );
 }
 
-// ---- the area under GZ: one integration per displacement, exact in VCG ----
+// ---- the area under GZ: the positive lobe only, one KN pass per displacement ----
 //
-// `gzAreaTerms` splits A(∇, VCG) into a hull term and a VCG term so the whole (∇, VCG) field — and every
-// contour drawn on it — comes off ONE integration per displacement. What has to hold: the split is the
-// identity it claims, the integral itself tracks a far finer one, and the inverse really is an inverse.
+// The criteria measure the energy the hull can ABSORB, so the integrand is max(GZ, 0). Past the vanishing
+// angle the hull is spending its own energy rather than storing a gust's, and netting that lobe off would
+// credit a capsizing hull for how hard it goes over. What has to hold: a curve the clip does not touch is
+// left exactly as it was, the clip really does bite on one that goes negative, the integral over the 5°
+// table tracks a 0.25° one on both, and the inverse really inverts.
 {
   const model = assemble(defaultHull());
   const h = hydrostatics(model, sample(model))!;
@@ -698,12 +700,41 @@ const sample = (model: Model): HullSampling => {
     `the area out to 30° is finite and positive (${area.toFixed(3)} units·rad)`,
   );
 
-  // the VCG term is exact: two centres of gravity differ by ΔVCG·(1 − cos φ₁) and by nothing else
+  // A curve that never goes negative is one the clip cannot touch, so the old exact identity still holds
+  // there: two centres of gravity differ by ΔVCG·(1 − cos φ₁) and by nothing else.
   const dv = 0.3 * Math.max(1e-6, h.kb);
+  const positiveThroughout = gzCurve(cc, h.vol, vcg + dv).every(
+    (p) => p.heel > upTo + 1e-12 || p.gz >= 0,
+  );
+  ok(positiveThroughout, "the reference condition's GZ stays positive to 30°");
   ok(
     Math.abs(gzArea(cc, h.vol, vcg + dv) - area + dv * (1 - Math.cos(upTo))) <
-      1e-12 * Math.max(1, Math.abs(area)),
-    "raising the VCG costs exactly ΔVCG·(1 − cos φ₁) of area",
+      1e-9 * Math.max(1, Math.abs(area)),
+    "with no negative lobe, raising the VCG still costs exactly ΔVCG·(1 − cos φ₁)",
+  );
+
+  // ...and a VCG that sinks part of the curve is where the two answers must part company. The bracket is
+  // read off the curve itself: GZ vanishes at φ exactly when VCG reaches KN(φ)/sin φ, so a VCG between that
+  // ratio at 5° and at 30° has the arm gone at one of them and still there at the other, whichever way this
+  // hull's curve happens to turn over. Sitting near the low end of the bracket leaves a substantial lobe.
+  const vAt = (deg: number) =>
+    knAtHeel(cc, h.vol, deg * DEG) / Math.sin(deg * DEG);
+  const bracket = [vAt(5), vAt(30)].sort((a, b) => a - b);
+  const sunk = bracket[0] + 0.15 * (bracket[1] - bracket[0]);
+  ok(
+    bracket[1] > bracket[0] * (1 + 1e-9),
+    "KN/sin φ differs between 5° and 30°, so some VCG crosses zero inside the range",
+  );
+  ok(
+    gzAtHeel(cc, h.vol, sunk, 5 * DEG) < 0 !==
+      gzAtHeel(cc, h.vol, sunk, 30 * DEG) < 0,
+    "the test condition's arm changes sign inside 0…30°",
+  );
+  const clipped = gzArea(cc, h.vol, sunk),
+    signed = gzArea(cc, h.vol, 0) - sunk * (1 - Math.cos(upTo));
+  ok(
+    clipped > signed * (1 + 1e-6) && clipped > 0,
+    `the negative lobe is dropped, not netted off (${clipped.toFixed(4)} vs a signed ${signed.toFixed(4)})`,
   );
 
   // the inverse is a real inverse, at an area the hull does not otherwise sit at
@@ -712,29 +743,64 @@ const sample = (model: Model): HullSampling => {
   const needed = vcgForGzArea(terms, target);
   ok(
     Math.abs(gzArea(cc, h.vol, needed) - target) <
-      1e-12 * Math.max(1, Math.abs(target)),
-    `vcgForGzArea inverts gzArea exactly (VCG ${needed.toFixed(3)} for ${target.toFixed(3)})`,
+      1e-8 * Math.max(1, Math.abs(target)),
+    `vcgForGzArea inverts gzArea (VCG ${needed.toFixed(3)} for ${target.toFixed(3)})`,
   );
   ok(
     needed > vcg,
     "a smaller area needs a higher VCG — the field decreases in KG",
   );
+  // it still inverts on a curve the clip has cut into — and lands somewhere the closed form would not have,
+  // which is the whole point of giving it up
+  const clippedTarget = clipped * 0.7;
+  const forClipped = vcgForGzArea(terms, clippedTarget);
+  const signedThere = gzArea(cc, h.vol, 0) - forClipped * (1 - Math.cos(upTo));
+  ok(
+    Math.abs(gzArea(cc, h.vol, forClipped) - clippedTarget) <
+      1e-8 * Math.max(1, Math.abs(clippedTarget)),
+    "vcgForGzArea inverts a curve whose arm vanishes inside the range",
+  );
+  ok(
+    Math.abs(signedThere - clippedTarget) > 1e-3 * Math.abs(clippedTarget),
+    `and the signed closed form would have put that contour elsewhere (${signedThere.toFixed(3)} vs ${clippedTarget.toFixed(3)})`,
+  );
+  // zero asks for the vanishing point itself: no area at or above it, some just below
+  const gone = vcgForGzArea(terms, 0);
+  ok(
+    gzArea(cc, h.vol, gone * (1 + 1e-6)) <= 0 &&
+      gzArea(cc, h.vol, gone * (1 - 1e-6)) > 0,
+    `an area of zero returns the VCG at which the lobe vanishes (${gone.toFixed(3)})`,
+  );
 
-  // and the integral tracks a far finer one: 0.5° steps, summed with the trapezoid rule, against the 5°
-  // table the panel actually draws from. This is the claim that the shading's contours sit where they say.
+  // and the integral tracks a far finer one: 0.25° steps, summed with the trapezoid rule and cut at the
+  // crossing, against the 5° table the panel actually draws from.
   const fine = crossCurves(model, sample(model), {
     steps: 40,
     heel: Array.from({ length: 121 }, (_, i) => i * 0.25),
   })!;
+  const fineArea = (vol: number, kg: number): number => {
+    const gz = gzCurve(fine, vol, kg).filter((p) => p.heel <= upTo + 1e-12);
+    if (gz.length < 2 || gz.some((p) => !Number.isFinite(p.gz))) return NaN;
+    let ref = 0;
+    for (let i = 1; i < gz.length; i++) {
+      const x0 = gz[i - 1].heel,
+        x1 = gz[i].heel,
+        y0 = gz[i - 1].gz,
+        y1 = gz[i].gz;
+      if (y0 >= 0 && y1 >= 0) ref += ((x1 - x0) * (y0 + y1)) / 2;
+      else if (y0 > 0 || y1 > 0) {
+        // one crossing: only the triangle on the positive side of it counts
+        const cross = x0 + (y0 / (y0 - y1)) * (x1 - x0);
+        ref += y0 > 0 ? ((cross - x0) * y0) / 2 : ((x1 - cross) * y1) / 2;
+      }
+    }
+    return ref;
+  };
   let worst = 0;
   for (const frac of [0.3, 0.6, 1, 1.4]) {
-    const vol = h.vol * frac;
-    const gz = gzCurve(fine, vol, vcg).filter((p) => p.heel <= upTo + 1e-12);
-    if (gz.length < 2 || gz.some((p) => !Number.isFinite(p.gz))) continue;
-    let ref = 0;
-    for (let i = 1; i < gz.length; i++)
-      ref += ((gz[i].heel - gz[i - 1].heel) * (gz[i].gz + gz[i - 1].gz)) / 2;
-    const mine = gzArea(cc, vol, vcg);
+    const ref = fineArea(h.vol * frac, vcg);
+    if (!Number.isFinite(ref)) continue;
+    const mine = gzArea(cc, h.vol * frac, vcg);
     worst = Math.max(
       worst,
       Math.abs(mine - ref) / Math.max(1e-9, Math.abs(ref)),
@@ -743,6 +809,17 @@ const sample = (model: Model): HullSampling => {
   ok(
     worst < 0.01,
     `the 5° table's area matches a 0.25° integration to 1% (worst ${(100 * worst).toFixed(2)}%)`,
+  );
+
+  // The clipped case is checked against the SAME reference but on an absolute scale, because a near-cancelled
+  // lobe is a difference of large numbers: at `sunk` the standing area is a couple of percent of the uncut
+  // one, so a crossing placed a fraction of a degree differently by the 5° table moves it by ~1% of ITSELF
+  // while moving it by well under a thousandth of the area the criterion is actually about. Normalising by
+  // the small number would be measuring the condition number, not the integration.
+  const crossingRef = fineArea(h.vol, sunk);
+  ok(
+    Math.abs(clipped - crossingRef) < 1e-3 * area,
+    `a curve cut by the clip still matches the fine integration to 0.1% of the uncut area (${clipped.toFixed(3)} vs ${crossingRef.toFixed(3)})`,
   );
 
   // off the table there is no area to report, and none is invented
@@ -758,6 +835,10 @@ const sample = (model: Model): HullSampling => {
   ok(
     !Number.isFinite(gzArea(short, h.vol, vcg)),
     "a table that stops before 30° reports no area rather than a partial one",
+  );
+  ok(
+    !Number.isFinite(vcgForGzArea(gzAreaTerms(short, h.vol), area / 2)),
+    "and its inverse reports nothing rather than searching an empty range",
   );
   // φ₁ between two heel angles is closed on the chord, not dropped
   const between = gzArea(cc, h.vol, vcg, 27.5 * DEG);
