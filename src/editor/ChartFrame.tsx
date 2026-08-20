@@ -109,7 +109,6 @@ const makeLayout = (
 
 type Domain = readonly [number, number];
 interface Viewport {
-  readonly key: string;
   readonly x: Domain;
   readonly y: Domain;
 }
@@ -379,22 +378,21 @@ function useChartNavigation({
   onPlotClick,
   onPlotHover,
 }: NavigationOptions) {
-  const viewportKey = [...xDomain, ...yDomain, ...initialX, ...initialY].join(
-      "|",
-    ),
-    [storedViewport, setStoredViewport] = useState<Viewport>(() => ({
-      key: viewportKey,
-      x: initialX,
-      y: initialY,
-    })),
+  // null until the chart is navigated. Until then it tracks the initial framing, so a chart still waiting on
+  // its analysis — or one whose hull is edited under it — opens on the extent its data now suggests. The first
+  // pan, zoom or framing makes the viewport the user's: from then on it is only held inside the complete
+  // domain, never re-seeded, so moving the waterline no longer throws away where they were looking.
+  const [storedViewport, setStoredViewport] = useState<Viewport | null>(null),
     [panEnabled, setPanEnabled] = useState(false),
     [isDragging, setIsDragging] = useState(false),
     temporaryPan = useTemporaryPan(enabled),
     panActive = panEnabled || temporaryPan.active,
-    viewport =
-      storedViewport.key === viewportKey
-        ? storedViewport
-        : { key: viewportKey, x: initialX, y: initialY },
+    viewport: Viewport = storedViewport
+      ? {
+          x: constrainDomain(storedViewport.x, xDomain),
+          y: constrainDomain(storedViewport.y, yDomain),
+        }
+      : { x: initialX, y: initialY },
     scale = chartScale(viewport, layout),
     drag = useRef<DragStart | null>(null),
     suppressClick = useRef(false);
@@ -431,8 +429,10 @@ function useChartNavigation({
         }
       : null;
   };
-  const setView = (x: Domain, y: Domain) =>
-    setStoredViewport({ key: viewportKey, x, y });
+  const setView = (x: Domain, y: Domain) => setStoredViewport({ x, y });
+  // Returning to the initial framing hands the viewport back rather than pinning it there: the chart is where
+  // it opened, and it follows the data again until the next gesture.
+  const resetView = () => setStoredViewport(null);
   const zoomAt = (factor: number, px: number, py: number) => {
     const xAnchor =
         viewport.x[0] +
@@ -585,6 +585,7 @@ function useChartNavigation({
     ),
     setPanEnabled,
     setView,
+    resetView,
     zoom: zoomCentered,
     svgEvents: {
       onClick: click,
@@ -884,6 +885,7 @@ export function ChartFrame({
       canZoomOut,
       setPanEnabled,
       setView,
+      resetView,
       zoom,
       svgEvents,
     } = useChartNavigation({
@@ -914,7 +916,7 @@ export function ChartFrame({
           canZoomOut={canZoomOut}
           zoom={zoom}
           togglePan={() => setPanEnabled((enabled) => !enabled)}
-          showInitial={() => setView(initialX, initialY)}
+          showInitial={resetView}
           showFull={() => setView(xDomain, yDomain)}
         />
       )}
