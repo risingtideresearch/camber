@@ -9,7 +9,6 @@ import {
   type RefObject,
 } from "react";
 import { Button } from "../components/Button";
-import { ButtonGroup } from "../components/ButtonGroup";
 
 // A small, dependency-free pair of Cartesian axes. Stability criteria all live in displacement/KG space,
 // so they can supply different layers while retaining exactly this frame, scales, pointer mapping and ticks.
@@ -64,12 +63,27 @@ interface ChartFrameProps {
 const BASE_WIDTH = 800,
   BASE_HEIGHT = 410,
   LEFT_MARGIN = 64,
-  RIGHT_MARGIN = 22,
+  // No trailing margin: the plot ends where the card's other rows end, so its right edge, the toolbar above it
+  // and the caption's tag all line up on one column. The margin existed to keep the last x tick label from
+  // overhanging; the labels near either end are anchored to the edge instead — see ChartDrawing.
+  RIGHT_MARGIN = 0,
   TOP_MARGIN = 20,
   // A navigable chart parks its toolbar in the top margin rather than above the frame, so that band is opened
   // just wide enough to hold it. It costs a third of what a row of its own did.
   NAVIGABLE_TOP_MARGIN = 32,
-  BOTTOM_MARGIN = 58;
+  BOTTOM_MARGIN = 58,
+  /** How far from an end a tick label has to be before it can stay centred: about half a wide one. */
+  TICK_LABEL_REACH = 26;
+
+/**
+ * Where the plot starts inside the frame, in CSS pixels — the band the y axis and its labels occupy.
+ *
+ * Exported because the frame is not the drawing: a legend or a caption stacked under the chart lines up with
+ * the CARD unless it is told otherwise, which leaves it starting 64px to the left of the picture it belongs
+ * to. One SVG unit is one CSS pixel here (see useSvgSize), so this crosses from the layout to the stylesheet
+ * unchanged.
+ */
+export const PLOT_LEFT_INSET = LEFT_MARGIN;
 
 interface ChartLayout {
   readonly width: number;
@@ -617,6 +631,8 @@ function NavIcon({ d }: { readonly d: string }) {
 interface ChartToolbarProps {
   /** Distance from the frame's right edge to the plot's, so the toolbar ends where the drawing does. */
   readonly rightInset: number;
+  /** How tall the plot's top margin is, less a hair of clearance. The toolbar sits on the FLOOR of it. */
+  readonly bandHeight: number;
   readonly panActive: boolean;
   readonly panEnabled: boolean;
   readonly initialViewLabel: string;
@@ -631,11 +647,17 @@ interface ChartToolbarProps {
 }
 
 // Three clusters, because the chart offers three separable things: a magnification, a mode, and a framing to
-// return to. The joined pairs follow ButtonGroup's rule — zoom is one movement taken in either direction, and
-// the two framings are a pick-one, so whichever the chart is currently showing lights up. Pan stays a
-// standalone rounded toggle, since it is lit independently of everything beside it.
+// return to. Zoom is one movement taken in either direction and the two framings are a pick-one, so each pair
+// is held together; pan stands alone, since it is lit independently of everything beside it.
+//
+// The pairs are spaced rather than joined — no ButtonGroup here. That component's whole job is to collapse the
+// borders between adjacent buttons into one shared line, and these are ghosts: they have no border to collapse
+// at rest, and the filled chip they take on hover would be dragged into its neighbour by the -1px the joining
+// depends on. With nothing to join, a tight gap inside a cluster against an open one between clusters says the
+// same thing and says it without the buttons having to touch.
 function ChartToolbar({
   rightInset,
+  bandHeight,
   panActive,
   panEnabled,
   initialViewLabel,
@@ -653,10 +675,15 @@ function ChartToolbar({
       className="chartnav"
       role="group"
       aria-label="Chart navigation"
-      style={{ right: `${rightInset}px` }}
+      // Both insets come from the layout: the trailing edge lines up with the plot's, and the band is the top
+      // margin the plot keeps for itself. The toolbar bottom-aligns inside it, so the white above it is wider
+      // than the sliver below — which is what makes it read as belonging to the drawing rather than to the
+      // row before it.
+      style={{ right: `${rightInset}px`, height: `${bandHeight}px` }}
     >
-      <ButtonGroup className="chartzoom">
+      <span className="chartnavgroup">
         <Button
+          variant="ghost"
           onClick={() => zoom(1 / 1.35)}
           disabled={!canZoomIn}
           aria-label="Zoom in"
@@ -665,6 +692,7 @@ function ChartToolbar({
           <NavIcon d={ZOOM_IN_PATH} />
         </Button>
         <Button
+          variant="ghost"
           onClick={() => zoom(1.35)}
           disabled={!canZoomOut}
           aria-label="Zoom out"
@@ -672,8 +700,9 @@ function ChartToolbar({
         >
           <NavIcon d={ZOOM_OUT_PATH} />
         </Button>
-      </ButtonGroup>
+      </span>
       <Button
+        variant="ghost"
         className="chartpan"
         active={panActive}
         aria-pressed={panEnabled}
@@ -687,8 +716,9 @@ function ChartToolbar({
       >
         <NavIcon d={PAN_PATH} />
       </Button>
-      <ButtonGroup className="chartviews">
+      <span className="chartnavgroup">
         <Button
+          variant="ghost"
           active={atInitial}
           onClick={showInitial}
           aria-label={`${initialViewLabel} view`}
@@ -697,6 +727,7 @@ function ChartToolbar({
           <NavIcon d={INITIAL_VIEW_PATH} />
         </Button>
         <Button
+          variant="ghost"
           active={atFull}
           onClick={showFull}
           aria-label="Full view"
@@ -704,7 +735,7 @@ function ChartToolbar({
         >
           <NavIcon d={FULL_VIEW_PATH} />
         </Button>
-      </ButtonGroup>
+      </span>
     </div>
   );
 }
@@ -746,6 +777,14 @@ function ChartDrawing({
       </defs>
       {xTicks.values.map((value) => {
         const px = scaleValue(value, viewport.x, left, right);
+        // A tick can land on either end of the axis, and a centred label there would hang half its width past
+        // the plot. The two outermost labels turn to face inwards instead, so the axis can run edge to edge.
+        const anchor =
+          px > right - TICK_LABEL_REACH
+            ? "end"
+            : px < left + TICK_LABEL_REACH
+              ? "start"
+              : "middle";
         return (
           <g key={`x-${value}`}>
             <line className="chartgrid" x1={px} y1={top} x2={px} y2={bottom} />
@@ -753,7 +792,7 @@ function ChartDrawing({
               className="charttick"
               x={px}
               y={bottom + 22}
-              textAnchor="middle"
+              textAnchor={anchor}
             >
               {formatX?.(value) ?? formatNiceTick(value, xTicks.step)}
             </text>
@@ -865,6 +904,7 @@ export function ChartFrame({
       {panZoom && (
         <ChartToolbar
           rightInset={layout.width - layout.right}
+          bandHeight={layout.top - 2}
           panActive={panActive}
           panEnabled={panEnabled}
           initialViewLabel={initialViewLabel}

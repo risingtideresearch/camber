@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, type ReactNode } from "react";
+import { NumberInput } from "polymorph-ui";
 import { unitScale } from "../core/json";
 import {
   gzAreaOf,
@@ -17,10 +18,18 @@ import {
   type GzBound,
   type LimitingKgPoint,
 } from "../core/stability";
+import { Button } from "../components/Button";
+import { ButtonGroup } from "../components/ButtonGroup";
+import { Dropdown } from "../components/Dropdown";
 import { useDocumentSnapshot } from "./documentStoreHooks";
 import { useEditorUi } from "./editorUi";
 import { useStabilityAnalysis } from "./useStabilityAnalysis";
-import { ChartFrame, type ChartScale, type PlotGrab } from "./ChartFrame";
+import {
+  ChartFrame,
+  PLOT_LEFT_INSET,
+  type ChartScale,
+  type PlotGrab,
+} from "./ChartFrame";
 import "./StabilityPanel.css";
 
 interface Condition {
@@ -29,19 +38,58 @@ interface Condition {
 }
 
 /**
- * How far the condition is allowed to be wrong, in each direction independently.
+ * How far ONE of the condition's two quantities is allowed to be wrong.
  *
- * Held in DISPLAYED units — tonnes across, model units up — because these are the numbers the user types and
- * the numbers a dragged handle lands on. The four extents are separate rather than a pair of ± values: a
- * displacement tolerance is often one-sided (the lightship is known and the gear on top of it is not), and
- * four handles can express that where a symmetric ± cannot.
+ * Held in DISPLAYED units — tonnes for the displacement, model units for the VCG — because these are the
+ * numbers the user types and the numbers a dragged handle lands on.
+ *
+ * The two extents are separate rather than a ± because a tolerance is often one-sided: the lightship is known
+ * and the gear on top of it is not. `linked` is what makes the common symmetrical case one number to keep in
+ * mind rather than two to keep equal — while it holds, an edit to either extent, typed or dragged, moves
+ * both. It is a statement about the tolerance and not a mode of the panel: the two extents are always what is
+ * stored, and always what is shown.
+ *
+ * `on` is per quantity, so a known displacement can be paired with an uncertain VCG, which is the case that a
+ * single switch over the pair could not express.
  */
-interface Spread {
-  xLo: number;
-  xHi: number;
-  yLo: number;
-  yHi: number;
+interface AxisTolerance {
+  readonly on: boolean;
+  readonly linked: boolean;
+  readonly lo: number;
+  readonly hi: number;
 }
+
+/** The condition's tolerance on both of its axes: x is the displacement, y the VCG. */
+interface Spread {
+  readonly x: AxisTolerance;
+  readonly y: AxisTolerance;
+}
+
+/** What an axis contributes to the rectangle — nothing at all while its tolerance is switched off. */
+const extentOf = (axis: AxisTolerance): { lo: number; hi: number } =>
+  axis.on ? { lo: axis.lo, hi: axis.hi } : { lo: 0, hi: 0 };
+
+/**
+ * The reference marks drawn over the shading — everything on the plane that is not the criterion itself.
+ *
+ * They are ONE object rather than a state each because that is how they are presented: a single Overlays
+ * control whose panel has a row per mark. The next reference to arrive is a row in that panel, not another
+ * bar above the chart, which is what the panel had been growing one of per feature.
+ */
+interface Overlays {
+  readonly sheerReference: boolean;
+  /** The heel the sheer immersion angle is compared against, in degrees. */
+  readonly sheerReferenceDeg: number;
+  readonly designWaterline: boolean;
+  readonly lowestSheer: boolean;
+}
+
+const DEFAULT_OVERLAYS: Overlays = {
+  sheerReference: true,
+  sheerReferenceDeg: 30,
+  designWaterline: true,
+  lowestSheer: true,
+};
 
 /** How finely the displacement interval is scanned for the readings' extremes over the rectangle. */
 const REGION_SAMPLES = 24;
@@ -137,6 +185,29 @@ const AREA_CRITERIA: readonly AreaCriterion[] = [
 ];
 /** The pass/fail contour the standard actually draws — the first band's floor. */
 const passArea = (criterion: AreaCriterion): number => criterion.bands[1].min;
+
+/** The four readings the plane can be shaded by, in the order the segmented bar offers them. */
+const SHADINGS: readonly {
+  readonly key: Coloring;
+  readonly label: string;
+  readonly hint: string;
+}[] = [
+  {
+    key: "gmt",
+    label: "Initial stability",
+    hint: "Where the transverse metacenter M stands above G — GMt > 0",
+  },
+  {
+    key: "gzmax",
+    label: "Maximum GZ",
+    hint: "The largest righting lever the condition reaches, against the 0.20 m criterion",
+  },
+  ...AREA_CRITERIA.map((criterion) => ({
+    key: criterion.key,
+    label: `Area to ${criterion.deg}°`,
+    hint: `The area under the GZ curve out to ${criterion.deg}°, against the IMO criterion of ${fmtArea(passArea(criterion))} m·rad`,
+  })),
+];
 
 const MAX_GZ_MIN = 0.2; // metres, at a heel of at least 30°
 const MAX_GZ_MIN_HEEL = 30 / DEG;
@@ -252,8 +323,13 @@ const bandPath = (
 
 const HANDLE_CAP = 7, // half-length of the visible end cap
   HANDLE_GRAB = 9; // half-extent of the invisible target around it, across the bar
-const fmtSpread = (value: number): string =>
-  Number.isFinite(value) ? String(Number(value.toPrecision(3))) : "0";
+/**
+ * What a typed or dragged field stores. polymorph-ui renders the value it is given with `toString`, so an
+ * unrounded drag would put a dozen digits in a box 60px wide; rounding on the way IN keeps the number in the
+ * state and the number on screen the same one, which is what stops the field fighting its own value.
+ */
+const snap = (value: number): number =>
+  Number.isFinite(value) ? Number(value.toPrecision(4)) : 0;
 
 /**
  * One end of one bar, draggable along its own axis.
@@ -331,44 +407,118 @@ function SpreadHandle({
 }
 
 /**
- * One tolerance box. It shows the live extent — so dragging a handle updates the number — but yields to
- * whatever is being typed for as long as it holds focus, which a plainly controlled input could not do.
+ * A mark that gives up an explanation on hover or focus, and takes no room until it is asked.
+ *
+ * CSS-only, and anchored to the bar it sits in rather than to itself: the card scrolls its own overflow, so a
+ * bubble hung off a mark near the right-hand end would be clipped by it or would open a scrollbar. Held to
+ * the bar's width, it can only ever grow downwards over the chart.
  */
-function SpreadField({
-  value,
-  sign,
+function InfoHint({
   label,
-  onCommit,
+  children,
 }: {
-  readonly value: number;
-  readonly sign: string;
   readonly label: string;
-  readonly onCommit: (value: number) => void;
+  readonly children: ReactNode;
 }) {
-  const [buffer, setBuffer] = useState<string | null>(null);
-  const commit = () => {
-    if (buffer === null) return;
-    const parsed = Number(buffer);
-    if (buffer.trim() && Number.isFinite(parsed)) onCommit(Math.max(0, parsed));
-    setBuffer(null);
-  };
   return (
-    <span className="spreadfield">
-      <span aria-hidden="true">{sign}</span>
-      <input
-        type="number"
-        min="0"
-        step="any"
-        aria-label={label}
-        value={buffer ?? fmtSpread(value)}
-        onFocus={() => setBuffer(fmtSpread(value))}
-        onChange={(event) => setBuffer(event.target.value)}
-        onBlur={commit}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
-        }}
-      />
+    <span className="infohint">
+      <button type="button" className="infomark" aria-label={label}>
+        i
+      </button>
+      <span className="infobubble" role="tooltip">
+        {children}
+      </span>
     </span>
+  );
+}
+
+/** The ± beside a quantity: whether it has a tolerance at all. Its extents are kept while it is off. */
+function ToleranceToggle({
+  on,
+  what,
+  onChange,
+}: {
+  readonly on: boolean;
+  readonly what: string;
+  readonly onChange: (on: boolean) => void;
+}) {
+  return (
+    <Button
+      className="rangetoggle"
+      active={on}
+      title={
+        on
+          ? `Every reading spans this tolerance — click to read ${what} as one exact value`
+          : `Give ${what} a tolerance, and read every value across it`
+      }
+      onClick={() => onChange(!on)}
+    >
+      ±
+    </Button>
+  );
+}
+
+/**
+ * A condition's tolerance on one axis: both extents on the quantity's own line, with the tie that links them.
+ *
+ * BOTH are always on show. A control that collapsed to one box while the two agreed had to be read before it
+ * could be trusted — the same field meant "both sides" or "the low side" depending on a number somewhere
+ * else — and it regrouped under the pointer as a drag happened to pass through symmetry. Two fields and a
+ * link say the same thing with nothing to infer.
+ *
+ * The signs ride inside their boxes here, which is the one place polymorph-ui's leading label reads correctly:
+ * "− 0.60" is the quantity, where "° 30" was a unit stranded in front of its number.
+ *
+ * `max` is not a limit so much as a scale: polymorph-ui's drag covers min…max in 200px, and without it a
+ * field for a 0.6 t tolerance would move a whole tonne per pixel.
+ */
+function ToleranceCells({
+  idBase,
+  axis,
+  max,
+  onExtent,
+  onLink,
+}: {
+  readonly idBase: string;
+  readonly axis: AxisTolerance;
+  readonly max: number;
+  readonly onExtent: (side: "lo" | "hi", value: number) => void;
+  readonly onLink: (linked: boolean) => void;
+}) {
+  return (
+    <>
+      <NumberInput
+        idBase={`${idBase}-lo`}
+        label="−"
+        value={axis.lo}
+        min={0}
+        max={max}
+        onChange={(value) => onExtent("lo", value)}
+      />
+      {/* Drawn as the tie between the two boxes it governs — unbroken while they move together, and a line
+          with a gap in it while each is its own. A mark rather than a word because it has to say WHICH two
+          fields it joins, which a word sitting beside them could not. */}
+      <button
+        type="button"
+        className={`tollink${axis.linked ? " islinked" : ""}`}
+        aria-pressed={axis.linked}
+        title={
+          axis.linked
+            ? "The two extents move together — click to give each its own"
+            : "Each extent is its own — click to move them together, at the wider of the two"
+        }
+        aria-label={axis.linked ? "Unlink the extents" : "Link the extents"}
+        onClick={() => onLink(!axis.linked)}
+      />
+      <NumberInput
+        idBase={`${idBase}-hi`}
+        label="+"
+        value={axis.hi}
+        min={0}
+        max={max}
+        onChange={(value) => onExtent("hi", value)}
+      />
+    </>
   );
 }
 
@@ -383,6 +533,82 @@ const rangeNote = (
     </small>
   ) : null;
 
+/**
+ * The Overlays menu: which reference marks are drawn. It uses the shared dropdown in its MENU form and its
+ * row primitives, so it reads as the same control as Curvature and Mesh resolution rather than as a third way
+ * of doing this — but with no toggle on the button, because there is no feature here to switch on. The marks
+ * are a list of independent choices, and a master switch over them would be one this panel invented.
+ *
+ * A mark's PARAMETER sits in the row under the mark it belongs to — the reference angle means nothing without
+ * the hatching it defines, and keeping the two together is what stops a "settings" section accumulating at
+ * the bottom of the panel. Dimmed rather than hidden while its mark is off: the value stays readable, and the
+ * panel does not resize under the pointer as rows are ticked.
+ */
+function OverlayControls({
+  value,
+  onChange,
+}: {
+  readonly value: Overlays;
+  readonly onChange: (next: Overlays) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const set = <K extends keyof Overlays>(key: K, next: Overlays[K]): void =>
+    onChange({ ...value, [key]: next });
+  return (
+    <Dropdown
+      label="Overlays"
+      open={open}
+      onOpenChange={setOpen}
+      title="Which reference marks are drawn over the shading"
+      menuLabel="Overlays"
+      align="right"
+    >
+      <div className="dd-section">
+        <div className="dd-group">References</div>
+        <label className="dd-row dd-check">
+          <input
+            type="checkbox"
+            checked={value.sheerReference}
+            onChange={(e) => set("sheerReference", e.target.checked)}
+          />
+          <span className="dd-name">Sheer immersion</span>
+        </label>
+        <div
+          className={`dd-row dd-sub${value.sheerReference ? "" : " isoff"}`}
+          title="Hatch the displacements whose sheer immerses before this heel"
+        >
+          <span className="dd-name">Immerses before</span>
+          <NumberInput
+            label=""
+            value={value.sheerReferenceDeg}
+            // The field is dragged as well as typed, and a heel is read in whole degrees either way.
+            onChange={(deg) => set("sheerReferenceDeg", Math.round(deg))}
+            min={5}
+            max={90}
+          />
+          <span className="dd-unit">°</span>
+        </div>
+        <label className="dd-row dd-check">
+          <input
+            type="checkbox"
+            checked={value.designWaterline}
+            onChange={(e) => set("designWaterline", e.target.checked)}
+          />
+          <span className="dd-name">Design waterline</span>
+        </label>
+        <label className="dd-row dd-check">
+          <input
+            type="checkbox"
+            checked={value.lowestSheer}
+            onChange={(e) => set("lowestSheer", e.target.checked)}
+          />
+          <span className="dd-name">Lowest sheer-immersing KG</span>
+        </label>
+      </div>
+    </Dropdown>
+  );
+}
+
 export function StabilityPanel() {
   const snapshot = useDocumentSnapshot();
   const { perf } = useEditorUi();
@@ -392,15 +618,21 @@ export function StabilityPanel() {
     hydro = analysis?.hydro ?? null,
     lowestSheerKg = analysis?.lowestSheerKg ?? NaN;
   const [condition, setCondition] = useState<Condition | null>(null);
-  // null is the range switched off, which is the panel this one grew out of: one condition, one curve.
+  // null until a tolerance is touched; `defaultSpread` stands in until then, so the first ± draws a rectangle
+  // immediately without seeding state from a viewport the analysis had not produced yet.
   const [spread, setSpread] = useState<Spread | null>(null);
   // Where the pointer is over the plane, if anywhere. Clicking pins a condition; merely pointing at one is
   // enough to see its curve, so the plane can be read continuously without committing to a selection.
   const [hover, setHover] = useState<Condition | null>(null);
-  const [coloring, setColoring] = useState<Coloring>("gmt");
-  const [showSheerReference, setShowSheerReference] = useState(true);
-  const [sheerReferenceDeg, setSheerReferenceDeg] = useState(30);
-  const [sheerReferenceInput, setSheerReferenceInput] = useState("30");
+  // The area out to 30° is the criterion a design is judged on first, so it is what the plane opens shaded by.
+  const [coloring, setColoring] = useState<Coloring>("gz30");
+  const [overlays, setOverlays] = useState<Overlays>(DEFAULT_OVERLAYS);
+  // Named for what each layer below asks. The reference angle keeps its own name because the hatch and its
+  // tooltip are stated in it.
+  const showSheerReference = overlays.sheerReference,
+    showDesignWaterline = overlays.designWaterline,
+    showLowestSheer = overlays.lowestSheer,
+    sheerReferenceDeg = overlays.sheerReferenceDeg;
   // The area criterion being shaded by, or null for the initial-stability and maximum-GZ readings. The area
   // readout falls back to the standard's first one, so switching away from area shading never blanks it.
   const criterion = AREA_CRITERIA.find((c) => c.key === coloring) ?? null;
@@ -455,6 +687,46 @@ export function StabilityPanel() {
       );
     return Math.min(yMax, Math.max(yMax / 1000, usefulMax * 1.18));
   }, [designXDomain, hydro, limit, lowestSheerKg, tonsPerVolume, yMax]);
+  // Off, linked, and — for when they are switched on — visible without swamping the chart: a twentieth of the
+  // design framing each way.
+  const defaultSpread = useMemo<Spread>(() => {
+    const x = snap((designXDomain[1] - designXDomain[0]) / 20),
+      y = snap(designYMax / 20);
+    return {
+      x: { on: false, linked: true, lo: x, hi: x },
+      y: { on: false, linked: true, lo: y, hi: y },
+    };
+  }, [designXDomain, designYMax]);
+  const tolerance = spread ?? defaultSpread;
+  const editAxis = (axis: "x" | "y", patch: Partial<AxisTolerance>): void =>
+    setSpread((s) => {
+      const base = s ?? defaultSpread;
+      return { ...base, [axis]: { ...base[axis], ...patch } };
+    });
+  // Every edit to an extent, typed or dragged, comes through here — so `linked` means the same thing to the
+  // fields and to the chart's handles: one number, moving both sides of the rectangle at once.
+  const setExtent = (
+    axis: "x" | "y",
+    side: "lo" | "hi",
+    value: number,
+  ): void => {
+    const next = snap(Math.max(0, value));
+    editAxis(
+      axis,
+      tolerance[axis].linked ? { lo: next, hi: next } : { [side]: next },
+    );
+  };
+  // Relinking takes the WIDER extent: it should never quietly narrow the rectangle the readings are over.
+  const setLinked = (axis: "x" | "y", linked: boolean): void =>
+    editAxis(
+      axis,
+      linked
+        ? (() => {
+            const both = Math.max(tolerance[axis].lo, tolerance[axis].hi);
+            return { linked, lo: both, hi: both };
+          })()
+        : { linked },
+    );
   // Only the KN curve behind the area costs table lookups, and it does not depend on KG — so ONE pass per
   // displacement carries every contour on this chart. See `gzAreaTerms`.
   const areaField = useMemo<readonly { x: number; terms: GzAreaTerms }[]>(
@@ -621,26 +893,29 @@ export function StabilityPanel() {
   //
   // Clamped to what the analysis can actually answer for, rather than passed through as typed: a tolerance
   // overhanging the end of the table should narrow the rectangle, not blank the whole band.
-  const region = spread
-    ? {
-        vol: [
-          clamp(
-            selected.vol - spread.xLo / tonsPerVolume,
-            volumeDomain[0],
-            volumeDomain[1],
-          ),
-          clamp(
-            selected.vol + spread.xHi / tonsPerVolume,
-            volumeDomain[0],
-            volumeDomain[1],
-          ),
-        ] as readonly [number, number],
-        kg: [
-          Math.max(0, selected.kg - spread.yLo),
-          Math.min(yMax, selected.kg + spread.yHi),
-        ] as readonly [number, number],
-      }
-    : null;
+  const dispExtent = extentOf(tolerance.x),
+    vcgExtent = extentOf(tolerance.y);
+  const region =
+    tolerance.x.on || tolerance.y.on
+      ? {
+          vol: [
+            clamp(
+              selected.vol - dispExtent.lo / tonsPerVolume,
+              volumeDomain[0],
+              volumeDomain[1],
+            ),
+            clamp(
+              selected.vol + dispExtent.hi / tonsPerVolume,
+              volumeDomain[0],
+              volumeDomain[1],
+            ),
+          ] as readonly [number, number],
+          kg: [
+            Math.max(0, selected.kg - vcgExtent.lo),
+            Math.min(yMax, selected.kg + vcgExtent.hi),
+          ] as readonly [number, number],
+        }
+      : null;
   const regionVols = region
     ? Array.from(
         { length: REGION_SAMPLES + 1 },
@@ -669,15 +944,7 @@ export function StabilityPanel() {
       }
     return { lo, hi };
   };
-  const volRange = region
-      ? {
-          lo: region.vol[0] * tonsPerVolume,
-          hi: region.vol[1] * tonsPerVolume,
-        }
-      : null,
-    kgRange = region ? { lo: region.kg[0], hi: region.kg[1] } : null,
-    kmtRange = rangeOf((vol) => limitingKgAt(limit, vol)),
-    gmtRange = rangeOf((vol, kg) => limitingKgAt(limit, vol) - kg),
+  const gmtRange = rangeOf((vol, kg) => limitingKgAt(limit, vol) - kg),
     maximumRange = rangeOf((vol, kg) => maximumGz(curves, vol, kg).gz * metres),
     peakRange = rangeOf((vol, kg) => maximumGz(curves, vol, kg).heel * DEG),
     beyond30Range = rangeOf(
@@ -759,163 +1026,38 @@ export function StabilityPanel() {
         <div className="cap">
           Limiting KG
           <span className="capctls">
-            <label className="shadepick">
-              Shade
-              <select
-                value={coloring}
-                onChange={(e) => setColoring(e.target.value as Coloring)}
+            <OverlayControls value={overlays} onChange={setOverlays} />
+          </span>
+        </div>
+        {/* What the plane is shaded by. A segmented bar rather than the select it was, because this is not a
+            setting of the chart but the question the whole card answers: it decides the shading, the legend,
+            the wording of the verdict, and which reading is taken beside the curve in the next card. A select
+            says "minor option" and hides its own alternatives; a bar shows the four readings as the four
+            readings. The explanation that used to sit under it in a paragraph of its own is behind the mark
+            at the end — it is read once and then never again, which is not worth a permanent row. */}
+        <div className="shadebar">
+          <ButtonGroup className="shadepick" aria-label="Shade the plane by">
+            {SHADINGS.map((shading) => (
+              <Button
+                key={shading.key}
+                active={coloring === shading.key}
+                title={shading.hint}
+                aria-pressed={coloring === shading.key}
+                onClick={() => setColoring(shading.key)}
               >
-                <option value="gmt">Initial stability</option>
-                <option value="gzmax">Maximum GZ</option>
-                {AREA_CRITERIA.map((c) => (
-                  <option key={c.key} value={c.key}>
-                    GZ area to {c.deg}°
-                  </option>
-                ))}
-              </select>
-            </label>
-            <span
-              className={`tag ${straddles ? "ismarginal" : displayedPass ? "issafe" : "isunsafe"}`}
-              title={
-                straddles
-                  ? "The criterion's own contour runs through the range — some of it complies and some of it does not."
-                  : undefined
-              }
-            >
-              {straddles
-                ? "MARGINAL"
-                : isMaximum
-                  ? displayedPass
-                    ? "PASS"
-                    : "FAIL"
-                  : safe
-                    ? "SAFE"
-                    : "UNSAFE"}
-            </span>
-          </span>
+                {shading.label}
+              </Button>
+            ))}
+          </ButtonGroup>
+          <InfoHint label="What this shading means">
+            {criterion
+              ? `Shaded by the area under GZ out to ${criterion.deg}°, which the IMO criterion puts at ${fmtArea(passArea(criterion))} m·rad or more.`
+              : isMaximum
+                ? "Shaded by maximum GZ. The dashed contour requires GZ ≥ 0.20 m at or beyond 30°; cross-hatching marks a qualifying lever whose peak occurs before 25°."
+                : "Green is where the transverse metacenter M is above G (GMt > 0)."}{" "}
+            Point anywhere to see that condition’s curve, and click to pin it.
+          </InfoHint>
         </div>
-        <div className="sheerreferencebar">
-          <label className="sheerreferencectl">
-            <input
-              type="checkbox"
-              checked={showSheerReference}
-              onChange={(e) => setShowSheerReference(e.target.checked)}
-            />
-            Sheer reference
-            <input
-              className="sheerreferenceinput"
-              type="number"
-              min="5"
-              max="90"
-              step="1"
-              value={sheerReferenceInput}
-              disabled={!showSheerReference}
-              aria-label="Sheer immersion reference angle in degrees"
-              onChange={(e) => setSheerReferenceInput(e.target.value)}
-              onBlur={() => {
-                const value = Number(sheerReferenceInput),
-                  next =
-                    sheerReferenceInput.trim() && Number.isFinite(value)
-                      ? clamp(value, 5, 90)
-                      : sheerReferenceDeg;
-                setSheerReferenceDeg(next);
-                setSheerReferenceInput(String(next));
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") e.currentTarget.blur();
-              }}
-            />
-            °
-          </label>
-          <span>
-            {showSheerReference
-              ? `Hatched where the sheer immerses before ${sheerReferenceDeg}°; clear where it immerses at or after it.`
-              : "Sheer-reference hatching hidden."}
-          </span>
-        </div>
-        <div className="rangebar">
-          <label className="rangetoggle">
-            <input
-              type="checkbox"
-              checked={spread !== null}
-              onChange={(event) =>
-                setSpread(
-                  event.target.checked
-                    ? {
-                        // visible without swamping the chart: a twentieth of the design framing each way
-                        xLo: (designXDomain[1] - designXDomain[0]) / 20,
-                        xHi: (designXDomain[1] - designXDomain[0]) / 20,
-                        yLo: designYMax / 20,
-                        yHi: designYMax / 20,
-                      }
-                    : null,
-                )
-              }
-            />
-            Range
-          </label>
-          {spread ? (
-            <>
-              <span className="rangegroup">
-                Δ
-                <SpreadField
-                  value={spread.xLo}
-                  sign="−"
-                  label="Displacement tolerance below the condition, in tonnes"
-                  onCommit={(value) =>
-                    setSpread((s) => s && { ...s, xLo: value })
-                  }
-                />
-                <SpreadField
-                  value={spread.xHi}
-                  sign="+"
-                  label="Displacement tolerance above the condition, in tonnes"
-                  onCommit={(value) =>
-                    setSpread((s) => s && { ...s, xHi: value })
-                  }
-                />
-                t
-              </span>
-              <span className="rangegroup">
-                KG
-                <SpreadField
-                  value={spread.yLo}
-                  sign="−"
-                  label={`VCG tolerance below the condition, in ${unit}`}
-                  onCommit={(value) =>
-                    setSpread((s) => s && { ...s, yLo: value })
-                  }
-                />
-                <SpreadField
-                  value={spread.yHi}
-                  sign="+"
-                  label={`VCG tolerance above the condition, in ${unit}`}
-                  onCommit={(value) =>
-                    setSpread((s) => s && { ...s, yHi: value })
-                  }
-                />
-                {unit}
-              </span>
-              <span>
-                Every reading is the range over the whole rectangle. Drag the
-                bar ends to change it.
-              </span>
-            </>
-          ) : (
-            <span>
-              Off — every reading is for the single condition. Switch on to give
-              the displacement and VCG a tolerance.
-            </span>
-          )}
-        </div>
-        <p className="stabilityhint">
-          {criterion
-            ? `Shaded by the area under GZ out to ${criterion.deg}°, which the IMO criterion puts at ${fmtArea(passArea(criterion))} m·rad or more.`
-            : isMaximum
-              ? "Shaded by maximum GZ. The dashed contour requires GZ ≥ 0.20 m at or beyond 30°; cross-hatching marks a qualifying lever whose peak occurs before 25°."
-              : "Green is where the transverse metacenter M is above G (GMt > 0)."}{" "}
-          Point anywhere to see that condition’s curve, and click to pin it.
-        </p>
         <ChartFrame
           xDomain={xDomain}
           yDomain={[0, yMax]}
@@ -1107,30 +1249,33 @@ export function StabilityPanel() {
                 >
                   <title>{`Sheer immersion before ${sheerReferenceDeg}°`}</title>
                 </path>
-                {lowestSheerKg >= 0 && lowestSheerKg <= yMax && (
-                  <>
-                    <line
-                      className="lowestsheerguide"
-                      x1={scale.left}
-                      y1={scale.y(lowestSheerKg)}
-                      x2={scale.right}
-                      y2={scale.y(lowestSheerKg)}
-                    />
-                    <text
-                      className="lowestsheerlabel"
-                      x={scale.right - 6}
-                      y={
-                        scale.y(lowestSheerKg) < scale.top + 22
-                          ? scale.y(lowestSheerKg) + 15
-                          : scale.y(lowestSheerKg) - 6
-                      }
-                      textAnchor="end"
-                    >
-                      Lowest sheer · {fmt(lowestSheerKg)} {unit}
-                    </text>
-                  </>
-                )}
-                {hydro &&
+                {showLowestSheer &&
+                  lowestSheerKg >= 0 &&
+                  lowestSheerKg <= yMax && (
+                    <>
+                      <line
+                        className="lowestsheerguide"
+                        x1={scale.left}
+                        y1={scale.y(lowestSheerKg)}
+                        x2={scale.right}
+                        y2={scale.y(lowestSheerKg)}
+                      />
+                      <text
+                        className="lowestsheerlabel"
+                        x={scale.right - 6}
+                        y={
+                          scale.y(lowestSheerKg) < scale.top + 22
+                            ? scale.y(lowestSheerKg) + 15
+                            : scale.y(lowestSheerKg) - 6
+                        }
+                        textAnchor="end"
+                      >
+                        Lowest sheer · {fmt(lowestSheerKg)} {unit}
+                      </text>
+                    </>
+                  )}
+                {showDesignWaterline &&
+                  hydro &&
                   hydro.vol >= volumeDomain[0] &&
                   hydro.vol <= volumeDomain[1] && (
                     <>
@@ -1171,9 +1316,7 @@ export function StabilityPanel() {
                 )}
                 {region &&
                   (() => {
-                    // The bars are the handles; the rectangle is the region they span. Drawing only the
-                    // bars would put no ink in the corners, which is exactly where the readings' extremes
-                    // are found — and where the box crossing a contour becomes visible.
+                    // The bars are the handles; the rectangle is the region they span.
                     const x0 = scale.x(region.vol[0] * tonsPerVolume),
                       x1 = scale.x(region.vol[1] * tonsPerVolume),
                       y0 = scale.y(region.kg[0]),
@@ -1183,85 +1326,85 @@ export function StabilityPanel() {
                       tons = selected.vol * tonsPerVolume;
                     return (
                       <>
-                        <rect
-                          className={`regionbox${straddles ? " straddles" : ""}`}
-                          x={Math.min(x0, x1)}
-                          y={Math.min(y0, y1)}
-                          width={Math.abs(x1 - x0)}
-                          height={Math.abs(y1 - y0)}
-                        />
-                        <line
-                          className="spreadbar"
-                          x1={x0}
-                          y1={cy}
-                          x2={x1}
-                          y2={cy}
-                        />
-                        <line
-                          className="spreadbar"
-                          x1={cx}
-                          y1={y0}
-                          x2={cx}
-                          y2={y1}
-                        />
-                        <SpreadHandle
-                          px={x0}
-                          py={cy}
-                          axis="x"
-                          label="Displacement tolerance below the condition"
-                          grab={grab}
-                          onMove={(at) =>
-                            setSpread(
-                              (s) =>
-                                s && { ...s, xLo: Math.max(0, tons - at.x) },
-                            )
-                          }
-                        />
-                        <SpreadHandle
-                          px={x1}
-                          py={cy}
-                          axis="x"
-                          label="Displacement tolerance above the condition"
-                          grab={grab}
-                          onMove={(at) =>
-                            setSpread(
-                              (s) =>
-                                s && { ...s, xHi: Math.max(0, at.x - tons) },
-                            )
-                          }
-                        />
-                        <SpreadHandle
-                          px={cx}
-                          py={y0}
-                          axis="y"
-                          label="VCG tolerance below the condition"
-                          grab={grab}
-                          onMove={(at) =>
-                            setSpread(
-                              (s) =>
-                                s && {
-                                  ...s,
-                                  yLo: Math.max(0, selected.kg - at.y),
-                                },
-                            )
-                          }
-                        />
-                        <SpreadHandle
-                          px={cx}
-                          py={y1}
-                          axis="y"
-                          label="VCG tolerance above the condition"
-                          grab={grab}
-                          onMove={(at) =>
-                            setSpread(
-                              (s) =>
-                                s && {
-                                  ...s,
-                                  yHi: Math.max(0, at.y - selected.kg),
-                                },
-                            )
-                          }
-                        />
+                        {/* The rectangle is drawn only when BOTH quantities have a tolerance — the bars
+                            would otherwise put no ink in the corners, which is where the readings' extremes
+                            are found and where the box crossing a contour becomes visible. With one of them
+                            exact there are no corners: the region IS the bar. */}
+                        {tolerance.x.on && tolerance.y.on && (
+                          <rect
+                            className={`regionbox${straddles ? " straddles" : ""}`}
+                            x={Math.min(x0, x1)}
+                            y={Math.min(y0, y1)}
+                            width={Math.abs(x1 - x0)}
+                            height={Math.abs(y1 - y0)}
+                          >
+                            {straddles && (
+                              <title>
+                                The criterion&rsquo;s own contour runs through
+                                the range — some of it complies and some of it
+                                does not.
+                              </title>
+                            )}
+                          </rect>
+                        )}
+                        {tolerance.x.on && (
+                          <>
+                            <line
+                              className="spreadbar"
+                              x1={x0}
+                              y1={cy}
+                              x2={x1}
+                              y2={cy}
+                            />
+                            <SpreadHandle
+                              px={x0}
+                              py={cy}
+                              axis="x"
+                              label="Displacement tolerance below the condition"
+                              grab={grab}
+                              onMove={(at) => setExtent("x", "lo", tons - at.x)}
+                            />
+                            <SpreadHandle
+                              px={x1}
+                              py={cy}
+                              axis="x"
+                              label="Displacement tolerance above the condition"
+                              grab={grab}
+                              onMove={(at) => setExtent("x", "hi", at.x - tons)}
+                            />
+                          </>
+                        )}
+                        {tolerance.y.on && (
+                          <>
+                            <line
+                              className="spreadbar"
+                              x1={cx}
+                              y1={y0}
+                              x2={cx}
+                              y2={y1}
+                            />
+                            <SpreadHandle
+                              px={cx}
+                              py={y0}
+                              axis="y"
+                              label="VCG tolerance below the condition"
+                              grab={grab}
+                              onMove={(at) =>
+                                setExtent("y", "lo", selected.kg - at.y)
+                              }
+                            />
+                            <SpreadHandle
+                              px={cx}
+                              py={y1}
+                              axis="y"
+                              label="VCG tolerance above the condition"
+                              grab={grab}
+                              onMove={(at) =>
+                                setExtent("y", "hi", at.y - selected.kg)
+                              }
+                            />
+                          </>
+                        )}
                       </>
                     );
                   })()}
@@ -1277,8 +1420,12 @@ export function StabilityPanel() {
             );
           }}
         </ChartFrame>
+        {/* The key to the shading, under the drawing it is the key to. */}
         {(criterion || isMaximum) && (
-          <div className="bandlegend">
+          <div
+            className="bandlegend"
+            style={{ paddingLeft: `${PLOT_LEFT_INSET}px` }}
+          >
             {(criterion?.bands ?? MAX_GZ_BANDS).map((band) => (
               <span
                 key={band.key}
@@ -1296,75 +1443,76 @@ export function StabilityPanel() {
             )}
           </div>
         )}
-        <div className="conditionreadout">
-          <span>
-            Δ <strong>{fmt(selected.vol * tonsPerVolume)} t</strong>
-            {rangeNote(volRange, fmt)}
-          </span>
-          <span>
-            KG{" "}
-            <strong>
-              {fmt(selected.kg)} {unit}
-            </strong>
-            {rangeNote(kgRange, fmt)}
-          </span>
-          <span>
-            KMt{" "}
-            <strong>
-              {fmt(bound)} {unit}
-            </strong>
-            {rangeNote(kmtRange, fmt)}
-          </span>
-          <span>
-            GMt{" "}
-            <strong>
-              {fmt(bound - selected.kg)} {unit}
-            </strong>
-            {rangeNote(gmtRange, fmt)}
-          </span>
-          {isMaximum ? (
-            <>
-              <span>
-                GZmax{" "}
-                <strong className={`bandvalue ${selectedMaximumBand.key}`}>
-                  {Number.isFinite(maximumMetres)
-                    ? `${maximumMetres.toFixed(3)} m`
-                    : "n/a"}
-                </strong>
-                {rangeNote(maximumRange, (v) => v.toFixed(3))}
-              </span>
-              <span>
-                Peak{" "}
-                <strong>
-                  {Number.isFinite(selectedMaximum.heel)
-                    ? `${Math.round(selectedMaximum.heel * DEG)}°`
-                    : "n/a"}
-                </strong>
-                {rangeNote(peakRange, (v) => `${Math.round(v)}°`)}
-                {selectedMaximum.deckDown && (
-                  <span className="areanote"> — after sheer immersion</span>
-                )}
-              </span>
-            </>
-          ) : (
-            <span>
-              A<sub>{readout.deg}</sub>{" "}
-              <strong
-                className={selectedBand ? `bandvalue ${selectedBand.key}` : ""}
-              >
-                {Number.isFinite(selectedArea)
-                  ? `${selectedArea.toFixed(3)} m·rad`
-                  : "n/a"}
-              </strong>
-              {rangeNote(areaRange, (v) => v.toFixed(3))}
-              {selectedBand && (
-                <span className="areanote" title={selectedBand.name}>
-                  {" "}
-                  — {selectedBand.note}
-                </span>
-              )}
-            </span>
-          )}
+        {/* The condition itself, and every reading taken of it. The two that DEFINE it are fields rather than
+            figures: a loading condition is a number that came out of a weight estimate, and pointing at it on
+            the plane is the coarse way to say it. KMt is not among the readings because it IS the limit curve
+            (see limitingKgCurve) — the chart states it at this displacement already, and GMt is the form of
+            it that the chart does not. */}
+        {/* ---------- the condition bar ---------- */}
+        {/* The two quantities that DEFINE the condition, as fields rather than figures: a loading condition
+            is a number that came out of a weight estimate, and pointing at it on the plane is the coarse way
+            to say it. One number to a line, in a grid of name · field · unit · control, so the units stand in
+            a column of their own instead of trailing each value into the next one along. The readings TAKEN
+            of the condition are in the GZ card, beside the curve they describe. */}
+        <div className="conditionbar">
+          <div className="quantity">
+            <label className="cname" htmlFor="cond-disp::input">
+              Δ
+            </label>
+            <NumberInput
+              idBase="cond-disp"
+              label=""
+              value={snap(selected.vol * tonsPerVolume)}
+              min={xDomain[0]}
+              max={xDomain[1]}
+              onChange={(tons) =>
+                setCondition({ vol: tons / tonsPerVolume, kg: selected.kg })
+              }
+            />
+            <span className="cunit">t</span>
+            <ToleranceToggle
+              on={tolerance.x.on}
+              what="the displacement"
+              onChange={(on) => editAxis("x", { on })}
+            />
+            {tolerance.x.on && (
+              <ToleranceCells
+                idBase="tol-disp"
+                axis={tolerance.x}
+                max={xDomain[1] - xDomain[0]}
+                onExtent={(side, value) => setExtent("x", side, value)}
+                onLink={(linked) => setLinked("x", linked)}
+              />
+            )}
+          </div>
+          <div className="quantity">
+            <label className="cname" htmlFor="cond-kg::input">
+              KG
+            </label>
+            <NumberInput
+              idBase="cond-kg"
+              label=""
+              value={snap(selected.kg)}
+              min={0}
+              max={yMax}
+              onChange={(kg) => setCondition({ vol: selected.vol, kg })}
+            />
+            <span className="cunit">{unit}</span>
+            <ToleranceToggle
+              on={tolerance.y.on}
+              what="the VCG"
+              onChange={(on) => editAxis("y", { on })}
+            />
+            {tolerance.y.on && (
+              <ToleranceCells
+                idBase="tol-kg"
+                axis={tolerance.y}
+                max={yMax}
+                onExtent={(side, value) => setExtent("y", side, value)}
+                onLink={(linked) => setLinked("y", linked)}
+              />
+            )}
+          </div>
         </div>
       </section>
 
@@ -1591,7 +1739,59 @@ export function StabilityPanel() {
             );
           }}
         </ChartFrame>
-        <div className="sheerimmersionreadout">
+        {/* Every reading taken of the condition, beside the curve they are readings of — the initial-stability
+            one, whichever large-angle criterion is being shaded by, and what the sheer does under it. */}
+        <div className="gzreadout">
+          <span>
+            GMt{" "}
+            <strong>
+              {fmt(bound - selected.kg)} {unit}
+            </strong>
+            {rangeNote(gmtRange, fmt)}
+          </span>
+          {isMaximum ? (
+            <>
+              <span>
+                GZmax{" "}
+                <strong className={`bandvalue ${selectedMaximumBand.key}`}>
+                  {Number.isFinite(maximumMetres)
+                    ? `${maximumMetres.toFixed(3)} m`
+                    : "n/a"}
+                </strong>
+                {rangeNote(maximumRange, (v) => v.toFixed(3))}
+              </span>
+              <span>
+                Peak{" "}
+                <strong>
+                  {Number.isFinite(selectedMaximum.heel)
+                    ? `${Math.round(selectedMaximum.heel * DEG)}°`
+                    : "n/a"}
+                </strong>
+                {rangeNote(peakRange, (v) => `${Math.round(v)}°`)}
+                {selectedMaximum.deckDown && (
+                  <span className="areanote"> — after sheer immersion</span>
+                )}
+              </span>
+            </>
+          ) : (
+            <span>
+              A<sub>{readout.deg}</sub>{" "}
+              <strong
+                className={selectedBand ? `bandvalue ${selectedBand.key}` : ""}
+              >
+                {Number.isFinite(selectedArea)
+                  ? `${selectedArea.toFixed(3)} m·rad`
+                  : "n/a"}
+              </strong>
+              {rangeNote(areaRange, (v) => v.toFixed(3))}
+              {selectedBand && (
+                <span className="areanote" title={selectedBand.name}>
+                  {" "}
+                  — {selectedBand.note}
+                </span>
+              )}
+            </span>
+          )}
           <span>
             Sheer immersion{" "}
             <strong>

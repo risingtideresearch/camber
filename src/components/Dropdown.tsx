@@ -2,18 +2,27 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { Button } from "./Button";
 import "./Dropdown.css";
 
-// A split "button + caret" control with a popover panel — the shared pattern behind the 3D view's Mesh
-// resolution control and the editor's Curvature control. The main button is a toggle (its pressed state is
-// `active`, its click is `onToggle`); the caret opens the panel, which renders `children` and closes on any
-// outside pointer-down. The caller owns both the toggle state and the open state, so the control stays a
-// pure presentation of them. `align` picks which edge the panel hangs from (default: the button's left).
+// A button with a popover panel, in two forms — the shared pattern behind the 3D view's Mesh resolution
+// control, the editor's Curvature control and the stability panel's Overlays menu. The panel renders
+// `children` and closes on any outside pointer-down; `align` picks which edge it hangs from (default: the
+// button's left).
+//
+// SPLIT form, when `onToggle` is given: a toggle button (pressed state `active`, click `onToggle`) joined to
+// a caret that opens the panel. For a feature that is switched on and off AND configured.
+//
+// MENU form, when it is not: one button carrying the caret, which only opens the panel. For a set of choices
+// with no master switch over them — where a toggle would have to invent one, and the button would claim to
+// enable something it merely lists.
+//
+// The caller owns the open state either way, so the control stays a pure presentation of it.
 //
 // Panel contents use the shared row primitives in Dropdown.css: `.dd-group` (a section header), `.dd-row`
-// (name · control · value), and `.dd-check` (a whole-row checkbox label).
+// (name · control · value), `.dd-check` (a whole-row checkbox label), and `.dd-sub` (a parameter row indented
+// under the check it configures, `.isoff` while that one is off, with `.dd-unit` for a trailing unit).
 interface DropdownProps {
   label: ReactNode; // the main button's content
-  active: boolean; // the main button's pressed (ink) state
-  onToggle: () => void; // the main button's click
+  active?: boolean; // split form: the main button's pressed (ink) state
+  onToggle?: () => void; // split form: the main button's click. Omit for the menu form.
   open: boolean; // whether the panel is shown
   onOpenChange: (open: boolean) => void;
   children: ReactNode; // the panel content
@@ -25,7 +34,7 @@ interface DropdownProps {
 
 export function Dropdown({
   label,
-  active,
+  active = false,
   onToggle,
   open,
   onOpenChange,
@@ -52,19 +61,35 @@ export function Dropdown({
       className={"dropdown" + (className ? " " + className : "")}
       ref={groupRef}
     >
-      <Button active={active} title={title} onClick={onToggle}>
-        {label}
-      </Button>
-      <Button
-        className="dropdown-caret"
-        active={open}
-        title={menuLabel}
-        aria-label={menuLabel}
-        aria-expanded={open}
-        onClick={() => onOpenChange(!open)}
-      >
-        ▾
-      </Button>
+      {onToggle ? (
+        <>
+          <Button active={active} title={title} onClick={onToggle}>
+            {label}
+          </Button>
+          <Button
+            className="dropdown-caret"
+            active={open}
+            title={menuLabel}
+            aria-label={menuLabel}
+            aria-expanded={open}
+            onClick={() => onOpenChange(!open)}
+          >
+            ▾
+          </Button>
+        </>
+      ) : (
+        <Button
+          active={open}
+          title={title ?? menuLabel}
+          aria-expanded={open}
+          onClick={() => onOpenChange(!open)}
+        >
+          {label}
+          <span className="dropdown-caret-mark" aria-hidden="true">
+            ▾
+          </span>
+        </Button>
+      )}
       {open && (
         <div className={"dropdown-panel dropdown-panel--" + align}>
           {children}

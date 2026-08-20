@@ -149,15 +149,6 @@ svg {
   color: var(--ink);
   font-size: 13px;
 }
-.cap .tag {
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 700;
-  font-size: 12px;
-  padding: 1px 8px;
-  border-radius: 10px;
-  color: #fff;
-}
 /* thin vertical divider between app-bar groups */
 .tabsep {
   width: 1px;

@@ -21,9 +21,7 @@
   flex: 1 1 0;
   color: var(--mut);
 }
-.stabilityhint,
 .decknote {
-  margin: 0 0 5px;
   color: var(--mut);
   font-size: 12px;
 }
@@ -68,8 +66,8 @@
 .stabilitychart.dragging {
   cursor: grabbing;
 }
-/* Chart navigation (ChartFrame's toolbar) — the shared Button and ButtonGroup, held to the size of a chart
-   caption rather than of an app bar. It sits in the plot's own top margin, at the trailing corner: a row of its
+/* Chart navigation (ChartFrame's toolbar) — the shared Button in its ghost variant, held to the size of a
+   chart caption rather than of an app bar. It sits in the plot's own top margin, at the trailing corner: a row of its
    own above the frame cost the chart a band of empty white as tall as the buttons themselves, on top of the
    margin the plot already keeps there. ChartFrame widens that margin for a navigable chart instead, so the
    controls land in space the drawing was never going to use and nothing below them moves down.
@@ -78,17 +76,27 @@
    is dim, is the shared component's business, which is the point of it being the shared component. */
 .chartnav {
   position: absolute;
-  top: 2px;
-  /* `right` comes from ChartFrame: the plot's own right margin, so the two trailing edges line up. */
+  top: 0;
+  /* `right` and `height` come from ChartFrame: the plot's own right margin, and its top margin less a hair of
+     clearance. Bottom-aligned within that band, so the buttons sit on the plot's top edge with the white
+     ABOVE them — the gap that used to be under them is what made them read as the row before the chart. */
   z-index: 1;
   display: flex;
-  align-items: center;
-  gap: 5px;
+  align-items: flex-end;
+  /* The clusters are told apart by spacing, since ghosts have no borders to join: open between them... */
+  gap: 12px;
+}
+/* ...and tight within one. */
+.chartnavgroup {
+  display: flex;
+  gap: 1px;
 }
 /* Icon-only throughout, so the buttons are square-ish: the text padding would leave each glyph adrift in its
    own button. */
 .chartnav .btn {
   padding: 3px 6px;
+  /* squarer than an app-bar button: these are icons, and the chip behind one should read as its own square */
+  border-radius: 6px;
 }
 .chartnav .btn svg {
   display: block;
@@ -304,27 +312,17 @@
   stroke-width: 3px;
   stroke-linejoin: round;
 }
-.conditionreadout,
-.sheerimmersionreadout {
+.gzreadout {
   display: flex;
   flex-wrap: wrap;
+  align-items: baseline;
   gap: 4px 18px;
   padding-top: 7px;
   border-top: 1px solid var(--line);
   color: var(--mut);
   font-size: 12px;
 }
-/* The readout's rule is there to part the numbers from the drawing above them. A legend already does that —
-   a row of bordered, filled keys is a firmer edge than a hairline — so where one sits between the two, the
-   rule would be a second horizontal line a few pixels under the first, and the pair of them read as a loose
-   empty band. Drop it there and close the gap; the GZ card, whose readout follows its chart directly, keeps
-   its rule. */
-.bandlegend + .conditionreadout {
-  padding-top: 4px;
-  border-top: 0;
-}
-.conditionreadout strong,
-.sheerimmersionreadout strong {
+.gzreadout strong {
   color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
@@ -332,154 +330,183 @@
    quantities and never through the middle of one. Without this the flex items shrink to their longest word and
    the last quantity, which is the longest, comes apart into a name, a number and a reading on three lines of
    its own while the four beside it sit on one. */
-.conditionreadout > span,
-.sheerimmersionreadout > span {
+.gzreadout > span {
   white-space: nowrap;
 }
 /* The exception is the reading at the end, which is a sentence and breaks like one. It keeps the row's own
    column gap from its chip, and takes what is left of the line before wrapping under it. */
-.conditionreadout .areanote {
+.gzreadout .areanote {
   white-space: normal;
 }
-.tag.issafe {
-  background: #15803d;
-}
-.tag.isunsafe {
-  background: var(--danger);
-}
 
-/* what shading is on, and what its bands mean — a strip of swatches reading the same order as the chart */
+/* what the caption carries besides its name — now only the Overlays menu */
 .capctls {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
 }
-.shadepick {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
+/* The caption is uppercase and letter-spaced; a control sitting in it is not. .btn takes `font: inherit`, and
+   both of those inherit besides the shorthand, so the dropdown has to opt out of them by hand. */
+.capctls .btn {
   text-transform: none;
   letter-spacing: 0;
-  color: var(--mut);
 }
-.shadepick select {
-  font: inherit;
-  font-size: 12px;
-  color: var(--ink);
-}
-.sheerreferencebar {
+/* ---------- what the plane is shaded by ---------- */
+/* The four readings as one segmented bar, on the row the explanation used to have to itself. Held to the size
+   of a chart caption rather than of an app bar, like the chart's own navigation above it. */
+.shadebar {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 12px;
-  margin: -2px 0 5px;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+}
+.shadepick .btn {
+  padding: 3px 9px;
+  font-size: 12px;
+}
+/* The mark, and the explanation it gives up. The bubble is anchored to the BAR, not to the mark: the card
+   scrolls its own overflow, so a bubble hung off a mark near the trailing end would be clipped by it or would
+   open a scrollbar. Held to the bar's own width it can only grow downwards, over the chart. */
+.infohint {
+  display: inline-flex;
+}
+.infomark {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: #fff;
   color: var(--mut);
-  font-size: 11px;
-}
-.sheerreferencectl {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  white-space: nowrap;
-}
-.sheerreferencectl input[type="checkbox"] {
-  margin: 0;
-}
-.sheerreferenceinput {
-  width: 48px;
   font: inherit;
-  color: var(--ink);
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
 }
+.infomark:hover,
+.infohint:focus-within .infomark {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.infobubble {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 25;
+  visibility: hidden;
+  max-width: min(420px, 100%);
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(17, 24, 31, 0.16);
+  color: var(--mut);
+  font-size: 12px;
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.infohint:hover .infobubble,
+.infohint:focus-within .infobubble {
+  visibility: visible;
+}
+/* The key to the shading: a swatch and a name apiece, at the size of a caption.
+   
+   It used to be four filled boxes sharing the full width, which put the loudest block of colour on the card
+   on everything except the drawing — and the drawing is the thing those colours are FOR. A legend is a
+   reference, consulted once and then carried in the head; it should be the quietest row on the card, not the
+   second loudest. So the fill shrinks to a chip the size of the text beside it, the row is content-width
+   rather than stretched, and the numbers each band covers wait behind a hover. */
 .bandlegend {
   display: flex;
   flex-wrap: wrap;
-  align-items: stretch;
-  width: 100%;
-  gap: 2px;
-  padding-top: 5px;
+  align-items: baseline;
+  gap: 3px 13px;
+  /* Close under the chart, which it belongs to, and set in to start where the drawing does — `paddingLeft`
+     comes from ChartFrame's own left margin, so the keys sit under the plot rather than under the y axis's
+     label band. The rule below parts it from the condition, which it does not belong to, and stands back far
+     enough to read as the end of a section. Light enough now that the rule is doing real work: the filled
+     boxes it used to be were their own firmer edge, and a hairline a few pixels under one read as a loose
+     empty band. */
+  margin: 6px 0 14px;
   font-size: 10px;
-  color: var(--ink);
+  color: var(--mut);
 }
-/* Share the available width equally between the colour keys. They shrink with the card rather than retaining
-   content-sized pills which wrap early and make the legend disproportionately tall. */
 .bandkey {
   position: relative;
   display: inline-flex;
-  flex: 1 1 0;
-  min-width: 0;
-  flex-direction: column;
-  justify-content: center;
-  padding: 2px 3px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  line-height: 1.1;
-  text-align: center;
-  overflow-wrap: anywhere;
-  background: var(--band);
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
   cursor: help;
 }
+.bandkey::before {
+  content: "";
+  align-self: center;
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border: 1px solid rgb(0 0 0 / 12%);
+  border-radius: 3px;
+  background: var(--band);
+}
+.bandkey:hover {
+  color: var(--ink);
+}
+/* the range the band covers, which is evidence rather than a label: on hover, over whatever is beside it */
 .bandkey small {
+  position: absolute;
+  z-index: 2;
+  bottom: calc(100% + 4px);
+  left: 0;
   display: none;
-  margin-top: 1px;
-  font-size: 9px;
-  color: #334155;
-  opacity: 0.75;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* In a tall panel the evidence fits under each name. In a compact panel it becomes a hover label instead,
-   keeping the legend to one short row without making the numeric range inaccessible. */
-@container stability-panel (min-height: 600px) {
-  .bandkey small {
-    display: block;
-  }
-}
-@container stability-panel (max-height: 599px) {
-  .bandkey:hover small {
-    position: absolute;
-    z-index: 2;
-    top: 50%;
-    left: 50%;
-    display: block;
-    width: max-content;
-    max-width: none;
-    margin: 0;
-    padding: 3px 5px;
-    transform: translate(-50%, -50%);
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    background: var(--panel);
-    color: var(--ink);
-    opacity: 1;
-    overflow: visible;
-    text-overflow: clip;
-    pointer-events: none;
-  }
-}
-.hatchkey {
-  flex: 1 0 100%;
-  box-sizing: border-box;
-  padding: 2px 5px;
-  border: 1px solid #9a3412;
+  width: max-content;
+  padding: 3px 5px;
+  border: 1px solid var(--line);
   border-radius: 4px;
+  background: var(--panel);
+  box-shadow: 0 4px 12px rgb(17 24 31 / 12%);
+  color: var(--ink);
   font-size: 9px;
-  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.bandkey:hover small {
+  display: block;
+}
+/* The secondary warning the maximum-GZ shading carries. Marked with its own hatch rather than a flat colour,
+   because that is how it is drawn on the plane — but at the weight of the rest of the row now. */
+.hatchkey {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.hatchkey::before {
+  content: "";
+  align-self: center;
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border: 1px solid rgb(154 52 18 / 45%);
+  border-radius: 3px;
   background:
     repeating-linear-gradient(
       45deg,
       transparent,
-      transparent 4px,
-      rgb(154 52 18 / 30%) 4px,
-      rgb(154 52 18 / 30%) 6px
+      transparent 3px,
+      rgb(154 52 18 / 40%) 3px,
+      rgb(154 52 18 / 40%) 4px
     ),
     repeating-linear-gradient(
       -45deg,
       transparent,
-      transparent 4px,
-      rgb(154 52 18 / 30%) 4px,
-      rgb(154 52 18 / 30%) 6px
+      transparent 3px,
+      rgb(154 52 18 / 40%) 3px,
+      rgb(154 52 18 / 40%) 4px
     );
 }
 /* The one number that says which shade the selected condition is standing in, written in that band's ink.
@@ -489,10 +516,10 @@
    stylesheet too. Under the old name this one <strong> was quietly turned into a flex column — which is why
    it stretched the width of the row and broke its own quantity across three lines while the four numbers
    beside it stayed on one. */
-.conditionreadout .bandvalue {
+.gzreadout .bandvalue {
   color: var(--bandink);
 }
-.conditionreadout .areanote {
+.gzreadout .areanote {
   color: var(--mut);
 }
 
@@ -580,9 +607,6 @@
   fill-opacity: 0.1;
   cursor: help;
 }
-.tag.ismarginal {
-  background: #c2410c;
-}
 /* The spread of a reading, set under the reading itself — quieter than the number it qualifies, and on its
    own line so a row of ranges cannot be misread as a row of values. */
 .spreadrange {
@@ -592,34 +616,92 @@
   font-variant-numeric: tabular-nums;
   opacity: 0.75;
 }
-.rangebar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 12px;
-  margin: -2px 0 5px;
+/* ---------- the condition bar ---------- */
+/* One line per quantity, in seven columns: name · value · unit · ± · low · tie · high. A subgrid, so the two
+   lines share those tracks and every control stands under its opposite number — and so the line of a quantity
+   whose ± is off simply stops after the fourth column instead of pulling the next quantity's name into it,
+   which is what a single flat grid would do.
+
+   polymorph-ui's inputs read their colours and metrics from custom properties its own dark base.css defines
+   and this app does not, so the bar supplies them in the editor's light palette — the same recipe as
+   StationView.css .urow, where the reasoning for each of them lives. */
+.conditionbar {
+  display: grid;
+  grid-template-columns:
+    max-content 76px max-content max-content
+    66px max-content 66px;
+  gap: 5px 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
   color: var(--mut);
-  font-size: 11px;
+  font-size: 12px;
+
+  --ui-font-size: 12px;
+  --ui-font-weight: 400;
+  --item-height: 22px;
+  --item-padding: 0 6px;
+  --border-radius: 6px;
+  --input-background-color: #fff;
+  --primary-text-color: var(--ink);
+  --active-background-color: #bfdbfe;
 }
-.rangetoggle,
-.rangegroup {
-  display: flex;
+.quantity {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: baseline;
-  gap: 5px;
-  white-space: nowrap;
+  column-gap: 8px;
 }
-.rangetoggle input[type="checkbox"] {
-  margin: 0;
+/* the quantity's name, against the field it names */
+.cname {
+  text-align: right;
+  cursor: default;
 }
-.spreadfield {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 1px;
+.cunit {
+  color: var(--mut);
 }
-.spreadfield input {
-  width: 62px;
-  font: inherit;
+/* the InputContainer. content-box, against this app's global border-box (base.css): polymorph-ui centers the
+   value in the full --item-height, so under border-box the border would eat 2px of that height. */
+.quantity > div {
+  box-sizing: content-box;
+  border: 1px solid var(--line);
+}
+.quantity [data-part="input"] {
+  font-weight: 600;
+  text-align: right;
+  /* the app disables text selection while drawing (.app in EditorApp.css); these fields are text */
+  user-select: text;
+  -webkit-user-select: text;
+}
+/* The ± button: whether this quantity has a tolerance at all. Its extents are kept while it is off, so this
+   is a view of the condition and not a mode of it. */
+.rangetoggle {
+  justify-self: start;
+  padding: 1px 9px;
+  font-weight: 700;
+  line-height: 18px;
+}
+/* The tie between the two extents: one unbroken line while they move together, a line with a gap in it while
+   each is its own. Drawn in the background so the button keeps a real click target around a 2px mark. */
+.tollink {
+  align-self: center;
+  width: 18px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  color: var(--mut);
+  background:
+    linear-gradient(currentColor, currentColor) left center / 6px 2px no-repeat,
+    linear-gradient(currentColor, currentColor) right center / 6px 2px no-repeat;
+}
+.tollink.islinked {
   color: var(--ink);
+  background: linear-gradient(currentColor, currentColor) center / 100% 2px
+    no-repeat;
+}
+.tollink:hover {
+  color: var(--accent);
 }
 
 /* The hovered condition's curve, drawn against the pinned one. Thinner and much quieter than `.gzline`: it
