@@ -21,13 +21,6 @@
   flex: 1 1 0;
   color: var(--mut);
 }
-.decknote {
-  color: var(--mut);
-  font-size: 12px;
-}
-.decknote {
-  margin: 4px 0 0;
-}
 .chartframe {
   position: relative;
   flex: 1 1 auto;
@@ -274,11 +267,6 @@
   stroke: var(--accent);
   stroke-width: 3;
 }
-.deckdownpoint {
-  fill: var(--sheer);
-  stroke: white;
-  stroke-width: 1;
-}
 .sheerangle {
   stroke: #0f766e;
   stroke-width: 1.5;
@@ -312,12 +300,38 @@
   stroke-width: 3px;
   stroke-linejoin: round;
 }
+/* ---------- the captions ---------- */
+/* A caption is one line. Its name never gives up width — a bare text node in the flex row would otherwise be
+   an anonymous item, free to shrink and wrap while the reading beside it stayed whole. */
+.stabilitycard .cap {
+  gap: 12px;
+  min-width: 0;
+}
+.capname {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.stabilitycard .cap .val {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+.pinnedval {
+  flex: 0 1 auto;
+  white-space: nowrap;
+}
+
+/* ---------- the readings ---------- */
+/* CLOSED: a wrapping row of the few worth a constant glance. */
 .gzreadout {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 18px;
-  padding-top: 7px;
+  /* clearance for the opener sitting on the rule: half its height, so a reading that wraps to the trailing
+     end of the first line still passes under it rather than into it */
+  padding-top: 11px;
   border-top: 1px solid var(--line);
   color: var(--mut);
   font-size: 12px;
@@ -332,6 +346,64 @@
    its own while the four beside it sit on one. */
 .gzreadout > span {
   white-space: nowrap;
+}
+.rname {
+  color: var(--mut);
+}
+/* OPEN: every reading, a tile apiece. Auto-fill rather than a fixed count, so the grid answers the width the
+   window happens to give the card instead of a number chosen here. */
+.gzreadout.isopen {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 9px 16px;
+}
+.gzreadout.isopen > span {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  white-space: normal;
+}
+.gzreadout.isopen .rname {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.gzreadout.isopen strong {
+  font-size: 14px;
+}
+/* the spread already sets itself under its number (see .spreadrange); in a tile it needs no indent either */
+.gzreadout.isopen .spreadrange {
+  margin-top: 0;
+}
+/* The chart gives up its floor while the numbers are open — that is the trade the button offers. Anything
+   beyond what the two of them can share, the card scrolls, as it always did. */
+.gzcard.numbersopen .chartframe {
+  min-height: 130px;
+}
+/* The opener, astride the rule that parts the readings from the chart — sitting ON the separator rather than
+   in the row, so it costs the section no height of its own in either size. The card's own background masks
+   the hairline behind it, which is what makes the rule appear to break around the word.
+
+   `.gzreadout .btn` and not `.readmore` alone: the ghost's `background: none` is two classes deep, and this
+   has to outrank it rather than depend on which stylesheet the bundler happened to put last. */
+.gzreadout .btn.readmore {
+  position: absolute;
+  top: 0;
+  right: 0;
+  transform: translateY(-50%);
+  padding: 0 6px;
+  border-radius: 5px;
+  background: var(--panel);
+  font-size: 10px;
+  line-height: 15px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.gzreadout .btn.readmore:hover {
+  background: #f1f5f9;
+}
+.gzreadout .btn.readmore.active {
+  background: var(--ink);
 }
 /* The exception is the reading at the end, which is a sentence and breaks like one. It keeps the row's own
    column gap from its chip, and takes what is left of the line before wrapping under it. */
@@ -508,16 +580,6 @@
       rgb(154 52 18 / 40%) 3px,
       rgb(154 52 18 / 40%) 4px
     );
-}
-/* The one number that says which shade the selected condition is standing in, written in that band's ink.
-
-   It is `bandvalue` and not `area` because the shell owns `.area`: that is the resizable pane primitive
-   (EditorApp.css), a full-height COLUMN FLEX CONTAINER, and every window carrying this panel loads the shell
-   stylesheet too. Under the old name this one <strong> was quietly turned into a flex column — which is why
-   it stretched the width of the row and broke its own quantity across three lines while the four numbers
-   beside it stayed on one. */
-.gzreadout .bandvalue {
-  color: var(--bandink);
 }
 .gzreadout .areanote {
   color: var(--mut);
@@ -716,7 +778,12 @@
 /* The hovered condition named beside the pinned one, in the quieter of the two weights, so the pinned
    reading does not shift on the line as the pointer moves. */
 .ghostval {
+  flex: 0 1 auto;
+  min-width: 0;
   margin-right: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   opacity: 0.6;
   font-weight: 400;
 }

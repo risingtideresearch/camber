@@ -432,6 +432,53 @@ function InfoHint({
   );
 }
 
+/**
+ * The readings, in one of two sizes.
+ *
+ * CLOSED they are a wrapping row of the few that are always worth a glance. OPEN they become a grid of the
+ * lot, one tile apiece with room for the name, the number and its spread — and the chart above gives up the
+ * height, because a card whose numbers are being read does not need as much of a picture.
+ */
+function Readings({
+  readings,
+  open,
+  onToggle,
+}: {
+  readonly readings: readonly Reading[];
+  readonly open: boolean;
+  readonly onToggle: () => void;
+}) {
+  return (
+    <div className={open ? "gzreadout isopen" : "gzreadout"}>
+      {readings
+        .filter((reading) => open || reading.always)
+        .map((reading) => (
+          <span key={reading.id} title={reading.title}>
+            <span className="rname">{reading.name}</span>{" "}
+            <strong>{reading.value}</strong>
+            {reading.range}
+            {reading.note}
+          </span>
+        ))}
+      {/* Last in the row, where it reads as the end of what is on show — "…and more", rather than a control
+          in the caption asking to be connected to something eight inches below it. */}
+      <Button
+        variant="ghost"
+        className="readmore"
+        aria-expanded={open}
+        title={
+          open
+            ? "Show only the key readings, and give the height back to the curve"
+            : "Show every reading, at the curve's expense"
+        }
+        onClick={onToggle}
+      >
+        {open ? "Less ▴" : "More ▾"}
+      </Button>
+    </div>
+  );
+}
+
 /** The ± beside a quantity: whether it has a tolerance at all. Its extents are kept while it is off. */
 function ToleranceToggle({
   on,
@@ -520,6 +567,23 @@ function ToleranceCells({
       />
     </>
   );
+}
+
+/**
+ * One reading of the selected condition.
+ *
+ * `always` marks the handful worth having on screen at all times; the rest are there when the section is
+ * opened out. None of them depends on what the plane is shaded by — a design either satisfies the criteria or it
+ * does not, and which one is being pictured at the moment has no bearing on that.
+ */
+interface Reading {
+  readonly id: string;
+  readonly name: ReactNode;
+  readonly value: string;
+  readonly range: ReactNode;
+  readonly note?: ReactNode;
+  readonly title?: string;
+  readonly always: boolean;
 }
 
 /** The spread of a reading across the rectangle, shown under the reading itself. */
@@ -627,6 +691,9 @@ export function StabilityPanel() {
   // The area out to 30° is the criterion a design is judged on first, so it is what the plane opens shaded by.
   const [coloring, setColoring] = useState<Coloring>("gz30");
   const [overlays, setOverlays] = useState<Overlays>(DEFAULT_OVERLAYS);
+  // Whether the readings are opened out to all of them. It costs the GZ chart height, which is the trade the
+  // button offers: the curve is the subject until the numbers are what is being read.
+  const [numbersOpen, setNumbersOpen] = useState(false);
   // Named for what each layer below asks. The reference angle keeps its own name because the hatch and its
   // tooltip are stated in it.
   const showSheerReference = overlays.sheerReference,
@@ -874,9 +941,6 @@ export function StabilityPanel() {
       MAX_GZ_MIN_HEEL,
     ),
     maximumMetres = selectedMaximum.gz * metres,
-    selectedMaximumBand = MAX_GZ_BANDS.reduce((best, band) =>
-      maximumMetres >= band.min ? band : best,
-    ),
     maximumPass =
       selectedBeyond30.gz * metres >= MAX_GZ_MIN &&
       selectedMaximum.heel >= MAX_GZ_MIN_PEAK_HEEL,
@@ -944,31 +1008,46 @@ export function StabilityPanel() {
       }
     return { lo, hi };
   };
-  const gmtRange = rangeOf((vol, kg) => limitingKgAt(limit, vol) - kg),
+  const kmtRange = rangeOf((vol) => limitingKgAt(limit, vol)),
+    gmtRange = rangeOf((vol, kg) => limitingKgAt(limit, vol) - kg),
     maximumRange = rangeOf((vol, kg) => maximumGz(curves, vol, kg).gz * metres),
     peakRange = rangeOf((vol, kg) => maximumGz(curves, vol, kg).heel * DEG),
     beyond30Range = rangeOf(
       (vol, kg) => maximumGz(curves, vol, kg, MAX_GZ_MIN_HEEL).gz * metres,
     ),
     sheerRange = rangeOf((vol) => sheerImmersionAngle(curves, vol) * DEG);
+  // EVERY area criterion, read for the selected condition and spread over the rectangle — not just the one
+  // the plane happens to be shaded by. Which criterion is being looked at is a question about the picture;
+  // which ones a design has to satisfy is not, and these are the numbers that answer the second.
+  //
   // The area is the one reading whose per-displacement setup is worth holding on to, so it does not go
   // through `rangeOf`: one `gzAreaTerms` per column serves both VCG edges.
-  const areaRange = region
-    ? (() => {
-        let lo = Infinity,
-          hi = -Infinity;
-        for (const vol of regionVols) {
-          const terms = gzAreaTerms(curves, vol, readout.upTo);
-          for (const kg of region.kg) {
-            const value = gzAreaOf(terms, kg) * metres;
-            if (!Number.isFinite(value)) return null;
-            lo = Math.min(lo, value);
-            hi = Math.max(hi, value);
+  const areaReadings = AREA_CRITERIA.map((c) => {
+    const value =
+      gzAreaOf(gzAreaTerms(curves, selected.vol, c.upTo), selected.kg) * metres;
+    const range = region
+      ? (() => {
+          let lo = Infinity,
+            hi = -Infinity;
+          for (const vol of regionVols) {
+            const terms = gzAreaTerms(curves, vol, c.upTo);
+            for (const kg of region.kg) {
+              const at = gzAreaOf(terms, kg) * metres;
+              if (!Number.isFinite(at)) return null;
+              lo = Math.min(lo, at);
+              hi = Math.max(hi, at);
+            }
           }
-        }
-        return { lo, hi };
-      })()
-    : null;
+          return { lo, hi };
+        })()
+      : null;
+    return { criterion: c, value, band: bandFor(c, value), range };
+  });
+  // The one the plane is shaded by, which is the only place the shading still reaches into the numbers: it
+  // decides which contour the rectangle can straddle, and which area the GZ curve fills out to.
+  const activeArea =
+    areaReadings.find((a) => a.criterion === readout) ?? areaReadings[0];
+  const areaRange = activeArea.range;
   const envelope: readonly GzBound[] = region
     ? gzEnvelope(curves, region.vol, region.kg)
     : [];
@@ -1016,15 +1095,100 @@ export function StabilityPanel() {
     gzPad = Math.max((gzMax - gzMin) * 0.1, yMax * 0.01),
     gzDomain: readonly [number, number] = [gzMin - gzPad, gzMax + gzPad];
 
-  // the selected condition's own area, converted out of model units into the m·rad the criteria are stated in
-  const selectedTerms = gzAreaTerms(curves, selected.vol, readout.upTo);
-  const selectedArea = gzAreaOf(selectedTerms, selected.kg) * metres;
-  const selectedBand = bandFor(readout, selectedArea);
+  const readings: readonly Reading[] = [
+    {
+      id: "kmt",
+      name: "KMt",
+      value: `${fmt(bound)} ${unit}`,
+      range: rangeNote(kmtRange, fmt),
+      title:
+        "Transverse metacentre above the keel — the hull's own geometry, whatever it is loaded to",
+      always: false,
+    },
+    {
+      id: "gmt",
+      name: "GMt",
+      value: `${fmt(bound - selected.kg)} ${unit}`,
+      range: rangeNote(gmtRange, fmt),
+      title:
+        "Metacentric height, KMt − KG. The IMO criterion puts it at 0.15 m or more",
+      always: true,
+    },
+    {
+      id: "gzmax",
+      name: "GZmax",
+      value: Number.isFinite(maximumMetres)
+        ? `${maximumMetres.toFixed(3)} m`
+        : "n/a",
+      range: rangeNote(maximumRange, (v) => v.toFixed(3)),
+      title: "The largest righting lever the condition reaches, at any heel",
+      always: true,
+    },
+    {
+      id: "peak",
+      name: "Peak",
+      value: Number.isFinite(selectedMaximum.heel)
+        ? `${Math.round(selectedMaximum.heel * DEG)}°`
+        : "n/a",
+      range: rangeNote(peakRange, (v) => `${Math.round(v)}°`),
+      note: selectedMaximum.deckDown ? (
+        <span className="areanote"> — after sheer immersion</span>
+      ) : undefined,
+      title:
+        "The heel GZmax occurs at. The IMO criterion puts it at 25° or more",
+      always: false,
+    },
+    {
+      id: "beyond30",
+      name: "GZ ≥ 30°",
+      value: Number.isFinite(selectedBeyond30.gz)
+        ? `${(selectedBeyond30.gz * metres).toFixed(3)} m`
+        : "n/a",
+      range: rangeNote(beyond30Range, (v) => v.toFixed(3)),
+      title:
+        "The largest righting lever at or beyond 30° of heel. The IMO criterion puts it at 0.20 m or more",
+      always: false,
+    },
+    ...areaReadings.map(({ criterion: c, value, range }) => ({
+      id: `area${c.deg}`,
+      name: (
+        <>
+          A<sub>{c.deg}</sub>
+        </>
+      ),
+      value: Number.isFinite(value) ? `${value.toFixed(3)} m·rad` : "n/a",
+      range: rangeNote(range, (v) => v.toFixed(3)),
+      title: `The area under the GZ curve out to ${c.deg}°. The IMO criterion puts it at ${fmtArea(passArea(c))} m·rad or more`,
+      always: true,
+    })),
+    {
+      id: "sheer",
+      name: "Sheer immersion",
+      value: Number.isFinite(selectedSheerDeg)
+        ? `${selectedSheerDeg.toFixed(1)}°`
+        : "> 90°",
+      range: rangeNote(sheerRange, (v) => `${v.toFixed(1)}°`),
+      title: "The heel at which the sheer line first touches the water",
+      always: true,
+    },
+    {
+      id: "sheergz",
+      name: "GZ at immersion",
+      value: Number.isFinite(selectedSheerGz)
+        ? `${(selectedSheerGz * metres).toFixed(3)} m`
+        : "n/a",
+      range: null,
+      title:
+        "The righting lever the condition has at the moment the sheer immerses",
+      always: false,
+    },
+  ];
+
   return (
     <div className="stabilitypanel">
       <section className="card stabilitycard">
         <div className="cap">
-          Limiting KG
+          <span className="capname">Limiting KG</span>
           <span className="capctls">
             <OverlayControls value={overlays} onChange={setOverlays} />
           </span>
@@ -1516,9 +1680,16 @@ export function StabilityPanel() {
         </div>
       </section>
 
-      <section className="card stabilitycard gzcard">
+      <section
+        className={`card stabilitycard gzcard${numbersOpen ? " numbersopen" : ""}`}
+      >
         <div className="cap">
-          {region ? "GZ curve and range" : "GZ curve"}
+          <span className="capname">
+            {region ? "GZ curve and range" : "GZ curve"}
+          </span>
+          {/* The pinned condition, and the one the pointer is over. Only the pinned one is fixed here: the
+              ghost gives up width first and is cut with an ellipsis, because a reading being taken should not
+              slide off the line as the pointer wanders over somewhere with longer numbers. */}
           <span className="val">
             {hover && (
               <span className="ghostval">
@@ -1526,8 +1697,10 @@ export function StabilityPanel() {
                 {fmt(hover.kg)} {unit}
               </span>
             )}
-            Δ {fmt(selected.vol * tonsPerVolume)} t · VCG {fmt(selected.kg)}{" "}
-            {unit}
+            <span className="pinnedval">
+              Δ {fmt(selected.vol * tonsPerVolume)} t · VCG {fmt(selected.kg)}{" "}
+              {unit}
+            </span>
           </span>
         </div>
         <ChartFrame
@@ -1618,7 +1791,7 @@ export function StabilityPanel() {
                     {lobes.map((points, i) => (
                       <path
                         key={i}
-                        className={`gzarea ${selectedBand?.key ?? ""}`}
+                        className={`gzarea ${activeArea.band?.key ?? ""}`}
                         d={`${linePath(points, scale)} L${scale.x(points[points.length - 1].x)},${scale.y(0)} L${scale.x(points[0].x)},${scale.y(0)} Z`}
                       />
                     ))}
@@ -1634,8 +1807,8 @@ export function StabilityPanel() {
                       x={scale.x(heel) + 5}
                       y={scale.top + 14}
                     >
-                      {Number.isFinite(selectedArea)
-                        ? `${label} ${fmtArea(selectedArea)} m·rad`
+                      {Number.isFinite(activeArea.value)
+                        ? `${label} ${fmtArea(activeArea.value)} m·rad`
                         : `${label} n/a`}
                     </text>
                   </>
@@ -1688,17 +1861,6 @@ export function StabilityPanel() {
                     scale,
                   )}
                 />
-                {gz
-                  .filter((p) => p.deckDown)
-                  .map((p) => (
-                    <circle
-                      className="deckdownpoint"
-                      key={p.heel}
-                      cx={scale.x(p.heel * DEG)}
-                      cy={scale.y(p.gz)}
-                      r={3}
-                    />
-                  ))}
                 {Number.isFinite(selectedSheerGz) && (
                   <circle
                     className="sheerpoint"
@@ -1741,79 +1903,11 @@ export function StabilityPanel() {
         </ChartFrame>
         {/* Every reading taken of the condition, beside the curve they are readings of — the initial-stability
             one, whichever large-angle criterion is being shaded by, and what the sheer does under it. */}
-        <div className="gzreadout">
-          <span>
-            GMt{" "}
-            <strong>
-              {fmt(bound - selected.kg)} {unit}
-            </strong>
-            {rangeNote(gmtRange, fmt)}
-          </span>
-          {isMaximum ? (
-            <>
-              <span>
-                GZmax{" "}
-                <strong className={`bandvalue ${selectedMaximumBand.key}`}>
-                  {Number.isFinite(maximumMetres)
-                    ? `${maximumMetres.toFixed(3)} m`
-                    : "n/a"}
-                </strong>
-                {rangeNote(maximumRange, (v) => v.toFixed(3))}
-              </span>
-              <span>
-                Peak{" "}
-                <strong>
-                  {Number.isFinite(selectedMaximum.heel)
-                    ? `${Math.round(selectedMaximum.heel * DEG)}°`
-                    : "n/a"}
-                </strong>
-                {rangeNote(peakRange, (v) => `${Math.round(v)}°`)}
-                {selectedMaximum.deckDown && (
-                  <span className="areanote"> — after sheer immersion</span>
-                )}
-              </span>
-            </>
-          ) : (
-            <span>
-              A<sub>{readout.deg}</sub>{" "}
-              <strong
-                className={selectedBand ? `bandvalue ${selectedBand.key}` : ""}
-              >
-                {Number.isFinite(selectedArea)
-                  ? `${selectedArea.toFixed(3)} m·rad`
-                  : "n/a"}
-              </strong>
-              {rangeNote(areaRange, (v) => v.toFixed(3))}
-              {selectedBand && (
-                <span className="areanote" title={selectedBand.name}>
-                  {" "}
-                  — {selectedBand.note}
-                </span>
-              )}
-            </span>
-          )}
-          <span>
-            Sheer immersion{" "}
-            <strong>
-              {Number.isFinite(selectedSheerDeg)
-                ? `${selectedSheerDeg.toFixed(1)}°`
-                : "> 90°"}
-            </strong>
-            {rangeNote(sheerRange, (v) => `${v.toFixed(1)}°`)}
-          </span>
-          {Number.isFinite(selectedSheerGz) && (
-            <span>
-              GZ at immersion{" "}
-              <strong>{(selectedSheerGz * metres).toFixed(3)} m</strong>
-            </span>
-          )}
-        </div>
-        {gz.some((p) => p.deckDown) && (
-          <div className="decknote">
-            Orange points use the watertight sheer cap after deck-edge
-            immersion.
-          </div>
-        )}
+        <Readings
+          readings={readings}
+          open={numbersOpen}
+          onToggle={() => setNumbersOpen((open) => !open)}
+        />
       </section>
     </div>
   );
