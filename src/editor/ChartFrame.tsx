@@ -22,6 +22,21 @@ export interface ChartScale {
   bottom: number;
 }
 
+/**
+ * What a layer needs to drag handles of its own: where the pointer is in DATA coordinates, and a way to stop
+ * the frame turning the release into a plot click. Deliberately unclamped — a handle being dragged past the
+ * axis should keep tracking the pointer, and it is the layer that knows what its own limits are.
+ */
+export interface PlotGrab {
+  readonly locate: (
+    clientX: number,
+    clientY: number,
+  ) => { x: number; y: number } | null;
+  readonly suppressClick: () => void;
+  /** True while the frame owns the drag for panning, so handles must keep their hands off it. */
+  readonly panActive: boolean;
+}
+
 interface ChartFrameProps {
   /** The complete domain. Zooming and panning are constrained to it. */
   readonly xDomain: readonly [number, number];
@@ -41,7 +56,7 @@ interface ChartFrameProps {
   readonly yTickStep?: number;
   readonly onPlotClick?: (x: number, y: number) => void;
   readonly ariaLabel: string;
-  readonly children: (scale: ChartScale) => ReactNode;
+  readonly children: (scale: ChartScale, grab: PlotGrab) => ReactNode;
 }
 
 const BASE_WIDTH = 800,
@@ -261,7 +276,7 @@ function useResponsiveLayout(
 
 const releaseFocusedButton = () => {
   const focused = document.activeElement;
-pan if (focused instanceof HTMLButtonElement) focused.blur();
+  if (focused instanceof HTMLButtonElement) focused.blur();
 };
 
 function useTemporaryPan(enabled: boolean) {
@@ -379,6 +394,25 @@ function useChartNavigation({
       ? { x: local.x, y: local.y }
       : null;
   };
+  // Pixel → data. The click handler and every draggable layer need the same mapping, so it lives once here.
+  const dataAt = (
+    clientX: number,
+    clientY: number,
+  ): { x: number; y: number } | null => {
+    const point = localPoint(clientX, clientY);
+    return point
+      ? {
+          x:
+            viewport.x[0] +
+            ((point.x - layout.left) / (layout.right - layout.left)) *
+              (viewport.x[1] - viewport.x[0]),
+          y:
+            viewport.y[0] +
+            ((layout.bottom - point.y) / (layout.bottom - layout.top)) *
+              (viewport.y[1] - viewport.y[0]),
+        }
+      : null;
+  };
   const setView = (x: Domain, y: Domain) =>
     setStoredViewport({ key: viewportKey, x, y });
   const zoomAt = (factor: number, px: number, py: number) => {
@@ -490,14 +524,8 @@ function useChartNavigation({
     if (panActive || !onPlotClick) return;
     const point = localPoint(event.clientX, event.clientY);
     if (!point || !pointInPlot(point, layout)) return;
-    onPlotClick(
-      viewport.x[0] +
-        ((point.x - layout.left) / (layout.right - layout.left)) *
-          (viewport.x[1] - viewport.x[0]),
-      viewport.y[0] +
-        ((layout.bottom - point.y) / (layout.bottom - layout.top)) *
-          (viewport.y[1] - viewport.y[0]),
-    );
+    const at = dataAt(event.clientX, event.clientY);
+    if (at) onPlotClick(at.x, at.y);
   };
 
   const xSpan = viewport.x[1] - viewport.x[0],
@@ -508,6 +536,13 @@ function useChartNavigation({
   return {
     viewport,
     scale,
+    grab: {
+      locate: dataAt,
+      suppressClick: () => {
+        suppressClick.current = true;
+      },
+      panActive,
+    } satisfies PlotGrab,
     panEnabled,
     panActive,
     isDragging,
@@ -779,6 +814,7 @@ export function ChartFrame({
     {
       viewport,
       scale,
+      grab,
       panEnabled,
       panActive,
       isDragging,
@@ -839,7 +875,7 @@ export function ChartFrame({
           xTickStep={xTickStep}
           yTickStep={yTickStep}
         >
-          {children(scale)}
+          {children(scale, grab)}
         </ChartDrawing>
       </svg>
     </div>

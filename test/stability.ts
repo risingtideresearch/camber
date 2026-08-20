@@ -40,6 +40,8 @@ import {
   gzAreaTerms,
   gzAtHeel,
   gzCurve,
+  gzEnvelope,
+  knEnvelope,
   stationGeometry,
   immersedAt,
   knAt,
@@ -845,6 +847,138 @@ const sample = (model: Model): HullSampling => {
   ok(
     Number.isFinite(between) && between > 0 && between < area,
     `a heel limit between two table angles integrates to just under the 30° area (${between.toFixed(3)} vs ${area.toFixed(3)})`,
+  );
+}
+
+// ---- the envelope over a rectangle of conditions ----
+//
+// The claim `gzEnvelope` rests on is that VCG needs no search and ∇ does: raising VCG lowers GZ at every
+// heel, so the rectangle's extremes lie on its two VCG edges, while KN's turn-over in ∇ can put the extreme
+// inside the interval. Both halves are checked the same way — against a dense grid of the conditions the
+// band claims to bracket. The grid is DENSER in ∇ than the band's own 32-step scan, so it can catch the
+// scan being too coarse as well as the bound being wrong.
+{
+  const model = assemble(defaultHull());
+  const cc = crossCurves(model, sample(model), { steps: 40 });
+  const h = hydrostatics(model, sample(model));
+  if (!cc || !h) throw new Error("no cross curves");
+  const vcg = h.kb * 1.4;
+  const volRange: readonly [number, number] = [h.vol * 0.8, h.vol * 1.2],
+    vcgRange: readonly [number, number] = [vcg * 0.9, vcg * 1.1];
+  const band = gzEnvelope(cc, volRange, vcgRange);
+
+  ok(
+    band.length === cc.heel.length &&
+      band.every((b, i) => b.heel === cc.heel[i]),
+    "the band is reported on the table's own heel rows",
+  );
+
+  const live = band.filter((b) => Number.isFinite(b.lo));
+  ok(
+    live.length > cc.heel.length / 2,
+    `most heel rows answer (${live.length}/${cc.heel.length})`,
+  );
+  ok(
+    live.every((b) => b.hi >= b.lo - 1e-12),
+    "the upper bound is never below the lower one",
+  );
+
+  const scale = Math.max(...live.map((b) => Math.abs(b.hi)));
+  const at = (vol: number, g: number, i: number) =>
+    gzAtHeel(cc, vol, g, cc.heel[i]);
+
+  // 1. the half that is claimed EXACT: at any displacement, an interior VCG never escapes the two edges.
+  // This is the monotonicity the whole construction rests on, so it is checked without a tolerance.
+  let escaped = 0;
+  for (let a = 0; a <= 32; a++) {
+    const vol = volRange[0] + ((volRange[1] - volRange[0]) * a) / 32;
+    for (let b = 1; b < 8; b++) {
+      const g = vcgRange[0] + ((vcgRange[1] - vcgRange[0]) * b) / 8;
+      for (let i = 0; i < cc.heel.length; i++) {
+        const inner = at(vol, g, i),
+          hi = at(vol, vcgRange[0], i),
+          lo = at(vol, vcgRange[1], i);
+        if (!Number.isFinite(inner)) continue;
+        if (inner > hi + 1e-9 || inner < lo - 1e-9) escaped++;
+      }
+    }
+  }
+  ok(
+    escaped === 0,
+    "an interior VCG never escapes the two VCG edges — the exact half of the rectangle",
+  );
+
+  // 2. the half that is SAMPLED: the default 32-step scan against a 16× denser reference. The band can only
+  // ever fall short, never overshoot, so this measures the resolution of the scan and nothing else.
+  let worstShortfall = 0;
+  for (let i = 0; i < cc.heel.length; i++) {
+    if (!Number.isFinite(band[i].lo)) continue;
+    let refHi = -Infinity,
+      refLo = Infinity;
+    for (let a = 0; a <= 512; a++) {
+      const vol = volRange[0] + ((volRange[1] - volRange[0]) * a) / 512;
+      refHi = Math.max(refHi, at(vol, vcgRange[0], i));
+      refLo = Math.min(refLo, at(vol, vcgRange[1], i));
+    }
+    worstShortfall = Math.max(
+      worstShortfall,
+      refHi - band[i].hi,
+      band[i].lo - refLo,
+    );
+  }
+  ok(
+    worstShortfall >= -1e-9 && worstShortfall < 1e-5 * scale,
+    `32 displacement steps resolve the extremes to ${(worstShortfall / scale).toExponential(1)} of the GZ scale`,
+  );
+
+  // 3. and the scan is not ceremony: on this hull KN turns over inside the interval, so at some heel the
+  // band reaches ABOVE both corners of the rectangle. Sampling only the corners would understate it.
+  let bestInterior = 0;
+  for (let i = 0; i < cc.heel.length; i++) {
+    if (!Number.isFinite(band[i].hi)) continue;
+    const corners = Math.max(
+      at(volRange[0], vcgRange[0], i),
+      at(volRange[1], vcgRange[0], i),
+    );
+    if (Number.isFinite(corners))
+      bestInterior = Math.max(bestInterior, band[i].hi - corners);
+  }
+  ok(
+    bestInterior > 1e-4 * scale,
+    `the extreme really does fall inside the interval at some heel, by ${(bestInterior / scale).toExponential(1)} of the GZ scale`,
+  );
+
+  // a rectangle of no extent is the curve itself
+  const pinched = gzEnvelope(cc, [h.vol, h.vol], [vcg, vcg]);
+  const curve = gzCurve(cc, h.vol, vcg);
+  ok(
+    pinched.every(
+      (bound, i) =>
+        Number.isFinite(bound.lo) === Number.isFinite(curve[i].gz) &&
+        (!Number.isFinite(bound.lo) ||
+          (Math.abs(bound.lo - curve[i].gz) < 1e-12 &&
+            Math.abs(bound.hi - curve[i].gz) < 1e-12)),
+    ),
+    "a rectangle of zero extent reproduces the GZ curve exactly",
+  );
+
+  // upright, every condition has GZ = 0, so the band has to pinch shut there rather than merely be small
+  const upright = band[cc.heel.findIndex((heel) => Math.abs(heel) < 1e-12)];
+  ok(
+    Math.abs(upright.hi) < 1e-9 * scale && Math.abs(upright.lo) < 1e-9 * scale,
+    "the band closes to a point at zero heel",
+  );
+
+  // a rectangle running off the table reports nothing rather than a bound over the part that fits
+  const off = gzEnvelope(cc, [h.vol * 0.8, h.vol * 1e6], vcgRange);
+  ok(
+    off.every((bound) => !Number.isFinite(bound.lo)),
+    "a rectangle reaching past the table reports no bound rather than a partial one",
+  );
+  const knOff = knEnvelope(cc, h.vol * 0.8, h.vol * 1e6);
+  ok(
+    knOff.min.every((v) => !Number.isFinite(v)),
+    "and so does the KN envelope underneath it",
   );
 }
 

@@ -203,6 +203,98 @@ export function gzCurve(cc: CrossCurves, vol: number, vcg: number): GzPoint[] {
   });
 }
 
+// ---------- the envelope over a rectangle of conditions ----------
+//
+// A loading condition is rarely known to a single point. The lightship estimate carries a tolerance, the VCG
+// estimate carries another, and the useful question is then not "what is the GZ curve" but "what band does
+// every curve in that rectangle lie inside".
+//
+// VCG needs no search. GZ = KN − VCG·sin φ and sin φ ≥ 0 over 0…90°, so at every heel GZ is non-increasing
+// in VCG: the highest curve of the family takes the LOWEST VCG and the lowest curve the highest. That half
+// of the rectangle is exact rather than sampled — only its two VCG edges are ever evaluated.
+//
+// Displacement does need one. KN is not monotone in ∇ — a hull picks up righting arm as it immerses its
+// flare and gives it back as it buries it — so the extreme can sit inside the interval rather than at either
+// end, and the corners of the rectangle are not enough. What makes the scan cheap is that KN is a PCHIP over
+// the sinkage march: `samples` points across ONE interval is at least as fine as the table underneath, which
+// spans the hull's whole range in about as many steps.
+//
+// The two edges are POINTWISE extremes, so neither is the GZ curve of any single condition — the ∇ attaining
+// the maximum at 20° need not be the one attaining it at 60°. They bound the family without belonging to it,
+// which is why nothing that belongs to one condition — a peak, a deck-edge point — may be drawn on them.
+
+export interface KnEnvelope {
+  readonly min: number[]; // per heel row, the least KN over the displacement interval
+  readonly max: number[]; // ...and the greatest
+}
+
+/**
+ * The least and greatest KN over a displacement interval, one pair per tabulated heel.
+ *
+ * NaN for any heel row whose own march does not cover the whole interval: a bound taken over part of a range
+ * is not a bound over that range. The rows genuinely stop short of one another at large heel, so a band that
+ * ends before the curve it brackets is the honest picture rather than an edge case.
+ */
+export function knEnvelope(
+  cc: CrossCurves,
+  vol0: number,
+  vol1: number,
+  samples = 32,
+): KnEnvelope {
+  const lo = Math.min(vol0, vol1),
+    hi = Math.max(vol0, vol1),
+    steps = Math.max(1, Math.round(samples)),
+    min: number[] = [],
+    max: number[] = [];
+  for (let i = 0; i < cc.heel.length; i++) {
+    let least = Infinity,
+      greatest = -Infinity;
+    for (let k = 0; k <= steps; k++) {
+      const kn = knAt(cc, i, lo + ((hi - lo) * k) / steps);
+      if (!Number.isFinite(kn)) {
+        least = greatest = NaN;
+        break;
+      }
+      least = Math.min(least, kn);
+      greatest = Math.max(greatest, kn);
+    }
+    min.push(least);
+    max.push(greatest);
+  }
+  return { min, max };
+}
+
+export interface GzBound {
+  heel: number; // radians
+  lo: number; // the least righting arm anywhere in the rectangle, at this heel
+  hi: number; // ...and the greatest
+}
+
+/**
+ * The band every GZ curve in a displacement × VCG rectangle lies inside.
+ *
+ * `hi` takes the lowest VCG against the largest KN and `lo` the highest against the smallest, which is the
+ * monotonicity above applied at each heel. A rectangle of zero extent returns the curve itself, twice.
+ */
+export function gzEnvelope(
+  cc: CrossCurves,
+  volRange: readonly [number, number],
+  vcgRange: readonly [number, number],
+  samples = 32,
+): GzBound[] {
+  const kn = knEnvelope(cc, volRange[0], volRange[1], samples),
+    vcgLo = Math.min(vcgRange[0], vcgRange[1]),
+    vcgHi = Math.max(vcgRange[0], vcgRange[1]);
+  return cc.heel.map((heel, i) => {
+    const sine = Math.sin(heel);
+    return {
+      heel,
+      lo: kn.min[i] - vcgHi * sine,
+      hi: kn.max[i] - vcgLo * sine,
+    };
+  });
+}
+
 // ---------- values and envelopes at a chosen heel ----------
 
 /** KN at an arbitrary heel, linearly interpolated between the cross-curve heel rows. */

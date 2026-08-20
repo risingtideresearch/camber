@@ -513,3 +513,111 @@
     min-height: 272px;
   }
 }
+
+/* ---------- the range: uncertainty bars, the rectangle they span, and the band that follows from it ----------
+
+   Error bars draw a cross, but the readings' extremes live in the CORNERS of the rectangle the bars span —
+   the worst case is the top VCG edge — so a cross on its own would put no ink in the place the numbers come
+   from. The rectangle is therefore drawn as well as the bars, faintly, and the bar ends double as its
+   handles: one object that reads as an uncertainty and as a region at the same time. */
+.regionbox {
+  fill: var(--ink);
+  fill-opacity: 0.07;
+  stroke: var(--ink);
+  stroke-opacity: 0.4;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  pointer-events: none;
+}
+/* The criterion's own contour running through the box is the finding the box was drawn to expose, so the
+   outline stops being incidental and takes the colour the verdict does. */
+.regionbox.straddles {
+  stroke: var(--danger);
+  stroke-opacity: 0.85;
+  stroke-width: 1.5;
+  stroke-dasharray: none;
+}
+.spreadbar {
+  stroke: var(--ink);
+  stroke-width: 1.5;
+  stroke-opacity: 0.65;
+  pointer-events: none;
+}
+.spreadcap {
+  stroke: var(--ink);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+/* The target is a good deal larger than the cap it moves, which is what makes a 2px line draggable. */
+.spreadgrab {
+  fill: transparent;
+}
+.spreadhandle.x {
+  cursor: ew-resize;
+}
+.spreadhandle.y {
+  cursor: ns-resize;
+}
+.spreadhandle:hover .spreadcap {
+  stroke: var(--accent);
+  stroke-width: 3.5;
+}
+/* The band every curve in the rectangle lies inside, in the colour of its worst corner so a tolerance that
+   reaches down into a lower band says so in the fill. No markers ever go on its edges: they are pointwise
+   extremes and belong to no single condition. */
+.gzenvelope {
+  fill: var(--band, var(--accent));
+  fill-opacity: 0.22;
+  stroke: var(--bandink, var(--accent));
+  stroke-opacity: 0.35;
+  stroke-width: 1;
+  cursor: help;
+}
+/* Sheer immersion does not move with VCG, so over a range of displacements it is a strip rather than a line. */
+.sheerspread {
+  fill: #0f766e;
+  fill-opacity: 0.1;
+  cursor: help;
+}
+.tag.ismarginal {
+  background: #c2410c;
+}
+/* The spread of a reading, set under the reading itself — quieter than the number it qualifies, and on its
+   own line so a row of ranges cannot be misread as a row of values. */
+.spreadrange {
+  display: block;
+  margin-top: 1px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+.rangebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: -2px 0 5px;
+  color: var(--mut);
+  font-size: 11px;
+}
+.rangetoggle,
+.rangegroup {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
+.rangetoggle input[type="checkbox"] {
+  margin: 0;
+}
+.spreadfield {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+}
+.spreadfield input {
+  width: 62px;
+  font: inherit;
+  color: var(--ink);
+}
