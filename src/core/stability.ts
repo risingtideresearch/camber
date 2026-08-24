@@ -397,6 +397,50 @@ export function maximumGz(
 }
 
 /**
+ * The highest VCG at which the largest righting lever still occurs at or beyond `minHeel` — the KG bound
+ * IMO's "angle of maximum GZ not less than 25°" puts on a displacement.
+ *
+ * Raising the centre of gravity subtracts VCG·sin φ, which grows with heel, so it takes more off the far end
+ * of the curve than the near end and walks the peak DOWN the heel axis. Writing A(VCG) for the best arm at
+ * or beyond `minHeel` and B(VCG) for the best below it, both are upper envelopes of straight lines whose
+ * slopes are −sin φ over their own side of the split; every φ on A's side has a larger sine than every φ on
+ * B's, so A falls strictly faster and A − B crosses zero exactly once. That crossing is the bound, and it is
+ * bisected for here because both envelopes change which line they ride as VCG moves.
+ *
+ * Returns −Infinity where the peak is already early at VCG 0 — nothing complies — and NaN off the table.
+ * The comparison is `maximumGz`'s own, so the contour and the reading beside it cannot disagree.
+ */
+export function vcgForMaximumGzHeel(
+  cc: CrossCurves,
+  vol: number,
+  minHeel: number,
+): number {
+  const late = (vcg: number): boolean => {
+    const peak = maximumGz(cc, vol, vcg);
+    return Number.isFinite(peak.gz) && peak.heel >= minHeel - 1e-12;
+  };
+  if (!Number.isFinite(maximumGz(cc, vol, 0).gz)) return NaN;
+  if (!late(0)) return -Infinity;
+  // Once the best arm beyond `minHeel` is gone the peak cannot be there, so the VCG that takes it to zero
+  // brackets the crossing from above — and it is already computed in closed form.
+  const hi = vcgForMaximumGz(cc, vol, 0, minHeel);
+  if (!Number.isFinite(hi)) return NaN;
+  let lo = 0,
+    top = Math.max(hi, lo);
+  if (late(top)) return top; // the whole column complies; the bound is off the top of it
+  for (
+    let k = 0;
+    k < 60 && top - lo > 1e-12 * Math.max(1, Math.abs(top));
+    k++
+  ) {
+    const mid = (lo + top) / 2;
+    if (late(mid)) lo = mid;
+    else top = mid;
+  }
+  return (lo + top) / 2;
+}
+
+/**
  * VCG at which the largest GZ at or beyond `minHeel` is exactly `target`.
  *
  * Each heel contributes the straight boundary VCG = (KN − target) / sin φ. The condition only needs one
@@ -459,20 +503,33 @@ export const GZ_AREA_HEEL_40 = 40 * DEG;
  *
  * `phi` is empty where the displacement is off the table, or where the table does not span the whole range —
  * a partial area must not be reported as a whole one.
+ *
+ * `from` moves the LOWER limit of integration without shortening the interpolant, which is what the
+ * standard's 30°–40° criterion needs: the curve is still the one drawn out to φ₁, so the part and the whole
+ * are measured off the same cubic and A(φ₀…φ₁) + A(0…φ₀) is exactly A(0…φ₁). Truncating the abscissae at φ₀
+ * instead would give the interval a different interpolant and the three numbers would not add up.
  */
 export interface GzAreaTerms {
   readonly phi: readonly number[]; // heel abscissae, radians, 0…φ₁
   readonly kn: readonly number[]; // KN at each
   readonly slope: readonly number[]; // dKN/dφ — the PCHIP slopes the interpolant is drawn with
+  readonly from: number; // φ₀ — where integration starts, 0 for a criterion measured from upright
   readonly upTo: number; // φ₁
 }
 
-const NO_GZ_AREA: GzAreaTerms = { phi: [], kn: [], slope: [], upTo: NaN };
+const NO_GZ_AREA: GzAreaTerms = {
+  phi: [],
+  kn: [],
+  slope: [],
+  from: 0,
+  upTo: NaN,
+};
 
 export function gzAreaTerms(
   cc: CrossCurves,
   vol: number,
   upTo: number = GZ_AREA_HEEL_30,
+  from = 0,
 ): GzAreaTerms {
   const phis: number[] = [],
     kns: number[] = [];
@@ -506,7 +563,8 @@ export function gzAreaTerms(
     phis[phis.length - 1] < upTo - 1e-12
   )
     return NO_GZ_AREA;
-  return { phi: phis, kn: kns, slope: pchipSlopes(phis, kns), upTo };
+  if (!(from >= 0) || from >= upTo) from = 0;
+  return { phi: phis, kn: kns, slope: pchipSlopes(phis, kns), from, upTo };
 }
 
 /**
@@ -515,9 +573,13 @@ export function gzAreaTerms(
  * Per interval, KN is the cubic Hermite c₀ + c₁t + c₂t² + c₃t³ in the local parameter t ∈ [0, 1], so
  * GZ(t) = that − VCG·sin(φ₀ + h·t) — a cubic and a sine, both of which integrate in closed form over any
  * part of the interval. All that is needed to clip is where GZ crosses zero.
+ *
+ * An interval only partly inside `terms.from`…`terms.upTo` is integrated over the part that is: the range
+ * is clipped in the SAME local parameter as the vanishing angle, so a criterion starting mid-interval and a
+ * curve giving way mid-interval are the same piece of arithmetic.
  */
 export function gzAreaOf(terms: GzAreaTerms, vcg: number): number {
-  const { phi, kn, slope } = terms;
+  const { phi, kn, slope, from } = terms;
   if (phi.length < 2 || !Number.isFinite(vcg)) return NaN;
   let total = 0;
   for (let i = 0; i < phi.length - 1; i++) {
@@ -531,6 +593,9 @@ export function gzAreaOf(terms: GzAreaTerms, vcg: number): number {
       c1 = m0,
       c2 = -3 * y0 + 3 * y1 - 2 * m0 - m1,
       c3 = 2 * y0 - 2 * y1 + m0 + m1;
+    // where this interval enters the criterion's range; the far end is always φ₁, which is the last abscissa
+    const start = h > 0 ? Math.min(1, Math.max(0, (from - phi0) / h)) : 0;
+    if (start >= 1) continue;
     const gzAt = (t: number) =>
       c0 + t * (c1 + t * (c2 + t * c3)) - vcg * Math.sin(phi0 + h * t);
     // ∫ GZ dφ over t ∈ [a, b]: the cubic term by term (dφ = h·dt), the sine as the difference of cosines
@@ -542,15 +607,15 @@ export function gzAreaOf(terms: GzAreaTerms, vcg: number): number {
           (c3 * (b * b * b * b - a * a * a * a)) / 4) -
       vcg * (Math.cos(phi0 + h * a) - Math.cos(phi0 + h * b));
 
-    const g0 = gzAt(0),
+    const g0 = gzAt(start),
       g1 = gzAt(1);
     if (g0 >= 0 && g1 >= 0) {
-      total += piece(0, 1);
+      total += piece(start, 1);
       continue;
     }
     if (g0 <= 0 && g1 <= 0) continue; // wholly past the vanishing angle: contributes nothing
     // one sign change inside the interval — bisect for it and keep only the positive side
-    let lo = 0,
+    let lo = start,
       hi = 1;
     for (let k = 0; k < 48; k++) {
       const mid = (lo + hi) / 2;
@@ -558,19 +623,20 @@ export function gzAreaOf(terms: GzAreaTerms, vcg: number): number {
       else hi = mid;
     }
     const cross = (lo + hi) / 2;
-    total += g0 > 0 ? piece(0, cross) : piece(cross, 1);
+    total += g0 > 0 ? piece(start, cross) : piece(cross, 1);
   }
   return total;
 }
 
-/** The area under the positive part of GZ out to `upTo` for one loading condition (model units·radians). */
+/** The area under the positive part of GZ over `from`…`upTo` for one loading condition (units·radians). */
 export function gzArea(
   cc: CrossCurves,
   vol: number,
   vcg: number,
   upTo: number = GZ_AREA_HEEL_30,
+  from = 0,
 ): number {
-  return gzAreaOf(gzAreaTerms(cc, vol, upTo), vcg);
+  return gzAreaOf(gzAreaTerms(cc, vol, upTo, from), vcg);
 }
 
 /**
@@ -578,18 +644,19 @@ export function gzArea(
  *
  * A is non-increasing in VCG and falls to zero at the VCG whose curve has no positive lobe left, so every
  * area above zero has exactly one crossing to find. The bracket below it comes for free: clipping can only
- * ADD area, so the signed integral's closed-form answer already has at least `area`. From there the search
- * doubles outward until it runs out of area, then bisects. An area of zero or less asks instead for the
- * vanishing point itself, which is the same search against a strictly positive lobe.
+ * ADD area, so the signed integral's closed-form answer already has at least `area`. Over φ₀…φ₁ that signed
+ * integral is ∫KN dφ − VCG·(cos φ₀ − cos φ₁), which is where the coefficient below comes from. From there
+ * the search doubles outward until it runs out of area, then bisects. An area of zero or less asks instead
+ * for the vanishing point itself, which is the same search against a strictly positive lobe.
  */
 export function vcgForGzArea(terms: GzAreaTerms, area: number): number {
   if (terms.phi.length < 2) return NaN;
   if (area === -Infinity) return Infinity; // every VCG clears it — the open end of a shading band
   if (area === Infinity) return -Infinity; // no VCG reaches it — the other open end
   const target = area > 0 ? area : 0;
-  // A(VCG) with no clipping is ∫KN dφ − VCG·(1 − cos φ₁), and KN ≥ 0, so A(0) is that first term outright
+  // A(VCG) with no clipping is ∫KN dφ − VCG·(cos φ₀ − cos φ₁), and KN ≥ 0, so A(0) is that first term
   const knArea = gzAreaOf(terms, 0),
-    coefficient = 1 - Math.cos(terms.upTo);
+    coefficient = Math.cos(terms.from) - Math.cos(terms.upTo);
   if (!Number.isFinite(knArea) || coefficient <= 0) return NaN;
   let lo = (knArea - target) / coefficient;
   if (!(gzAreaOf(terms, lo) > target)) return lo;

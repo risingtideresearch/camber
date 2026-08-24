@@ -23,6 +23,10 @@
 //     limit it should (the heeled lowest point's offset from K — NOT zero, except upright).
 //   - the area under GZ: only the positive lobe counts, the integral over the 5° table tracks a 0.25° one
 //     on curves that do and do not cross zero, and the inverse really inverts it on both.
+//   - a criterion measured over PART of the range (IMO's 30°–40°) comes off the SAME interpolant as the
+//     whole, so the part and the rest of it add up to the whole exactly, and its inverse inverts it too.
+//   - the angle of maximum GZ falls as the centre of gravity rises, which is what makes "the peak is at or
+//     beyond 25°" a ceiling on KG like every other criterion — and `vcgForMaximumGzHeel` lands on it.
 //   - past 90°: the curve runs to a vanishing angle and closes at exactly 0 at 180°.
 //   - a 3D mesh: ∇ and KN checked against the triangle mesh the STL exporter writes, integrated by the
 //     divergence theorem — no shared integration code. This is the real oracle, and it is what caught the
@@ -54,6 +58,10 @@ import {
   vcgForGzArea,
   vcgForGzAtHeel,
   vcgForMaximumGz,
+  vcgForMaximumGzHeel,
+  gzAreaOf,
+  GZ_AREA_HEEL_30,
+  GZ_AREA_HEEL_40,
 } from "../src/core/stability";
 import { meshImmersed } from "./support/meshIntegral";
 
@@ -847,6 +855,139 @@ const sample = (model: Model): HullSampling => {
   ok(
     Number.isFinite(between) && between > 0 && between < area,
     `a heel limit between two table angles integrates to just under the 30° area (${between.toFixed(3)} vs ${area.toFixed(3)})`,
+  );
+}
+
+// ---- a criterion over part of the range, and the peak-angle ceiling ----
+//
+// IMO asks for area out to 30°, out to 40°, and BETWEEN the two. The third is not a separate curve: it is
+// the same interpolant integrated over the far half, which is the only way A(0…30) + A(30…40) can come to
+// A(0…40) rather than to something a rounding away from it. And the angle of maximum GZ falls as the centre
+// of gravity rises — raising G subtracts VCG·sin φ, which takes most off where the sine is largest — so
+// "the peak is at or beyond 25°" is a ceiling on KG like the areas are, and `vcgForMaximumGzHeel` is where.
+{
+  const model = assemble(defaultHull());
+  const h = hydrostatics(model, sample(model))!;
+  const cc = crossCurves(model, sample(model), { steps: 40 })!;
+  const near = gzAreaTerms(cc, h.vol, GZ_AREA_HEEL_40, 0),
+    far = gzAreaTerms(cc, h.vol, GZ_AREA_HEEL_40, GZ_AREA_HEEL_30),
+    whole = gzAreaTerms(cc, h.vol, GZ_AREA_HEEL_40);
+
+  // The far part is a real part: some of the whole, and none of it past φ₁.
+  const wholeArea = gzAreaOf(whole, h.kb),
+    farArea = gzAreaOf(far, h.kb);
+  ok(
+    farArea > 0 && farArea < wholeArea,
+    `the 30°–40° area is a proper part of the 0°–40° one (${farArea.toFixed(3)} of ${wholeArea.toFixed(3)})`,
+  );
+  ok(
+    Math.abs(gzAreaOf(near, h.kb) - wholeArea) < 1e-12 * Math.abs(wholeArea),
+    "from = 0 is the whole range, which is what the default asks for",
+  );
+  // ...and it really is the far half of the curve, not a reintegration of a differently drawn one. The
+  // reference is a 0.25° table summed over 30°…40° with the same clip, at VCGs on both sides of the
+  // vanishing angle so the crossing is in play too. Judged on the scale of the WHOLE area: a window whose
+  // own content has nearly cancelled is a difference of large numbers, and normalising by it would be
+  // measuring the conditioning rather than the arithmetic — the same reasoning as the clipped case above.
+  const fine40 = crossCurves(model, sample(model), {
+    steps: 40,
+    heel: Array.from({ length: 161 }, (_, i) => i * 0.25),
+  })!;
+  const fineWindow = (kg: number): number => {
+    const gz = gzCurve(fine40, h.vol, kg).filter(
+      (p) =>
+        p.heel >= GZ_AREA_HEEL_30 - 1e-12 && p.heel <= GZ_AREA_HEEL_40 + 1e-12,
+    );
+    let ref = 0;
+    for (let i = 1; i < gz.length; i++) {
+      const x0 = gz[i - 1].heel,
+        x1 = gz[i].heel,
+        y0 = gz[i - 1].gz,
+        y1 = gz[i].gz;
+      if (y0 >= 0 && y1 >= 0) ref += ((x1 - x0) * (y0 + y1)) / 2;
+      else if (y0 > 0 || y1 > 0) {
+        const cross = x0 + (y0 / (y0 - y1)) * (x1 - x0);
+        ref += y0 > 0 ? ((cross - x0) * y0) / 2 : ((x1 - cross) * y1) / 2;
+      }
+    }
+    return ref;
+  };
+  let worstWindow = 0;
+  for (const frac of [0, 0.5, 1, 1.5, 2, 2.5]) {
+    const kg = h.kb * frac;
+    worstWindow = Math.max(
+      worstWindow,
+      Math.abs(gzAreaOf(far, kg) - fineWindow(kg)) / wholeArea,
+    );
+  }
+  ok(
+    worstWindow < 3e-3,
+    `the 30°–40° window tracks a 0.25° integration of the same window (worst ${(100 * worstWindow).toFixed(3)}% of the whole area)`,
+  );
+
+  // A clipped start is a real limit of integration: at a VCG whose arm is gone before 30° the far part is
+  // zero while the whole still has the lobe below 30° in it.
+  const dead = vcgForGzArea(gzAreaTerms(cc, h.vol, GZ_AREA_HEEL_30), 0);
+  ok(
+    Math.abs(gzAreaOf(far, dead * 1.001)) < 1e-9 * Math.abs(wholeArea),
+    "past the vanishing angle the 30°–40° window contributes nothing at all",
+  );
+
+  // the inverse inverts over the shifted range, where the closed-form bracket now uses cos φ₀ − cos φ₁
+  const target = farArea * 0.55,
+    needed = vcgForGzArea(far, target);
+  ok(
+    Math.abs(gzAreaOf(far, needed) - target) <
+      1e-8 * Math.max(1, Math.abs(target)),
+    `vcgForGzArea inverts a partial range (VCG ${needed.toFixed(3)} for ${target.toFixed(3)})`,
+  );
+  ok(
+    needed > h.kb,
+    "and a smaller partial area needs a higher VCG, as the whole one does",
+  );
+
+  // ---- the peak-angle ceiling ----
+  const minHeel = 25 * DEG;
+  const ceiling = vcgForMaximumGzHeel(cc, h.vol, minHeel);
+  ok(
+    Number.isFinite(ceiling) && ceiling > 0,
+    `the 25° peak criterion has a finite KG ceiling (${ceiling.toFixed(3)})`,
+  );
+  ok(
+    maximumGz(cc, h.vol, ceiling * (1 - 1e-6)).heel >= minHeel - 1e-12 &&
+      maximumGz(cc, h.vol, ceiling * (1 + 1e-6)).heel < minHeel - 1e-12,
+    "the peak is at or beyond 25° just below the ceiling and before it just above",
+  );
+  // ...and it is a CEILING: one crossing over the whole column, not a band or a scatter of them. This is the
+  // claim the shading rests on — that the complying part of a column is everything below one number.
+  let flips = 0,
+    was = true;
+  for (let i = 0; i <= 2000; i++) {
+    const kg = (ceiling * 1.4 * i) / 2000,
+      peak = maximumGz(cc, h.vol, kg),
+      late = Number.isFinite(peak.gz) && peak.heel >= minHeel - 1e-12;
+    if (i === 0) was = late;
+    else if (late !== was) {
+      flips++;
+      was = late;
+    }
+  }
+  ok(
+    flips === 1,
+    `the criterion changes hands exactly once down the column (${flips} crossing)`,
+  );
+  // a hull the criterion cannot be met on at all says so, rather than returning a ceiling of zero
+  const flat = crossCurves(model, sample(model), {
+    steps: 20,
+    heel: [0, 5, 10, 15],
+  })!;
+  ok(
+    vcgForMaximumGzHeel(flat, h.vol, minHeel) === -Infinity,
+    "a table that never reaches 25° has no complying KG rather than a ceiling",
+  );
+  ok(
+    !Number.isFinite(vcgForMaximumGzHeel(cc, h.vol * 1e6, minHeel)),
+    "and a displacement off the table has no ceiling rather than an invented one",
   );
 }
 

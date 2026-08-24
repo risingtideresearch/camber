@@ -12,6 +12,7 @@ import {
   sheerImmersionAngle,
   vcgForGzArea,
   vcgForMaximumGz,
+  vcgForMaximumGzHeel,
   GZ_AREA_HEEL_30,
   GZ_AREA_HEEL_40,
   type GzAreaTerms,
@@ -106,7 +107,26 @@ const fmt = (value: number): string =>
 
 // ---------- how the displacement / KG plane is shaded ----------
 
-type Coloring = "gmt" | "gzmax" | "gz30" | "gz40";
+type Coloring = "imo" | "gmt" | "gzmax" | "gz30" | "gz40";
+
+/**
+ * IMO A.749(18) / 2008 IS Code part A, 2.2 — the general intact-stability criteria, as the numbers they are
+ * stated in. Said ONCE here because four of them are also the pass contour of a shading of their own, and a
+ * threshold that disagreed with itself between the checklist and the drawing would be worse than no
+ * checklist at all.
+ *
+ * The 40° criteria are stated "or to the downflooding angle if that is less". Downflooding is not modelled —
+ * there are no openings in the hull — so they are read at 40° flat, and the sheer-immersion overlay is left
+ * to say where the deck edge goes under before then. That is a warning here and not a criterion.
+ */
+const IMO = {
+  area30: 0.055, // m·rad, area under GZ out to 30°
+  area40: 0.09, // m·rad, out to 40°
+  area3040: 0.03, // m·rad, between 30° and 40°
+  gzAt30: 0.2, // m, righting lever at 30° of heel or beyond
+  peakDeg: 25, // degrees, the heel maximum GZ must occur at or beyond
+  gm: 0.15, // m, initial metacentric height
+} as const;
 
 interface AreaBand {
   readonly key: string;
@@ -174,24 +194,33 @@ const AREA_CRITERIA: readonly AreaCriterion[] = [
     key: "gz30",
     deg: 30,
     upTo: GZ_AREA_HEEL_30,
-    bands: bandsAt([0.055, 0.07, 0.12, 0.2]),
+    bands: bandsAt([IMO.area30, 0.07, 0.12, 0.2]),
   },
   {
     key: "gz40",
     deg: 40,
     upTo: GZ_AREA_HEEL_40,
-    bands: bandsAt([0.09, 0.115, 0.2, 0.33]),
+    bands: bandsAt([IMO.area40, 0.115, 0.2, 0.33]),
   },
 ];
 /** The pass/fail contour the standard actually draws — the first band's floor. */
 const passArea = (criterion: AreaCriterion): number => criterion.bands[1].min;
 
-/** The four readings the plane can be shaded by, in the order the segmented bar offers them. */
+/**
+ * What the plane can be shaded by, in the order the segmented bar offers them. The IMO view comes first
+ * because it is the question a design is actually asked — the four below it are the same plane opened up one
+ * reading at a time, for when the answer is no and the next thing to know is by how much and on what.
+ */
 const SHADINGS: readonly {
   readonly key: Coloring;
   readonly label: string;
   readonly hint: string;
 }[] = [
+  {
+    key: "imo",
+    label: "IMO criteria",
+    hint: "Every general intact-stability criterion at once — compliant below the limiting KG curve, non-compliant above it",
+  },
   {
     key: "gmt",
     label: "Initial stability",
@@ -209,9 +238,9 @@ const SHADINGS: readonly {
   })),
 ];
 
-const MAX_GZ_MIN = 0.2; // metres, at a heel of at least 30°
+const MAX_GZ_MIN = IMO.gzAt30; // metres, at a heel of at least 30°
 const MAX_GZ_MIN_HEEL = 30 / DEG;
-const MAX_GZ_MIN_PEAK_HEEL = 25 / DEG;
+const MAX_GZ_MIN_PEAK_HEEL = IMO.peakDeg / DEG;
 const MAX_GZ_BANDS: readonly AreaBand[] = [
   {
     key: "fail",
@@ -222,7 +251,7 @@ const MAX_GZ_BANDS: readonly AreaBand[] = [
   },
   {
     key: "limited",
-    min: 0.2,
+    min: MAX_GZ_MIN,
     range: "0.20 – 0.30",
     name: "Limited margin",
     note: "maximum righting lever from 0.20 to 0.30 m",
@@ -242,6 +271,40 @@ const MAX_GZ_BANDS: readonly AreaBand[] = [
     note: "assess stiffness and dynamics separately",
   },
 ];
+
+/**
+ * One criterion of the standard, as everything the panel has to say about it: the reading it takes of a
+ * condition, the threshold that reading is held to, and the bound that threshold puts on KG.
+ *
+ * `bound` is the highest KG at a displacement that still complies, in MODEL units — which every one of the
+ * six has, because every one of these readings falls as the centre of gravity rises. The areas and the
+ * 30°-and-beyond lever fall because raising G subtracts VCG·sin φ from the arm at every heel; GM₀ falls one
+ * for one; and the angle of maximum GZ walks down the heel axis because that subtraction bites hardest
+ * where sin φ is largest (see `vcgForMaximumGzHeel`). So the complying region of each column is everything
+ * below a single number, the region complying with ALL of them is everything below the LEAST of those
+ * numbers, and that lower envelope is the limiting KG curve the standard is usually drawn as.
+ */
+interface ImoCheck {
+  readonly key: string;
+  /** The name as plain text, for the SVG — which has no markup to set a subscript with. */
+  readonly label: string;
+  /** The requirement as the standard states it, for the label on the curve. */
+  readonly rule: string;
+  readonly title: string;
+  /** The reading for one condition, in the unit `rule` is stated in. */
+  readonly read: (vol: number, kg: number) => number;
+  /** The threshold that reading is held to, same unit — `rule` is how it is written. */
+  readonly min: number;
+  /** The highest complying KG at this displacement, in model units. */
+  readonly bound: (vol: number) => number;
+}
+
+/** Where a criterion stands for one condition, or across the whole tolerance rectangle. */
+interface ImoVerdict {
+  readonly pass: boolean;
+  /** The rectangle has the threshold running through it: some of it complies and some does not. */
+  readonly straddles: boolean;
+}
 
 const bandFor = (criterion: AreaCriterion, area: number): AreaBand | null =>
   Number.isFinite(area)
@@ -688,8 +751,9 @@ export function StabilityPanel() {
   // Where the pointer is over the plane, if anywhere. Clicking pins a condition; merely pointing at one is
   // enough to see its curve, so the plane can be read continuously without committing to a selection.
   const [hover, setHover] = useState<Condition | null>(null);
-  // The area out to 30° is the criterion a design is judged on first, so it is what the plane opens shaded by.
-  const [coloring, setColoring] = useState<Coloring>("gz30");
+  // The plane opens on the whole standard at once, because that is the question a design is asked. The
+  // single-reading shadings are what it is opened up into once the answer is no.
+  const [coloring, setColoring] = useState<Coloring>("imo");
   const [overlays, setOverlays] = useState<Overlays>(DEFAULT_OVERLAYS);
   // Whether the readings are opened out to all of them. It costs the GZ chart height, which is the trade the
   // button offers: the curve is the subject until the numbers are what is being read.
@@ -703,6 +767,7 @@ export function StabilityPanel() {
   // The area criterion being shaded by, or null for the initial-stability and maximum-GZ readings. The area
   // readout falls back to the standard's first one, so switching away from area shading never blanks it.
   const criterion = AREA_CRITERIA.find((c) => c.key === coloring) ?? null;
+  const isImo = coloring === "imo";
   const isInitial = coloring === "gmt";
   const isMaximum = coloring === "gzmax";
   const readout = criterion ?? AREA_CRITERIA[0];
@@ -842,6 +907,122 @@ export function StabilityPanel() {
         : [],
     [areaField, criterion, metres],
   );
+  // The standard's six criteria, bound to this hull. Readings come out of the core in model units and are
+  // stated here in the units the criteria are written in — metres and metre-radians — so the thresholds can
+  // be the literal numbers of the text.
+  const imoChecks = useMemo<readonly ImoCheck[]>(() => {
+    if (!curves) return [];
+    const rad = (deg: number) => deg / DEG,
+      area =
+        (upTo: number, from = 0) =>
+        (vol: number) =>
+          gzAreaTerms(curves, vol, upTo, from);
+    const areaCheck = (
+      key: string,
+      label: string,
+      min: number,
+      title: string,
+      terms: (vol: number) => GzAreaTerms,
+    ): ImoCheck => ({
+      key,
+      label,
+      rule: `≥ ${fmtArea(min)} m·rad`,
+      title,
+      read: (vol, kg) => gzAreaOf(terms(vol), kg) * metres,
+      min,
+      bound: (vol) => vcgForGzArea(terms(vol), min / metres),
+    });
+    return [
+      {
+        key: "gm",
+        label: "GM₀",
+        rule: `≥ ${IMO.gm.toFixed(2)} m`,
+        title:
+          "Initial metacentric height, KMt − KG. IMO A.749 2.2.4 puts it at 0.15 m or more",
+        read: (vol, kg) => (limitingKgAt(limit, vol) - kg) * metres,
+        min: IMO.gm,
+        bound: (vol) => limitingKgAt(limit, vol) - IMO.gm / metres,
+      },
+      areaCheck(
+        "area30",
+        "A₃₀",
+        IMO.area30,
+        "Area under the righting-lever curve out to 30° of heel. IMO A.749 2.2.1 puts it at 0.055 m·rad or more",
+        area(GZ_AREA_HEEL_30),
+      ),
+      areaCheck(
+        "area40",
+        "A₄₀",
+        IMO.area40,
+        "Area under the righting-lever curve out to 40°. IMO A.749 2.2.1 puts it at 0.09 m·rad or more — the standard says 40° or the downflooding angle, which this model does not carry",
+        area(GZ_AREA_HEEL_40),
+      ),
+      areaCheck(
+        "area3040",
+        "A₃₀₋₄₀",
+        IMO.area3040,
+        "Area under the righting-lever curve between 30° and 40°. IMO A.749 2.2.2 puts it at 0.03 m·rad or more",
+        area(GZ_AREA_HEEL_40, GZ_AREA_HEEL_30),
+      ),
+      {
+        key: "gz30",
+        label: "GZ₃₀₊",
+        rule: `≥ ${IMO.gzAt30.toFixed(2)} m`,
+        title:
+          "The largest righting lever at or beyond 30° of heel. IMO A.749 2.2.3 puts it at 0.20 m or more",
+        read: (vol, kg) => maximumGz(curves, vol, kg, rad(30)).gz * metres,
+        min: IMO.gzAt30,
+        bound: (vol) =>
+          vcgForMaximumGz(curves, vol, IMO.gzAt30 / metres, rad(30)),
+      },
+      {
+        key: "peak",
+        label: "θmax",
+        rule: `≥ ${IMO.peakDeg}°`,
+        title:
+          "The heel at which the righting lever peaks. IMO A.749 2.2.4 puts it at 25° or more",
+        read: (vol, kg) => maximumGz(curves, vol, kg).heel * DEG,
+        min: IMO.peakDeg,
+        bound: (vol) => vcgForMaximumGzHeel(curves, vol, MAX_GZ_MIN_PEAK_HEEL),
+      },
+    ];
+  }, [curves, limit, metres]);
+  // The limiting KG curve itself: per displacement, each criterion's own bound and the least of them. Held
+  // here for the same reason the area ribbons are — six bisections a column is the most expensive thing the
+  // panel does, and none of it depends on the viewport or the pointer.
+  const imoColumns = useMemo(
+    () =>
+      imoChecks.length
+        ? limit.map((point) => {
+            const bounds = imoChecks.map((check) =>
+              clamp(check.bound(point.vol), 0, yMax),
+            );
+            return {
+              x: point.vol * tonsPerVolume,
+              vol: point.vol,
+              bounds,
+              limit: Math.min(...bounds),
+            };
+          })
+        : [],
+    [imoChecks, limit, tonsPerVolume, yMax],
+  );
+  // The IMO envelope runs far below KMt — the large-angle criteria bite well under the metacentre — so
+  // opening this view on the initial-stability framing would press the complying region into a sliver along
+  // the foot of the chart. It gets its own initial framing, off its own curve over the same displacement
+  // window, with room above the envelope for the marks that sit there.
+  const imoDesignYMax = useMemo(() => {
+    const local = imoColumns
+      .filter(
+        (column) =>
+          column.x >= designXDomain[0] && column.x <= designXDomain[1],
+      )
+      .map((column) => column.limit)
+      .filter(Number.isFinite);
+    return local.length
+      ? clamp(Math.max(...local) * 1.35, yMax / 1000, yMax)
+      : designYMax;
+  }, [designXDomain, designYMax, imoColumns, yMax]);
   // Sample only the warning overlay. The coloured maximum-GZ bands and the 0.20 m criterion contour below
   // are exact envelopes of the tabulated heel lines; this modest grid cross-hatches the secondary finding
   // that the peak occurs before 25°.
@@ -944,7 +1125,6 @@ export function StabilityPanel() {
     maximumPass =
       selectedBeyond30.gz * metres >= MAX_GZ_MIN &&
       selectedMaximum.heel >= MAX_GZ_MIN_PEAK_HEEL,
-    displayedPass = isMaximum ? maximumPass : safe,
     selectedSheerHeel = sheerImmersionAngle(curves, selected.vol),
     selectedSheerDeg = selectedSheerHeel * DEG,
     selectedSheerGz = gzAtHeel(
@@ -1043,6 +1223,23 @@ export function StabilityPanel() {
       : null;
     return { criterion: c, value, band: bandFor(c, value), range };
   });
+  // EVERY criterion of the standard against the condition, and against the whole rectangle where there is
+  // one. A criterion whose threshold falls inside its own range is neither a pass nor a failure — the box
+  // has been drawn across the line, and saying either would be answering for the centre point alone.
+  const imoVerdicts: readonly ImoVerdict[] = imoChecks.map((check) => {
+    const value = check.read(selected.vol, selected.kg),
+      range = rangeOf(check.read);
+    return {
+      pass: Number.isFinite(value) && value >= check.min,
+      straddles:
+        range !== null && range.lo < check.min && range.hi >= check.min,
+    };
+  });
+  // Compliance is the conjunction: one criterion short is non-compliant however much margin the rest have.
+  const imoPass = imoVerdicts.length > 0 && imoVerdicts.every((v) => v.pass),
+    imoStraddles = imoVerdicts.some((v) => v.straddles);
+  // What the marker on the plane says, in the terms the plane is currently drawn in.
+  const displayedPass = isImo ? imoPass : isMaximum ? maximumPass : safe;
   // The one the plane is shaded by, which is the only place the shading still reaches into the numbers: it
   // decides which contour the rectangle can straddle, and which area the GZ curve fills out to.
   const activeArea =
@@ -1060,25 +1257,31 @@ export function StabilityPanel() {
         ? beyond30Range
         : areaRange,
     criterionFloor = isInitial ? 0 : isMaximum ? MAX_GZ_MIN : passArea(readout),
-    straddles =
-      criterionRange !== null &&
-      criterionRange.lo < criterionFloor &&
-      criterionRange.hi >= criterionFloor;
+    // Under the IMO view it is ANY of the six the box may be drawn across, not one nominated reading.
+    straddles = isImo
+      ? imoStraddles
+      : criterionRange !== null &&
+        criterionRange.lo < criterionFloor &&
+        criterionRange.hi >= criterionFloor;
   // The band is drawn in the colour of its WORST corner, so a tolerance reaching down into a lower band says
   // so in the fill and not only in the numbers.
   const worstBandKey = !region
     ? null
-    : isMaximum
-      ? maximumRange
-        ? MAX_GZ_BANDS.reduce((best, band) =>
-            maximumRange.lo >= band.min ? band : best,
-          ).key
-        : null
-      : criterion
-        ? (bandFor(criterion, areaRange?.lo ?? NaN)?.key ?? null)
-        : gmtRange && gmtRange.lo <= 0
-          ? "fail"
-          : null;
+    : isImo
+      ? imoVerdicts.some((v) => !v.pass || v.straddles)
+        ? "fail"
+        : "comfortable"
+      : isMaximum
+        ? maximumRange
+          ? MAX_GZ_BANDS.reduce((best, band) =>
+              maximumRange.lo >= band.min ? band : best,
+            ).key
+          : null
+        : criterion
+          ? (bandFor(criterion, areaRange?.lo ?? NaN)?.key ?? null)
+          : gmtRange && gmtRange.lo <= 0
+            ? "fail"
+            : null;
 
   // The hovered condition's own curve, drawn faintly against the pinned one. It deliberately does NOT enter
   // the framing below: the axis belongs to the condition that was chosen, and GZ swings widely enough across
@@ -1214,11 +1417,13 @@ export function StabilityPanel() {
             ))}
           </ButtonGroup>
           <InfoHint label="What this shading means">
-            {criterion
-              ? `Shaded by the area under GZ out to ${criterion.deg}°, which the IMO criterion puts at ${fmtArea(passArea(criterion))} m·rad or more.`
-              : isMaximum
-                ? "Shaded by maximum GZ. The dashed contour requires GZ ≥ 0.20 m at or beyond 30°; cross-hatching marks a qualifying lever whose peak occurs before 25°."
-                : "Green is where the transverse metacenter M is above G (GMt > 0)."}{" "}
+            {isImo
+              ? "Green is where every general intact-stability criterion of IMO A.749 is met at once. The heavy curve is the limiting KG each displacement allows — the least of the six ceilings, drawn thin behind it — and it is labelled with the criterion that sets it. The 40° criteria are read at 40° flat: downflooding openings are not modelled, so the sheer-immersion overlay is a warning here and not a criterion."
+              : criterion
+                ? `Shaded by the area under GZ out to ${criterion.deg}°, which the IMO criterion puts at ${fmtArea(passArea(criterion))} m·rad or more.`
+                : isMaximum
+                  ? "Shaded by maximum GZ. The dashed contour requires GZ ≥ 0.20 m at or beyond 30°; cross-hatching marks a qualifying lever whose peak occurs before 25°."
+                  : "Green is where the transverse metacenter M is above G (GMt > 0)."}{" "}
             Point anywhere to see that condition’s curve, and click to pin it.
           </InfoHint>
         </div>
@@ -1226,7 +1431,7 @@ export function StabilityPanel() {
           xDomain={xDomain}
           yDomain={[0, yMax]}
           initialXDomain={designXDomain}
-          initialYDomain={[0, designYMax]}
+          initialYDomain={[0, isImo ? imoDesignYMax : designYMax]}
           initialViewLabel="Design"
           panZoom
           xLabel="Displacement Δ (t, seawater)"
@@ -1234,11 +1439,13 @@ export function StabilityPanel() {
           formatX={fmt}
           formatY={fmt}
           ariaLabel={
-            criterion
-              ? `Limiting KG by displacement, shaded by the area under the GZ curve out to ${criterion.deg} degrees`
-              : isMaximum
-                ? "Displacement and VCG conditions shaded by maximum righting lever, with the 0.20 metre criterion and early peak warning"
-                : "Limiting KG by displacement; green below the curve is safe and red above it is unsafe"
+            isImo
+              ? "Limiting KG by displacement against every general intact-stability criterion of IMO A.749; green below the curve is compliant and red above it is not"
+              : criterion
+                ? `Limiting KG by displacement, shaded by the area under the GZ curve out to ${criterion.deg} degrees`
+                : isMaximum
+                  ? "Displacement and VCG conditions shaded by maximum righting lever, with the 0.20 metre criterion and early peak warning"
+                  : "Limiting KG by displacement; green below the curve is safe and red above it is unsafe"
           }
           onPlotClick={(tons, kg) =>
             setCondition({ vol: tons / tonsPerVolume, kg })
@@ -1273,6 +1480,20 @@ export function StabilityPanel() {
               })),
               (p) => Number.isFinite(p.y) && p.y >= 0 && p.y <= yMax,
             );
+            // The limiting KG curve and the criterion that owns each stretch of it. Runs are grouped by
+            // which bound is least, so the label appears once per stretch rather than once per column.
+            const imoRuns = runsOf(imoColumns, (c) => Number.isFinite(c.limit));
+            const imoGovernors = imoRuns.flatMap((run) => {
+              const stretches: { columns: typeof run; check: ImoCheck }[] = [];
+              for (const column of run) {
+                const at = column.bounds.indexOf(column.limit),
+                  check = imoChecks[at < 0 ? 0 : at],
+                  last = stretches[stretches.length - 1];
+                if (last && last.check === check) last.columns.push(column);
+                else stretches.push({ columns: [column], check });
+              }
+              return stretches;
+            });
             return (
               <>
                 <defs>
@@ -1292,7 +1513,84 @@ export function StabilityPanel() {
                     />
                   </pattern>
                 </defs>
-                {isInitial ? (
+                {isImo ? (
+                  <>
+                    {/* Two states and no ramp: the standard does not grade, it admits or refuses. The
+                        margin a design has over each criterion is the OTHER four shadings — this one is
+                        the answer, and giving it a gradient would suggest the answer came by degrees. */}
+                    <rect
+                      className="unsafearea"
+                      x={scale.left}
+                      y={scale.top}
+                      width={scale.right - scale.left}
+                      height={scale.bottom - scale.top}
+                    />
+                    {imoRuns.map((run, i) => (
+                      <path
+                        key={i}
+                        className="safearea"
+                        d={`${linePath(
+                          run.map((c) => ({ x: c.x, y: c.limit })),
+                          scale,
+                        )} L${scale.x(run[run.length - 1].x)},${scale.bottom} L${scale.x(run[0].x)},${scale.bottom} Z`}
+                      >
+                        <title>
+                          Every general intact-stability criterion is met below
+                          this curve.
+                        </title>
+                      </path>
+                    ))}
+                    {/* Each criterion's own bound, so the envelope can be read as the six curves it is the
+                        floor of: how close the others run to the one that governs is the margin a change
+                        has to work with, and it is invisible in the envelope alone. */}
+                    {imoChecks.map((check, ci) =>
+                      runsOf(
+                        imoColumns.map((column) => ({
+                          x: column.x,
+                          y: column.bounds[ci],
+                        })),
+                        (point) => Number.isFinite(point.y),
+                      ).map((run, i) => (
+                        <path
+                          key={`${check.key}-${i}`}
+                          className="criterioncontour"
+                          d={linePath(run, scale)}
+                        >
+                          <title>{`${check.title} — the KG this puts a ceiling on`}</title>
+                        </path>
+                      )),
+                    )}
+                    {imoRuns.map((run, i) => (
+                      <path
+                        key={i}
+                        className="limitline"
+                        d={linePath(
+                          run.map((c) => ({ x: c.x, y: c.limit })),
+                          scale,
+                        )}
+                      />
+                    ))}
+                    {/* Which criterion the envelope is made of here. It changes along the curve, and it is
+                        the one a design has to answer, so it is written on the stretch it governs rather
+                        than left to be worked out from six overlapping lines. */}
+                    {imoGovernors.map(({ columns, check }, i) => {
+                      const at = columns[Math.floor(columns.length / 2)],
+                        px = scale.x(at.x),
+                        py = scale.y(at.limit);
+                      return columns.length < 3 ? null : (
+                        <text
+                          key={i}
+                          className="governorlabel"
+                          x={px}
+                          y={py - 7}
+                          textAnchor="middle"
+                        >
+                          {`${check.label} ${check.rule}`}
+                        </text>
+                      );
+                    })}
+                  </>
+                ) : isInitial ? (
                   <>
                     <rect
                       className="unsafearea"

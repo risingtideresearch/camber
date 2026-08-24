@@ -214,6 +214,31 @@
   stroke: #15803d;
   stroke-width: 3;
 }
+/* One criterion's own ceiling, under the envelope that is the least of them. Thin, dashed and grey on
+   purpose: six of these are on the plane at once and only their LOWER EDGE is the answer, so they have to
+   read as the working behind the heavy curve rather than as six competing curves. What they are there to
+   show is the gap — how much room the criteria that are not governing have before they would. */
+.criterioncontour {
+  fill: none;
+  stroke: var(--mut);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.55;
+  pointer-events: stroke;
+}
+/* Which criterion the envelope is made of along this stretch, written on the stretch. Haloed in white the
+   same way the other on-plane labels are, so it stays readable over green, over red and over the curve. */
+.governorlabel {
+  fill: #14532d;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  paint-order: stroke;
+  pointer-events: none;
+  stroke: white;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
 .lowestsheerguide {
   stroke: var(--sheer);
   stroke-width: 2;
