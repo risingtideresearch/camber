@@ -16,3 +16,10 @@
   color: var(--ink);
   min-width: 38px;
 }
+.ctl .ctlnum {
+  width: 72px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}

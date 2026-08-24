@@ -66,6 +66,7 @@ export type DocumentCommand =
   | { type: "setDeckRakeDeg"; deg: number }
   | { type: "setName"; name: string }
   | { type: "setUnit"; unit: Unit; rescale: boolean }
+  | { type: "setLoa"; length: number }
   // a whole hull at once: open, import, revert, reset, or a blend
   | { type: "installHull"; state: HullState };
 
@@ -467,6 +468,33 @@ export function interpretDocumentCommand(
       );
     }
 
+    // Scale the whole hull to a stated length overall. A document authored in units of L — the plan running
+    // 0…1000 — is a SHAPE, and every dimensional answer off it (∇ in tonnes, KG, the area under GZ) is that
+    // shape's number multiplied by however long the boat really is. This is the multiplication: state the
+    // length and the numbers become the real ones. Geometrically it is the rescaling `setUnit` does, with the
+    // factor read off the length the author wants rather than off a change of unit.
+    case "setLoa": {
+      const len = loa(before);
+      if (!Number.isFinite(cmd.length) || cmd.length <= 0)
+        return { rejected: "a length overall must be a positive number" };
+      if (len <= 0) return { rejected: "this hull has no length to scale" };
+      const s = cmd.length / len;
+      if (s === 1) return d.commit();
+      d.scalars();
+      d.plan().forEach((p) => ((p.x *= s), (p.y *= s)));
+      d.trim().forEach((p) => ((p.x *= s), (p.z *= s)));
+      d.transom().forEach((p) => ((p.x *= s), (p.z *= s)));
+      d.stations().forEach((st) =>
+        st.points.forEach((p) => ((p.n *= s), (p.z *= s))),
+      );
+      // the views lay out against `viewLen`, and the station editor clamps its points to a box measured from
+      // it, so a scaled hull must carry its layout with it or the next section edit would clamp to the old size
+      return d.commit(
+        { waterline: before.waterline * s },
+        { session: { x0: before.x0 * s, viewLen: before.viewLen * s } },
+      );
+    }
+
     // ---- a whole hull ----
     // Open, import, revert, reset, blend. The 2D views are laid out against the hull that is installed, not
     // the one it replaced, and the cut station is brought inside the new boat.
@@ -558,6 +586,7 @@ export function commandSlices(cmd: DocumentCommand): SliceMask {
     case "setName":
       return SLICE.scalars;
     case "setUnit":
+    case "setLoa":
     case "installHull":
       return ALL_SLICES;
   }
@@ -582,6 +611,7 @@ export function sameGesture(a: DocumentCommand, b: DocumentCommand): boolean {
     case "setWaterline":
     case "setDeckRakeDeg":
     case "setName":
+    case "setLoa":
       return true; // a slider or a text field, held down or typed into
     default:
       return false;
@@ -638,6 +668,8 @@ export function describeCommand(cmd: DocumentCommand): string {
       return "Rename the hull";
     case "setUnit":
       return `Unit → ${cmd.unit}${cmd.rescale ? ", rescaled" : ""}`;
+    case "setLoa":
+      return `Scale to LOA ${cmd.length}`;
     case "installHull":
       return "Replace the whole hull";
   }

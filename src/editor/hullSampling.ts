@@ -29,7 +29,7 @@ export function useHullSampling(
   perf: PerfSettings,
   /** Bumped by the Performance toggle to force one more sweep with nothing having moved. */
   redraws: number,
-): () => HullSampling {
+): () => HullSampling | null {
   // A landed sweep is not a value React can subscribe to — the sampling is PULLED, by whichever view asks —
   // so the sampler only says "look again" and this is what it says it to.
   const [, rerender] = useReducer((n: number) => n + 1, 0);
@@ -38,10 +38,19 @@ export function useHullSampling(
   // nothing — the worker is not made until a sweep is actually asked for.
   const [sampler] = useState(() => createHullSampler(rerender));
   const [clock] = useState(() => createGestureClock());
+  // Delay disposal by one task. React StrictMode performs a setup → cleanup → setup probe on mount; immediate
+  // cleanup would kill the first worker request after the render that made it, leaving the blank first paint
+  // with no event capable of asking again. A real unmount gets no second setup and disposes normally.
+  const disposeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
   useEffect(() => {
+    clearTimeout(disposeTimer.current);
     return () => {
-      sampler.dispose();
-      clock.dispose();
+      disposeTimer.current = setTimeout(() => {
+        sampler.dispose();
+        clock.dispose();
+      }, 0);
     };
   }, [sampler, clock]);
 
@@ -59,7 +68,7 @@ export function useHullSampling(
   const resolution = resolutionFor(perf, working);
   const key = samplingKey(geometry, resolution);
 
-  return (): HullSampling => {
+  return (): HullSampling | null => {
     wanted.current = true; // from here this window is one that sweeps, and starts watching the rate
     return sampler.get(
       {

@@ -23,6 +23,7 @@ import { ProfileView } from "./ProfileView";
 import { StationView } from "./StationView";
 import { CutStationView } from "./CutStationView";
 import { StlControl } from "../components/StlControl";
+import { DetachPanelButton } from "./DetachPanelButton";
 import { Area, AreaGroup, AreaSeparator } from "polymorph-ui";
 import "./EditorApp.css";
 
@@ -165,6 +166,7 @@ function Editor() {
           onClose={onClose}
         />
         <span className="tabsep" />
+        <DetachPanelButton kind="stability" label="Stability" />
         <StlControl />
       </div>
       <div className="main">

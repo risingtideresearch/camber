@@ -75,13 +75,13 @@ export interface EditorUi {
   perf: PerfSettings;
   setPerf: (p: PerfSettings) => void;
   /**
-   * The one hull sampling every view in this window shares — CALLED, not held, and computed on the first call
-   * that finds it stale. Only the plan, the profile and the 3D view ask for it, so a window showing none of
-   * them (the station grid, the history) never sweeps a hull at all; it used to sweep one per edit and throw
-   * it away. Successive calls in a render return the identical object, which is what lets the 3D view keep
-   * memoizing its mesh on the sampling's identity.
+   * The one hull sampling every view in this window shares — CALLED, not held, and requested from its worker
+   * on the first call that finds it stale. That first call can return null until the worker answers; later
+   * edits retain the last good lattice meanwhile. A window showing none of the plan, profile or 3D views
+   * never starts the meshing worker. Successive calls return the identical cached object, which lets the 3D
+   * view keep memoizing its mesh on the sampling's identity.
    */
-  sampling: () => HullSampling;
+  sampling: () => HullSampling | null;
   /** Imported reference STL — session only, never saved. */
   stl: StlState | null;
   importStl: (file: File) => void;

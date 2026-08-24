@@ -1,0 +1,814 @@
+/* The stability window is two readings of one selected loading condition. Both charts keep their captions and
+   scale together; in a narrow window they stack and the panel itself scrolls. */
+.stabilitypanel {
+  container-name: stability-panel;
+  container-type: size;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+.stabilitycard {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.stabilityempty {
+  flex: 1 1 0;
+  color: var(--mut);
+}
+.chartframe {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 230px;
+  display: flex;
+  flex-direction: column;
+}
+/* The overlaid toolbar takes no height of its own; the frame allows only for the wider top margin the plot
+   keeps beneath it. */
+.chartframe.navigable {
+  min-height: 242px;
+}
+.stabilitychart {
+  flex: 1 1 0;
+  width: 100%;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+}
+/* Preserve authored stroke weights even if an embedding context scales the responsive SVG. */
+.stabilitychart line,
+.stabilitychart path,
+.stabilitychart rect,
+.stabilitychart circle {
+  vector-effect: non-scaling-stroke;
+}
+.stabilitychart.clickable {
+  cursor: crosshair;
+}
+.stabilitychart.pannable {
+  cursor: grab;
+  touch-action: none;
+}
+.stabilitychart.dragging {
+  cursor: grabbing;
+}
+/* Chart navigation (ChartFrame's toolbar) — the shared Button in its ghost variant, held to the size of a
+   chart caption rather than of an app bar. It sits in the plot's own top margin, at the trailing corner: a row of its
+   own above the frame cost the chart a band of empty white as tall as the buttons themselves, on top of the
+   margin the plot already keeps there. ChartFrame widens that margin for a navigable chart instead, so the
+   controls land in space the drawing was never going to use and nothing below them moves down.
+
+   Sizing and placement are all this file has to say: what the buttons look like, when one is lit and when one
+   is dim, is the shared component's business, which is the point of it being the shared component. */
+.chartnav {
+  position: absolute;
+  top: 0;
+  /* `right` and `height` come from ChartFrame: the plot's own right margin, and its top margin less a hair of
+     clearance. Bottom-aligned within that band, so the buttons sit on the plot's top edge with the white
+     ABOVE them — the gap that used to be under them is what made them read as the row before the chart. */
+  z-index: 1;
+  display: flex;
+  align-items: flex-end;
+  /* The clusters are told apart by spacing, since ghosts have no borders to join: open between them... */
+  gap: 12px;
+}
+/* ...and tight within one. */
+.chartnavgroup {
+  display: flex;
+  gap: 1px;
+}
+/* Icon-only throughout, so the buttons are square-ish: the text padding would leave each glyph adrift in its
+   own button. */
+.chartnav .btn {
+  padding: 3px 6px;
+  /* squarer than an app-bar button: these are icons, and the chip behind one should read as its own square */
+  border-radius: 6px;
+}
+.chartnav .btn svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+}
+/* The hand fills its own drawing to the edges, where the others keep a margin, so it is set a size smaller to
+   weigh the same as the icons beside it. */
+.chartnav .chartpan svg {
+  width: 13px;
+  height: 13px;
+}
+
+.chartgrid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.chartborder {
+  fill: none;
+  stroke: var(--station);
+  stroke-width: 1;
+}
+.charttick,
+.chartlabel {
+  fill: var(--mut);
+  font-family: inherit;
+  user-select: none;
+}
+.charttick {
+  font-size: 10px;
+}
+.chartlabel {
+  fill: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.unsafearea {
+  fill: #fee2e2;
+}
+.safearea {
+  fill: #bbf7d0;
+}
+
+/* The GZ-area shading. The scale is not a ramp from bad to good: red fails the criterion, amber clears it
+   with little to spare, green is the comfortable band — and blue, deliberately off the ramp, is a large area
+   that is not automatically a better boat (it usually buys reserve energy with a stiff, snappy roll).
+
+   Each band's two colours are said once, here, and carried by its key class: `--band` is the wash the chart
+   is shaded in, `--bandink` the darker relative of it that the same colour can be written in. Everything that
+   speaks of a band then asks for the band rather than for a hex — the envelope's shading, the area under the
+   GZ curve, the legend key, the selected condition's own reading — so none of them can drift out of agreement
+   with the drawing they are describing. */
+.fail {
+  --band: #fecaca;
+  --bandink: #b91c1c;
+}
+.limited {
+  --band: #fed7aa;
+  --bandink: #c2410c;
+}
+.comfortable {
+  --band: #bbf7d0;
+  --bandink: #15803d;
+}
+.large {
+  --band: #bfdbfe;
+  --bandink: #1d4ed8;
+}
+.vast {
+  --band: #ddd6fe;
+  --bandink: #6d28d9;
+}
+.gzband {
+  fill: var(--band);
+}
+.passcontour {
+  fill: none;
+  stroke: #b91c1c;
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+.earlysheerarea {
+  fill: url(#early-sheer-hatch);
+  pointer-events: none;
+}
+.earlysheerstroke {
+  stroke: #0f766e;
+  stroke-width: 2;
+  opacity: 0.45;
+}
+.earlypeakarea {
+  fill: url(#early-maximum-hatch);
+  pointer-events: none;
+}
+.earlypeakstroke {
+  stroke: #7c2d12;
+  stroke-width: 2;
+  opacity: 0.55;
+}
+/* the same shading under the curve it is measured from; slate where no band applies */
+.gzarea {
+  fill: var(--band, #e2e8f0);
+  opacity: 0.75;
+}
+.areaedge {
+  stroke: var(--station);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+.areaedgelabel {
+  fill: var(--mut);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: white;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.limitline {
+  fill: none;
+  stroke: #15803d;
+  stroke-width: 3;
+}
+/* One criterion's own ceiling, under the envelope that is the least of them. Thin, dashed and grey on
+   purpose: six of these are on the plane at once and only their LOWER EDGE is the answer, so they have to
+   read as the working behind the heavy curve rather than as six competing curves. What they are there to
+   show is the gap — how much room the criteria that are not governing have before they would. */
+.criterioncontour {
+  fill: none;
+  stroke: var(--mut);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.55;
+  pointer-events: stroke;
+}
+/* Which criterion the envelope is made of along this stretch, written on the stretch. Haloed in white the
+   same way the other on-plane labels are, so it stays readable over green, over red and over the curve. */
+.governorlabel {
+  fill: #14532d;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  paint-order: stroke;
+  pointer-events: none;
+  stroke: white;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.lowestsheerguide {
+  stroke: var(--sheer);
+  stroke-width: 2;
+  stroke-dasharray: 7 4;
+}
+.lowestsheerlabel {
+  fill: #9a3412;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: white;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.designwlguide {
+  stroke: var(--wl);
+  stroke-width: 2;
+}
+.designwllabel {
+  fill: #0369a1;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: white;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.selectionguide {
+  stroke: var(--mut);
+  stroke-width: 1;
+  stroke-dasharray: 4 5;
+}
+.condition {
+  stroke: white;
+  stroke-width: 2;
+}
+.condition.safe {
+  fill: #15803d;
+}
+.condition.unsafe {
+  fill: var(--danger);
+}
+.zeroline {
+  stroke: var(--station);
+  stroke-width: 1.5;
+}
+.gzline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+.sheerangle {
+  stroke: #0f766e;
+  stroke-width: 1.5;
+  stroke-dasharray: 7 4;
+}
+.sheerpoint {
+  fill: #0f766e;
+  stroke: white;
+  stroke-width: 2;
+}
+.maximumguide {
+  stroke: var(--accent);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+.maximumpoint {
+  fill: var(--accent);
+  stroke: white;
+  stroke-width: 2;
+}
+.maximumpoint.deckdown {
+  fill: var(--sheer);
+}
+.maximumlabel {
+  fill: var(--accent);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: white;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+/* ---------- the captions ---------- */
+/* A caption is one line. Its name never gives up width — a bare text node in the flex row would otherwise be
+   an anonymous item, free to shrink and wrap while the reading beside it stayed whole. */
+.stabilitycard .cap {
+  gap: 12px;
+  min-width: 0;
+}
+.capname {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.stabilitycard .cap .val {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+.pinnedval {
+  flex: 0 1 auto;
+  white-space: nowrap;
+}
+
+/* ---------- the readings ---------- */
+/* CLOSED: a wrapping row of the few worth a constant glance. */
+.gzreadout {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 18px;
+  /* clearance for the opener sitting on the rule: half its height, so a reading that wraps to the trailing
+     end of the first line still passes under it rather than into it */
+  padding-top: 11px;
+  border-top: 1px solid var(--line);
+  color: var(--mut);
+  font-size: 12px;
+}
+.gzreadout strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+/* Each quantity is one unbreakable unit — the name and the number that answers it — so the row breaks between
+   quantities and never through the middle of one. Without this the flex items shrink to their longest word and
+   the last quantity, which is the longest, comes apart into a name, a number and a reading on three lines of
+   its own while the four beside it sit on one. */
+.gzreadout > span {
+  white-space: nowrap;
+}
+.rname {
+  color: var(--mut);
+}
+/* OPEN: every reading, a tile apiece. Auto-fill rather than a fixed count, so the grid answers the width the
+   window happens to give the card instead of a number chosen here. */
+.gzreadout.isopen {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 9px 16px;
+}
+.gzreadout.isopen > span {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  white-space: normal;
+}
+.gzreadout.isopen .rname {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.gzreadout.isopen strong {
+  font-size: 14px;
+}
+/* the spread already sets itself under its number (see .spreadrange); in a tile it needs no indent either */
+.gzreadout.isopen .spreadrange {
+  margin-top: 0;
+}
+/* The chart gives up its floor while the numbers are open — that is the trade the button offers. Anything
+   beyond what the two of them can share, the card scrolls, as it always did. */
+.gzcard.numbersopen .chartframe {
+  min-height: 130px;
+}
+/* The opener, astride the rule that parts the readings from the chart — sitting ON the separator rather than
+   in the row, so it costs the section no height of its own in either size. The card's own background masks
+   the hairline behind it, which is what makes the rule appear to break around the word.
+
+   `.gzreadout .btn` and not `.readmore` alone: the ghost's `background: none` is two classes deep, and this
+   has to outrank it rather than depend on which stylesheet the bundler happened to put last. */
+.gzreadout .btn.readmore {
+  position: absolute;
+  top: 0;
+  right: 0;
+  transform: translateY(-50%);
+  padding: 0 6px;
+  border-radius: 5px;
+  background: var(--panel);
+  font-size: 10px;
+  line-height: 15px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.gzreadout .btn.readmore:hover {
+  background: #f1f5f9;
+}
+.gzreadout .btn.readmore.active {
+  background: var(--ink);
+}
+/* The exception is the reading at the end, which is a sentence and breaks like one. It keeps the row's own
+   column gap from its chip, and takes what is left of the line before wrapping under it. */
+.gzreadout .areanote {
+  white-space: normal;
+}
+
+/* what the caption carries besides its name — now only the Overlays menu */
+.capctls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* The caption is uppercase and letter-spaced; a control sitting in it is not. .btn takes `font: inherit`, and
+   both of those inherit besides the shorthand, so the dropdown has to opt out of them by hand. */
+.capctls .btn {
+  text-transform: none;
+  letter-spacing: 0;
+}
+/* ---------- what the plane is shaded by ---------- */
+/* The four readings as one segmented bar, on the row the explanation used to have to itself. Held to the size
+   of a chart caption rather than of an app bar, like the chart's own navigation above it. */
+.shadebar {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+}
+.shadepick .btn {
+  padding: 3px 9px;
+  font-size: 12px;
+}
+/* The mark, and the explanation it gives up. The bubble is anchored to the BAR, not to the mark: the card
+   scrolls its own overflow, so a bubble hung off a mark near the trailing end would be clipped by it or would
+   open a scrollbar. Held to the bar's own width it can only grow downwards, over the chart. */
+.infohint {
+  display: inline-flex;
+}
+.infomark {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: #fff;
+  color: var(--mut);
+  font: inherit;
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+}
+.infomark:hover,
+.infohint:focus-within .infomark {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.infobubble {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 25;
+  visibility: hidden;
+  max-width: min(420px, 100%);
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(17, 24, 31, 0.16);
+  color: var(--mut);
+  font-size: 12px;
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.infohint:hover .infobubble,
+.infohint:focus-within .infobubble {
+  visibility: visible;
+}
+/* The key to the shading: a swatch and a name apiece, at the size of a caption.
+   
+   It used to be four filled boxes sharing the full width, which put the loudest block of colour on the card
+   on everything except the drawing — and the drawing is the thing those colours are FOR. A legend is a
+   reference, consulted once and then carried in the head; it should be the quietest row on the card, not the
+   second loudest. So the fill shrinks to a chip the size of the text beside it, the row is content-width
+   rather than stretched, and the numbers each band covers wait behind a hover. */
+.bandlegend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 13px;
+  /* Close under the chart, which it belongs to, and set in to start where the drawing does — `paddingLeft`
+     comes from ChartFrame's own left margin, so the keys sit under the plot rather than under the y axis's
+     label band. The rule below parts it from the condition, which it does not belong to, and stands back far
+     enough to read as the end of a section. Light enough now that the rule is doing real work: the filled
+     boxes it used to be were their own firmer edge, and a hairline a few pixels under one read as a loose
+     empty band. */
+  margin: 6px 0 14px;
+  font-size: 10px;
+  color: var(--mut);
+}
+.bandkey {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+  cursor: help;
+}
+.bandkey::before {
+  content: "";
+  align-self: center;
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border: 1px solid rgb(0 0 0 / 12%);
+  border-radius: 3px;
+  background: var(--band);
+}
+.bandkey:hover {
+  color: var(--ink);
+}
+/* the range the band covers, which is evidence rather than a label: on hover, over whatever is beside it */
+.bandkey small {
+  position: absolute;
+  z-index: 2;
+  bottom: calc(100% + 4px);
+  left: 0;
+  display: none;
+  width: max-content;
+  padding: 3px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  box-shadow: 0 4px 12px rgb(17 24 31 / 12%);
+  color: var(--ink);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.bandkey:hover small {
+  display: block;
+}
+/* The secondary warning the maximum-GZ shading carries. Marked with its own hatch rather than a flat colour,
+   because that is how it is drawn on the plane — but at the weight of the rest of the row now. */
+.hatchkey {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.hatchkey::before {
+  content: "";
+  align-self: center;
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border: 1px solid rgb(154 52 18 / 45%);
+  border-radius: 3px;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 3px,
+      rgb(154 52 18 / 40%) 3px,
+      rgb(154 52 18 / 40%) 4px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 3px,
+      rgb(154 52 18 / 40%) 3px,
+      rgb(154 52 18 / 40%) 4px
+    );
+}
+.gzreadout .areanote {
+  color: var(--mut);
+}
+
+@media (max-width: 850px) {
+  .stabilitypanel {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .stabilitycard {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+  .chartframe {
+    min-height: 260px;
+  }
+  .chartframe.navigable {
+    min-height: 272px;
+  }
+}
+
+/* ---------- the range: uncertainty bars, the rectangle they span, and the band that follows from it ----------
+
+   Error bars draw a cross, but the readings' extremes live in the CORNERS of the rectangle the bars span —
+   the worst case is the top VCG edge — so a cross on its own would put no ink in the place the numbers come
+   from. The rectangle is therefore drawn as well as the bars, faintly, and the bar ends double as its
+   handles: one object that reads as an uncertainty and as a region at the same time. */
+.regionbox {
+  fill: var(--ink);
+  fill-opacity: 0.07;
+  stroke: var(--ink);
+  stroke-opacity: 0.4;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  pointer-events: none;
+}
+/* The criterion's own contour running through the box is the finding the box was drawn to expose, so the
+   outline stops being incidental and takes the colour the verdict does. */
+.regionbox.straddles {
+  stroke: var(--danger);
+  stroke-opacity: 0.85;
+  stroke-width: 1.5;
+  stroke-dasharray: none;
+}
+.spreadbar {
+  stroke: var(--ink);
+  stroke-width: 1.5;
+  stroke-opacity: 0.65;
+  pointer-events: none;
+}
+.spreadcap {
+  stroke: var(--ink);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+/* The target is a good deal larger than the cap it moves, which is what makes a 2px line draggable. */
+.spreadgrab {
+  fill: transparent;
+}
+.spreadhandle.x {
+  cursor: ew-resize;
+}
+.spreadhandle.y {
+  cursor: ns-resize;
+}
+.spreadhandle:hover .spreadcap {
+  stroke: var(--accent);
+  stroke-width: 3.5;
+}
+/* The band every curve in the rectangle lies inside, in the colour of its worst corner so a tolerance that
+   reaches down into a lower band says so in the fill. No markers ever go on its edges: they are pointwise
+   extremes and belong to no single condition. */
+.gzenvelope {
+  fill: var(--band, var(--accent));
+  fill-opacity: 0.22;
+  stroke: var(--bandink, var(--accent));
+  stroke-opacity: 0.35;
+  stroke-width: 1;
+  cursor: help;
+}
+/* Sheer immersion does not move with VCG, so over a range of displacements it is a strip rather than a line. */
+.sheerspread {
+  fill: #0f766e;
+  fill-opacity: 0.1;
+  cursor: help;
+}
+/* The spread of a reading, set under the reading itself — quieter than the number it qualifies, and on its
+   own line so a row of ranges cannot be misread as a row of values. */
+.spreadrange {
+  display: block;
+  margin-top: 1px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+/* ---------- the condition bar ---------- */
+/* One line per quantity, in seven columns: name · value · unit · ± · low · tie · high. A subgrid, so the two
+   lines share those tracks and every control stands under its opposite number — and so the line of a quantity
+   whose ± is off simply stops after the fourth column instead of pulling the next quantity's name into it,
+   which is what a single flat grid would do.
+
+   polymorph-ui's inputs read their colours and metrics from custom properties its own dark base.css defines
+   and this app does not, so the bar supplies them in the editor's light palette — the same recipe as
+   StationView.css .urow, where the reasoning for each of them lives. */
+.conditionbar {
+  display: grid;
+  grid-template-columns:
+    max-content 76px max-content max-content
+    66px max-content 66px;
+  gap: 5px 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+  color: var(--mut);
+  font-size: 12px;
+
+  --ui-font-size: 12px;
+  --ui-font-weight: 400;
+  --item-height: 22px;
+  --item-padding: 0 6px;
+  --border-radius: 6px;
+  --input-background-color: #fff;
+  --primary-text-color: var(--ink);
+  --active-background-color: #bfdbfe;
+}
+.quantity {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: baseline;
+  column-gap: 8px;
+}
+/* the quantity's name, against the field it names */
+.cname {
+  text-align: right;
+  cursor: default;
+}
+.cunit {
+  color: var(--mut);
+}
+/* the InputContainer. content-box, against this app's global border-box (base.css): polymorph-ui centers the
+   value in the full --item-height, so under border-box the border would eat 2px of that height. */
+.quantity > div {
+  box-sizing: content-box;
+  border: 1px solid var(--line);
+}
+.quantity [data-part="input"] {
+  font-weight: 600;
+  text-align: right;
+  /* the app disables text selection while drawing (.app in EditorApp.css); these fields are text */
+  user-select: text;
+  -webkit-user-select: text;
+}
+/* The ± button: whether this quantity has a tolerance at all. Its extents are kept while it is off, so this
+   is a view of the condition and not a mode of it. */
+.rangetoggle {
+  justify-self: start;
+  padding: 1px 9px;
+  font-weight: 700;
+  line-height: 18px;
+}
+/* The tie between the two extents: one unbroken line while they move together, a line with a gap in it while
+   each is its own. Drawn in the background so the button keeps a real click target around a 2px mark. */
+.tollink {
+  align-self: center;
+  width: 18px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  color: var(--mut);
+  background:
+    linear-gradient(currentColor, currentColor) left center / 6px 2px no-repeat,
+    linear-gradient(currentColor, currentColor) right center / 6px 2px no-repeat;
+}
+.tollink.islinked {
+  color: var(--ink);
+  background: linear-gradient(currentColor, currentColor) center / 100% 2px
+    no-repeat;
+}
+.tollink:hover {
+  color: var(--accent);
+}
+
+/* The hovered condition's curve, drawn against the pinned one. Thinner and much quieter than `.gzline`: it
+   is context for the curve being read, not a second subject competing with it. */
+.gzghost {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  opacity: 0.32;
+  pointer-events: none;
+}
+/* The hovered condition named beside the pinned one, in the quieter of the two weights, so the pinned
+   reading does not shift on the line as the pointer moves. */
+.ghostval {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-right: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.6;
+  font-weight: 400;
+}

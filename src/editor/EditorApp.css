@@ -115,6 +115,12 @@ svg {
   color: var(--mut);
 }
 
+/* brief first paint while the hull's first lattice is built entirely off the UI thread */
+.samplingempty {
+  flex: 1 1 0;
+  color: var(--mut);
+}
+
 /* generic card surface, shared by the station view and the cut panel */
 .card {
   background: var(--panel);
@@ -142,15 +148,6 @@ svg {
   font-weight: 600;
   color: var(--ink);
   font-size: 13px;
-}
-.cap .tag {
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 700;
-  font-size: 12px;
-  padding: 1px 8px;
-  border-radius: 10px;
-  color: #fff;
 }
 /* thin vertical divider between app-bar groups */
 .tabsep {

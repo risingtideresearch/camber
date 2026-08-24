@@ -6,7 +6,8 @@
   display: flex;
   gap: 0;
 }
-.dropdown > .btn:first-child {
+/* only the SPLIT form's buttons are joined; the menu form's single button keeps the ordinary radius */
+.dropdown > .btn:first-child:not(:last-child) {
   border-radius: 8px 0 0 8px;
 }
 .dropdown > .btn.dropdown-caret {
@@ -20,7 +21,14 @@
   z-index: 1;
 }
 
-/* the popover panel, anchored under the split button. A max-height keeps a long panel (the Curvature
+/* the menu form's caret, inside its one button rather than beside it */
+.dropdown-caret-mark {
+  margin-left: 6px;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+/* the popover panel, anchored under the button. A max-height keeps a long panel (the Curvature
    control's many groups) from running off the bottom of the window — it scrolls instead. */
 .dropdown-panel {
   position: absolute;
@@ -84,6 +92,50 @@
   text-align: right;
   font-weight: 600;
   color: var(--ink);
+}
+
+/* a PARAMETER row: indented under the .dd-check whose mark it configures, so a value sits with the thing it
+   means something for rather than in a settings group of its own. Add .isoff to dim it while that mark is
+   off — dimmed rather than removed, so the panel keeps its height as rows are ticked. */
+.dd-row.dd-sub {
+  padding-left: 20px;
+  gap: 6px;
+}
+.dd-row.dd-sub .dd-name {
+  min-width: 124px;
+}
+.dd-row.dd-sub.isoff {
+  opacity: 0.45;
+  pointer-events: none;
+}
+/* the unit a parameter is read in, trailing its field */
+.dd-unit {
+  color: var(--mut);
+}
+/* A polymorph-ui NumberInput as a parameter's field — click to type, drag across it to scrub. Its colours and
+   metrics come from custom properties that polymorph-ui's own dark base.css defines and this app does not, so
+   the row supplies them in the light palette; see StationView.css .urow, where the reasoning for each lives. */
+.dd-row.dd-sub {
+  --ui-font-size: 12px;
+  --ui-font-weight: 400;
+  --item-height: 22px;
+  --item-padding: 0 6px;
+  --border-radius: 6px;
+  --input-background-color: #fff;
+  --primary-text-color: var(--ink);
+  --active-background-color: #bfdbfe;
+}
+.dd-row.dd-sub > div {
+  flex: 0 0 44px;
+  box-sizing: content-box;
+  border: 1px solid var(--line);
+}
+.dd-row.dd-sub [data-part="input"] {
+  font-weight: 600;
+  text-align: center;
+  /* the app disables text selection while drawing (.app in EditorApp.css); this field is text */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* a whole-row checkbox: box then label, pointer cursor over the whole row */

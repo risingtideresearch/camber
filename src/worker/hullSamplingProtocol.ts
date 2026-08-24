@@ -4,18 +4,10 @@
 // revisions and the resolution) and the worker hands it straight back, so a reply can be matched to the
 // request that asked for it and a late answer to a superseded one can be recognised for what it is.
 
-import type { HullState } from "../core/hull";
 import type { HullSampling } from "../core/mesh";
-import type { SessionState, SliceRevs } from "../core/runtime";
+import type { HullComputationRequest } from "./hullComputation";
 
-export interface SamplingRequest {
-  readonly key: string;
-  readonly state: HullState;
-  readonly session: SessionState;
-  readonly sliceRevs: SliceRevs;
-  readonly numSections: number;
-  readonly girthSteps: number;
-}
+export type SamplingRequest = HullComputationRequest;
 
 export interface SamplingResponse {
   readonly key: string;

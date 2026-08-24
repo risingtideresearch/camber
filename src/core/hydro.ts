@@ -1,23 +1,38 @@
 // ---------- hydrostatics: naval-architecture metrics from the swept hull ----------
 //
-// Everything here is derived by sampling the trimmed sections along the hull and integrating, at the
-// model's current design waterline (`immersion(x,z) > 0` ⇔ submerged, already floated at deckRake). All
-// outputs are in MODEL units — lengths in model units, areas in units², volume in units³, the form
+// Everything here is derived from ONE cut of the hull at the model's current design waterline (already
+// floated at deckRake). `sweep.ts` does the integrating — it owns the fanning-station-plane Jacobian and the
+// polygon clipping — and this module turns its answers into the numbers a designer reads: the principal
+// dimensions, the centroids, the initial stability and the form coefficients.
+//
+// All outputs are in MODEL units — lengths in model units, areas in units², volume in units³, the form
 // coefficients dimensionless. A display layer scales lengths by s = L_real/L (areas s², volume s³) and
 // multiplies volume by water density to get displacement; see the blender UI.
 //
-// The integration is the standard sectional-area-curve method: immersed cross-section area A(x), waterline
-// beam b(x), wetted girth and area centroid per station, trapezoid-integrated along x. At deckRake = 0 the
-// waterline is a clean horizontal cut in every section; at a small rake it is the usual station-plane
-// approximation (exact in the limit).
+// Two things are worth knowing about how these are obtained, because both used to be done differently:
+//
+//   • The VOLUME integrals go through `sweep.ts`, so they carry its Jacobian. The old sectional-area-curve
+//     method here — trapezoid A(x) against plan x — assumed constant-x sections, which these are not: a
+//     station plane is normal to the plan's heading and the planes fan as the plan turns. That ran ∇ about
+//     7% high on the default hull. Sectional area is now measured in the station plane itself rather than
+//     projected onto (y, z), which also nudges Cm.
+//
+//   • The WATERPLANE integrals — A_w, LCF, I_t, I_l — also come from `sweep.ts`, in the same coordinates as
+//     the volume, replacing the ∫b dx that had the same fanning bug. I_t is a cubed transverse quantity, so
+//     it was biased harder than the volume was; and because BMt = I_t/∇, the two have to be consistent with
+//     each other or hydro's KMt stops agreeing with the large-angle KN that stability.ts computes from the
+//     same hull. (A shoelace over the waterline curve is a tempting alternative — the waterplane really is
+//     planar — but a polygon through the per-station crossings is an inscribed chord approximation that is
+//     0.5% low at 200 columns and converges only at first order. The sweep integral is exact at any count.)
 
-import { lerp, V, type Vec3 } from "./math";
-import { type Model, immersion, loa, worldZ } from "./model";
-import { computeHullSampling, sweptSection } from "./mesh";
+import { type Vec3 } from "./math";
+import { type Model, loa } from "./model";
+import { sweptSection, type HullSampling } from "./mesh";
+import { cut, stationGeometry } from "./sweep";
 
 export interface Hydro {
   // principal dimensions (model units)
-  lwl: number; // waterline length (wetted span)
+  lwl: number; // waterline length
   bwl: number; // max waterline beam
   draft: number; // T — deepest immersion
   // areas / volume (model units)
@@ -51,61 +66,6 @@ export interface Hydro {
   validWaterplane: boolean; // false when the waterline sits above the sheer (no WL crossing) → coeffs are NaN
 }
 
-const M = 10; // default sub-steps per section segment (the section's girth resolution)
-const NS = 240; // default longitudinal sampling (coarser is fine for the heatmap — see hydrostatics args)
-
-interface Strip {
-  x: number;
-  area: number; // full immersed cross-section area
-  beam: number; // full waterline beam
-  girth: number; // full wetted girth (both sides)
-  zMom: number; // full area's world-z first moment (Σ z·dA), for KB
-  draft: number; // deepest immersion in this section
-  keel: boolean; // section closes on the centerline
-}
-
-// immersed integrals for one section: area between the section curve and the centerline below the WL,
-// plus the wetted girth, the world-z area moment, and the waterline beam. Works on the starboard half;
-// the caller doubles to full width.
-function stripOf(
-  model: Model,
-  sec: { pts: Vec3[] },
-): Omit<Strip, "x" | "draft" | "keel"> {
-  let areaH = 0,
-    girthH = 0,
-    zMomH = 0,
-    bHalf = 0;
-  const p = sec.pts;
-  for (let i = 0; i < p.length - 1; i++) {
-    let a = p[i],
-      b = p[i + 1];
-    const ia = immersion(model, a[0], a[2]),
-      ib = immersion(model, b[0], b[2]);
-    // waterline beam: half-breadth at any sheer↔keel crossing of the WL (outermost wins)
-    if (ia < 0 !== ib < 0 && ia !== ib) {
-      const t = -ia / (ib - ia);
-      bHalf = Math.max(bHalf, Math.abs(lerp(a[1], b[1], t)));
-    }
-    if (ia <= 0 && ib <= 0) continue; // dry segment
-    // clip the segment to its submerged part (immersion ≥ 0)
-    if (ia < 0) a = V.lerp(a, b, -ia / (ib - ia));
-    else if (ib < 0) b = V.lerp(a, b, ia / (ia - ib));
-    const dz = Math.abs(a[2] - b[2]),
-      ya = a[1],
-      yb = b[1];
-    areaH += ((ya + yb) / 2) * dz; // ∫ y dz
-    girthH += Math.hypot(b[1] - a[1], b[2] - a[2]);
-    const zw = worldZ(model, (a[0] + b[0]) / 2, (a[2] + b[2]) / 2);
-    zMomH += ((ya + yb) / 2) * dz * zw;
-  }
-  return {
-    area: 2 * areaH,
-    beam: 2 * bHalf,
-    girth: 2 * girthH,
-    zMom: 2 * zMomH,
-  };
-}
-
 // deadrise (deg) of a section near the keel: least-squares slope of (half-breadth, depth) over the lowest
 // ~7% of the model depth, as an angle from horizontal
 function deadriseAt(sec: { pts: Vec3[]; keel: boolean }, len: number): number {
@@ -134,113 +94,103 @@ function deadriseAt(sec: { pts: Vec3[]; keel: boolean }, len: number): number {
   return Math.atan(Math.abs(dzdy)) * (180 / Math.PI); // deadrise = angle of the bottom from horizontal
 }
 
+// `sampling` is the hull already swept — see `stationGeometry`. Use HYDRO_NS / HYDRO_GIRTH if there is no
+// sampling to hand; reuse the host's if there is.
 export function hydrostatics(
   model: Model,
-  ns: number = NS,
-  m: number = M,
+  sampling: HullSampling,
 ): Hydro | null {
-  // Integrate over the SHARED hull sampling (mesh.ts) rather than a private sweep: the same bisection-free
-  // trimmed sections every view uses, at hydro's own resolution (ns columns, m girth sub-steps). The empty
-  // columns past the bow/stern closure fall out; each surviving column records its own x (the plan's x is
-  // monotone in u, so the strips stay ordered for the trapezoid integration below).
-  const hs = computeHullSampling(model, ns, m);
-  const strips: Strip[] = [];
-  for (const col of hs.columns) {
-    if (col.pts.length < 2) continue;
-    const pts = col.pts.map((s) => s.pos); // the trimmed section, as world points
-    let dmax = 0;
-    for (const q of pts) dmax = Math.max(dmax, immersion(model, q[0], q[2]));
-    if (dmax <= 0) continue; // dry section (above the waterline)
-    const s = stripOf(model, { pts });
-    if (s.area <= 0) continue;
-    strips.push({
-      x: model.plan.at(hs.uParams[col.i])[0],
-      ...s,
-      draft: dmax,
-      keel: col.keel,
-    });
-  }
-  if (strips.length < 3) return null;
+  const geom = stationGeometry(model, sampling);
+  if (!geom) return null;
+  const wlZ = -model.waterline;
+  const c = cut(geom, 0, wlZ, true);
+  if (c.vol <= 0) return null;
 
-  // trapezoid integrals over the wetted stations
-  let vol = 0,
-    aw = 0,
-    wsa = 0,
-    lcbN = 0,
-    lcfN = 0,
-    kbN = 0,
-    it = 0;
-  for (let i = 0; i < strips.length - 1; i++) {
-    const a = strips[i],
-      b = strips[i + 1],
-      dx = b.x - a.x,
-      avg = (p: number, q: number) => ((p + q) / 2) * dx;
-    vol += avg(a.area, b.area);
-    aw += avg(a.beam, b.beam);
-    wsa += avg(a.girth, b.girth);
-    lcbN += avg(a.x * a.area, b.x * b.area);
-    lcfN += avg(a.x * a.beam, b.x * b.beam);
-    kbN += avg(a.zMom, b.zMom);
-    it += avg(a.beam ** 3 / 12, b.beam ** 3 / 12);
-  }
-  const xAft = strips[0].x,
-    xFwd = strips[strips.length - 1].x,
-    lwl = xFwd - xAft,
+  // the wetted span, and the sectional-area curve's peak and its value amidships
+  const wetIdx: number[] = [];
+  for (let i = 0; i < c.wet.length; i++) if (c.wet[i]) wetIdx.push(i);
+  if (wetIdx.length < 3) return null;
+  const cols = geom.cols;
+  const xAft = cols[wetIdx[0]].x,
+    xFwd = cols[wetIdx[wetIdx.length - 1]].x,
     amid = (xAft + xFwd) / 2;
-  const bwl = Math.max(...strips.map((s) => s.beam)),
-    draft = Math.max(...strips.map((s) => s.draft)),
-    maxSectionArea = Math.max(...strips.map((s) => s.area));
-  const midStrip = strips.reduce((m, s) =>
-    Math.abs(s.x - amid) < Math.abs(m.x - amid) ? s : m,
+  const maxSectionArea = Math.max(...wetIdx.map((i) => c.area[i]));
+  const midIdx = wetIdx.reduce((best, i) =>
+    Math.abs(cols[i].x - amid) < Math.abs(cols[best].x - amid) ? i : best,
   );
-  const midshipArea = midStrip.area;
-  const lcb = vol > 0 ? lcbN / vol : amid,
-    lcf = aw > 0 ? lcfN / aw : amid,
-    // KB reported above the keel baseline (the deepest immersed point), not the deck datum
-    kb = (vol > 0 ? kbN / vol : 0) + model.waterline + draft;
-  // longitudinal waterplane inertia about the LCF
-  let il = 0;
-  for (let i = 0; i < strips.length - 1; i++) {
-    const a = strips[i],
-      b = strips[i + 1],
-      dx = b.x - a.x;
-    il += ((a.beam * (a.x - lcf) ** 2 + b.beam * (b.x - lcf) ** 2) / 2) * dx;
-  }
+  const midshipArea = c.area[midIdx];
 
-  // a degenerate waterplane (no WL crossing — e.g. the waterline sits above the sheer) makes every
-  // waterplane-referenced metric meaningless; report ∇ / WSA / draft and flag the rest N/A.
-  const wpOk = bwl > 1e-6 && aw > 1e-6;
+  // ---- the waterplane ----
+  // Its area, centroid and inertias come from `sweep.ts`, integrated in the same coordinates as the volume.
+  // The waterline CURVE is still used, but only for the things that are properties of the curve itself —
+  // the waterline's length and beam, and the entrance angle.
+  const cr = geom.cosRake,
+    sr = geom.sinRake;
+  const wl2: [number, number][] = c.waterline.map((p) => [
+    p[0] * cr - p[2] * sr,
+    p[1],
+  ]);
+  const wp = c.wp;
+  // ...and back to model x for reporting, since lcb and the station span are in model x
+  const toModelX = (X: number): number => X * cr + wlZ * sr;
+
+  const lcb = c.xB,
+    // KB above K — `stationGeometry`'s keel baseline, which is the ONE vertical datum the whole hull is
+    // measured from: hydro's KB / KMt / KMl and stability's KN, KG and VCG all count upward from it, so the
+    // two modules' heights are directly comparable. Reading the datum off this cut instead (wlZ − draft, the
+    // deepest immersed point) would tie it to the waterline — it agrees only while the hull's lowest point
+    // happens to be submerged, and a heeled cut has no such point to read at all.
+    kb = c.zBWorld - geom.keelZ;
+
+  // A submerged deck edge invalidates the waterplane, not just a missing one: where the sheer is under, the
+  // solid is capped by the deck and contributes NO free surface, so a curve traced through the skin
+  // crossings encloses area the hull does not have. Every waterplane-referenced number goes N/A there —
+  // which is what this flag was always for.
+  const wpOk = !!wp && wl2.length >= 3 && !c.deckDown;
   const na = (v: number): number => (wpOk ? v : NaN);
-  // Cp uses the SAME midship area as Cm, so the identity Cb = Cp·Cm holds exactly
-  const cb = na(vol / (lwl * bwl * draft || 1)),
-    cm = na(midshipArea / (bwl * draft || 1)),
-    cp = na(vol / (midshipArea * lwl || 1)),
-    cw = na(aw / (lwl * bwl || 1)),
-    cvp = na(vol / (aw * draft || 1));
-  const bmt = na(it / (vol || 1)),
-    bml = na(il / (vol || 1));
+  const aw = wp ? wp.area : 0,
+    lcf = wp ? toModelX(wp.cx) : amid,
+    bwl = wp ? 2 * Math.max(...wl2.map(([, y]) => Math.abs(y))) : 0,
+    // waterline length from the curve itself rather than from the station spacing
+    lwlRaw = wp
+      ? Math.max(...wl2.map(([x]) => x)) - Math.min(...wl2.map(([x]) => x))
+      : xFwd - xAft,
+    lwl = lwlRaw > 1e-9 ? lwlRaw : xFwd - xAft;
 
-  // waterline half-angle of entrance: slope of the half-beam over the forward ~10% of LWL
+  const cb = na(c.vol / (lwl * bwl * c.draft || 1)),
+    cm = na(midshipArea / (bwl * c.draft || 1)),
+    // Cp uses the SAME midship area as Cm, so the identity Cb = Cp·Cm holds exactly
+    cp = na(c.vol / (midshipArea * lwl || 1)),
+    cw = na(aw / (lwl * bwl || 1)),
+    cvp = na(c.vol / (aw * c.draft || 1));
+  const bmt = wpOk && wp ? wp.it / c.vol : NaN,
+    bml = wpOk && wp ? wp.il / c.vol : NaN;
+
+  // waterline half-angle of entrance: slope of the half-beam over the forward ~10% of the waterline. The
+  // curve's starboard side runs aft → forward, so the last points on it are the bow.
   let halfEntrance = NaN;
-  const fwd = strips.filter((s) => s.x >= xFwd - 0.1 * lwl && s.beam > 0);
-  if (fwd.length >= 2) {
-    const f0 = fwd[0],
-      f1 = fwd[fwd.length - 1];
-    if (f1.x !== f0.x)
-      halfEntrance =
-        Math.atan(Math.abs(f1.beam - f0.beam) / 2 / (f1.x - f0.x)) *
-        (180 / Math.PI);
+  if (wp) {
+    const xMax = Math.max(...wl2.map(([x]) => x));
+    const fwd = wl2.filter(([x, y]) => x >= xMax - 0.1 * lwl && y > 0);
+    if (fwd.length >= 2) {
+      const f0 = fwd.reduce((a, b) => (b[0] < a[0] ? b : a)),
+        f1 = fwd.reduce((a, b) => (b[0] > a[0] ? b : a));
+      if (f1[0] !== f0[0])
+        halfEntrance =
+          Math.atan(Math.abs(f1[1] - f0[1]) / (f1[0] - f0[0])) *
+          (180 / Math.PI);
+    }
   }
 
   return {
     lwl,
     bwl,
-    draft,
-    vol,
-    waterplaneArea: aw,
+    draft: c.draft,
+    vol: c.vol,
+    waterplaneArea: na(aw),
     midshipArea,
     maxSectionArea,
-    wettedArea: wsa,
+    wettedArea: c.wsa,
     lcb,
     lcf: na(lcf),
     kb,
@@ -254,13 +204,13 @@ export function hydrostatics(
     cw,
     cvp,
     deadrise: deadriseAt(
-      sweptSection(model, model.plan.uAtX(amid), m, true),
+      sweptSection(model, model.plan.uAtX(amid), sampling.R, true),
       loa(model),
     ),
     halfEntrance,
     xAft,
     xFwd,
-    closed: strips.every((s) => s.keel),
+    closed: wetIdx.every((i) => cols[i].keel),
     validWaterplane: wpOk,
   };
 }

@@ -52,3 +52,32 @@
 .btn.active:hover {
   background: var(--ink);
 }
+
+/* ghost: no border in ANY state, no fill at rest, and the muted colour of the surface it sits on. Hover and
+   the selected state are a soft filled chip instead of a bordered pill — which is what a toolbar icon button
+   looks like everywhere else, and what keeps a row of them from needing to be joined into groups to stop
+   their borders doubling up. The 1px border stays in the box as transparent, so nothing shifts by a pixel as
+   the states change. */
+.btn.ghost {
+  border-color: transparent;
+  background: none;
+  color: var(--mut);
+}
+.btn.ghost:hover,
+.btn.ghost:focus-visible {
+  border-color: transparent;
+  background: #f1f5f9;
+  color: var(--ink);
+}
+/* The pressed state is the app's, not a quieter one of its own: an ink fill and a white glyph, the same
+   answer to "which of these is on" that every other toggle here gives. Only the border stays out of it. */
+.btn.ghost.active,
+.btn.ghost.active:hover {
+  border-color: transparent;
+  background: var(--ink);
+  color: #fff;
+}
+.btn.ghost:disabled:hover {
+  background: none;
+  color: var(--mut);
+}

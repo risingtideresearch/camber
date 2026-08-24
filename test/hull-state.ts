@@ -392,6 +392,52 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
   check("setUnit with rescale");
   run({ type: "setUnit", unit: "mm", rescale: true });
 
+  // Scaling to a stated LOA is a SIMILARITY: every length multiplies by one factor, so the hull that comes
+  // out is the same shape at a different size. Checked as a ratio against the hull before it, which is what
+  // "the same shape" means — and the cut station and the view length come along, being lengths too.
+  {
+    const was = {
+      loa: loa(model),
+      x0: model.x0,
+      viewLen: model.viewLen,
+      wl: model.waterline,
+      beam: Math.max(...model.sheerPlan.map((p) => p.y)),
+      z: model.stations[0].points[1].z,
+      u: model.stations[0].u,
+      rake: model.deckRake,
+    };
+    const target = 3.7 * was.loa;
+    run({ type: "setLoa", length: target });
+    const s = target / was.loa;
+    ok(
+      Math.abs(loa(model) - target) < 1e-9 * target,
+      `setLoa scales the hull to the length asked for (${loa(model).toFixed(1)} of ${target.toFixed(1)})`,
+    );
+    ok(
+      Math.abs(model.x0 - was.x0 * s) < 1e-9 * target &&
+        Math.abs(model.viewLen - was.viewLen * s) < 1e-9 * target,
+      "setLoa carries the cut station and the view length",
+    );
+    ok(
+      Math.abs(model.waterline - was.wl * s) < 1e-9 * target &&
+        Math.abs(Math.max(...model.sheerPlan.map((p) => p.y)) - was.beam * s) <
+          1e-9 * target &&
+        Math.abs(model.stations[0].points[1].z - was.z * s) < 1e-9 * target,
+      "setLoa scales the waterline, the breadths and the section heights by the same factor",
+    );
+    ok(
+      model.stations[0].u === was.u && model.deckRake === was.rake,
+      "setLoa leaves the dimensionless parameters — u, knuckles, rake — alone",
+    );
+    check("setLoa");
+    ok(
+      rejected(run({ type: "setLoa", length: 0 })) &&
+        rejected(run({ type: "setLoa", length: NaN })),
+      "setLoa refuses a length that is not positive",
+    );
+    run({ type: "setLoa", length: was.loa });
+  }
+
   run({ type: "removeStationPoint", idx: 1 });
   check("removeStationPoint");
   run({ type: "removePlanPoint", idx: 1 });
@@ -465,6 +511,10 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
   ok(
     maskOf({ type: "setUnit", unit: "m", rescale: false }) === SLICE.scalars,
     "a non-rescaling unit change touches the scalars alone",
+  );
+  ok(
+    maskOf({ type: "setLoa", length: 1234 }) === ALL_SLICES,
+    "scaling to a length overall touches every slice",
   );
 }
 
