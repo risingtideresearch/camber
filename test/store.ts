@@ -5,7 +5,7 @@ import { createLocalDocumentStore } from "../src/document-store/localStore";
 import type { PersistenceAdapter } from "../src/document-store/persistence/persistenceAdapter";
 import { SaveCoordinator } from "../src/document-store/saveCoordinator";
 import { createDocumentStoreServer } from "../src/document-store/server";
-import { isDirty } from "../src/document-store/snapshot";
+import { isDirty, type DocumentSnapshot } from "../src/document-store/snapshot";
 
 let failures = 0;
 const check = (condition: unknown, message: string) => {
@@ -222,10 +222,16 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
   };
 
   step({ type: "setWaterline", depth: 200 });
-  step({ type: "addSheet", id: "p1", name: "Weights" });
+  step({ type: "addSheet", id: "p1", name: "Weights", kind: "scalars" });
   step({ type: "addSheetRow", sheet: "p1", id: "r1", after: -1 });
   step({ type: "renameSheetRow", sheet: "p1", row: "r1", name: "hull shell" });
-  step({ type: "setSheetFormula", sheet: "p1", row: "r1", formula: "12 ± 2" });
+  step({
+    type: "setSheetFormula",
+    sheet: "p1",
+    row: "r1",
+    field: "formula",
+    formula: "12 ± 2",
+  });
   step({ type: "setWaterline", depth: 250 });
 
   const now = server.snapshot();
@@ -233,9 +239,14 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
     now.state.hull.waterline === 250 && now.state.weights.sheets.length === 1,
     "the hull and the estimate advance in one document",
   );
+  // A row is a union over what its page holds, so reading a formula off one means saying which kind it is.
+  const scalarAt = (snapshot: DocumentSnapshot, page: number, row: number) => {
+    const found = snapshot.state.weights.sheets[page].rows[row];
+    return found.kind === "item" ? found : null;
+  };
   check(
-    now.state.weights.sheets[0].rows[0].name === "hull shell" &&
-      now.state.weights.sheets[0].rows[0].formula === "12 ± 2",
+    scalarAt(now, 0, 0)?.name === "hull shell" &&
+      scalarAt(now, 0, 0)?.formula === "12 ± 2",
     "an estimate edit lands where it was aimed, spaces in the name and all",
   );
 
@@ -248,12 +259,12 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
   server.undo("a"); // the second waterline
   check(
     server.snapshot().state.hull.waterline === 200 &&
-      server.snapshot().state.weights.sheets[0].rows[0].formula === "12 ± 2",
+      scalarAt(server.snapshot(), 0, 0)?.formula === "12 ± 2",
     "undoing a hull edit leaves the estimate exactly where it was",
   );
   server.undo("a"); // the formula
   check(
-    server.snapshot().state.weights.sheets[0].rows[0].formula === "" &&
+    scalarAt(server.snapshot(), 0, 0)?.formula === "" &&
       server.snapshot().state.hull.waterline === 200,
     "undo crosses into the estimate without disturbing the hull",
   );
@@ -286,7 +297,7 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
   const server = createDocumentStoreServer();
   const run = (command: Parameters<typeof server.execute>[0]["command"]) =>
     server.execute({ command, author: "a" });
-  run({ type: "addSheet", id: "p1", name: "Weights" });
+  run({ type: "addSheet", id: "p1", name: "Weights", kind: "scalars" });
   run({ type: "addSheetRow", sheet: "p1", id: "r1", after: -1 });
   run({ type: "renameSheetRow", sheet: "p1", row: "r1", name: "hull shell" });
   run({ type: "addSheetRow", sheet: "p1", id: "r2", after: 0 });
@@ -312,7 +323,7 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
   check("rejected" in bad, "a name a formula could not use is refused");
 
   // The same name on two PAGES is fine — it is the same item answering a different question.
-  run({ type: "addSheet", id: "p2", name: "VCG" });
+  run({ type: "addSheet", id: "p2", name: "VCG", kind: "scalars" });
   run({ type: "addSheetRow", sheet: "p2", id: "r3", after: -1 });
   const across = run({
     type: "renameSheetRow",

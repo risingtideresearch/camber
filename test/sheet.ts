@@ -23,6 +23,7 @@ import {
   type WeightBook,
 } from "../src/core/sheet/book";
 import { parseUnit, naturalUnit, UnitError } from "../src/core/sheet/units";
+import { sameGesture, type DocumentCommand } from "../src/core/commands";
 import { bookViolations } from "../src/core/invariants";
 import {
   completionsFor,
@@ -61,7 +62,7 @@ const build = (lines: Line[], extra: [string, Line[]][] = []): WeightBook => {
   let book = emptyBook();
   const page = (pageName: string, rows: Line[], p: number) => {
     const id = `p${p}`;
-    book = run(book, { type: "addSheet", id, name: pageName });
+    book = run(book, { type: "addSheet", id, name: pageName, kind: "scalars" });
     let at = -1;
     let heading = "";
     rows.forEach((line, i) => {
@@ -100,6 +101,7 @@ const build = (lines: Line[], extra: [string, Line[]][] = []): WeightBook => {
           type: "setSheetFormula",
           sheet: id,
           row: rowId,
+          field: "formula",
           formula: line.formula,
         });
       if (line.unit)
@@ -114,6 +116,43 @@ const build = (lines: Line[], extra: [string, Line[]][] = []): WeightBook => {
   page("Weights", lines, 0);
   extra.forEach(([name, rows], i) => page(name, rows, i + 1));
   return book;
+};
+
+/**
+ * Make the book answer one of its outputs, the way the panel's "use as" menu does: a row on the outputs page
+ * whose formula names the row that actually carries the number.
+ */
+const answer = (
+  book: WeightBook,
+  name: string,
+  formula: string,
+): WeightBook => {
+  let out = book;
+  let page = out.sheets.find((sheet) => sheet.kind === "outputs");
+  if (!page) {
+    out = run(out, {
+      type: "addSheet",
+      id: "out",
+      name: "Outputs",
+      kind: "outputs",
+    });
+    page = out.sheets.find((sheet) => sheet.kind === "outputs")!;
+  }
+  const id = `o-${name}`;
+  out = run(out, {
+    type: "addSheetRow",
+    sheet: page.id,
+    id,
+    after: page.rows.length - 1,
+  });
+  out = run(out, { type: "renameSheetRow", sheet: page.id, row: id, name });
+  return run(out, {
+    type: "setSheetFormula",
+    sheet: page.id,
+    row: id,
+    field: "formula",
+    formula,
+  });
 };
 
 const rowOf = (book: WeightBook, name: string, page = "Weights") => {
@@ -405,28 +444,20 @@ const problem = (
     "and naming a page with no item on it says what to write instead",
   );
 
-  // Removing a page takes its outputs with it rather than leaving them dangling.
-  const nominated = run(withVcg, {
-    type: "setSheetOutput",
-    output: "vcg",
-    ref: {
-      sheet: withVcg.sheets[1].id,
-      row: withVcg.sheets[1].rows[2].id,
-    },
-  });
-  const dropped = run(nominated, {
+  const dropped = run(withVcg, {
     type: "removeSheet",
     sheet: withVcg.sheets[1].id,
   });
   ok(
-    dropped.outputs.vcg === null && bookViolations(dropped).length === 0,
-    "removing a page clears the outputs it carried",
+    dropped.sheets.length === 1 && bookViolations(dropped).length === 0,
+    "removing a page leaves the book valid",
   );
 
   const clash = interpretSheetCommand(withVcg, {
     type: "addSheet",
     id: "dupe",
     name: "VCG",
+    kind: "scalars",
   });
   ok("rejected" in clash, "two pages may not share a name");
 }
@@ -780,14 +811,8 @@ const problem = (
     { name: "crew", formula: "160 ± 15", unit: "kg" },
     { name: "displacement", formula: "hull shell + crew" },
   ]);
-  const nominated = run(book, {
-    type: "setSheetOutput",
-    output: "displacement",
-    ref: rowOf(book, "displacement").rowId
-      ? { sheet: book.sheets[0].id, row: rowOf(book, "displacement").rowId }
-      : null,
-  });
-  const out = evaluateBook(nominated, null).outputs.displacement!;
+  const answered = answer(book, "DISPLACEMENT", "Weights.displacement");
+  const out = evaluateBook(answered, null).outputs.displacement!;
   ok(near(out.v, 14.8 * 4.2 + 160, 1e-9), "the output carries the total");
   ok(
     out.terms.length === 2 &&
@@ -872,6 +897,240 @@ const problem = (
   );
 }
 
+// ---------- typed pages ----------
+//
+// A page holds one kind of object and says which. The types describe four kinds; the commands can only make
+// two of them, because nothing can edit a point or a slice yet — so what is checked here is that the rule
+// holds where it is reachable, and that the unreachable half is genuinely unreachable.
+{
+  const book = build([{ name: "crew", formula: "160" }]);
+  ok(
+    book.sheets[0].kind === "scalars",
+    "a page made without saying otherwise holds scalars",
+  );
+
+  const points = interpretSheetCommand(book, {
+    type: "addSheet",
+    id: "pts",
+    name: "Points",
+    kind: "points",
+  });
+  ok(
+    "rejected" in points,
+    "a points page cannot be made yet — the kind exists, the editor does not",
+  );
+
+  // A heading is legal on a page of any kind, because grouping is not a property of what is grouped.
+  const withHeading = run(book, {
+    type: "addSheetRow",
+    sheet: book.sheets[0].id,
+    id: "h1",
+    after: -1,
+    kind: "heading",
+    name: "Hull",
+  });
+  ok(
+    withHeading.sheets[0].rows[0].kind === "heading",
+    "a heading is still a row, on whatever kind of page",
+  );
+
+  const wrongKind = interpretSheetCommand(book, {
+    type: "addSheetRow",
+    sheet: book.sheets[0].id,
+    id: "bad",
+    after: -1,
+    kind: "point",
+  });
+  ok(
+    "rejected" in wrongKind,
+    "and a page refuses a row of a kind it does not hold",
+  );
+
+  // Hand-assembled, the way a corrupt file or a bad merge would be — which is what the invariants are for.
+  const mixed: WeightBook = {
+    ...book,
+    sheets: [
+      {
+        ...book.sheets[0],
+        rows: [
+          {
+            id: "p1",
+            kind: "point",
+            name: "engine",
+            note: "",
+            unit: "m",
+            x: "1",
+            y: "0",
+            z: "0",
+          },
+        ],
+      },
+    ],
+  };
+  ok(
+    bookViolations(mixed).some((v) => v.includes("point on a scalars page")),
+    "a row of the wrong kind for its page is a violation, however it got there",
+  );
+}
+
+// ---------- a formula cell is addressed by field ----------
+//
+// A scalar row has one cell and a point has three, so a row id no longer says which formula is meant. What
+// matters beyond the plumbing is UNDO: two cells of one row are two gestures, and coalescing them would make
+// undoing a point's height silently undo its station too.
+{
+  const a: DocumentCommand = {
+    type: "setSheetFormula",
+    sheet: "p0",
+    row: "r0",
+    field: "formula",
+    formula: "1",
+  };
+  ok(
+    sameGesture(a, { ...a, formula: "12" }),
+    "two edits to one cell are one gesture, as they always were",
+  );
+  ok(
+    !sameGesture(a, { ...a, field: "z", formula: "12" }),
+    "but two cells of one row are two, so undo takes them apart",
+  );
+  ok(
+    !sameGesture(a, { ...a, row: "r1", formula: "12" }),
+    "and two rows are still two",
+  );
+
+  const book = build([{ name: "crew", formula: "160" }]);
+  const bad = interpretSheetCommand(book, {
+    type: "setSheetFormula",
+    sheet: book.sheets[0].id,
+    row: rowOf(book, "crew").rowId,
+    field: "z",
+    formula: "1",
+  });
+  ok(
+    "rejected" in bad,
+    "a scalar has no z to set, and writing one anyway is refused rather than stored",
+  );
+}
+
+// ---------- what the book answers ----------
+//
+// The answers are ROWS on a page of their own, named from a fixed table, rather than a stored nomination
+// pointing at a row by id. So there is nothing to prune when a row goes, and renaming rewrites nothing.
+{
+  const book = build([
+    { name: "hull shell", formula: "800", unit: "kg" },
+    { name: "crew", formula: "160 ± 15", unit: "kg" },
+    { name: "all up weight", formula: "hull shell + crew", unit: "kg" },
+  ]);
+  const answered = answer(book, "DISPLACEMENT", "Weights.all up weight");
+
+  ok(
+    bookViolations(answered).length === 0,
+    "a book with an outputs page is valid",
+  );
+  ok(
+    near(evaluateBook(answered, null).outputs.displacement!.v, 960, 1e-9),
+    "and the stability panel's reading comes off that row",
+  );
+  // A formula can read the book's own answer back: a margin stated as a share of the total is the case that
+  // makes it worth having, and the cycle it would close if the total included the margin is the existing one.
+  const withMargin = run(
+    run(
+      run(answered, {
+        type: "addSheetRow",
+        sheet: answered.sheets[0].id,
+        id: "margin",
+        after: answered.sheets[0].rows.length - 1,
+      }),
+      {
+        type: "renameSheetRow",
+        sheet: answered.sheets[0].id,
+        row: "margin",
+        name: "margin",
+      },
+    ),
+    {
+      type: "setSheetFormula",
+      sheet: answered.sheets[0].id,
+      row: "margin",
+      field: "formula",
+      formula: "OUT.DISPLACEMENT * 10%",
+    },
+  );
+  ok(
+    near(value(withMargin, "margin"), 96, 1e-9),
+    "a formula reads the book's own answer back — a margin as a share of the total",
+  );
+
+  // The schedule keeps its own vocabulary: the row is still called what its author called it.
+  ok(
+    rowOf(answered, "all up weight").rowId !== undefined,
+    "the row that carries the number keeps its name",
+  );
+
+  // Removing the answer removes the claim, and nothing anywhere needs pruning to make that true.
+  const page = answered.sheets.find((sheet) => sheet.kind === "outputs")!;
+  const cleared = run(answered, {
+    type: "removeSheetRow",
+    sheet: page.id,
+    row: page.rows[0].id,
+  });
+  ok(
+    evaluateBook(cleared, null).outputs.displacement === null &&
+      bookViolations(cleared).length === 0,
+    "deleting the row deletes the answer, and leaves nothing dangling",
+  );
+
+  const second = interpretSheetCommand(answered, {
+    type: "addSheet",
+    id: "out2",
+    name: "More",
+    kind: "outputs",
+  });
+  ok(
+    "rejected" in second,
+    "a book has one outputs page — OUT. finds it by kind, and two would be ambiguous",
+  );
+
+  const strayName: WeightBook = {
+    ...answered,
+    sheets: answered.sheets.map((sheet) =>
+      sheet.kind === "outputs"
+        ? {
+            ...sheet,
+            rows: [{ ...sheet.rows[0], name: "profit" }],
+          }
+        : sheet,
+    ),
+  };
+  ok(
+    bookViolations(strayName).some((v) =>
+      v.includes("not one of the book's answers"),
+    ),
+    "and a name the app never asks for has no business on that page",
+  );
+
+  ok(
+    (problem(build([{ name: "x", formula: "OUT.VCG" }]), "x") ?? "").includes(
+      "no outputs page",
+    ),
+    "reading an answer from a book that has none says so plainly",
+  );
+
+  const wrongDim = answer(
+    build([{ name: "crew", formula: "160", unit: "kg" }]),
+    "VCG",
+    "Weights.crew",
+  );
+  const vcgRow = wrongDim.sheets.find((sheet) => sheet.kind === "outputs")!;
+  ok(
+    !!resultAt(evaluateBook(wrongDim, null), vcgRow.id, vcgRow.rows[0].id)
+      ?.unitWarning,
+    "a VCG that works out to a mass is flagged, and still reported",
+  );
+}
+
 // ---------- persistence ----------
 {
   const book = build([
@@ -890,6 +1149,61 @@ const problem = (
   );
   ok(bookViolations(back).length === 0, "and comes back valid");
 
+  // The outputs page is a page like any other on disk, so it round-trips with everything else — and the
+  // answer survives as a row, which is the whole point of it not being a stored reference.
+  const answered = answer(book, "DISPLACEMENT", "Weights.crew");
+  const answeredBack = parseSheet(buildSheetJson(answered));
+  ok(
+    JSON.stringify(answeredBack) === JSON.stringify(answered) &&
+      answeredBack.sheets[1].kind === "outputs",
+    "a book with an outputs page round-trips, kind and all",
+  );
+  ok(
+    evaluateBook(answeredBack, null).outputs.displacement?.v === 160,
+    "and still answers after the trip",
+  );
+
+  // A page whose kind the file does not name is a page of scalars; a row whose kind disagrees with its page
+  // is dropped, which is the same forgiveness the reader has always extended to a row it cannot read.
+  const mixed = parseSheet(
+    JSON.stringify({
+      version: 1,
+      sheets: [
+        {
+          id: "s1",
+          name: "Weights",
+          rows: [
+            {
+              id: "a",
+              kind: "item",
+              name: "crew",
+              formula: "160",
+              unit: "kg",
+              note: "",
+            },
+            {
+              id: "b",
+              kind: "point",
+              name: "engine",
+              x: "1",
+              y: "0",
+              z: "0",
+              note: "",
+            },
+            { id: "c", kind: "heading", name: "Hull", note: "" },
+          ],
+        },
+      ],
+      density: 1.025,
+    }),
+  );
+  ok(
+    mixed.sheets[0].kind === "scalars" &&
+      mixed.sheets[0].rows.length === 2 &&
+      mixed.sheets[0].rows.map((row) => row.id).join() === "a,c",
+    "a row of the wrong kind for its page is dropped, and the rest of the page opens",
+  );
+
   ok(
     parseSheet(null).sheets.length === 0,
     "a design with no estimate opens empty",
@@ -904,14 +1218,31 @@ const problem = (
   );
 
   ok(
-    parseSheet(JSON.stringify({ version: 2, sheets: [] })).sheets.length === 0,
+    parseSheet(JSON.stringify({ version: 0, sheets: [] })).sheets.length === 0,
     "an estimate in any other version opens empty",
   );
 
-  const dangling = parseSheet(
+  // A book written before pages had kinds. Its pages are pages of scalars, which is what every page was, and
+  // its `outputs` block is a field this reader does not look for — so it opens with its rows intact.
+  const older = parseSheet(
     JSON.stringify({
       version: 1,
-      sheets: [{ id: "s1", name: "Weights", rows: [] }],
+      sheets: [
+        {
+          id: "s1",
+          name: "Weights",
+          rows: [
+            {
+              id: "r1",
+              kind: "item",
+              name: "crew",
+              formula: "160",
+              unit: "kg",
+              note: "",
+            },
+          ],
+        },
+      ],
       outputs: {
         displacement: { sheet: "s1", row: "gone" },
         vcg: null,
@@ -921,9 +1252,11 @@ const problem = (
     }),
   );
   ok(
-    dangling.outputs.displacement === null &&
-      bookViolations(dangling).length === 0,
-    "an output naming a row that did not survive is cleared, keeping the book valid",
+    older.sheets.length === 1 &&
+      older.sheets[0].kind === "scalars" &&
+      older.sheets[0].rows.length === 1 &&
+      bookViolations(older).length === 0,
+    "a page written before pages had kinds reads as a page of scalars, rows intact",
   );
 }
 

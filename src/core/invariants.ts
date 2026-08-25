@@ -26,11 +26,15 @@ import {
 } from "./hull";
 import type { SessionDocument } from "./sessionDocument";
 import {
+  isHeading,
+  isPageKind,
   isReserved,
+  isSliceShape,
   isValidName,
-  refValue,
+  ROW_KIND_OF,
   type WeightBook,
 } from "./sheet/book";
+import { isOutputName } from "./sheet/outputs";
 
 export type InvariantLevel = "document" | "editor";
 
@@ -164,10 +168,16 @@ export function assertValidHull(
 // Far fewer promises than a hull, because a schedule is text until it is evaluated and a formula that does
 // not parse is a per-row ERROR rather than an invalid document — the whole point is that you can leave a
 // half-written line in it. What must hold is only what the book's own addressing depends on: ids that are
-// unique, names a formula could actually resolve, and outputs that point at something.
+// unique, names a formula could actually resolve, and rows that are the kind their page holds.
+//
+// Note what is NOT here any more. The book used to nominate its answers by storing a reference to a row, and
+// that reference could dangle, so it had to be checked. An answer is now a row on the outputs page, named
+// from the `OUTPUTS` table — there is no reference to go stale, and its uniqueness is the ordinary per-page
+// rule below rather than a clause of its own.
 
 export function bookViolations(book: WeightBook): string[] {
   const out: string[] = [];
+  let seenOutputs = false;
 
   if (!finite(book.density) || book.density <= 0)
     out.push("density must be a positive number");
@@ -187,6 +197,14 @@ export function bookViolations(book: WeightBook): string[] {
       out.push(`sheets[${i}] repeats the name ${sheet.name}`);
     else sheetNames.add(sheet.name);
 
+    if (!isPageKind(sheet.kind))
+      out.push(`sheets[${i}] has an unknown kind "${sheet.kind}"`);
+    // `OUT.` finds the outputs page by kind, so a second one would make every answer ambiguous.
+    else if (sheet.kind === "outputs") {
+      if (seenOutputs) out.push(`sheets[${i}] is a second outputs page`);
+      seenOutputs = true;
+    }
+
     const rowIds = new Set<string>();
     const rowNames = new Set<string>();
     sheet.rows.forEach((row, j) => {
@@ -196,10 +214,21 @@ export function bookViolations(book: WeightBook): string[] {
         out.push(`sheets[${i}].rows[${j}] repeats the id ${row.id}`);
       else rowIds.add(row.id);
 
+      // A page holds one kind of object, so a row that is not that kind — and is not a heading, which is
+      // legal anywhere — cannot be edited by anything the page's editor offers. The commands refuse to make
+      // one, so this catches a book assembled some other way.
+      if (!isHeading(row) && row.kind !== ROW_KIND_OF[sheet.kind])
+        out.push(
+          `sheets[${i}].rows[${j}] is a ${row.kind} on a ${sheet.kind} page`,
+        );
+
+      if (row.kind === "slice" && !isSliceShape(row.shape))
+        out.push(`sheets[${i}].rows[${j}] cuts with an unknown "${row.shape}"`);
+
       // A heading is not a value and nothing can refer to one, so its text is under no rules at all.
       // An unnamed ITEM is legal too — it is the scratch line a grid would spend a spare column on. A named
       // one has to be resolvable, and has to be the only item on its page answering to that name.
-      if (row.name && row.kind !== "heading") {
+      if (row.name && !isHeading(row)) {
         if (!isValidName(row.name))
           out.push(
             `sheets[${i}].rows[${j}] name "${row.name}" is not usable in a formula`,
@@ -208,16 +237,18 @@ export function bookViolations(book: WeightBook): string[] {
           out.push(`sheets[${i}].rows[${j}] takes a reserved name`);
         else if (rowNames.has(row.name))
           out.push(`sheets[${i}].rows[${j}] repeats the name ${row.name}`);
-        else rowNames.add(row.name);
+        else {
+          rowNames.add(row.name);
+          // The outputs page answers the questions the rest of the app asks, and it can only answer the ones
+          // there are names for. Anything else on it is a row nothing will ever read.
+          if (sheet.kind === "outputs" && !isOutputName(row.name))
+            out.push(
+              `sheets[${i}].rows[${j}] "${row.name}" is not one of the book's answers`,
+            );
+        }
       }
     });
   });
-
-  // An output has to name a row that is still here. The remove commands clear them, so a dangling one means
-  // a book assembled some other way.
-  for (const [key, ref] of Object.entries(book.outputs))
-    if (ref && !refValue(book, ref))
-      out.push(`outputs.${key} names an item that is not in the book`);
 
   return out;
 }

@@ -36,19 +36,27 @@ import { evaluate, FormulaError, parseFormula, type Node } from "./formula";
 import { hullMetric, isHullMetricName, type HullMetrics } from "../hullMetrics";
 import { read, type Quantity, type Reading, type Source } from "./quantity";
 import {
+  fieldOf,
+  fieldsOf,
   isHeading,
+  outputsSheet,
   symbolsOf,
+  type RowField,
   type Sheet,
   type SheetRef,
   type SheetRow,
   type WeightBook,
 } from "./book";
+import { isOutputName, OUTPUTS, outputSpec } from "./outputs";
+import { sameDim } from "./quantity";
 import { naturalUnit, parseUnit, UnitError, type UnitSpec } from "./units";
 
 /** One evaluated row. */
 export interface RowResult {
   readonly sheetId: string;
   readonly rowId: string;
+  /** Which cell of the row this is. A scalar has only `"formula"`; a point has three. */
+  readonly field: RowField;
   /** A blank formula has no value and no error — it is simply empty. */
   readonly empty: boolean;
   readonly reading: Reading | null;
@@ -83,14 +91,25 @@ export interface BookResults {
   };
 }
 
-export const rowKey = (sheetId: string, rowId: string): string =>
-  `${sheetId} ${rowId}`;
+/**
+ * Where a result lives.
+ *
+ * The field defaults to `"formula"`, which is the only cell a scalar row has — so every caller that knew
+ * about rows and not about fields keeps working and keeps meaning what it meant. A point row occupies three
+ * keys under this scheme, one per coordinate.
+ */
+export const rowKey = (
+  sheetId: string,
+  rowId: string,
+  field: RowField = "formula",
+): string => `${sheetId} ${rowId} ${field}`;
 
 export const resultAt = (
   results: BookResults,
   sheetId: string,
   rowId: string,
-): RowResult | undefined => results.rows.get(rowKey(sheetId, rowId));
+  field: RowField = "formula",
+): RowResult | undefined => results.rows.get(rowKey(sheetId, rowId, field));
 
 export const resultFor = (
   results: BookResults,
@@ -103,6 +122,7 @@ export const resultFor = (
 interface Cell {
   readonly sheet: Sheet;
   readonly row: SheetRow;
+  readonly field: RowField;
   readonly source: string;
   /** Parsed once, whatever it is referenced from. */
   tree: Node | null;
@@ -143,46 +163,52 @@ export function evaluateBook(
     symbols.set(sheet.id, symbolsOf(book, sheet.id));
   }
 
-  // Headings carry no formula and produce no result: they are where a group starts, and nothing more.
+  // One cell per FORMULA CELL, not per row: a scalar contributes one, a point three, a heading none —
+  // headings are where a group starts and nothing more.
   for (const sheet of book.sheets)
     for (const row of sheet.rows) {
       if (isHeading(row)) continue;
-      const text = row.formula.trim();
+      // Every cell of a row shares the row's unit, which is why a point declares one unit and not three.
+      const declaredUnit = row.kind === "slice" ? "" : row.unit.trim();
       let declared: UnitSpec | null = null;
       let unitError: string | null = null;
-      if (row.unit.trim()) {
+      if (declaredUnit) {
         try {
-          declared = parseUnit(row.unit);
+          declared = parseUnit(declaredUnit);
         } catch (error) {
           unitError =
             error instanceof UnitError ? error.message : String(error);
         }
       }
-      let tree: Node | null = null;
-      let parseError: FormulaError | null = null;
-      if (text) {
-        try {
-          tree = parseFormula(text, symbols.get(sheet.id));
-        } catch (error) {
-          parseError =
-            error instanceof FormulaError
-              ? error
-              : new FormulaError(String(error));
+      for (const field of fieldsOf(row)) {
+        const text = (fieldOf(row, field) ?? "").trim();
+        let tree: Node | null = null;
+        let parseError: FormulaError | null = null;
+        if (text) {
+          try {
+            tree = parseFormula(text, symbols.get(sheet.id));
+          } catch (error) {
+            parseError =
+              error instanceof FormulaError
+                ? error
+                : new FormulaError(String(error));
+          }
         }
+        cells.set(rowKey(sheet.id, row.id, field), {
+          sheet,
+          row,
+          field,
+          source: text,
+          tree,
+          parseError,
+          declared,
+          unitError,
+          state: "fresh",
+          value: null,
+          error: null,
+          unitWarning: null,
+        });
       }
-      cells.set(rowKey(sheet.id, row.id), {
-        sheet,
-        row,
-        source: text,
-        tree,
-        parseError,
-        declared,
-        unitError,
-        state: "fresh",
-        value: null,
-        error: null,
-        unitWarning: null,
-      });
     }
 
   // The path currently being resolved, so a cycle is reported as the loop it actually is.
@@ -200,11 +226,19 @@ export function evaluateBook(
     const cell = cells.get(key);
     if (!cell) return "a missing item";
     const name = cell.row.name || "an unnamed item";
-    return book.sheets.length > 1 ? `${cell.sheet.name}.${name}` : name;
+    // A point's three cells are three different things to be in a cycle with, so the coordinate is part of
+    // how one is named — "Points.engine.z", not "Points.engine" three times over.
+    const leaf = cell.field === "formula" ? name : `${name}.${cell.field}`;
+    return book.sheets.length > 1 ? `${cell.sheet.name}.${leaf}` : leaf;
   };
 
-  const rowValue = (sheetId: string, rowId: string, at: number): Quantity => {
-    const key = rowKey(sheetId, rowId);
+  const rowValue = (
+    sheetId: string,
+    rowId: string,
+    at: number,
+    field: RowField = "formula",
+  ): Quantity => {
+    const key = rowKey(sheetId, rowId, field);
     const cell = cells.get(key);
     if (!cell) fail("no such item", at);
     if (cell!.state === "running") {
@@ -248,11 +282,31 @@ export function evaluateBook(
       return value!;
     }
 
+    // What the book itself answers. Resolved by page KIND rather than page name, so the outputs page can be
+    // called anything and every `OUT.` reference keeps working.
+    if (head === "OUT") {
+      if (rest.length !== 1)
+        fail(
+          `OUT.${rest.join(".") || "?"} is not one of the book's answers`,
+          at,
+        );
+      if (!isOutputName(rest[0]))
+        fail(
+          `the book has no answer called ${rest[0]} — it has ${OUTPUTS.map((spec) => spec.name).join(", ")}`,
+          at,
+        );
+      const sheet = outputsSheet(book);
+      if (!sheet) fail("this book has no outputs page yet", at);
+      const row = rowsByName.get(sheet!.id)?.get(rest[0]);
+      if (!row) fail(`nothing on ${sheet!.name} answers ${rest[0]} yet`, at);
+      return rowValue(sheet!.id, row!.id, at);
+    }
+
     // A bare name is a row on THIS page, and that is tried first: a page and a row may share a name, and the
     // page you are writing on is the one you meant.
     if (rest.length === 0) {
       const row = rowsByName.get(currentSheet.id)?.get(head);
-      if (row) return rowValue(currentSheet.id, row.id, at);
+      if (row) return bareRowValue(currentSheet, row, at);
       const near = [...(rowsByName.get(currentSheet.id)?.keys() ?? [])].find(
         (name) => name.toLowerCase() === head.toLowerCase(),
       );
@@ -271,19 +325,60 @@ export function evaluateBook(
     // Otherwise it names another page.
     const sheet = sheetsByName.get(head);
     if (!sheet) fail(`there is no page called ${head}`, at);
-    if (rest.length > 1) fail(`${path.join(".")} is one dot too deep`, at);
     const row = rowsByName.get(sheet!.id)?.get(rest[0]);
     if (!row) fail(`${sheet!.name} has nothing called ${rest[0]}`, at);
-    return rowValue(sheet!.id, row!.id, at);
+    if (rest.length === 1) return bareRowValue(sheet!, row!, at);
+    // A leaf past the row: `Points.engine.z`. Only a row with more than one cell has any.
+    if (rest.length > 2) fail(`${path.join(".")} is one dot too deep`, at);
+    return leafValue(sheet!, row!, rest[1], at);
   };
+
+  /**
+   * A row named with no leaf after it.
+   *
+   * A scalar IS its value. A point is not — it is three of them — so naming one bare is a mistake with an
+   * obvious fix, and saying so beats "there is no such name", which is what a lexer-level answer would be.
+   */
+  const bareRowValue = (sheet: Sheet, row: SheetRow, at: number): Quantity => {
+    if (row.kind === "item") return rowValue(sheet.id, row.id, at);
+    const leaves = fieldsOf(row);
+    fail(
+      `${row.name} is a ${row.kind} — write ${row.name}.${leaves[0]}${leaves.length > 1 ? ` (or .${leaves.slice(1).join(", .")})` : ""}`,
+      at,
+    );
+    return null!;
+  };
+
+  const leafValue = (
+    sheet: Sheet,
+    row: SheetRow,
+    leaf: string,
+    at: number,
+  ): Quantity => {
+    const leaves = fieldsOf(row);
+    if (row.kind === "item")
+      fail(
+        `${row.name} is a single value — ${row.name}.${leaf} is one dot too deep`,
+        at,
+      );
+    if (!(leaves as string[]).includes(leaf))
+      fail(`a ${row.kind} has no ${leaf} — try .${leaves.join(", .")}`, at);
+    return rowValue(sheet.id, row.id, at, leaf as RowField);
+  };
+
+  // Whether a sensitivity label has to say which page it came from. Counted over the pages that hold
+  // AUTHORED numbers: the outputs page holds the book's answers, which are aliases for rows counted here
+  // already, so its presence must not start qualifying every label on a book with one schedule.
+  const authoredPages = book.sheets.filter(
+    (sheet) => sheet.kind !== "outputs",
+  ).length;
 
   const env = {
     resolve,
     source: (lo: number, hi: number): Source => {
       const cell = currentCell!;
       const base = cell.row.name || "an unnamed item";
-      const label =
-        book.sheets.length > 1 ? `${cell.sheet.name}.${base}` : base;
+      const label = authoredPages > 1 ? `${cell.sheet.name}.${base}` : base;
       const id = `s${sourceSeq++}`;
       const source: Source = { id, label, lo, hi };
       sources.set(id, source);
@@ -361,22 +456,39 @@ export function evaluateBook(
     // on their own the moment a row acquires a dimension, and why a plain number shows none.
     const derived = cell.value ? naturalUnit(cell.value.dim) : null;
     const unit = cell.declared ?? (derived && derived.label ? derived : null);
+    // An answer that is not the kind of thing it claims to be. A warning and not a refusal, exactly as a
+    // declared unit that disagrees with its formula is: the number is reported as written and flagged.
+    const spec =
+      cell.sheet.kind === "outputs" ? outputSpec(cell.row.name) : undefined;
+    const outputWarning =
+      spec && cell.value && !sameDim(cell.value.dim, spec.dim)
+        ? `${spec.name} should be ${naturalUnit(spec.dim).label || "a plain number"}, and this works out to ${naturalUnit(cell.value.dim).label || "a plain number"}`
+        : null;
     rows.set(key, {
       sheetId: cell.sheet.id,
       rowId: cell.row.id,
+      field: cell.field,
       empty: !cell.source,
       reading: cell.value ? read(cell.value, sources) : null,
       error: cell.error?.message ?? null,
       errorAt: cell.error?.at ?? -1,
       unit,
       unitIsDerived: !cell.declared && !!unit,
-      unitWarning: cell.unitWarning,
+      unitWarning: cell.unitWarning ?? outputWarning,
     });
   }
 
-  const outputOf = (ref: SheetRef | null): Reading | null => {
-    if (!ref) return null;
-    const cell = cells.get(rowKey(ref.sheet, ref.row));
+  // ---------- what the book answers ----------
+  //
+  // Read off the outputs page by name rather than from a stored nomination, which is what lets the answer be
+  // an ordinary row: deleting it removes the answer, and renaming anything it refers to rewrites nothing.
+  const outputsPage = outputsSheet(book);
+
+  const outputOf = (name: string): Reading | null => {
+    if (!outputsPage) return null;
+    const row = rowsByName.get(outputsPage.id)?.get(name);
+    if (!row) return null;
+    const cell = cells.get(rowKey(outputsPage.id, row.id));
     return cell?.value ? read(cell.value, sources) : null;
   };
 
@@ -384,9 +496,9 @@ export function evaluateBook(
     rows,
     sources,
     outputs: {
-      displacement: outputOf(book.outputs.displacement),
-      vcg: outputOf(book.outputs.vcg),
-      lcg: outputOf(book.outputs.lcg),
+      displacement: outputOf("DISPLACEMENT"),
+      vcg: outputOf("VCG"),
+      lcg: outputOf("LCG"),
     },
   };
 }

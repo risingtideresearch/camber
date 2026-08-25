@@ -39,9 +39,8 @@
  * heading IS putting it there, and no command has to say so separately. It also means a heading can exist
  * with nothing under it yet, which is how you make one: add it, then move items in.
  */
-export interface SheetRow {
+export interface RowBase {
   readonly id: string;
-  readonly kind: "item" | "heading";
   /**
    * For an item, what formulas call it: may contain spaces, and may be empty — an unnamed item still
    * evaluates and still displays, it just cannot be referred to. That is the scratch-calculation escape hatch
@@ -51,6 +50,20 @@ export interface SheetRow {
    * nothing can refer to one.
    */
   readonly name: string;
+  readonly note: string;
+}
+
+/** A heading. Legal on a page of any kind — grouping is not a property of what is being grouped. */
+export interface HeadingRow extends RowBase {
+  readonly kind: "heading";
+}
+
+/**
+ * One scalar: a mass, an areal density, a fraction, a length. What a `scalars` page — and an `outputs` page —
+ * is made of.
+ */
+export interface ItemRow extends RowBase {
+  readonly kind: "item";
   /** The expression, as the user typed it. Never stored pre-parsed — see `json.ts`. */
   readonly formula: string;
   /**
@@ -62,13 +75,87 @@ export interface SheetRow {
    * a cell marked `t` is 1400 kg. See `units.ts`.
    */
   readonly unit: string;
-  readonly note: string;
 }
+
+/**
+ * One position in the hull: three formulas, not one.
+ *
+ * Each coordinate takes the whole language, `±` included, and that is the point of splitting them — a tank's
+ * longitudinal position is usually known well and its height badly, and per-coordinate uncertainty is what
+ * lets the sensitivity ranking say which of the two is costing you. All three are lengths, so one unit covers
+ * the row.
+ *
+ * The frame is the SHEET's, not the drawing's: x from the transom, y from the centreline (starboard
+ * positive), z above the keel baseline — the same frame `hullMetrics.ts` reports `shellLcg` and `shellVcg`
+ * in, so a formula never has to know the hull is authored deck-flat with rake applied as a rotation.
+ */
+export interface PointRow extends RowBase {
+  readonly kind: "point";
+  readonly unit: string;
+  readonly x: string;
+  readonly y: string;
+  readonly z: string;
+}
+
+/** What a slice cuts with. A plane is horizontal; a station is normal to the sheer plan's heading. */
+export type SliceShape = "plane" | "station";
+
+export const SLICE_SHAPES: readonly SliceShape[] = ["plane", "station"];
+
+export const isSliceShape = (shape: string): shape is SliceShape =>
+  (SLICE_SHAPES as readonly string[]).includes(shape);
+
+/**
+ * One cut through the hull, which reports its area, the length of its intersection curve, and its centroid.
+ *
+ * `pos` is in the sheet's frame, as a point's coordinates are: a height above the keel baseline for a plane,
+ * x from the transom for a station.
+ */
+export interface SliceRow extends RowBase {
+  readonly kind: "slice";
+  readonly shape: SliceShape;
+  readonly pos: string;
+}
+
+export type SheetRow = HeadingRow | ItemRow | PointRow | SliceRow;
+
+/** The addressable formula cells of a row. A scalar has one; a point has three. */
+export type RowField = "formula" | "x" | "y" | "z" | "pos";
+
+/**
+ * What a page holds. One kind of object per page, and the page says which.
+ *
+ * `outputs` is the one kind that shares a payload with another: its rows are `item` rows, identical in every
+ * field. What it carries is a CONSTRAINT — the row's name comes from the `OUTPUTS` table rather than being
+ * typed, and a book holds at most one such page. So the rule that a page holds one kind of object still reads
+ * true (an outputs page holds scalars), while the kind gives the editor something to dispatch on and gives
+ * `OUT.` something stable to resolve against.
+ */
+export type PageKind = "scalars" | "outputs" | "points" | "slices";
+
+export const PAGE_KINDS: readonly PageKind[] = [
+  "scalars",
+  "outputs",
+  "points",
+  "slices",
+];
+
+export const isPageKind = (kind: string): kind is PageKind =>
+  (PAGE_KINDS as readonly string[]).includes(kind);
+
+/** The row kind a page of each kind holds, headings aside. */
+export const ROW_KIND_OF: Record<PageKind, SheetRow["kind"]> = {
+  scalars: "item",
+  outputs: "item",
+  points: "point",
+  slices: "slice",
+};
 
 /** One page. */
 export interface Sheet {
   readonly id: string;
   readonly name: string;
+  readonly kind: PageKind;
   readonly rows: readonly SheetRow[];
 }
 
@@ -78,16 +165,8 @@ export interface SheetRef {
   readonly row: string;
 }
 
-/** Which row answers each question the rest of the app asks the estimate. */
-export interface BookOutputs {
-  readonly displacement: SheetRef | null;
-  readonly vcg: SheetRef | null;
-  readonly lcg: SheetRef | null;
-}
-
 export interface WeightBook {
   readonly sheets: readonly Sheet[];
-  readonly outputs: BookOutputs;
   /**
    * Water density in t/m³, turning an estimated mass into the displaced volume the stability panel wants.
    * 1.025 is seawater, and is what the stability plane's own axis is drawn in.
@@ -100,15 +179,8 @@ export const SEAWATER_DENSITY = 1.025;
 /** The page a fresh book opens on. Named for what it holds rather than for being first. */
 export const FIRST_SHEET_NAME = "Weights";
 
-export const emptyOutputs = (): BookOutputs => ({
-  displacement: null,
-  vcg: null,
-  lcg: null,
-});
-
 export const emptyBook = (): WeightBook => ({
   sheets: [],
-  outputs: emptyOutputs(),
   density: SEAWATER_DENSITY,
 });
 
@@ -117,11 +189,6 @@ export const cloneBook = (book: WeightBook): WeightBook => ({
     ...sheet,
     rows: sheet.rows.map((row) => ({ ...row })),
   })),
-  outputs: {
-    displacement: book.outputs.displacement && { ...book.outputs.displacement },
-    vcg: book.outputs.vcg && { ...book.outputs.vcg },
-    lcg: book.outputs.lcg && { ...book.outputs.lcg },
-  },
   density: book.density,
 });
 
@@ -141,8 +208,15 @@ export const isValidName = (name: string): boolean => NAME_PATTERN.test(name);
 export const tidyName = (name: string): string =>
   name.trim().replace(/\s+/g, " ");
 
-/** The namespaces a formula reserves. A row may not take one of these for its own. */
-export const RESERVED = ["HULL"] as const;
+/**
+ * The namespaces a formula reserves. A row may not take one of these for its own.
+ *
+ * They point in opposite directions. `HULL` is what the sheet READS — the geometry's own numbers, supplied to
+ * it. `OUT` is what the sheet PROVIDES — the answers the rest of the app asks it for, which live as rows on
+ * the outputs page (see `outputs.ts`). Both are reserved against being taken as a row name; only `OUT`
+ * resolves to something the book itself authored.
+ */
+export const RESERVED = ["HULL", "OUT"] as const;
 
 export const isReserved = (name: string): boolean =>
   (RESERVED as readonly string[]).includes(name);
@@ -165,7 +239,8 @@ export function refValue(
 export const sameRef = (a: SheetRef | null, b: SheetRef | null): boolean =>
   a === b || (!!a && !!b && a.sheet === b.sheet && a.row === b.row);
 
-export const isHeading = (row: SheetRow): boolean => row.kind === "heading";
+export const isHeading = (row: SheetRow): row is HeadingRow =>
+  row.kind === "heading";
 
 /** Every heading on a page, in order. */
 export const sheetHeadings = (sheet: Sheet): SheetRow[] =>
@@ -233,13 +308,78 @@ export function freeSheetName(book: WeightBook, wanted: string): string {
     if (!taken.has(`${wanted} ${n}`)) return `${wanted} ${n}`;
 }
 
+/**
+ * The kinds a command may actually create, as against the kinds the types can describe.
+ *
+ * `points` and `slices` are fully described above and deliberately unreachable: nothing can build one until
+ * the editor and the resolver know what to do with it. That keeps every narrowing site honest — the compiler
+ * checks them now — without any half-built page being reachable from the UI.
+ */
+export const CREATABLE_KINDS: readonly PageKind[] = ["scalars", "outputs"];
+
+/** The book's outputs page, if it has one. At most one exists — see `invariants.ts`. */
+export const outputsSheet = (book: WeightBook): Sheet | undefined =>
+  book.sheets.find((sheet) => sheet.kind === "outputs");
+
+/** The row on a page answering to `name`, ignoring headings. */
+export const rowNamed = (sheet: Sheet, name: string): SheetRow | undefined =>
+  sheet.rows.find((row) => !isHeading(row) && row.name === name);
+
+/** A fresh row of the kind a page holds. Every field the kind carries, empty. */
+export function blankRow(
+  kind: SheetRow["kind"],
+  id: string,
+  name: string,
+): SheetRow {
+  switch (kind) {
+    case "heading":
+      return { id, kind, name, note: "" };
+    case "item":
+      return { id, kind, name, note: "", formula: "", unit: "" };
+    case "point":
+      return { id, kind, name, note: "", unit: "", x: "", y: "", z: "" };
+    case "slice":
+      return { id, kind, name, note: "", shape: "station", pos: "" };
+  }
+}
+
+/** Read one formula cell of a row, or null where the row has no such field. */
+export function fieldOf(row: SheetRow, field: RowField): string | null {
+  switch (row.kind) {
+    case "heading":
+      return null;
+    case "item":
+      return field === "formula" ? row.formula : null;
+    case "point":
+      return field === "x" || field === "y" || field === "z"
+        ? row[field]
+        : null;
+    case "slice":
+      return field === "pos" ? row.pos : null;
+  }
+}
+
+/** Every formula cell a row carries, in the order the editor shows them. */
+export function fieldsOf(row: SheetRow): RowField[] {
+  switch (row.kind) {
+    case "heading":
+      return [];
+    case "item":
+      return ["formula"];
+    case "point":
+      return ["x", "y", "z"];
+    case "slice":
+      return ["pos"];
+  }
+}
+
 // ---------- commands ----------
 // Every edit as a value, in the same spirit as `commands.ts`. These are interpreted against the BOOK ALONE:
 // unlike a hull command, none of them needs the assembled model, which is why the reducer below takes a
 // `WeightBook` rather than a `Model`.
 
 export type SheetCommand =
-  | { type: "addSheet"; id: string; name: string }
+  | { type: "addSheet"; id: string; name: string; kind: PageKind }
   | { type: "removeSheet"; sheet: string }
   | { type: "renameSheet"; sheet: string; name: string }
   | { type: "moveSheet"; sheet: string; to: number }
@@ -248,16 +388,23 @@ export type SheetCommand =
       sheet: string;
       id: string;
       after: number;
-      kind?: "item" | "heading";
+      /** Omitted means "whatever this page holds". Only `heading` is ever worth saying. */
+      kind?: SheetRow["kind"];
       name?: string;
     }
   | { type: "removeSheetRow"; sheet: string; row: string }
   | { type: "moveSheetRow"; sheet: string; row: string; to: number }
   | { type: "renameSheetRow"; sheet: string; row: string; name: string }
-  | { type: "setSheetFormula"; sheet: string; row: string; formula: string }
+  | {
+      type: "setSheetFormula";
+      sheet: string;
+      row: string;
+      field: RowField;
+      formula: string;
+    }
   | { type: "setSheetUnit"; sheet: string; row: string; unit: string }
+  | { type: "setSliceShape"; sheet: string; row: string; shape: SliceShape }
   | { type: "setSheetRowNote"; sheet: string; row: string; note: string }
-  | { type: "setSheetOutput"; output: keyof BookOutputs; ref: SheetRef | null }
   | { type: "setSheetDensity"; density: number }
   | { type: "installSheet"; book: WeightBook };
 
@@ -277,8 +424,8 @@ export const SHEET_COMMAND_TYPES = {
   renameSheetRow: 1,
   setSheetFormula: 1,
   setSheetUnit: 1,
+  setSliceShape: 1,
   setSheetRowNote: 1,
-  setSheetOutput: 1,
   setSheetDensity: 1,
   installSheet: 1,
 } as const satisfies Record<SheetCommand["type"], 1>;
@@ -326,20 +473,6 @@ const editRow = (
     return { ...sheet, rows };
   });
 
-/** Outputs naming something that has gone are cleared rather than left dangling. */
-const pruneOutputs = (book: WeightBook): WeightBook => {
-  const live = (ref: SheetRef | null): SheetRef | null =>
-    ref && refValue(book, ref) ? ref : null;
-  return {
-    ...book,
-    outputs: {
-      displacement: live(book.outputs.displacement),
-      vcg: live(book.outputs.vcg),
-      lcg: live(book.outputs.lcg),
-    },
-  };
-};
-
 /**
  * Interpret one command. Pure: it returns the next book or a refusal, and never mutates the one it was given.
  * Structural validity — unique names, resolvable outputs — is checked by `invariants.ts` after the fact, in
@@ -353,6 +486,11 @@ export function interpretSheetCommand(
     case "addSheet": {
       if (book.sheets.some((sheet) => sheet.id === command.id))
         return { rejected: `page ${command.id} already exists` };
+      if (!CREATABLE_KINDS.includes(command.kind))
+        return { rejected: `a ${command.kind} page cannot be made yet` };
+      // One outputs page, because `OUT.` resolves by kind and two would make it ambiguous.
+      if (command.kind === "outputs" && outputsSheet(book))
+        return { rejected: "this book already has an outputs page" };
       const name = tidyName(command.name);
       if (!isValidName(name))
         return {
@@ -363,7 +501,7 @@ export function interpretSheetCommand(
       return {
         book: withSheets(book, [
           ...book.sheets,
-          { id: command.id, name, rows: [] },
+          { id: command.id, name, kind: command.kind, rows: [] },
         ]),
         result: book.sheets.length,
       };
@@ -374,7 +512,7 @@ export function interpretSheetCommand(
       if (idx < 0) return { rejected: `no such page: ${command.sheet}` };
       const sheets = [...book.sheets];
       sheets.splice(idx, 1);
-      return { book: pruneOutputs(withSheets(book, sheets)), result: idx };
+      return { book: withSheets(book, sheets), result: idx };
     }
 
     case "renameSheet": {
@@ -407,32 +545,28 @@ export function interpretSheetCommand(
       return editSheet(book, command.sheet, (sheet) => {
         if (sheet.rows.some((row) => row.id === command.id))
           return { rejected: `item ${command.id} already exists` };
+        // A heading is legal on any page; anything else is the page's own kind, whether or not it was named.
+        const kind =
+          command.kind === "heading" ? "heading" : ROW_KIND_OF[sheet.kind];
+        if (command.kind && command.kind !== kind)
+          return {
+            rejected: `a ${sheet.kind} page does not hold ${command.kind} rows`,
+          };
         const at = Math.max(0, Math.min(sheet.rows.length, command.after + 1));
         const rows = [...sheet.rows];
         // Nothing to say about grouping: an item belongs to the heading it lands under, and it just landed.
-        rows.splice(at, 0, {
-          id: command.id,
-          kind: command.kind ?? "item",
-          name: command.name ?? "",
-          formula: "",
-          unit: "",
-          note: "",
-        });
+        rows.splice(at, 0, blankRow(kind, command.id, command.name ?? ""));
         return { ...sheet, rows };
       });
 
-    case "removeSheetRow": {
-      const outcome = editSheet(book, command.sheet, (sheet) => {
+    case "removeSheetRow":
+      return editSheet(book, command.sheet, (sheet) => {
         const idx = sheet.rows.findIndex((row) => row.id === command.row);
         if (idx < 0) return { rejected: `no such item: ${command.row}` };
         const rows = [...sheet.rows];
         rows.splice(idx, 1);
         return { ...sheet, rows };
       });
-      return "rejected" in outcome
-        ? outcome
-        : { ...outcome, book: pruneOutputs(outcome.book) };
-    }
 
     case "moveSheetRow":
       return editSheet(book, command.sheet, (sheet) => {
@@ -463,33 +597,35 @@ export function interpretSheetCommand(
     }
 
     case "setSheetFormula":
-      return editRow(book, command.sheet, command.row, (row) => ({
-        ...row,
-        formula: command.formula,
-      }));
+      return editRow(book, command.sheet, command.row, (row) => {
+        // The field has to be one the row actually carries: a point has no `formula` and an item has no `z`.
+        // Writing it anyway would put a property on the row that nothing reads and the JSON would carry.
+        if (fieldOf(row, command.field) === null)
+          return {
+            rejected: `a ${row.kind} row has no ${command.field} to set`,
+          };
+        return { ...row, [command.field]: command.formula };
+      });
 
     case "setSheetUnit":
-      return editRow(book, command.sheet, command.row, (row) => ({
-        ...row,
-        unit: command.unit.trim(),
-      }));
+      return editRow(book, command.sheet, command.row, (row) => {
+        if (row.kind !== "item" && row.kind !== "point")
+          return { rejected: `a ${row.kind} row carries no unit` };
+        return { ...row, unit: command.unit.trim() };
+      });
+
+    case "setSliceShape":
+      return editRow(book, command.sheet, command.row, (row) => {
+        if (row.kind !== "slice")
+          return { rejected: "only a slice has a shape" };
+        return { ...row, shape: command.shape };
+      });
 
     case "setSheetRowNote":
       return editRow(book, command.sheet, command.row, (row) => ({
         ...row,
         note: command.note,
       }));
-
-    case "setSheetOutput": {
-      if (command.ref && !refValue(book, command.ref))
-        return { rejected: "no such item" };
-      return {
-        book: {
-          ...book,
-          outputs: { ...book.outputs, [command.output]: command.ref },
-        },
-      };
-    }
 
     case "setSheetDensity":
       if (!isFinite(command.density) || command.density <= 0)

@@ -477,6 +477,16 @@
   margin-bottom: -1px;
   padding-bottom: 7px;
 }
+/* The page that holds what the estimate answers, rather than a page of the estimate. Marked, not moved: it
+   keeps its place in the strip so the tabs stay where the user put them. */
+.wtab.answers {
+  font-style: italic;
+}
+.wtab.answers::before {
+  content: "→ ";
+  opacity: 0.55;
+}
+
 .wtab:focus-visible,
 .wtabadd:focus-visible {
   outline: 2px solid var(--accent);

@@ -674,7 +674,14 @@ export function sameGesture(a: DocumentCommand, b: DocumentCommand): boolean {
   switch (a.type) {
     // The book's text fields, held open while the user types. Coalesced per ROW, so tabbing to the next
     // field starts a new step rather than absorbing the last one.
+    // A point row carries three formula cells, so the row alone no longer tells two gestures apart: tabbing
+    // from x to y would coalesce into one moment and undoing the height would silently undo the station too.
     case "setSheetFormula":
+      return (
+        a.sheet === (b as typeof a).sheet &&
+        a.row === (b as typeof a).row &&
+        a.field === (b as typeof a).field
+      );
     case "setSheetUnit":
     case "renameSheetRow":
     case "setSheetRowNote":
@@ -761,7 +768,9 @@ export function describeCommand(cmd: DocumentCommand): string {
     // A book moment reads by what it did, not by which id it did it to: an id is meaningless in a timeline,
     // and the thing it names may since have been removed.
     case "addSheet":
-      return `Add the page "${cmd.name}"`;
+      return cmd.kind === "outputs"
+        ? "Add the outputs page"
+        : `Add the page "${cmd.name}"`;
     case "removeSheet":
       return "Remove a page";
     case "renameSheet":
@@ -769,13 +778,26 @@ export function describeCommand(cmd: DocumentCommand): string {
     case "moveSheet":
       return "Reorder the pages";
     case "setSheetFormula":
-      return "Edit a weight formula";
+      // A point's three cells are three different edits, and a timeline that called them all "edit a formula"
+      // would be unreadable next to a drag of the same point.
+      return cmd.field === "formula"
+        ? "Edit a weight formula"
+        : `Move a point's ${cmd.field}`;
     case "setSheetUnit":
       return cmd.unit
         ? `Weight item in ${cmd.unit}`
         : "Clear a weight item's unit";
     case "addSheetRow":
-      return cmd.kind === "heading" ? "Add a heading" : "Add a weight item";
+      switch (cmd.kind) {
+        case "heading":
+          return "Add a heading";
+        case "point":
+          return "Add a point";
+        case "slice":
+          return "Add a slice";
+        default:
+          return "Add a weight item";
+      }
     case "removeSheetRow":
       return "Remove a weight item";
     case "moveSheetRow":
@@ -784,8 +806,8 @@ export function describeCommand(cmd: DocumentCommand): string {
       return cmd.name ? `Name a weight item "${cmd.name}"` : "Unname an item";
     case "setSheetRowNote":
       return "Note on a weight item";
-    case "setSheetOutput":
-      return `Set the estimate's ${cmd.output}`;
+    case "setSliceShape":
+      return `Cut with a ${cmd.shape}`;
     case "setSheetDensity":
       return "Set the water density";
     case "installSheet":

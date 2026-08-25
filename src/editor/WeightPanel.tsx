@@ -6,13 +6,16 @@ import { type Reading } from "../core/sheet/quantity";
 import {
   FIRST_SHEET_NAME,
   freeSheetName,
+  isHeading,
   newId,
-  sameRef,
+  outputsSheet,
+  rowNamed,
+  type PageKind,
   type Sheet,
-  type SheetRef,
   type SheetRow,
   type WeightBook,
 } from "../core/sheet/book";
+import { OUTPUTS, type OutputSpec } from "../core/sheet/outputs";
 import {
   evaluateBook,
   resultAt,
@@ -103,9 +106,9 @@ export function WeightPanel() {
   // What the toolbar's tools act on: the item the caret was last in on this page.
   const focused = sheet?.rows.find((row) => row.id === focusRow) ?? null;
 
-  const addSheet = (name: string) => {
+  const addSheet = (name: string, kind: PageKind = "scalars") => {
     const id = newId("p");
-    send({ type: "addSheet", id, name: freeSheetName(book, name) });
+    send({ type: "addSheet", id, name: freeSheetName(book, name), kind });
     setActiveSheet(id);
     return id;
   };
@@ -184,7 +187,7 @@ export function WeightPanel() {
           Add group
         </Button>
         <span className="wsep" />
-        <OutputTool book={book} sheet={sheet} row={focused} send={send} />
+        <OutputTool book={book} sheet={sheet} row={focused} send={dispatch} />
         <span className="wsep" />
         <span className="wtoolbarlabel">Show</span>
         <div className="wtoggle">
@@ -242,11 +245,39 @@ export function WeightPanel() {
 // ---------- the tools ----------
 
 /**
- * Which of the estimate's three answers the focused item is.
+ * How a row on the outputs page refers to a row anywhere else.
+ *
+ * Always page-qualified, even on a one-page book: an answer is written once and then read from a page that is
+ * not the one it names, so the short form would be wrong the moment a second page appeared.
+ */
+const aliasFor = (sheet: Sheet, row: SheetRow): string =>
+  `${sheet.name}.${row.name}`;
+
+/** The answers a given row is behind, by being what their formula aliases. */
+function rolesAliasing(
+  book: WeightBook,
+  sheet: Sheet,
+  row: SheetRow,
+): string[] {
+  const page = outputsSheet(book);
+  if (!page || !row.name || sheet.kind === "outputs") return [];
+  const alias = aliasFor(sheet, row);
+  return OUTPUTS.filter((spec) => {
+    const answer = rowNamed(page, spec.name);
+    return answer?.kind === "item" && answer.formula.trim() === alias;
+  }).map((spec) => spec.name);
+}
+
+/**
+ * Which of the estimate's answers the focused item is.
  *
  * These are what the rest of the app reads — the stability panel takes the displacement and its tolerance
- * straight off them — so they are the estimate's exports, and there are exactly three of them however long
- * the schedule gets.
+ * straight off them — so they are the estimate's exports, and there are exactly as many as `OUTPUTS` names.
+ *
+ * The gesture is the one that was always here: a checkable item saying "this row is the displacement". What
+ * it WRITES changed. There is no nomination to store any more, so ticking one adds a row to the outputs page
+ * whose formula names this row, making the page if the book has none; unticking removes that row. Both are
+ * ordinary book edits, which is why they undo like anything else and need no command of their own.
  */
 function OutputTool({
   book,
@@ -257,58 +288,103 @@ function OutputTool({
   readonly book: WeightBook;
   readonly sheet: Sheet | null;
   readonly row: SheetRow | null;
-  readonly send: (command: DocumentCommand) => void;
+  readonly send: (command: DocumentCommand) => Promise<unknown>;
 }) {
   const [open, setOpen] = useState(false);
-  const roles = ["displacement", "vcg", "lcg"] as const;
-  const label: Record<(typeof roles)[number], string> = {
-    displacement: "Displacement",
-    vcg: "VCG",
-    lcg: "LCG",
+  const page = outputsSheet(book);
+  // An answer refers to its row by name, so an unnamed one cannot be an answer; and the outputs page holds
+  // the answers themselves, so a row sitting there has nothing to be made into one.
+  const usable =
+    !!sheet &&
+    !!row &&
+    !isHeading(row) &&
+    !!row.name &&
+    sheet.kind === "scalars";
+  const alias = usable ? aliasFor(sheet!, row!) : "";
+
+  const assign = async (spec: OutputSpec, mine: boolean) => {
+    setOpen(false);
+    if (!usable) return;
+    const answer = page ? rowNamed(page, spec.name) : undefined;
+    // Ticking the one that is already ours means unticking it: the answer goes, and with it the claim.
+    if (mine && page && answer) {
+      await send({ type: "removeSheetRow", sheet: page.id, row: answer.id });
+      return;
+    }
+    let pageId = page?.id;
+    if (!pageId) {
+      pageId = newId("p");
+      await send({
+        type: "addSheet",
+        id: pageId,
+        name: freeSheetName(book, "Outputs"),
+        kind: "outputs",
+      });
+    }
+    // An answer already claimed by another row keeps its identity and changes what it points at, so the
+    // formula a user may have built on top of the alias is the only thing they lose.
+    let rowId = answer?.id;
+    if (!rowId) {
+      rowId = newId();
+      await send({
+        type: "addSheetRow",
+        sheet: pageId,
+        id: rowId,
+        after: page ? page.rows.length - 1 : -1,
+      });
+      await send({
+        type: "renameSheetRow",
+        sheet: pageId,
+        row: rowId,
+        name: spec.name,
+      });
+    }
+    await send({
+      type: "setSheetFormula",
+      sheet: pageId,
+      row: rowId,
+      field: "formula",
+      formula: alias,
+    });
   };
-  const refTo: SheetRef | null =
-    sheet && row ? { sheet: sheet.id, row: row.id } : null;
+
   return (
     <Dropdown
       label="Use as"
-      open={open && !!row}
+      open={open && usable}
       onOpenChange={setOpen}
       align="left"
       menuLabel="Outputs"
       title={
-        row
-          ? `Use "${row.name || "this item"}" as the estimate's displacement, VCG or LCG`
-          : "Select an item first — an output names the item the caret is in"
+        usable
+          ? `Use "${row!.name}" as the estimate's displacement, VCG or LCG`
+          : row && !isHeading(row) && !row.name
+            ? "Name this item first — an answer refers to it by name"
+            : "Select an item first — an output names the item the caret is in"
       }
-      className={row ? "" : "wtooloff"}
+      className={usable ? "" : "wtooloff"}
     >
       <div className="dd-section">
         <div className="dd-group">This item is the estimate's</div>
-        {roles.map((key) => {
-          const mine = sameRef(book.outputs[key], refTo);
-          const taken = book.outputs[key];
+        {OUTPUTS.map((spec) => {
+          const answer = page ? rowNamed(page, spec.name) : undefined;
+          const mine =
+            answer?.kind === "item" && answer.formula.trim() === alias;
           const elsewhere =
-            !mine && taken
-              ? (book.sheets
-                  .find((s) => s.id === taken.sheet)
-                  ?.rows.find((r) => r.id === taken.row)?.name ??
-                "another item")
+            !mine && answer?.kind === "item" && answer.formula.trim()
+              ? answer.formula.trim()
               : null;
           return (
             <button
-              key={key}
+              key={spec.name}
               className={`wmenurow${mine ? " on" : ""}`}
-              onClick={() => {
-                send({
-                  type: "setSheetOutput",
-                  output: key,
-                  ref: mine ? null : refTo,
-                });
-                setOpen(false);
-              }}
+              title={spec.hint}
+              onClick={() => void assign(spec, mine)}
             >
               {mine ? "✓ " : ""}
-              {label[key]}
+              {spec.label === spec.name
+                ? spec.name
+                : `${spec.label} — ${spec.name}`}
               {elsewhere && <span className="wmenunote">{elsewhere}</span>}
             </button>
           );
@@ -361,17 +437,29 @@ function SheetTabs({
               }}
             />
           );
+        // The outputs page is not a page OF the schedule, it is what the schedule answers — so it sits apart
+        // from the pages you name and reorder. It cannot be renamed from here, because `OUT.` finds it by
+        // kind and its name is decoration; and it goes when its last answer does, not by a ×.
+        const answers = sheet.kind === "outputs";
         return (
           <button
             key={sheet.id}
             role="tab"
             aria-selected={on}
-            className={`wtab${on ? " on" : ""}`}
-            onClick={() => (on ? setRenaming(sheet.id) : onPick(sheet.id))}
-            title={on ? "Click again to rename this page" : sheet.name}
+            className={`wtab${on ? " on" : ""}${answers ? " answers" : ""}`}
+            onClick={() =>
+              on && !answers ? setRenaming(sheet.id) : onPick(sheet.id)
+            }
+            title={
+              answers
+                ? "What this estimate answers: the displacement, VCG and LCG the rest of the app reads"
+                : on
+                  ? "Click again to rename this page"
+                  : sheet.name
+            }
           >
             {sheet.name}
-            {on && book.sheets.length > 1 && (
+            {on && !answers && book.sheets.length > 1 && (
               <span
                 className="wtabclose"
                 role="button"
@@ -754,10 +842,9 @@ function Row({
   onNudge,
 }: RowProps) {
   const result = resultAt(results, sheet.id, row.id);
-  const ref: SheetRef = { sheet: sheet.id, row: row.id };
-  const roles = (["displacement", "vcg", "lcg"] as const).filter((key) =>
-    sameRef(book.outputs[key], ref),
-  );
+  // Which of the book's answers this row is behind. Read off the outputs page rather than from a stored
+  // nomination — an answer is a row whose formula points here, so the badge follows the formula.
+  const roles = isHeading(row) ? [] : rolesAliasing(book, sheet, row);
   const focused = focusRow === row.id;
   const factor = result?.unit?.factor ?? 1;
 
@@ -800,7 +887,7 @@ function Row({
       </td>
       <td className="wcolformula">
         <FormulaField
-          value={row.formula}
+          value={row.kind === "item" ? row.formula : ""}
           error={result?.error ?? null}
           completions={completions}
           onCommit={(formula) =>
@@ -808,6 +895,7 @@ function Row({
               type: "setSheetFormula",
               sheet: sheet.id,
               row: row.id,
+              field: "formula",
               formula,
             })
           }
@@ -816,7 +904,7 @@ function Row({
       </td>
       <td className="wcolunit">
         <Field
-          value={row.unit}
+          value={row.kind === "item" || row.kind === "point" ? row.unit : ""}
           // A derived unit shows as the placeholder rather than as text, so it reads as what the formula
           // works out to rather than as something the user typed and could delete.
           placeholder={
@@ -864,8 +952,8 @@ function Row({
             and its heading is simply where it sits. A row carries the marks it has earned rather than the
             controls that set them. */}
         {roles.map((role) => (
-          <span key={role} className={`wrole r-${role}`}>
-            {role === "displacement" ? "∆" : role.toUpperCase()}
+          <span key={role} className={`wrole r-${role.toLowerCase()}`}>
+            {role === "DISPLACEMENT" ? "∆" : role}
           </span>
         ))}
         <button
@@ -1075,14 +1163,14 @@ function Footer({
   readonly hasHull: boolean;
 }) {
   const output = results.outputs.displacement;
-  const nominated = book.outputs.displacement;
-  const nominatedRow = nominated
-    ? (book.sheets
-        .find((s) => s.id === nominated.sheet)
-        ?.rows.find((r) => r.id === nominated.row) ?? null)
+  // The row on the outputs page that answers the displacement, and how it fared. Where it exists but has no
+  // value, the footer says so rather than falling back to whatever the caret happens to be in.
+  const outputsPage = outputsSheet(book);
+  const nominatedRow = outputsPage
+    ? (rowNamed(outputsPage, "DISPLACEMENT") ?? null)
     : null;
-  const nominatedResult = nominated
-    ? resultAt(results, nominated.sheet, nominated.row)
+  const nominatedResult = nominatedRow
+    ? resultAt(results, outputsPage!.id, nominatedRow.id)
     : undefined;
 
   const focused =
@@ -1162,8 +1250,8 @@ function Footer({
           <>
             <div className="wsummarylabel">Displacement unavailable</div>
             <p className="whint">
-              <code>{nominatedRow.name || "The nominated item"}</code> is the
-              estimated displacement, but it{" "}
+              <code>{nominatedRow.name}</code> is the estimated displacement,
+              but it{" "}
               {nominatedResult?.empty
                 ? "has nothing in it yet"
                 : `cannot be worked out: ${nominatedResult?.error ?? "it did not evaluate"}`}
