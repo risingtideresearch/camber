@@ -5,6 +5,7 @@
 
 import { buildJson } from "../core/json";
 import { buildPreviewSvg } from "../core/preview";
+import { buildSheetJson, sheetIsEmpty } from "../core/sheet/json";
 import type { SaveResult } from "./api";
 import type { PersistenceAdapter } from "./persistence/persistenceAdapter";
 import type { DocumentStoreServer } from "./server";
@@ -17,11 +18,18 @@ export class SaveCoordinator {
     // beginSave synchronously publishes `saving` and freezes the exact immutable revision to serialize.
     const capture = server.beginSave(name);
     try {
-      // Build both persisted artifacts from the same capture, even if newer commands arrive while I/O waits.
+      // Build every persisted artifact from the same capture, even if newer commands arrive while I/O waits.
+      // The hull and the sheet are serialized separately and stored in separate columns: `buildJson` writes
+      // exactly the `HullDocument` it always did, and a sheet with nothing in it is stored as `null` rather
+      // than as an empty object, so a design that never had an estimate reads back identically to one saved
+      // before the sheet existed.
       const result = await this.persistence.saveDesign({
         currentId: capture.currentId,
         name: capture.name,
-        document: buildJson(capture.state),
+        document: buildJson(capture.state.hull),
+        weights: sheetIsEmpty(capture.state.weights)
+          ? null
+          : buildSheetJson(capture.state.weights),
         preview: buildPreviewSvg(capture.model),
         create: capture.create,
       });

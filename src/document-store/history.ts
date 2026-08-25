@@ -19,28 +19,35 @@ import {
   type DocumentCommand,
   type SliceMask,
 } from "../core/commands";
-import type { HullState } from "../core/hull";
+import type { SessionDocument } from "../core/sessionDocument";
 
-export interface HistoryRecord {
+// ---------- generic in the state, and genuinely so ----------
+// Nothing below ever reads a FIELD of the state it stores: `before` only reaches `plant()`, `after` only
+// becomes a node's state, and `travel` hands that state straight back out. The tree, the depth cap, the
+// pruning, the coalescing and the nearest-common-ancestor jump are all about the SHAPE of the history and
+// none of them about hulls — so the state is a type parameter rather than a document type, which says that
+// in a way a hard-coded type could not. `SessionDocument` is what a session actually parameterizes it with.
+
+export interface HistoryRecord<S = SessionDocument> {
   /** The state the gesture was applied to. Used only to plant the root when the tree is still empty. */
-  readonly before: HullState;
+  readonly before: S;
   /** The state the gesture produced — what the new node restores. */
-  readonly after: HullState;
+  readonly after: S;
   readonly touched: SliceMask;
   readonly command: DocumentCommand;
   readonly author: string;
   readonly at?: number;
 }
 
-export interface HistoryTransition {
-  readonly state: HullState;
+export interface HistoryTransition<S = SessionDocument> {
+  readonly state: S;
   /** Every slice crossed on the way, so one jump bumps the same clocks the equivalent walk would have. */
   readonly touched: SliceMask;
 }
 
 // ---------- the tree, described ----------
 // What a reader can be told about the history without being handed it. A step names a gesture, says who made
-// it and when, and points at its neighbours; the HullState it would restore stays here, because it is large,
+// it and when, and points at its neighbours; the state it would restore stays here, because it is large,
 // private to the authority, and no use to a reader anyway — travelling to a step is asking the authority to
 // go there, not installing a state from outside.
 
@@ -76,25 +83,25 @@ export interface HistoryTimeline {
   readonly truncated: boolean;
 }
 
-export interface DocumentHistory {
+export interface DocumentHistory<S = SessionDocument> {
   readonly canUndo: boolean;
   readonly canRedo: boolean;
-  record(record: HistoryRecord): void;
-  undo(): HistoryTransition | null;
-  redo(): HistoryTransition | null;
+  record(record: HistoryRecord<S>): void;
+  undo(): HistoryTransition<S> | null;
+  redo(): HistoryTransition<S> | null;
   /** Jump to any kept moment. `null` if the id is unknown — a branch the depth cap has since dropped. */
-  travel(id: number): HistoryTransition | null;
-  /** A transportable description of the tree. Holds no HullState, so it is cheap to send to a window. */
+  travel(id: number): HistoryTransition<S> | null;
+  /** A transportable description of the tree. Holds no document, so it is cheap to send to a window. */
   timeline(): HistoryTimeline;
   clear(): void;
 }
 
-export interface DocumentHistoryOptions {
+export interface DocumentHistoryOptions<S = SessionDocument> {
   readonly depth?: number;
   readonly coalesceMs?: number;
   readonly now?: () => number;
   /** The state the session opened with. Given one, the tree has a root before anything has been edited. */
-  readonly initial?: HullState;
+  readonly initial?: S;
   readonly sameGesture?: (
     before: DocumentCommand,
     after: DocumentCommand,
@@ -104,18 +111,18 @@ export interface DocumentHistoryOptions {
 // A node is a moment: the whole state as it stood after `command`, plus the slices that command changed
 // relative to its parent. Absolute states rather than diffs are what make an arbitrary jump one transition,
 // and `touched` is what makes it a correctly-clocked one.
-interface Node {
+interface Node<S> {
   readonly id: number;
-  parent: Node | null;
+  parent: Node<S> | null;
   /** Creation order, and it stays that way — see HistoryStep.children for why nothing may reorder it. */
-  readonly children: Node[];
+  readonly children: Node<S>[];
   /**
    * The child last travelled through, in either direction. This is what `redo` owes an `undo`: the way you
    * came, not the newest branch. It is kept apart from `children` deliberately — where you have been is a
    * property of the visit, not of the history, and it must not disturb how the tree reads.
    */
-  resume: Node | null;
-  state: HullState;
+  resume: Node<S> | null;
+  state: S;
   touched: SliceMask;
   command: DocumentCommand | null;
   author: string;
@@ -123,21 +130,21 @@ interface Node {
 }
 
 /** Snapshot-based branching document history. It owns tree policy, but never mutates or publishes state. */
-export function createDocumentHistory(
-  options: DocumentHistoryOptions = {},
-): DocumentHistory {
+export function createDocumentHistory<S = SessionDocument>(
+  options: DocumentHistoryOptions<S> = {},
+): DocumentHistory<S> {
   const depth = options.depth ?? 200;
   const coalesceMs = options.coalesceMs ?? 400;
   const now = options.now ?? Date.now;
   const gesturesEqual = options.sameGesture ?? sameGesture;
   // Keyed by id because that is how a window asks to travel: a reader holds ids, never nodes.
-  const nodes = new Map<number, Node>();
+  const nodes = new Map<number, Node<S>>();
   let nextId = 1;
-  let root: Node | null = null;
-  let current: Node | null = null;
+  let root: Node<S> | null = null;
+  let current: Node<S> | null = null;
   let truncated = false;
 
-  const plant = (state: HullState): void => {
+  const plant = (state: S): void => {
     root = {
       id: nextId++,
       parent: null,
@@ -157,7 +164,7 @@ export function createDocumentHistory(
 
   // Remember the way we came, so `redo` can retrace it. Nothing about the tree's shape changes: an edge is
   // noted as travelled, and the moments stay in the order they were made.
-  const remember = (child: Node): void => {
+  const remember = (child: Node<S>): void => {
     if (child.parent) child.parent.resume = child;
   };
 
@@ -166,7 +173,7 @@ export function createDocumentHistory(
     while (nodes.size > depth + 1 && root && current) {
       // Give up the stalest tip first — the end of a branch nobody has come back to is what a reader misses
       // least. Where the document stands is never a candidate, so a jump always still has somewhere to land.
-      let victim: Node | null = null;
+      let victim: Node<S> | null = null;
       for (const node of nodes.values())
         if (
           node.children.length === 0 &&
@@ -197,7 +204,7 @@ export function createDocumentHistory(
     }
   };
 
-  const step = (node: Node): HistoryStep => ({
+  const step = (node: Node<S>): HistoryStep => ({
     id: node.id,
     parent: node.parent?.id ?? null,
     children: node.children.map((child) => child.id),
@@ -208,24 +215,24 @@ export function createDocumentHistory(
     touched: node.touched,
   });
 
-  const travel = (id: number): HistoryTransition | null => {
+  const travel = (id: number): HistoryTransition<S> | null => {
     const target = nodes.get(id);
     if (!target || !current || target === current) return null;
     // Two moments' paths meet at their nearest common ancestor: up from here to the meeting point, then down
     // the other side. Crossing an edge in either direction changes the same slices, so the union over the
     // whole journey is what the jump touched.
-    const behind = new Set<Node>();
-    for (let node: Node | null = current; node; node = node.parent)
+    const behind = new Set<Node<S>>();
+    for (let node: Node<S> | null = current; node; node = node.parent)
       behind.add(node);
-    const down: Node[] = [];
-    let meet: Node | null = target;
+    const down: Node<S>[] = [];
+    let meet: Node<S> | null = target;
     while (meet && !behind.has(meet)) {
       down.push(meet);
       meet = meet.parent;
     }
     if (!meet) return null;
     let touched: SliceMask = 0;
-    for (let node: Node | null = current; node && node !== meet;) {
+    for (let node: Node<S> | null = current; node && node !== meet;) {
       touched |= node.touched;
       remember(node);
       node = node.parent;
@@ -268,7 +275,7 @@ export function createDocumentHistory(
       }
       // The new moment simply joins the ones already here. An edit made after going back therefore branches
       // rather than truncating: whatever hung off this point still hangs off it.
-      const child: Node = {
+      const child: Node<S> = {
         id: nextId++,
         parent: here,
         children: [],

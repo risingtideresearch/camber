@@ -73,7 +73,7 @@ export function useHullSampling(
     return sampler.get(
       {
         key,
-        state: snapshot.state,
+        state: snapshot.state.hull,
         session: snapshot.session,
         sliceRevs: snapshot.sliceRevs,
         ...resolution,

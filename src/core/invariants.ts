@@ -24,6 +24,13 @@ import {
   U_GAP,
   type HullState,
 } from "./hull";
+import type { SessionDocument } from "./sessionDocument";
+import {
+  isReserved,
+  isValidName,
+  refValue,
+  type WeightBook,
+} from "./sheet/book";
 
 export type InvariantLevel = "document" | "editor";
 
@@ -149,5 +156,88 @@ export function assertValidHull(
   if (bad.length)
     throw new Error(
       `invalid hull (${level}): ${bad[0]}${bad.length > 1 ? ` (and ${bad.length - 1} more)` : ""}`,
+    );
+}
+
+// ---------- the weight book ----------
+//
+// Far fewer promises than a hull, because a schedule is text until it is evaluated and a formula that does
+// not parse is a per-row ERROR rather than an invalid document — the whole point is that you can leave a
+// half-written line in it. What must hold is only what the book's own addressing depends on: ids that are
+// unique, names a formula could actually resolve, and outputs that point at something.
+
+export function bookViolations(book: WeightBook): string[] {
+  const out: string[] = [];
+
+  if (!finite(book.density) || book.density <= 0)
+    out.push("density must be a positive number");
+
+  const sheetIds = new Set<string>();
+  const sheetNames = new Set<string>();
+  book.sheets.forEach((sheet, i) => {
+    if (typeof sheet.id !== "string" || !sheet.id)
+      out.push(`sheets[${i}] must carry an id`);
+    else if (sheetIds.has(sheet.id))
+      out.push(`sheets[${i}] repeats the id ${sheet.id}`);
+    else sheetIds.add(sheet.id);
+
+    if (!isValidName(sheet.name))
+      out.push(`sheets[${i}] name "${sheet.name}" is not usable in a formula`);
+    else if (sheetNames.has(sheet.name))
+      out.push(`sheets[${i}] repeats the name ${sheet.name}`);
+    else sheetNames.add(sheet.name);
+
+    const rowIds = new Set<string>();
+    const rowNames = new Set<string>();
+    sheet.rows.forEach((row, j) => {
+      if (typeof row.id !== "string" || !row.id)
+        out.push(`sheets[${i}].rows[${j}] must carry an id`);
+      else if (rowIds.has(row.id))
+        out.push(`sheets[${i}].rows[${j}] repeats the id ${row.id}`);
+      else rowIds.add(row.id);
+
+      // A heading is not a value and nothing can refer to one, so its text is under no rules at all.
+      // An unnamed ITEM is legal too — it is the scratch line a grid would spend a spare column on. A named
+      // one has to be resolvable, and has to be the only item on its page answering to that name.
+      if (row.name && row.kind !== "heading") {
+        if (!isValidName(row.name))
+          out.push(
+            `sheets[${i}].rows[${j}] name "${row.name}" is not usable in a formula`,
+          );
+        else if (isReserved(row.name))
+          out.push(`sheets[${i}].rows[${j}] takes a reserved name`);
+        else if (rowNames.has(row.name))
+          out.push(`sheets[${i}].rows[${j}] repeats the name ${row.name}`);
+        else rowNames.add(row.name);
+      }
+    });
+  });
+
+  // An output has to name a row that is still here. The remove commands clear them, so a dangling one means
+  // a book assembled some other way.
+  for (const [key, ref] of Object.entries(book.outputs))
+    if (ref && !refValue(book, ref))
+      out.push(`outputs.${key} names an item that is not in the book`);
+
+  return out;
+}
+
+/** Both parts of what a session authors, checked together. */
+export function documentViolations(
+  doc: SessionDocument,
+  level: InvariantLevel = "editor",
+): string[] {
+  return [...hullViolations(doc.hull, level), ...bookViolations(doc.weights)];
+}
+
+/** Throw on the first violation. Use where an invalid document must never become observable. */
+export function assertValidDocument(
+  doc: SessionDocument,
+  level: InvariantLevel = "editor",
+): void {
+  const bad = documentViolations(doc, level);
+  if (bad.length)
+    throw new Error(
+      `invalid document (${level}): ${bad[0]}${bad.length > 1 ? ` (and ${bad.length - 1} more)` : ""}`,
     );
 }

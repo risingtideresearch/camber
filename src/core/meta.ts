@@ -1,12 +1,16 @@
 // Shared session metadata reducer. The DocumentStoreServer is its only writer: windows may request a name,
 // while begin/complete/fail save transitions remain server-owned and cannot be forged through the protocol.
 
-import type { HullState } from "./hull";
+import type { SessionDocument } from "./sessionDocument";
 
 export interface DesignIdentity {
   readonly currentId: string | null;
   readonly savedName: string | null;
-  readonly savedState: HullState | null;
+  /**
+   * The whole document as it stood at the last save — hull AND sheet. Both, because this is what Revert
+   * restores, and reverting a hull while leaving a half-typed weight sheet behind would be a lie.
+   */
+  readonly savedState: SessionDocument | null;
 }
 
 export interface SessionMeta {
@@ -23,11 +27,11 @@ export type SessionMetaTransition =
       type: "completeSave";
       currentId: string;
       name: string;
-      savedState: HullState;
+      savedState: SessionDocument;
     }
   | { type: "failSave" };
 
-export const initialSessionMeta = (state: HullState): SessionMeta => ({
+export const initialSessionMeta = (state: SessionDocument): SessionMeta => ({
   initialized: true,
   name: "",
   design: { currentId: null, savedName: null, savedState: state },

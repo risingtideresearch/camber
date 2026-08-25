@@ -239,20 +239,48 @@ function clipSubmerged(poly: Vtx[], f: number[]): Vtx[] {
   return out;
 }
 
-// wetted girth of a clipped outline, and its first moment about the plan origin — the surface element of a
-// swept sheet is |P'|(1 + κa) ds, so the surface needs ∫a ds exactly as the volume needs ∫a dA
-function girthOf(poly: Vtx[]): { len: number; Msa: number } {
+// Wetted girth of a clipped outline, and the moments the surface integral needs.
+//
+// The surface element of a swept sheet is |P'|(1 + κa) ds, so an AREA needs ∫a ds exactly as the volume needs
+// ∫a dA. The surface's own CENTROID needs three more, because both the weight and the coordinate are affine
+// in the section's (a, z):
+//
+//     ∫x dS = px·(speed·len + kSpeed·Msa) + nx·(speed·Msa + kSpeed·Msaa)
+//     ∫z dS = speed·Msz + kSpeed·Msaz
+//
+// Each is integrated EXACTLY along a segment rather than sampled: over a straight edge both a and z are
+// linear in the arc parameter, so a product of two of them is a quadratic with a closed form. `Msaa` is the
+// ∫a² of that pair and `Msaz` the ∫az; the sixths and thirds below are those integrals, not approximations.
+interface Girth {
+  len: number;
+  Msa: number;
+  Msaa: number;
+  Msz: number;
+  Msaz: number;
+}
+
+function girthOf(poly: Vtx[]): Girth {
   let len = 0,
-    Msa = 0;
+    Msa = 0,
+    Msaa = 0,
+    Msz = 0,
+    Msaz = 0;
   for (let i = 0; i < poly.length; i++) {
     const a = poly[i];
     if (!a[2]) continue;
     const b = poly[(i + 1) % poly.length],
       d = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const a0 = a[0],
+      a1 = b[0],
+      z0 = a[1],
+      z1 = b[1];
     len += d;
-    Msa += d * ((a[0] + b[0]) / 2);
+    Msa += d * ((a0 + a1) / 2);
+    Msaa += (d * (a0 * a0 + a0 * a1 + a1 * a1)) / 3;
+    Msz += d * ((z0 + z1) / 2);
+    Msaz += (d * (2 * a0 * z0 + a0 * z1 + a1 * z0 + 2 * a1 * z1)) / 6;
   }
-  return { len, Msa };
+  return { len, Msa, Msaa, Msz, Msaz };
 }
 
 // ---------- one cut ----------
@@ -265,6 +293,15 @@ export interface Cut {
   zB: number;
   zBWorld: number; // ...and its true world height, once floated at deckRake
   wsa: number; // wetted surface area
+  // ...and where it acts: the SKIN's own centroid, in the same coordinates as the volume's. Zero-filled when
+  // there is no skin. `wsaZWorld` is its true height once floated at deckRake, matching `zBWorld`.
+  //
+  // This is what makes "the shell weighs area × areal density and acts at the skin's own centroid" one line
+  // in a weight sheet instead of a guess. Taken over the same clipped outlines the area is, so a cut above
+  // the whole hull gives the centroid of the ENTIRE trimmed shell.
+  wsaX: number;
+  wsaZ: number;
+  wsaZWorld: number;
   draft: number; // deepest immersion below the waterplane
   deckDown: boolean; // the sheer is under somewhere, so the watertight deck cap is carrying load
   sheerZ: number; // lowest heeled height of the sheer, independent of this cut's waterline
@@ -342,12 +379,16 @@ export function cut(
     IX = 0,
     IY = 0,
     IZ = 0,
-    wsa = 0;
+    wsa = 0,
+    SX = 0,
+    SZ = 0;
   let pV = 0,
     pX = 0,
     pY = 0,
     pZ = 0,
     pS = 0,
+    pSX = 0,
+    pSZ = 0,
     pU = 0,
     have = false;
   let draft = 0,
@@ -394,6 +435,8 @@ export function cut(
       gY = 0,
       gZ = 0,
       gS = 0,
+      gSX = 0,
+      gSZ = 0,
       secArea = 0;
     curW.fill(0);
     for (const side of [1, -1]) {
@@ -429,7 +472,13 @@ export function cut(
       gX += c.px * w0 + c.nx * w1; // x = px + a·nx
       gY += side * (c.py * w0 + c.ny * w1); // y = ±(py + a·ny)
       gZ += wz;
+      // ∫dS and its two first moments. y is left out: the two halves are mirror images, so the skin's
+      // centroid is on the centerline by construction and computing it would only accumulate float noise.
       gS += c.speed * gr.len + c.kSpeed * gr.Msa;
+      gSX +=
+        c.px * (c.speed * gr.len + c.kSpeed * gr.Msa) +
+        c.nx * (c.speed * gr.Msa + c.kSpeed * gr.Msaa);
+      gSZ += c.speed * gr.Msz + c.kSpeed * gr.Msaz;
 
       if (detail) {
         // the outermost point where the SKIN crosses the waterline — the waterplane's edge at this station
@@ -503,6 +552,8 @@ export function cut(
       IY += avg(pY, gY);
       IZ += avg(pZ, gZ);
       wsa += avg(pS, gS);
+      SX += avg(pSX, gSX);
+      SZ += avg(pSZ, gSZ);
       if (wantWp) {
         wA += avg(prevW[0], curW[0]);
         wX += avg(prevW[1], curW[1]);
@@ -517,13 +568,17 @@ export function cut(
     pY = gY;
     pZ = gZ;
     pS = gS;
+    pSX = gSX;
+    pSZ = gSZ;
     pU = c.u;
     have = true;
   }
 
   const xB = vol > 0 ? IX / vol : 0,
     yB = vol > 0 ? IY / vol : 0,
-    zB = vol > 0 ? IZ / vol : 0;
+    zB = vol > 0 ? IZ / vol : 0,
+    wsaX = wsa > 0 ? SX / wsa : 0,
+    wsaZ = wsa > 0 ? SZ / wsa : 0;
   return {
     vol,
     xB,
@@ -531,6 +586,9 @@ export function cut(
     zB,
     zBWorld: xB * g.sinRake + zB * g.cosRake,
     wsa,
+    wsaX,
+    wsaZ,
+    wsaZWorld: wsaX * g.sinRake + wsaZ * g.cosRake,
     draft,
     deckDown,
     sheerZ,

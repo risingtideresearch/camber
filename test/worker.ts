@@ -6,7 +6,7 @@ import {
 import { connectDocumentStore } from "../src/document-store/client";
 import type { StoreTransportFactory } from "../src/document-store/transport/transport";
 import { defaultHull } from "../src/core/hull";
-import { hullViolations } from "../src/core/invariants";
+import { documentViolations } from "../src/core/invariants";
 import { buildJson } from "../src/core/json";
 
 let failures = 0;
@@ -48,6 +48,7 @@ const host = createSessionHost({
       return {
         currentId: request.currentId ?? "created-row",
         created: request.create,
+        weightsStored: true,
       };
     },
   },
@@ -76,7 +77,7 @@ await b.store.setName("Test");
 await a.store.dispatch({ type: "setWaterline", depth: 222 });
 await tick();
 check(
-  b.store.snapshot().state.waterline === 222,
+  b.store.snapshot().state.hull.waterline === 222,
   "an edit is published to the other window",
 );
 check(
@@ -84,7 +85,7 @@ check(
   "both windows observe the shared server revision",
 );
 check(
-  hullViolations(b.store.snapshot().state, "document").length === 0,
+  documentViolations(b.store.snapshot().state, "document").length === 0,
   "published snapshots remain valid",
 );
 
@@ -130,7 +131,7 @@ check(
 );
 check(
   a.store.snapshot().revision > a.store.snapshot().savedRevision &&
-    a.store.snapshot().state.waterline === 300,
+    a.store.snapshot().state.hull.waterline === 300,
   "an edit arriving during save remains dirty",
 );
 
@@ -138,7 +139,7 @@ a.store.close?.();
 await host.settled();
 await b.store.dispatch({ type: "setWaterline", depth: 333 });
 check(
-  b.store.snapshot().state.waterline === 333,
+  b.store.snapshot().state.hull.waterline === 333,
   "closing one window leaves the shared session editable",
 );
 
@@ -168,7 +169,7 @@ check(
   "a window travels straight to a moment by naming it",
 );
 check(
-  b.store.snapshot().state.waterline === 333 &&
+  b.store.snapshot().state.hull.waterline === 333 &&
     (await b.store.timeline()).current === at333,
   "the jump is an ordinary authoritative transition, and lands where it was aimed",
 );
@@ -183,7 +184,7 @@ const isolated = await connectDocumentStore({
   transport: transportFor(host),
 });
 check(
-  isolated.store.snapshot().state.waterline !== 333,
+  isolated.store.snapshot().state.hull.waterline !== 333,
   "a different session has an independent server",
 );
 
@@ -195,6 +196,7 @@ const loadHost = createSessionHost({
       return {
         name: "Loaded",
         documentText: buildJson({ ...defaultHull(), waterline: 456 }),
+        weightsText: null,
       };
     },
     async saveDesign() {
@@ -215,7 +217,7 @@ const loadedB = await connectDocumentStore({
   transport: transportFor(loadHost),
 });
 check(
-  loads === 1 && loadedB.store.snapshot().state.waterline === 456,
+  loads === 1 && loadedB.store.snapshot().state.hull.waterline === 456,
   "the host loads a design once before exposing the session",
 );
 

@@ -5,7 +5,7 @@
 // protocol routing live outside it; only begin/complete/fail save transitions remain here because they alter
 // authoritative saved-revision and shared save metadata.
 
-import { assertValidHull } from "../core/invariants";
+import { assertValidDocument } from "../core/invariants";
 import {
   interpretDocumentCommand,
   applySessionCommand,
@@ -14,11 +14,15 @@ import {
   requiresCurrentBase,
   SLICE,
   type DocumentCommand,
-  type CommandOutcome,
+  type DocumentOutcome,
   type SessionCommand,
   type SliceMask,
 } from "../core/commands";
-import { cloneHull, defaultHull, type HullState } from "../core/hull";
+import {
+  cloneDocument,
+  defaultDocument,
+  type SessionDocument,
+} from "../core/sessionDocument";
 import {
   applyMetaCommand,
   initialSessionMeta,
@@ -59,7 +63,9 @@ export interface RevisionAuthor {
 export interface SaveCapture {
   readonly token: string;
   readonly revision: number;
-  readonly state: HullState;
+  /** Both parts, frozen together: the hull is serialized to the document, the sheet beside it. */
+  readonly state: SessionDocument;
+  /** The hull assembled, for the preview thumbnail. */
   readonly model: Model;
   readonly currentId: string | null;
   readonly name: string;
@@ -69,7 +75,7 @@ export interface SaveCapture {
 export interface DocumentStoreServer {
   snapshot(): DocumentSnapshot;
   subscribe(listener: (snapshot: DocumentSnapshot) => void): () => void;
-  execute(request: CommandRequest): CommandOutcome;
+  execute(request: CommandRequest): DocumentOutcome;
   executeSession(command: SessionCommand): void;
   undo(author?: string): boolean;
   redo(author?: string): boolean;
@@ -90,12 +96,12 @@ export interface DocumentStoreServer {
 }
 
 export interface DocumentStoreServerOptions {
-  readonly state?: HullState;
+  readonly state?: SessionDocument;
   readonly session?: SessionState;
   readonly meta?: SessionMeta;
   readonly savedRevision?: number;
-  readonly history?: DocumentHistory;
-  readonly historyOptions?: DocumentHistoryOptions;
+  readonly history?: DocumentHistory<SessionDocument>;
+  readonly historyOptions?: DocumentHistoryOptions<SessionDocument>;
 }
 
 const saveToken = (): string =>
@@ -108,7 +114,7 @@ const cloneMeta = (meta: SessionMeta): SessionMeta => ({
   design: {
     ...meta.design,
     savedState: meta.design.savedState
-      ? cloneHull(meta.design.savedState)
+      ? cloneDocument(meta.design.savedState)
       : null,
   },
 });
@@ -119,10 +125,10 @@ export function createDocumentStoreServer(
 ): DocumentStoreServer {
   // Canonical mutable references are replaced only after accepted transitions. Inputs are cloned so callers
   // cannot mutate server state behind its revision and publication machinery.
-  let state = options.state ? cloneHull(options.state) : defaultHull();
+  let state = options.state ? cloneDocument(options.state) : defaultDocument();
   let session = options.session
     ? { ...options.session }
-    : defaultSession(state);
+    : defaultSession(state.hull);
   // Authored and session-only changes use separate clocks: moving the cut position must not dirty a design.
   let revision = 0;
   let sessionRevision = 0;
@@ -144,7 +150,7 @@ export function createDocumentStoreServer(
 
   // A few command semantics need derived pre-state values. This private cache is distinct from client caches.
   const runtime = (): Model =>
-    assemble(state, session, { sliceRevs, cacheKey });
+    assemble(state.hull, session, { sliceRevs, cacheKey });
 
   // Slice clocks are durable memoization keys: unlike references, integers survive structuredClone.
   const bump = (touched: SliceMask): void => {
@@ -154,6 +160,7 @@ export function createDocumentStoreServer(
       transom: sliceRevs.transom + (touched & SLICE.transom ? 1 : 0),
       stations: sliceRevs.stations + (touched & SLICE.stations ? 1 : 0),
       scalars: sliceRevs.scalars + (touched & SLICE.scalars ? 1 : 0),
+      weights: sliceRevs.weights + (touched & SLICE.weights ? 1 : 0),
     };
   };
 
@@ -176,7 +183,7 @@ export function createDocumentStoreServer(
 
   // All authored transitions, including undo and redo, pass through this one revision/publication boundary.
   const install = (
-    next: HullState,
+    next: SessionDocument,
     touched: SliceMask,
     author: string,
   ): void => {
@@ -214,10 +221,14 @@ export function createDocumentStoreServer(
       }
 
       // Domain interpretation is pure: no canonical state changes until its candidate has also validated.
-      const outcome = interpretDocumentCommand(runtime(), request.command);
+      const outcome = interpretDocumentCommand(
+        runtime(),
+        state,
+        request.command,
+      );
       if (rejected(outcome)) return outcome;
       try {
-        assertValidHull(outcome.state, "document");
+        assertValidDocument(outcome.doc, "document");
       } catch (error) {
         return {
           rejected: error instanceof Error ? error.message : String(error),
@@ -225,7 +236,7 @@ export function createDocumentStoreServer(
       }
 
       // Record the pre-state before installing the candidate. A command may also adjust session bounds, but
-      // only authored HullState belongs to snapshot-based undo history.
+      // only the authored document belongs to snapshot-based undo history.
       const before = state;
       if (outcome.session) {
         session = { ...session, ...outcome.session };
@@ -233,12 +244,12 @@ export function createDocumentStoreServer(
       }
       history.record({
         before,
-        after: outcome.state,
+        after: outcome.doc,
         touched: outcome.touched,
         command: request.command,
         author: request.author,
       });
-      install(outcome.state, outcome.touched, request.author);
+      install(outcome.doc, outcome.touched, request.author);
       return outcome;
     },
     executeSession(command) {
@@ -313,7 +324,7 @@ export function createDocumentStoreServer(
         type: "completeSave",
         currentId: result.currentId,
         name: capture.name,
-        savedState: cloneHull(capture.state),
+        savedState: cloneDocument(capture.state),
       });
       // Newer edits are intentionally left dirty when an older in-flight revision completes.
       savedRevision = capture.revision;
@@ -323,6 +334,7 @@ export function createDocumentStoreServer(
         currentId: result.currentId,
         name: capture.name,
         created: result.created,
+        weightsStored: result.weightsStored,
       };
     },
     failSave(capture) {

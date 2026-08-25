@@ -29,6 +29,24 @@ import "./EditorApp.css";
 
 const editorSession = sessionDescriptorFromUrl();
 
+/**
+ * Say once, per window, that the weight sheet has nowhere to be stored.
+ *
+ * Once rather than per save: it is a property of the database, so it will be true of every save until someone
+ * runs the migration, and a dialog on each one would be nagging about something the user may not be able to
+ * fix from here. The save button keeps saying it in the meantime.
+ */
+let warnedAboutWeights = false;
+function warnOnceAboutWeights(): void {
+  if (warnedAboutWeights) return;
+  warnedAboutWeights = true;
+  alert(
+    "The hull was saved, but the weight estimate was not: this database has no `weights` column.\n\n" +
+      "Run this once, then save again:\n\n" +
+      "    alter table designs add column weights jsonb;",
+  );
+}
+
 export function EditorApp() {
   return (
     <DocumentStoreProvider session={editorSession}>
@@ -60,6 +78,7 @@ function Editor() {
   }, [meta, dirty]);
 
   // ---------- save: browser prompts; the store server captures and the persistence coordinator writes ----------
+
   const doSave = useCallback(async () => {
     const current = metaRef.current;
     if (current.saving) return;
@@ -76,8 +95,19 @@ function Editor() {
         url.searchParams.set("id", result.currentId);
         history.replaceState(null, "", url);
       }
-      setFlash({ buttonLabel: "Save", kind: "saved", text: "Saved ✓" });
-      window.setTimeout(() => setFlash(null), 1400);
+      // A save that could not store the weight sheet is not a clean save, and must not read as one: the hull
+      // is safely written but the estimate is not, and the only fix is a migration the user has to run.
+      if (!result.weightsStored) {
+        setFlash({
+          buttonLabel: "Save",
+          kind: "dirty",
+          text: "Saved — without weights",
+        });
+        warnOnceAboutWeights();
+      } else {
+        setFlash({ buttonLabel: "Save", kind: "saved", text: "Saved ✓" });
+        window.setTimeout(() => setFlash(null), 1400);
+      }
     } catch (e) {
       setFlash({ buttonLabel: "Save", kind: "dirty", text: "Save failed" });
       alert("Save failed: " + (e instanceof Error ? e.message : String(e)));
@@ -123,12 +153,15 @@ function Editor() {
     const saved = current.design.savedName;
     if (!current.name.trim() && saved != null) void setDocumentName(saved);
   };
-  // Revert is one `installHull`, which means it is itself undoable — a slip of the hand is recoverable now.
+  // Revert is `installHull` plus `installSheet`, which means it is itself undoable — a slip of the hand is
+  // recoverable now. Both parts go back: reverting the hull and leaving a half-typed weight sheet standing
+  // would not be a revert.
   const onRevert = () => {
-    const state = revertTo(dirty, meta);
-    if (!state) return;
+    const saved = revertTo(dirty, meta);
+    if (!saved) return;
     setSelection(null);
-    void dispatch({ type: "installHull", state });
+    void dispatch({ type: "installHull", state: saved.hull });
+    void dispatch({ type: "installSheet", book: saved.weights });
   };
   const onClose = () => {
     if (
@@ -167,6 +200,7 @@ function Editor() {
         />
         <span className="tabsep" />
         <DetachPanelButton kind="stability" label="Stability" />
+        <DetachPanelButton kind="weights" label="Weights" />
         <StlControl />
       </div>
       <div className="main">

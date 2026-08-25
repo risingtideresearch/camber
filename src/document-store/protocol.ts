@@ -9,8 +9,14 @@ import type { SaveResult, SessionSource } from "./api";
 import type { HistoryTimeline } from "./history";
 import type { DocumentSnapshot } from "./snapshot";
 
-/** Increment whenever either message union changes incompatibly. */
-export const PROTOCOL_VERSION = 4;
+/**
+ * Increment whenever either message union changes incompatibly.
+ *
+ * 5: the snapshot's `state` became the whole `SessionDocument` — the hull AND the weight sheet beside it —
+ * rather than bare `HullState`. A SharedWorker left running from an older build would otherwise hand a new
+ * window a hull-shaped state and every view would read undefined off it.
+ */
+export const PROTOCOL_VERSION = 5;
 
 export type ErrorCode =
   | "protocol-version"

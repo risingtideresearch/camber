@@ -270,7 +270,7 @@ export function LibraryApp() {
         /* leave preview empty; the card falls back to a placeholder */
       }
       try {
-        const id = await insertDesign(name, text, preview);
+        const { id } = await insertDesign(name, text, preview);
         setSelectedId(id);
         await refresh();
       } catch (e) {

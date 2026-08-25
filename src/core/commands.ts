@@ -1,18 +1,23 @@
 // ---------- every edit, as a value ----------
 //
-// One command per user intention, serializable, and a reducer that turns a command plus the hull it applies
-// to into a new hull. This is where the edit operations used to live as in-place mutations of a shared
-// `Model`; they read almost exactly as they did, because the draft below clones only the branches a command
-// touches and lets each body splice and clamp as before.
+// One command per user intention, serializable, and a reducer that turns a command plus the document it
+// applies to into a new document. This is where the edit operations used to live as in-place mutations of a
+// shared `Model`; they read almost exactly as they did, because the draft below clones only the branches a
+// command touches and lets each body splice and clamp as before.
+//
+// A session authors TWO things — the hull, and the weight sheet beside it (see `sessionDocument.ts`) — so
+// there are two reducers under one flat command union. `interpretHullCommand` is the one that has always been
+// here; `interpretSheetCommand` lives in `sheet/book.ts` and never sees a hull; `interpretDocumentCommand` routes
+// between them and returns the whole document either way.
 //
 // Two things follow from commands being values. They can cross a `postMessage` boundary, which is what the
-// SharedWorker server will need. And they can be rejected: `interpretDocumentCommand` returns an outcome rather than
+// SharedWorker server will need. And they can be rejected: the reducers return an outcome rather than
 // throwing or half-applying, so a hull that would break its invariants is simply never published — the
 // caller sees the refusal and the previous hull is still there, untouched, because nothing was mutated.
 //
 // ---------- commands are NOT replayable ----------
 //
-// `interpretDocumentCommand` takes the runtime `Model`, not bare `HullState`, and two commands genuinely need it:
+// `interpretHullCommand` takes the runtime `Model`, not bare `HullState`, and two commands genuinely need it:
 // `addStation` reads the new station's section off the LOFT of the pre-state, and the two station-point
 // commands clamp against `bounds`, which is measured against the session's `viewLen`. The same command
 // applied at a different revision therefore produces a different hull. So: no command-log persistence, no
@@ -34,12 +39,18 @@ import {
 } from "./hull";
 import type { Model } from "./model";
 import type { SessionState } from "./runtime";
+import type { SessionDocument } from "./sessionDocument";
+import {
+  interpretSheetCommand,
+  isSheetCommand,
+  type SheetCommand,
+} from "./sheet/book";
 
 // ---------- the command set ----------
 // Coordinates are MODEL-space: the views map a pointer through their inverse transform before dispatching,
 // so nothing here knows about pixels, pan or zoom.
 
-export type DocumentCommand =
+export type HullCommand =
   // the sheer plan
   | { type: "addPlanPoint"; x: number; y: number }
   | { type: "movePlanPoint"; idx: number; x: number; y: number }
@@ -70,6 +81,17 @@ export type DocumentCommand =
   // a whole hull at once: open, import, revert, reset, or a blend
   | { type: "installHull"; state: HullState };
 
+/**
+ * Every authored edit in the session: the hull's, and the weight sheet's.
+ *
+ * The union is FLAT rather than a `{ part, op }` envelope. An envelope is the tidier type, but the five
+ * functions below all switch on `type` and would each grow a nested switch, and every dispatch site in the
+ * editor would have to be rewritten to wrap its command. Exhaustiveness is recovered where it actually
+ * matters — at the reducers, which are one per part and each complete over its own union — and the routing
+ * between them goes through `isSheetCommand`, whose table the compiler checks against `SheetCommand`.
+ */
+export type DocumentCommand = HullCommand | SheetCommand;
+
 // Shared between a session's windows, never persisted, never undoable.
 export type SessionCommand = { type: "setX0"; x: number };
 
@@ -82,8 +104,11 @@ export const SLICE = {
   transom: 4,
   stations: 8,
   scalars: 16,
+  weights: 32,
 } as const;
-export const ALL_SLICES = 31;
+/** Every slice of the HULL. What `installHull` and a rescaling `setUnit` touch — the sheet is not theirs. */
+export const ALL_HULL_SLICES = 31;
+export const ALL_SLICES = 63;
 export type SliceMask = number;
 
 export interface Applied {
@@ -96,8 +121,18 @@ export interface Applied {
 }
 export type CommandOutcome = Applied | { rejected: string };
 
-export const rejected = (o: CommandOutcome): o is { rejected: string } =>
-  "rejected" in o;
+/** What a document command produces: the whole session document, and the slices it moved. */
+export interface AppliedDocument {
+  doc: SessionDocument;
+  touched: SliceMask;
+  session?: Partial<SessionState>;
+  result?: number | boolean;
+}
+export type DocumentOutcome = AppliedDocument | { rejected: string };
+
+export const rejected = <T extends object>(
+  o: T | { rejected: string },
+): o is { rejected: string } => "rejected" in o;
 
 // ---------- the draft ----------
 // Mutable mirrors of the authored types. A command asks for the branches it needs, mutates them exactly as
@@ -199,11 +234,15 @@ const hair = (before: Model): number => 1e-6 * (loa(before) || 1);
 // against the session's `viewLen`, not the live plan — see `Model.viewLen`.
 const stationBox = (before: Model) => boundsOf(before.viewLen);
 
-// ---------- the reducer ----------
+// ---------- the reducers ----------
+//
+// One per part. The hull's takes the assembled `Model`, because three of its commands genuinely need derived
+// pre-state (see the header). The sheet's takes the sheet alone and never sees a hull — which is the point of
+// splitting them rather than growing one switch: neither reducer can reach for what it has no business with.
 
-export function interpretDocumentCommand(
+export function interpretHullCommand(
   before: Model,
-  cmd: DocumentCommand,
+  cmd: HullCommand,
 ): CommandOutcome {
   const d = draft(before);
   switch (cmd.type) {
@@ -502,11 +541,38 @@ export function interpretDocumentCommand(
       const len = loa(cmd.state);
       return {
         state: cmd.state,
-        touched: ALL_SLICES,
+        touched: ALL_HULL_SLICES,
         session: { x0: clamp(before.x0, 0, len), viewLen: len },
       };
     }
   }
+}
+
+/**
+ * Route one authored command to the part that owns it, and return the whole document either way.
+ *
+ * The hull half is the reducer that has always been here, handed the assembled model as before; the sheet
+ * half never sees it. Both produce a new document that SHARES the part they did not touch by reference, so a
+ * reader comparing slices — or a `sliceRevs` clock — stays exact rather than conservative.
+ */
+export function interpretDocumentCommand(
+  before: Model,
+  doc: SessionDocument,
+  cmd: DocumentCommand,
+): DocumentOutcome {
+  if (isSheetCommand(cmd)) {
+    const outcome = interpretSheetCommand(doc.weights, cmd);
+    if ("rejected" in outcome) return outcome;
+    return {
+      doc: { hull: doc.hull, weights: outcome.book },
+      touched: SLICE.weights,
+      result: outcome.result,
+    };
+  }
+  const outcome = interpretHullCommand(before, cmd);
+  if (rejected(outcome)) return outcome;
+  const { state, touched, ...extra } = outcome;
+  return { doc: { hull: state, weights: doc.weights }, touched, ...extra };
 }
 
 /** Session commands never touch the hull, so they have a reducer of their own. */
@@ -543,7 +609,14 @@ export const isInsert = (cmd: DocumentCommand): boolean =>
   cmd.type === "addStation" ||
   cmd.type === "addStationPoint";
 
-/** Structural commands are meaningful only against the collection indices they were composed from. */
+/**
+ * Structural commands are meaningful only against the collection indices they were composed from.
+ *
+ * No SHEET command is here, and the two positional ones are a deliberate exception. `addSheetRow` and
+ * `moveSheetRow` carry an index, so a concurrent edit in another window can land a row one place from where
+ * it was aimed — but the alternative is refusing to add a row because someone else was typing in a cell, and
+ * a row in the wrong place is dragged back in one gesture where a rejection loses the edit outright.
+ */
 export function requiresCurrentBase(cmd: DocumentCommand): boolean {
   return (
     cmd.type === "addPlanPoint" ||
@@ -560,6 +633,7 @@ export function requiresCurrentBase(cmd: DocumentCommand): boolean {
 
 /** The slices another author must have changed before a structural command is stale. */
 export function commandSlices(cmd: DocumentCommand): SliceMask {
+  if (isSheetCommand(cmd)) return SLICE.weights;
   switch (cmd.type) {
     case "addPlanPoint":
     case "movePlanPoint":
@@ -588,7 +662,7 @@ export function commandSlices(cmd: DocumentCommand): SliceMask {
     case "setUnit":
     case "setLoa":
     case "installHull":
-      return ALL_SLICES;
+      return ALL_HULL_SLICES;
   }
 }
 
@@ -598,6 +672,17 @@ export function commandSlices(cmd: DocumentCommand): SliceMask {
 export function sameGesture(a: DocumentCommand, b: DocumentCommand): boolean {
   if (a.type !== b.type) return false;
   switch (a.type) {
+    // The book's text fields, held open while the user types. Coalesced per ROW, so tabbing to the next
+    // field starts a new step rather than absorbing the last one.
+    case "setSheetFormula":
+    case "setSheetUnit":
+    case "renameSheetRow":
+    case "setSheetRowNote":
+      return a.sheet === (b as typeof a).sheet && a.row === (b as typeof a).row;
+    case "renameSheet":
+      return a.sheet === (b as typeof a).sheet;
+    case "setSheetDensity":
+      return true;
     case "movePlanPoint":
     case "moveTrim":
     case "moveTransom":
@@ -672,6 +757,39 @@ export function describeCommand(cmd: DocumentCommand): string {
       return `Scale to LOA ${cmd.length}`;
     case "installHull":
       return "Replace the whole hull";
+    // ---- the weight book ----
+    // A book moment reads by what it did, not by which id it did it to: an id is meaningless in a timeline,
+    // and the thing it names may since have been removed.
+    case "addSheet":
+      return `Add the page "${cmd.name}"`;
+    case "removeSheet":
+      return "Remove a page";
+    case "renameSheet":
+      return `Rename a page to "${cmd.name}"`;
+    case "moveSheet":
+      return "Reorder the pages";
+    case "setSheetFormula":
+      return "Edit a weight formula";
+    case "setSheetUnit":
+      return cmd.unit
+        ? `Weight item in ${cmd.unit}`
+        : "Clear a weight item's unit";
+    case "addSheetRow":
+      return cmd.kind === "heading" ? "Add a heading" : "Add a weight item";
+    case "removeSheetRow":
+      return "Remove a weight item";
+    case "moveSheetRow":
+      return "Reorder a weight page";
+    case "renameSheetRow":
+      return cmd.name ? `Name a weight item "${cmd.name}"` : "Unname an item";
+    case "setSheetRowNote":
+      return "Note on a weight item";
+    case "setSheetOutput":
+      return `Set the estimate's ${cmd.output}`;
+    case "setSheetDensity":
+      return "Set the water density";
+    case "installSheet":
+      return "Replace the whole weight estimate";
   }
 }
 

@@ -22,6 +22,7 @@ import {
 import { Button } from "../components/Button";
 import { ButtonGroup } from "../components/ButtonGroup";
 import { Dropdown } from "../components/Dropdown";
+import { evaluateBook } from "../core/sheet/evaluate";
 import { useDocumentSnapshot } from "./documentStoreHooks";
 import { useEditorUi } from "./editorUi";
 import { useStabilityAnalysis } from "./useStabilityAnalysis";
@@ -745,6 +746,15 @@ export function StabilityPanel() {
     hydro = analysis?.hydro ?? null,
     lowestSheerKg = analysis?.lowestSheerKg ?? NaN;
   const [condition, setCondition] = useState<Condition | null>(null);
+  /**
+   * Whether the pinned condition is FOLLOWING the weight sheet rather than standing where it was clicked.
+   *
+   * A link, not a copy. The sheet is the session's other authored document and it lives in the same store, so
+   * while this is on, a formula edited in the weights window moves the condition here as it is typed — which
+   * is the question a designer actually has: not "does this displacement pass" but "does my estimate pass,
+   * and how much of the margin is the estimate rather than the boat".
+   */
+  const [linkSheet, setLinkSheet] = useState(false);
   // null until a tolerance is touched; `defaultSpread` stands in until then, so the first ± draws a rectangle
   // immediately without seeding state from a viewport the analysis had not produced yet.
   const [spread, setSpread] = useState<Spread | null>(null);
@@ -771,10 +781,13 @@ export function StabilityPanel() {
   const isInitial = coloring === "gmt";
   const isMaximum = coloring === "gzmax";
   const readout = criterion ?? AREA_CRITERIA[0];
-  // Metric tonnes of seawater per model-volume unit: 1.025 t/m³.
-  const unit = snapshot.state.unit;
+  // Metric tonnes of water per model-volume unit. The density is the DOCUMENT's — the weight sheet carries it,
+  // defaulting to seawater's 1.025 t/m³ — so a design worked in fresh water reports its displacement in the
+  // same water the estimate was made in, and the sheet's mass and this axis cannot disagree.
+  const unit = snapshot.state.hull.unit;
+  const book = snapshot.state.weights;
   const metres = unitScale(unit, "m");
-  const tonsPerVolume = metres ** 3 * 1.025;
+  const tonsPerVolume = metres ** 3 * book.density;
   const volumeDomain = useMemo<readonly [number, number]>(() => {
     if (!limit.length) return [0, 1];
     return [limit[0].vol, limit[limit.length - 1].vol];
@@ -829,12 +842,64 @@ export function StabilityPanel() {
       y: { on: false, linked: true, lo: y, hi: y },
     };
   }, [designXDomain, designYMax]);
-  const tolerance = spread ?? defaultSpread;
-  const editAxis = (axis: "x" | "y", patch: Partial<AxisTolerance>): void =>
+  // ---------- the weight sheet's answer, in this panel's coordinates ----------
+  //
+  // The sheet works in kilograms and metres; the plane works in tonnes and model units. Both readings are
+  // taken at their WORST extent, because that is what this plane is for: the question is whether the design
+  // still passes when the estimate is as wrong as it is allowed to be.
+  const sheetResults = useMemo(
+    () => evaluateBook(book, analysis?.metrics ?? null),
+    [book, analysis?.metrics],
+  );
+  const fromSheet = useMemo(() => {
+    const mass = sheetResults.outputs.displacement;
+    if (!mass || !isFinite(mass.v) || mass.v <= 0) return null;
+    const toTonnes = 1 / 1000;
+    const vcg = sheetResults.outputs.vcg;
+    return {
+      // kilograms → tonnes → volume in model units, through the same density the axis is drawn in.
+      vol: (mass.v * toTonnes) / book.density / metres ** 3,
+      kg: vcg && isFinite(vcg.v) ? vcg.v / metres : null,
+      x: {
+        lo: mass.worst.lo * toTonnes,
+        hi: mass.worst.hi * toTonnes,
+      },
+      y: vcg ? { lo: vcg.worst.lo / metres, hi: vcg.worst.hi / metres } : null,
+    };
+  }, [sheetResults, book.density, metres]);
+  // The link is only live while the sheet actually answers; a broken or unnominated displacement leaves the
+  // panel exactly as it was rather than snapping the condition to nothing.
+  const linked = linkSheet && fromSheet !== null;
+
+  // While linked, the rectangle is the ESTIMATE's spread and is not editable here — dragging a handle would
+  // be editing the weight sheet from the wrong window. Unlinking hands back whatever was set before.
+  const manualTolerance = spread ?? defaultSpread;
+  const tolerance: Spread = linked
+    ? {
+        x: {
+          on: fromSheet!.x.lo > 0 || fromSheet!.x.hi > 0,
+          linked: false,
+          lo: fromSheet!.x.lo,
+          hi: fromSheet!.x.hi,
+        },
+        y: fromSheet!.y
+          ? {
+              on: fromSheet!.y.lo > 0 || fromSheet!.y.hi > 0,
+              linked: false,
+              lo: fromSheet!.y.lo,
+              hi: fromSheet!.y.hi,
+            }
+          : { ...manualTolerance.y },
+      }
+    : manualTolerance;
+  const editAxis = (axis: "x" | "y", patch: Partial<AxisTolerance>): void => {
+    // Touching a tolerance while the sheet is driving it means the user wants their own number back.
+    if (linked) setLinkSheet(false);
     setSpread((s) => {
       const base = s ?? defaultSpread;
       return { ...base, [axis]: { ...base[axis], ...patch } };
     });
+  };
   // Every edit to an extent, typed or dragged, comes through here — so `linked` means the same thing to the
   // fields and to the chart's handles: one number, moving both sides of the rectangle at once.
   const setExtent = (
@@ -1095,9 +1160,14 @@ export function StabilityPanel() {
 
   // Begin at the authored waterline with G at B. If an edit changes the envelope, clamp the displayed
   // condition while retaining the raw click, so derived data never has to be copied into state by an effect.
+  // While linked, the sheet names the condition; otherwise it is wherever it was last clicked.
+  const wanted = linked ? fromSheet : null;
   const selectedVol = Math.min(
     volumeDomain[1],
-    Math.max(volumeDomain[0], condition?.vol ?? hydro?.vol ?? volumeDomain[0]),
+    Math.max(
+      volumeDomain[0],
+      wanted?.vol ?? condition?.vol ?? hydro?.vol ?? volumeDomain[0],
+    ),
   );
   const bound = limitingKgAt(limit, selectedVol);
   const selected: Condition = {
@@ -1106,11 +1176,17 @@ export function StabilityPanel() {
       yMax,
       Math.max(
         0,
-        condition?.kg ?? Math.min(bound * 0.75, hydro?.kb ?? bound * 0.5),
+        wanted?.kg ??
+          condition?.kg ??
+          Math.min(bound * 0.75, hydro?.kb ?? bound * 0.5),
       ),
     ),
   };
   const safe = selected.kg < bound;
+  // Whether the pinned condition is off the edge of the view the plane opened on.
+  const selectedTons = selected.vol * tonsPerVolume;
+  const offView =
+    selectedTons < designXDomain[0] || selectedTons > designXDomain[1];
   const gz = gzCurve(curves, selected.vol, selected.kg).filter((p) =>
     Number.isFinite(p.gz),
   );
@@ -1447,9 +1523,10 @@ export function StabilityPanel() {
                   ? "Displacement and VCG conditions shaded by maximum righting lever, with the 0.20 metre criterion and early peak warning"
                   : "Limiting KG by displacement; green below the curve is safe and red above it is unsafe"
           }
-          onPlotClick={(tons, kg) =>
-            setCondition({ vol: tons / tonsPerVolume, kg })
-          }
+          onPlotClick={(tons, kg) => {
+            setLinkSheet(false);
+            setCondition({ vol: tons / tonsPerVolume, kg });
+          }}
           onPlotHover={(at) =>
             setHover(at ? { vol: at.x / tonsPerVolume, kg: at.y } : null)
           }
@@ -1916,6 +1993,47 @@ export function StabilityPanel() {
             to say it. One number to a line, in a grid of name · field · unit · control, so the units stand in
             a column of their own instead of trailing each value into the next one along. The readings TAKEN
             of the condition are in the GZ card, beside the curve they describe. */}
+        {/* Where the condition comes from. The weight sheet is the session's other authored document, so this
+            is a LIVE link rather than a copy: with it on, a formula edited in the Weights window moves this
+            condition and its tolerance rectangle as it is typed. That is the question a designer actually
+            has — not "does this displacement pass" but "does my estimate pass, and how much of the margin is
+            the estimate rather than the boat". Clicking the plane or typing a number below drops the link. */}
+        <div className="sheetlink">
+          <Button
+            active={linked}
+            disabled={!fromSheet}
+            aria-pressed={linked}
+            title={
+              fromSheet
+                ? "Follow the weight sheet's estimated displacement, with its uncertainty as the tolerance rectangle"
+                : "The weight sheet has no displacement to follow — nominate a row in the Weights panel"
+            }
+            onClick={() => setLinkSheet((v) => !v)}
+          >
+            {linked ? "Following the weight sheet" : "Use the weight sheet"}
+          </Button>
+          {linked && (
+            <span className="sheetlinknote">
+              Δ and its ± come from the estimate
+              {fromSheet!.kg === null
+                ? "; no VCG is nominated yet, so KG is still yours"
+                : ""}
+              .
+              {/* An estimate can land outside the range the plane opened on — an early, very light estimate
+                  against a hull drawn for a heavier boat. The readings are still right; the marker is simply
+                  off-screen, and saying so beats leaving the plane looking unresponsive. */}
+              {offView && (
+                <>
+                  {" "}
+                  <strong>
+                    It falls outside the plotted range — zoom out to see it on
+                    the plane.
+                  </strong>
+                </>
+              )}
+            </span>
+          )}
+        </div>
         <div className="conditionbar">
           <div className="quantity">
             <label className="cname" htmlFor="cond-disp::input">
@@ -1927,9 +2045,10 @@ export function StabilityPanel() {
               value={snap(selected.vol * tonsPerVolume)}
               min={xDomain[0]}
               max={xDomain[1]}
-              onChange={(tons) =>
-                setCondition({ vol: tons / tonsPerVolume, kg: selected.kg })
-              }
+              onChange={(tons) => {
+                setLinkSheet(false);
+                setCondition({ vol: tons / tonsPerVolume, kg: selected.kg });
+              }}
             />
             <span className="cunit">t</span>
             <ToleranceToggle
@@ -1957,7 +2076,10 @@ export function StabilityPanel() {
               value={snap(selected.kg)}
               min={0}
               max={yMax}
-              onChange={(kg) => setCondition({ vol: selected.vol, kg })}
+              onChange={(kg) => {
+                if (fromSheet?.kg !== null) setLinkSheet(false);
+                setCondition({ vol: selected.vol, kg });
+              }}
             />
             <span className="cunit">{unit}</span>
             <ToleranceToggle

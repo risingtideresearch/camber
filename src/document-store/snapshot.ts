@@ -2,8 +2,8 @@
 // Whole snapshots are intentionally small enough to transport on every accepted transition. Derived
 // samplers and geometry are excluded; each DocumentStoreClient assembles those in its own window.
 
-import type { HullState } from "../core/hull";
 import type { SessionMeta } from "../core/meta";
+import type { SessionDocument } from "../core/sessionDocument";
 import type { SessionState, SliceRevs } from "../core/runtime";
 
 export interface DocumentSnapshot {
@@ -15,7 +15,8 @@ export interface DocumentSnapshot {
   readonly sliceRevs: SliceRevs;
   /** Exact authored revision captured by the most recently completed save. */
   readonly savedRevision: number;
-  readonly state: HullState;
+  /** Both parts a session authors: the hull, and the weight sheet beside it. */
+  readonly state: SessionDocument;
   readonly session: SessionState;
   readonly meta: SessionMeta;
   readonly canUndo: boolean;
