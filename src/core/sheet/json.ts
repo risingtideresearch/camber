@@ -74,7 +74,7 @@ function storeRow(row: SheetRow): StoredRow {
     case "point":
       return { ...base, unit: row.unit, x: row.x, y: row.y, z: row.z };
     case "slice":
-      return { ...base, shape: row.shape, pos: row.pos };
+      return { ...base, shape: row.shape, unit: row.unit, pos: row.pos };
   }
 }
 
@@ -167,6 +167,7 @@ function readRow(
         ...row,
         note,
         shape: isSliceShape(shape) ? shape : row.shape,
+        unit: str(r.unit),
         pos: str(r.pos),
       };
     }

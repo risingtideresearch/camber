@@ -71,10 +71,30 @@
 
 /* ---------- the sheet ---------- */
 
+.wbody,
+.wslicebody {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
 .wscroll {
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
+}
+.wslicebody .wscroll {
+  flex-basis: 58%;
+}
+.wslicepreview {
+  display: flex;
+  flex: 1 1 42%;
+  min-width: 320px;
+  min-height: 240px;
+  padding: 8px;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
 }
 
 .wsheet {
@@ -225,6 +245,59 @@
 }
 
 /* ---------- row actions ---------- */
+
+.wcolshape {
+  width: 1%;
+  min-width: 112px;
+  padding: 0 8px !important;
+}
+.wcolshape select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 5px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+.wcolpos {
+  position: relative;
+  min-width: 180px;
+}
+.wcolpos .wformula {
+  padding-right: 58px;
+}
+.wsheet input.wpositionunit {
+  position: absolute;
+  z-index: 2;
+  right: 3px;
+  top: 2px;
+  width: 50px;
+  padding: 4px 5px;
+  color: var(--mut);
+  font-size: 11px;
+  text-align: center;
+}
+.wpositionunit.derived::placeholder {
+  color: var(--mut);
+  font-style: italic;
+  opacity: 0.85;
+}
+.wcolsection,
+.wcolcentroid {
+  width: 1%;
+  min-width: 150px;
+  padding: 0 8px !important;
+  text-align: right;
+  color: var(--mut);
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.wcolsection.bad {
+  color: var(--danger);
+}
 
 .wcolact button {
   border: 0;
@@ -503,6 +576,40 @@
   background: var(--danger);
   color: #fff;
 }
+.wtabaddwrap {
+  position: relative;
+  display: inline-flex;
+}
+.wtabaddmenu {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  min-width: 210px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  box-shadow: 0 8px 26px rgb(0 0 0 / 14%);
+}
+.wtabaddmenu button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 0;
+  border-radius: 4px;
+  padding: 7px 9px;
+  background: none;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.wtabaddmenu button:hover {
+  background: var(--line);
+}
+.wtabaddmenu small {
+  color: var(--mut);
+}
 .wtabadd {
   border: 0;
   background: none;
@@ -529,6 +636,18 @@
   color: var(--ink);
   min-width: 90px;
   outline: 0;
+}
+
+@media (max-width: 820px) {
+  .wslicebody {
+    flex-direction: column;
+  }
+  .wslicepreview {
+    flex-basis: 42%;
+    min-width: 0;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
 }
 
 /* ---------- groups ---------- */

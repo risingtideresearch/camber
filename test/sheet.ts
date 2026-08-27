@@ -4,7 +4,7 @@ import { hullMetrics, HULL_METRICS } from "../src/core/hullMetrics";
 import { unitScale } from "../src/core/json";
 import { computeHullSampling } from "../src/core/mesh";
 import { assemble } from "../src/core/runtime";
-import { stationGeometry } from "../src/core/sweep";
+import { cut, stationGeometry } from "../src/core/sweep";
 import {
   FormulaError,
   parseFormula,
@@ -23,6 +23,7 @@ import {
   type WeightBook,
 } from "../src/core/sheet/book";
 import { parseUnit, naturalUnit, UnitError } from "../src/core/sheet/units";
+import { measureSlice, sliceMeasurementKey } from "../src/core/sheet/slices";
 import { sameGesture, type DocumentCommand } from "../src/core/commands";
 import { bookViolations } from "../src/core/invariants";
 import {
@@ -899,9 +900,8 @@ const problem = (
 
 // ---------- typed pages ----------
 //
-// A page holds one kind of object and says which. The types describe four kinds; the commands can only make
-// two of them, because nothing can edit a point or a slice yet — so what is checked here is that the rule
-// holds where it is reachable, and that the unreachable half is genuinely unreachable.
+// A page holds one kind of object and says which. Points remain deliberately unreachable because they have no
+// editor yet; slice pages become creatable once their specialised editor and geometry resolver are present.
 {
   const book = build([{ name: "crew", formula: "160" }]);
   ok(
@@ -1257,6 +1257,242 @@ const problem = (
       older.sheets[0].rows.length === 1 &&
       bookViolations(older).length === 0,
     "a page written before pages had kinds reads as a page of scalars, rows intact",
+  );
+}
+
+// ---------- hull slice pages ----------
+{
+  let book = build([
+    { name: "double section", formula: "Sections.midship.area * 2" },
+    { name: "open perimeter", formula: "Sections.midship.openPerimeter" },
+    { name: "closed perimeter", formula: "Sections.midship.closedPerimeter" },
+  ]);
+  book = run(book, {
+    type: "addSheet",
+    id: "sections",
+    name: "Sections",
+    kind: "slices",
+  });
+  book = run(book, {
+    type: "addSheetRow",
+    sheet: "sections",
+    id: "midship",
+    after: -1,
+  });
+  book = run(book, {
+    type: "renameSheetRow",
+    sheet: "sections",
+    row: "midship",
+    name: "midship",
+  });
+  book = run(book, {
+    type: "setSheetFormula",
+    sheet: "sections",
+    row: "midship",
+    field: "pos",
+    formula: "HULL.LOA / 2",
+  });
+
+  const model = assemble(defaultHull());
+  const sampling = computeHullSampling(model, 240, 10);
+  const metrics = hullMetrics(model, sampling)!;
+  const positions = evaluateBook(book, metrics);
+  const pos = resultAt(positions, "sections", "midship", "pos")!.reading!.v;
+  const section = measureSlice(model, sampling, "station", pos)!;
+  const measured = new Map([
+    [sliceMeasurementKey("sections", "midship"), section],
+  ]);
+  const results = evaluateBook(book, metrics, measured);
+
+  ok(
+    section.area > 0 &&
+      section.openPerimeter > 0 &&
+      section.closedPerimeter > section.openPerimeter,
+    "a station slice measures open and closed perimeters",
+  );
+  ok(
+    section.curve.length > 3 && section.z > 0,
+    "and returns a curve and centroid for the 3D overlay",
+  );
+  ok(
+    resultAt(results, book.sheets[0].id, rowOf(book, "double section").rowId)!
+      .reading!.v ===
+      section.area * 2,
+    "a scalar formula can read a slice's measured area",
+  );
+  ok(
+    resultAt(results, book.sheets[0].id, rowOf(book, "open perimeter").rowId)!
+      .reading!.v === section.openPerimeter &&
+      resultAt(
+        results,
+        book.sheets[0].id,
+        rowOf(book, "closed perimeter").rowId,
+      )!.reading!.v === section.closedPerimeter,
+    "scalar formulas can read both slice perimeters",
+  );
+
+  const feetBook = run(
+    run(book, {
+      type: "setSheetUnit",
+      sheet: "sections",
+      row: "midship",
+      unit: "ft",
+    }),
+    {
+      type: "setSheetFormula",
+      sheet: "sections",
+      row: "midship",
+      field: "pos",
+      formula: "10",
+    },
+  );
+  ok(
+    near(
+      resultAt(evaluateBook(feetBook, metrics), "sections", "midship", "pos")!
+        .reading!.v,
+      3.048,
+      1e-12,
+    ),
+    "a slice position can be authored in a custom unit",
+  );
+  const feetBack = parseSheet(buildSheetJson(feetBook)).sheets[1].rows[0];
+  ok(
+    feetBack.kind === "slice" && feetBack.unit === "ft",
+    "a slice's position unit round-trips",
+  );
+
+  const uncertainBook = run(book, {
+    type: "setSheetFormula",
+    sheet: "sections",
+    row: "midship",
+    field: "pos",
+    formula: "2.5 ± 0.1",
+  });
+  const uncertainPositions = evaluateBook(uncertainBook, metrics);
+  const uncertainPos = resultAt(
+    uncertainPositions,
+    "sections",
+    "midship",
+    "pos",
+  )!.reading!.v;
+  const uncertainMeasurement = measureSlice(
+    model,
+    sampling,
+    "station",
+    uncertainPos,
+  )!;
+  const uncertainResults = evaluateBook(
+    uncertainBook,
+    metrics,
+    new Map([
+      [sliceMeasurementKey("sections", "midship"), uncertainMeasurement],
+    ]),
+  );
+  ok(
+    resultAt(
+      uncertainResults,
+      uncertainBook.sheets[0].id,
+      rowOf(uncertainBook, "double section").rowId,
+    )!.reading!.worst.hi > 0,
+    "position uncertainty propagates through the measured slice",
+  );
+
+  const horizontalPosition = metrics.draft * 0.5;
+  const horizontal = measureSlice(model, sampling, "plane", horizontalPosition);
+  ok(
+    !!horizontal && horizontal.area > 0 && horizontal.curve.length > 3,
+    "a horizontal slice measures and returns its intersection curve",
+  );
+  const geom = stationGeometry(model, sampling)!;
+  const scale = unitScale(model.unit, "m");
+  const rawHorizontal = cut(
+    geom,
+    0,
+    geom.keelZ + horizontalPosition / scale,
+    true,
+  );
+  const runLength = (points: readonly (readonly number[])[]): number => {
+    let length = 0;
+    for (let i = 1; i < points.length; i++)
+      length += Math.hypot(
+        points[i][0] - points[i - 1][0],
+        points[i][1] - points[i - 1][1],
+        points[i][2] - points[i - 1][2],
+      );
+    return length;
+  };
+  const skinOnly =
+    (runLength(rawHorizontal.waterlineSkin[0]) +
+      runLength(rawHorizontal.waterlineSkin[1])) *
+    scale;
+  ok(
+    near(horizontal!.openPerimeter, skinOnly, 1e-12),
+    "a horizontal open perimeter excludes both centreline end caps",
+  );
+
+  let dependent = run(book, {
+    type: "addSheetRow",
+    sheet: "sections",
+    id: "dependent",
+    after: 0,
+  });
+  dependent = run(dependent, {
+    type: "renameSheetRow",
+    sheet: "sections",
+    row: "dependent",
+    name: "dependent",
+  });
+  dependent = run(dependent, {
+    type: "setSheetFormula",
+    sheet: "sections",
+    row: "dependent",
+    field: "pos",
+    formula: "Weights.double section",
+  });
+  const dependencyError =
+    resultAt(
+      evaluateBook(dependent, metrics, measured),
+      "sections",
+      "dependent",
+      "pos",
+    )!.error ?? "";
+  ok(
+    dependencyError.includes("cannot depend on measured slice values"),
+    `a slice position visibly refuses an indirect measured-value dependency (${dependencyError})`,
+  );
+
+  const shifted = defaultHull();
+  const dx = 1000;
+  const shiftedModel = assemble({
+    ...shifted,
+    sheerPlan: shifted.sheerPlan.map((point) => ({
+      ...point,
+      x: point.x + dx,
+    })),
+    sheerTrim: shifted.sheerTrim.map((point) => ({
+      ...point,
+      x: point.x + dx,
+    })),
+    transom: shifted.transom.map((point) => ({
+      ...point,
+      x: point.x + dx,
+    })) as typeof shifted.transom,
+  });
+  const shiftedSampling = computeHullSampling(shiftedModel, 240, 10);
+  const shiftedSection = measureSlice(
+    shiftedModel,
+    shiftedSampling,
+    "station",
+    pos,
+  )!;
+  ok(
+    near(shiftedSection.area, section.area, 1e-9) &&
+      near(shiftedSection.x, section.x, 1e-9),
+    "station position and centroid x are relative to a nonzero transom",
+  );
+  ok(
+    bookViolations(book).length === 0,
+    "a slice page is a valid authored page",
   );
 }
 

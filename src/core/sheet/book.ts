@@ -106,7 +106,7 @@ export const isSliceShape = (shape: string): shape is SliceShape =>
   (SLICE_SHAPES as readonly string[]).includes(shape);
 
 /**
- * One cut through the hull, which reports its area, the length of its intersection curve, and its centroid.
+ * One cut through the hull, which reports its area, open and closed perimeters, and its centroid.
  *
  * `pos` is in the sheet's frame, as a point's coordinates are: a height above the keel baseline for a plane,
  * x from the transom for a station.
@@ -114,6 +114,8 @@ export const isSliceShape = (shape: string): shape is SliceShape =>
 export interface SliceRow extends RowBase {
   readonly kind: "slice";
   readonly shape: SliceShape;
+  /** Unit used to author and display `pos`; blank derives metres from a dimensioned formula. */
+  readonly unit: string;
   readonly pos: string;
 }
 
@@ -311,11 +313,14 @@ export function freeSheetName(book: WeightBook, wanted: string): string {
 /**
  * The kinds a command may actually create, as against the kinds the types can describe.
  *
- * `points` and `slices` are fully described above and deliberately unreachable: nothing can build one until
- * the editor and the resolver know what to do with it. That keeps every narrowing site honest — the compiler
- * checks them now — without any half-built page being reachable from the UI.
+ * Points remain deliberately unreachable until their editor is implemented. Slice pages have a specialised
+ * editor and geometry resolver, so they are ordinary user-creatable pages alongside scalar calculations.
  */
-export const CREATABLE_KINDS: readonly PageKind[] = ["scalars", "outputs"];
+export const CREATABLE_KINDS: readonly PageKind[] = [
+  "scalars",
+  "outputs",
+  "slices",
+];
 
 /** The book's outputs page, if it has one. At most one exists — see `invariants.ts`. */
 export const outputsSheet = (book: WeightBook): Sheet | undefined =>
@@ -339,7 +344,15 @@ export function blankRow(
     case "point":
       return { id, kind, name, note: "", unit: "", x: "", y: "", z: "" };
     case "slice":
-      return { id, kind, name, note: "", shape: "station", pos: "" };
+      return {
+        id,
+        kind,
+        name,
+        note: "",
+        shape: "station",
+        unit: "",
+        pos: "",
+      };
   }
 }
 
@@ -609,7 +622,7 @@ export function interpretSheetCommand(
 
     case "setSheetUnit":
       return editRow(book, command.sheet, command.row, (row) => {
-        if (row.kind !== "item" && row.kind !== "point")
+        if (row.kind !== "item" && row.kind !== "point" && row.kind !== "slice")
           return { rejected: `a ${row.kind} row carries no unit` };
         return { ...row, unit: command.unit.trim() };
       });

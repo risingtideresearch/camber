@@ -1,6 +1,7 @@
 import { FUNCTIONS } from "../core/sheet/formula";
 import { HULL_METRICS } from "../core/hullMetrics";
 import { groupAt, type Sheet, type WeightBook } from "../core/sheet/book";
+import { SLICE_VALUE_FIELDS } from "../core/sheet/slices";
 
 // ---------- what a formula can mention, offered as you type ----------
 //
@@ -36,21 +37,39 @@ export function completionsFor(
   if (sheet)
     sheet.rows.forEach((row, i) => {
       if (!row.name || row.kind === "heading") return;
-      out.push({
-        insert: row.name,
-        kind: "item",
-        hint: groupAt(sheet, i) || "on this page",
-      });
+      if (row.kind === "slice") {
+        // The only formula authored on a slice page is another slice's position. Positions may share an
+        // authored position, but deliberately cannot depend on measured geometry (see evaluate.ts).
+        out.push({
+          insert: `${row.name}.pos`,
+          kind: "item",
+          hint: `position of ${row.name}`,
+        });
+      } else
+        out.push({
+          insert: row.name,
+          kind: "item",
+          hint: groupAt(sheet, i) || "on this page",
+        });
     });
   for (const other of book.sheets) {
     if (!other.name || other.id === sheet?.id) continue;
-    for (const row of other.rows)
-      if (row.name && row.kind !== "heading")
+    for (const row of other.rows) {
+      if (!row.name || row.kind === "heading") continue;
+      if (row.kind === "slice") {
+        for (const field of ["pos", ...SLICE_VALUE_FIELDS])
+          out.push({
+            insert: `${other.name}.${row.name}.${field}`,
+            kind: "page",
+            hint: `${field} on ${other.name}`,
+          });
+      } else
         out.push({
           insert: `${other.name}.${row.name}`,
           kind: "page",
           hint: `on ${other.name}`,
         });
+    }
   }
   for (const spec of HULL_METRICS)
     out.push({ insert: `HULL.${spec.name}`, kind: "hull", hint: spec.hint });

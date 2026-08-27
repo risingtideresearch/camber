@@ -22,6 +22,7 @@ import { ButtonGroup } from "./ButtonGroup";
 import { Dropdown } from "./Dropdown";
 import { CameraLens } from "./view3d/CameraLens";
 import { Scene } from "./view3d/Scene";
+import type { SliceOverlayState } from "./view3d/SliceOverlay";
 import "./View3d.css";
 
 // a stable "all off" default for hosts (e.g. the interpolation app) that don't drive the curvature overlay —
@@ -167,6 +168,8 @@ interface View3dProps {
   // changes what is DRAWN and nothing else, so a control about the pane itself — the editor's "open this in
   // its own window" button — comes from the host and stays out of here.
   actions?: ReactNode;
+  /** Optional authored hull cuts, measured by the weights panel and drawn in the same model frame. */
+  sliceOverlay?: SliceOverlayState | null;
 }
 
 export function View3d({
@@ -177,6 +180,7 @@ export function View3d({
   stl,
   title,
   actions,
+  sliceOverlay,
 }: View3dProps) {
   const [shading, setShading] = useState<ShadingMode>("smooth");
   // one object rather than four useStates: <Scene> keys a rebuild on it, so its identity has to change only
@@ -225,6 +229,7 @@ export function View3d({
           sampling={effSampling}
           curvature={curvature}
           stl={stl}
+          sliceOverlay={sliceOverlay}
         />
       </Canvas3D>
       {title && <div className="view3dtitle">{title}</div>}

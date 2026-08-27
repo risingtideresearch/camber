@@ -325,6 +325,8 @@ export interface Cut {
   // sheer is under, the solid is capped by the deck and has no free surface there at all, and this curve
   // would enclose area the hull does not have. Callers must check `deckDown` before using it.
   waterline: Vec3[];
+  /** The two skin-only runs before the centreline end caps are joined to make `waterline`. */
+  waterlineSkin: readonly [Vec3[], Vec3[]];
   wet: boolean[]; // which columns have any immersed area
 }
 
@@ -598,7 +600,8 @@ export function cut(
       .concat(capAft ? [capAft] : [])
       .concat(wlStbd)
       .concat(capFwd ? [capFwd] : [])
-      .concat(wlPort.reverse()),
+      .concat([...wlPort].reverse()),
+    waterlineSkin: [wlStbd, wlPort],
     wet,
     wp:
       wantWp && wA > 1e-9

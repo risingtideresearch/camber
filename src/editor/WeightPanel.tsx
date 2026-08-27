@@ -1,4 +1,11 @@
-import { Fragment, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { DocumentCommand } from "../core/commands";
 import { FUNCTIONS } from "../core/sheet/formula";
 import { HULL_METRICS } from "../core/hullMetrics";
@@ -13,19 +20,26 @@ import {
   type PageKind,
   type Sheet,
   type SheetRow,
+  type SliceRow,
   type WeightBook,
 } from "../core/sheet/book";
 import { OUTPUTS, type OutputSpec } from "../core/sheet/outputs";
 import {
-  evaluateBook,
-  resultAt,
-  type BookResults,
-} from "../core/sheet/evaluate";
+  sliceMeasurementKey,
+  type SliceMeasurement,
+} from "../core/sheet/slices";
+import { resultAt, type BookResults } from "../core/sheet/evaluate";
 import { Button } from "../components/Button";
 import { Dropdown } from "../components/Dropdown";
-import { useDocumentDispatch, useDocumentSnapshot } from "./documentStoreHooks";
+import { View3d } from "../components/View3d";
+import {
+  useDocumentDispatch,
+  useDocumentRuntime,
+  useDocumentSnapshot,
+} from "./documentStoreHooks";
 import { useEditorUi } from "./editorUi";
 import { useStabilityAnalysis } from "./useStabilityAnalysis";
+import { useWeightBookResults } from "./useWeightBookResults";
 import { AutocompleteList } from "./WeightAutocomplete";
 import { useAutocomplete } from "./useAutocomplete";
 import { completionsFor, type Completion } from "./weightCompletions";
@@ -83,8 +97,9 @@ const pct = (v: number): string => `${Math.round(v * 100)}%`;
 
 export function WeightPanel() {
   const snapshot = useDocumentSnapshot();
+  const model = useDocumentRuntime();
   const dispatch = useDocumentDispatch();
-  const { perf } = useEditorUi();
+  const { perf, sampling, selection, curvature, stl } = useEditorUi();
   const { analysis } = useStabilityAnalysis(snapshot, perf);
   const book = snapshot.state.weights;
   const metrics = analysis?.metrics ?? null;
@@ -98,11 +113,30 @@ export function WeightPanel() {
   // want in their undo history.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
 
-  const results = useMemo(() => evaluateBook(book, metrics), [book, metrics]);
+  const hullSampling = sampling();
+  const { measurements: sliceMeasurements, results } = useWeightBookResults(
+    book,
+    model,
+    hullSampling,
+    metrics,
+  );
   const send = (command: DocumentCommand) => void dispatch(command);
 
   const sheet =
     book.sheets.find((s) => s.id === activeSheet) ?? book.sheets[0] ?? null;
+  const sliceOverlay = useMemo(() => {
+    if (sheet?.kind !== "slices") return null;
+    return {
+      activeId: focusRow,
+      entries: sheet.rows.flatMap((row) => {
+        if (row.kind !== "slice") return [];
+        const measurement = sliceMeasurements.get(
+          sliceMeasurementKey(sheet.id, row.id),
+        );
+        return measurement ? [{ id: row.id, measurement }] : [];
+      }),
+    };
+  }, [focusRow, sheet, sliceMeasurements]);
   // What the toolbar's tools act on: the item the caret was last in on this page.
   const focused = sheet?.rows.find((row) => row.id === focusRow) ?? null;
 
@@ -168,7 +202,7 @@ export function WeightPanel() {
         book={book}
         active={sheet}
         onPick={setActiveSheet}
-        onAdd={() => addSheet("Page")}
+        onAdd={(kind) => addSheet(kind === "slices" ? "Slices" : "Page", kind)}
         send={send}
       />
 
@@ -214,20 +248,36 @@ export function WeightPanel() {
 
       {showReference && <Reference book={book} sheet={sheet} />}
 
-      <div className="wscroll">
-        {sheet && (
-          <SheetTable
-            book={book}
-            sheet={sheet}
-            results={results}
-            reading={reading}
-            focusRow={focusRow}
-            setFocusRow={setFocusRow}
-            collapsed={collapsed}
-            setCollapsed={setCollapsed}
-            addRow={addRow}
-            send={send}
-          />
+      <div className={sheet?.kind === "slices" ? "wslicebody" : "wbody"}>
+        <div className="wscroll">
+          {sheet && (
+            <SheetTable
+              book={book}
+              sheet={sheet}
+              results={results}
+              reading={reading}
+              focusRow={focusRow}
+              setFocusRow={setFocusRow}
+              collapsed={collapsed}
+              setCollapsed={setCollapsed}
+              addRow={addRow}
+              send={send}
+              sliceMeasurements={sliceMeasurements}
+            />
+          )}
+        </div>
+        {sheet?.kind === "slices" && (
+          <div className="wslicepreview">
+            <View3d
+              model={model}
+              sampling={hullSampling ?? undefined}
+              selection={selection}
+              curvature={curvature}
+              stl={stl}
+              title="Hull slices"
+              sliceOverlay={sliceOverlay}
+            />
+          </div>
         )}
       </div>
 
@@ -406,10 +456,35 @@ function SheetTabs({
   readonly book: WeightBook;
   readonly active: Sheet | null;
   readonly onPick: (id: string) => void;
-  readonly onAdd: () => void;
+  readonly onAdd: (kind: "scalars" | "slices") => void;
   readonly send: (command: DocumentCommand) => void;
 }) {
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [addMenu, setAddMenu] = useState<{ left: number; top: number } | null>(
+    null,
+  );
+  const addWrap = useRef<HTMLSpanElement>(null);
+  const addButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!addMenu) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!addWrap.current?.contains(event.target as Node)) setAddMenu(null);
+    };
+    const closeEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setAddMenu(null);
+    };
+    const closeMoved = () => setAddMenu(null);
+    document.addEventListener("pointerdown", closeOutside);
+    window.addEventListener("keydown", closeEscape);
+    window.addEventListener("scroll", closeMoved, true);
+    window.addEventListener("resize", closeMoved);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("keydown", closeEscape);
+      window.removeEventListener("scroll", closeMoved, true);
+      window.removeEventListener("resize", closeMoved);
+    };
+  }, [addMenu]);
   return (
     <div className="wtabs" role="tablist">
       {book.sheets.map((sheet) => {
@@ -484,9 +559,45 @@ function SheetTabs({
           </button>
         );
       })}
-      <button className="wtabadd" onClick={onAdd} title="Add a page">
-        +
-      </button>
+      <span className="wtabaddwrap" ref={addWrap}>
+        <button
+          ref={addButton}
+          className="wtabadd"
+          onClick={() => {
+            if (addMenu) setAddMenu(null);
+            else {
+              const box = addButton.current?.getBoundingClientRect();
+              if (box) setAddMenu({ left: box.left, top: box.bottom + 4 });
+            }
+          }}
+          title="Add a page"
+          aria-expanded={!!addMenu}
+        >
+          +
+        </button>
+        {addMenu && (
+          <span className="wtabaddmenu" style={addMenu}>
+            <button
+              onClick={() => {
+                setAddMenu(null);
+                onAdd("scalars");
+              }}
+            >
+              <b>Calculation page</b>
+              <small>Named values and formulas</small>
+            </button>
+            <button
+              onClick={() => {
+                setAddMenu(null);
+                onAdd("slices");
+              }}
+            >
+              <b>Hull slices</b>
+              <small>Stations and horizontal cuts</small>
+            </button>
+          </span>
+        )}
+      </span>
     </div>
   );
 }
@@ -504,6 +615,7 @@ interface TableProps {
   readonly setCollapsed: (next: ReadonlySet<string>) => void;
   readonly addRow: (after: number, group?: string) => void;
   readonly send: (command: DocumentCommand) => void;
+  readonly sliceMeasurements: ReadonlyMap<string, SliceMeasurement>;
 }
 
 function SheetTable(props: TableProps) {
@@ -577,16 +689,27 @@ function SheetTable(props: TableProps) {
   return (
     <table className="wsheet">
       <thead>
-        <tr>
-          <th className="wcolname">Item</th>
-          <th className="wcolformula">Formula</th>
-          <th className="wcolunit">Unit</th>
-          <th className="wcolvalue">Value</th>
-          <th className="wcolspread">
-            {reading === "worst" ? "Worst" : "Likely"}
-          </th>
-          <th className="wcolact" />
-        </tr>
+        {sheet.kind === "slices" ? (
+          <tr>
+            <th className="wcolname">Slice</th>
+            <th className="wcolshape">Cut</th>
+            <th className="wcolpos">Position</th>
+            <th className="wcolsection">Area / boundary</th>
+            <th className="wcolcentroid">Centroid x / y / z</th>
+            <th className="wcolact" />
+          </tr>
+        ) : (
+          <tr>
+            <th className="wcolname">Item</th>
+            <th className="wcolformula">Formula</th>
+            <th className="wcolunit">Unit</th>
+            <th className="wcolvalue">Value</th>
+            <th className="wcolspread">
+              {reading === "worst" ? "Worst" : "Likely"}
+            </th>
+            <th className="wcolact" />
+          </tr>
+        )}
       </thead>
       <tbody>
         {sheet.rows.map((row, i) => (
@@ -615,7 +738,16 @@ function SheetTable(props: TableProps) {
                 {...dragProps(i)}
               />
             ) : (
-              !hidden.has(row.id) && (
+              !hidden.has(row.id) &&
+              (row.kind === "slice" ? (
+                <SliceRowView
+                  {...props}
+                  row={row}
+                  index={i}
+                  completions={completions}
+                  {...dragProps(i)}
+                />
+              ) : (
                 <Row
                   {...props}
                   row={row}
@@ -623,7 +755,7 @@ function SheetTable(props: TableProps) {
                   completions={completions}
                   {...dragProps(i)}
                 />
-              )
+              ))
             )}
           </Fragment>
         ))}
@@ -820,6 +952,157 @@ interface RowProps extends TableProps {
   readonly onDrop: () => void;
   readonly onDragEnd: () => void;
   readonly onNudge: (delta: -1 | 1) => void;
+}
+
+function SliceRowView({
+  sheet,
+  row,
+  index,
+  results,
+  focusRow,
+  setFocusRow,
+  addRow,
+  send,
+  completions,
+  sliceMeasurements,
+  dragging,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+  onNudge,
+}: Omit<RowProps, "row"> & { readonly row: SliceRow }) {
+  const position = resultAt(results, sheet.id, row.id, "pos");
+  const measured = sliceMeasurements.get(sliceMeasurementKey(sheet.id, row.id));
+  const focused = focusRow === row.id;
+  const values = measured
+    ? `${sig(measured.area)} m² / ${sig(measured.openPerimeter)} m open / ${sig(measured.closedPerimeter)} m closed`
+    : "—";
+  const centroid = measured
+    ? `${sig(measured.x)} / ${sig(measured.y)} / ${sig(measured.z)} m`
+    : "—";
+  const unphysicalLinearBound =
+    measured &&
+    position?.reading &&
+    (["area", "openPerimeter", "closedPerimeter"] as const).some((field) => {
+      const slope = measured.derivative[field];
+      const downward =
+        slope >= 0
+          ? slope * position.reading!.worst.lo
+          : -slope * position.reading!.worst.hi;
+      return downward > measured[field];
+    });
+  return (
+    <tr
+      className={`wrow wslicerow${focused ? " focused" : ""}${dragging ? " dragging" : ""}`}
+      onClick={() => setFocusRow(row.id)}
+      onDragOver={(event) => {
+        event.preventDefault();
+        const box = event.currentTarget.getBoundingClientRect();
+        onDragOver(event.clientY > box.top + box.height / 2);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        onDrop();
+      }}
+      onKeyDown={(event) => {
+        if (!event.altKey) return;
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          onNudge(-1);
+        } else if (event.key === "ArrowDown") {
+          event.preventDefault();
+          onNudge(1);
+        }
+      }}
+    >
+      <td className="wcolname">
+        <Grip onDragStart={onDragStart} onDragEnd={onDragEnd} rowId={row.id} />
+        <Field
+          value={row.name}
+          placeholder="name"
+          className="wname"
+          onCommit={(name) =>
+            send({ type: "renameSheetRow", sheet: sheet.id, row: row.id, name })
+          }
+          onFocus={() => setFocusRow(row.id)}
+        />
+      </td>
+      <td className="wcolshape">
+        <select
+          value={row.shape}
+          aria-label="Cut shape"
+          onChange={(event) =>
+            send({
+              type: "setSliceShape",
+              sheet: sheet.id,
+              row: row.id,
+              shape: event.target.value as SliceRow["shape"],
+            })
+          }
+        >
+          <option value="station">Station</option>
+          <option value="plane">Horizontal</option>
+        </select>
+      </td>
+      <td className="wcolpos">
+        <FormulaField
+          value={row.pos}
+          error={position?.error ?? null}
+          completions={completions}
+          onCommit={(formula) =>
+            send({
+              type: "setSheetFormula",
+              sheet: sheet.id,
+              row: row.id,
+              field: "pos",
+              formula,
+            })
+          }
+          onFocus={() => setFocusRow(row.id)}
+        />
+        <Field
+          value={row.unit}
+          placeholder={position?.unit?.label ?? "m"}
+          className={`wpositionunit${position?.unitIsDerived ? " derived" : ""}`}
+          title={position?.unitWarning ?? "Position unit"}
+          onCommit={(unit) =>
+            send({ type: "setSheetUnit", sheet: sheet.id, row: row.id, unit })
+          }
+          onFocus={() => setFocusRow(row.id)}
+        />
+      </td>
+      <td className={!measured && row.pos ? "wcolsection bad" : "wcolsection"}>
+        {values}
+        {unphysicalLinearBound && (
+          <span
+            className="wwarn"
+            title="The first-order uncertainty reaches below zero for this cut. Geometry is linearized at the nominal position; reduce the position spread or inspect its end cuts before using the worst-case extent."
+          >
+            !
+          </span>
+        )}
+      </td>
+      <td className="wcolcentroid">{centroid}</td>
+      <td className="wcolact">
+        <button
+          title="Add a slice below this one"
+          onClick={() => addRow(index)}
+        >
+          +
+        </button>
+        <button
+          className="wremove"
+          title="Remove this slice"
+          onClick={() =>
+            send({ type: "removeSheetRow", sheet: sheet.id, row: row.id })
+          }
+        >
+          ×
+        </button>
+      </td>
+    </tr>
+  );
 }
 
 function Row({
@@ -1334,6 +1617,23 @@ function Reference({
           <Entry term="total * 7%" hint="a percentage is just ÷100" />
         </dl>
       </Section>
+      {sheet?.kind === "slices" && (
+        <Section title="Slice results">
+          <dl>
+            <Entry term="slice.pos" hint="the cut position, in metres" />
+            <Entry term="slice.area" hint="enclosed section area" />
+            <Entry
+              term="slice.openPerimeter"
+              hint="hull-skin perimeter without closing segments"
+            />
+            <Entry
+              term="slice.closedPerimeter"
+              hint="complete perimeter including closing segments"
+            />
+            <Entry term="slice.x / .y / .z" hint="centroid coordinates" />
+          </dl>
+        </Section>
+      )}
       <Section title="The hull">
         <dl>
           {HULL_METRICS.map((spec) => (

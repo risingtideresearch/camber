@@ -34,7 +34,14 @@
 
 import { evaluate, FormulaError, parseFormula, type Node } from "./formula";
 import { hullMetric, isHullMetricName, type HullMetrics } from "../hullMetrics";
-import { read, type Quantity, type Reading, type Source } from "./quantity";
+import {
+  AREA,
+  LENGTH,
+  read,
+  type Quantity,
+  type Reading,
+  type Source,
+} from "./quantity";
 import {
   fieldOf,
   fieldsOf,
@@ -50,6 +57,12 @@ import {
 import { isOutputName, OUTPUTS, outputSpec } from "./outputs";
 import { sameDim } from "./quantity";
 import { naturalUnit, parseUnit, UnitError, type UnitSpec } from "./units";
+import {
+  SLICE_VALUE_FIELDS,
+  sliceMeasurementKey,
+  type SliceMeasurements,
+  type SliceValueField,
+} from "./slices";
 
 /** One evaluated row. */
 export interface RowResult {
@@ -133,6 +146,8 @@ interface Cell {
   value: Quantity | null;
   error: { message: string; at: number } | null;
   unitWarning: string | null;
+  /** This cell's dependency graph reaches a geometry-derived slice leaf. */
+  usesSliceMeasurement: boolean;
 }
 
 /**
@@ -144,6 +159,7 @@ interface Cell {
 export function evaluateBook(
   book: WeightBook,
   metrics: HullMetrics | null,
+  sliceMeasurements: SliceMeasurements = new Map(),
 ): BookResults {
   const cells = new Map<string, Cell>();
   const sources = new Map<string, Source>();
@@ -169,7 +185,7 @@ export function evaluateBook(
     for (const row of sheet.rows) {
       if (isHeading(row)) continue;
       // Every cell of a row shares the row's unit, which is why a point declares one unit and not three.
-      const declaredUnit = row.kind === "slice" ? "" : row.unit.trim();
+      const declaredUnit = row.unit.trim();
       let declared: UnitSpec | null = null;
       let unitError: string | null = null;
       if (declaredUnit) {
@@ -207,6 +223,7 @@ export function evaluateBook(
           value: null,
           error: null,
           unitWarning: null,
+          usesSliceMeasurement: false,
         });
       }
     }
@@ -255,12 +272,23 @@ export function evaluateBook(
     if (cell!.state === "fresh") compute(cell!);
     if (cell!.error) fail(`${describe(key)} could not be worked out`, at);
     if (!cell!.value) fail(`${describe(key)} is empty`, at);
+    if (cell!.usesSliceMeasurement) {
+      if (currentCell && currentCell !== cell)
+        currentCell.usesSliceMeasurement = true;
+      if (slicePositionDepth > 0)
+        fail("a slice position cannot depend on measured slice values", at);
+    }
     return cell!.value!;
   };
 
   // Which page the row being evaluated sits on, so a bare reference means "this page".
   let currentSheet: Sheet = book.sheets[0] ?? { id: "", name: "", rows: [] };
   let currentCell: Cell | null = null;
+  // Geometry is evaluated after authored formulas have produced slice positions. Letting a position depend on
+  // any measured slice leaf would require solving an implicit geometry system, not another evaluation pass.
+  // Track the root computation so an indirect dependency through scalar rows is refused just as clearly as a
+  // direct `other.area` reference.
+  let slicePositionDepth = 0;
 
   const resolve = (path: readonly string[], at: number): Quantity => {
     const [head, ...rest] = path;
@@ -322,6 +350,13 @@ export function evaluateBook(
       );
     }
 
+    // A leaf on a structured row on this page: `engine.z`, `bulkhead.area`. This is what autocomplete offers;
+    // a scalar has no leaves and reports that explicitly through `leafValue`.
+    if (rest.length === 1) {
+      const local = rowsByName.get(currentSheet.id)?.get(head);
+      if (local) return leafValue(currentSheet, local, rest[0], at);
+    }
+
     // Otherwise it names another page.
     const sheet = sheetsByName.get(head);
     if (!sheet) fail(`there is no page called ${head}`, at);
@@ -341,7 +376,8 @@ export function evaluateBook(
    */
   const bareRowValue = (sheet: Sheet, row: SheetRow, at: number): Quantity => {
     if (row.kind === "item") return rowValue(sheet.id, row.id, at);
-    const leaves = fieldsOf(row);
+    const leaves =
+      row.kind === "slice" ? ["pos", ...SLICE_VALUE_FIELDS] : fieldsOf(row);
     fail(
       `${row.name} is a ${row.kind} — write ${row.name}.${leaves[0]}${leaves.length > 1 ? ` (or .${leaves.slice(1).join(", .")})` : ""}`,
       at,
@@ -355,12 +391,42 @@ export function evaluateBook(
     leaf: string,
     at: number,
   ): Quantity => {
-    const leaves = fieldsOf(row);
     if (row.kind === "item")
       fail(
         `${row.name} is a single value — ${row.name}.${leaf} is one dot too deep`,
         at,
       );
+    if (row.kind === "slice") {
+      if (leaf === "pos") return rowValue(sheet.id, row.id, at, "pos");
+      if (!(SLICE_VALUE_FIELDS as readonly string[]).includes(leaf))
+        fail(
+          `a slice has no ${leaf} — try .pos, .${SLICE_VALUE_FIELDS.join(", .")}`,
+          at,
+        );
+      const measured = sliceMeasurements.get(
+        sliceMeasurementKey(sheet.id, row.id),
+      );
+      if (!measured)
+        return fail(`${row.name} has not produced a valid hull cut`, at);
+      const field = leaf as SliceValueField;
+      currentCell!.usesSliceMeasurement = true;
+      // A direct measured leaf has no intervening rowValue call to propagate the marker back to the position.
+      if (currentCell!.row.kind === "slice" && currentCell!.field === "pos")
+        fail("a slice position cannot depend on measured slice values", at);
+      const position = rowValue(sheet.id, row.id, at, "pos");
+      const slope = measured.derivative[field];
+      return {
+        v: measured[field],
+        d: Object.fromEntries(
+          Object.entries(position.d).map(([source, gradient]) => [
+            source,
+            gradient * slope,
+          ]),
+        ),
+        dim: field === "area" ? AREA : LENGTH,
+      };
+    }
+    const leaves = fieldsOf(row);
     if (!(leaves as string[]).includes(leaf))
       fail(`a ${row.kind} has no ${leaf} — try .${leaves.join(", .")}`, at);
     return rowValue(sheet.id, row.id, at, leaf as RowField);
@@ -413,13 +479,15 @@ export function evaluateBook(
   };
 
   const compute = (cell: Cell): void => {
-    const key = rowKey(cell.sheet.id, cell.row.id);
+    const key = rowKey(cell.sheet.id, cell.row.id, cell.field);
+    const isSlicePosition = cell.row.kind === "slice" && cell.field === "pos";
     cell.state = "running";
     visiting.push(key);
     const savedSheet = currentSheet;
     const savedCell = currentCell;
     currentSheet = cell.sheet;
     currentCell = cell;
+    if (isSlicePosition) slicePositionDepth++;
     try {
       if (cell.unitError) cell.error = { message: cell.unitError, at: -1 };
       else if (cell.parseError)
@@ -439,6 +507,7 @@ export function evaluateBook(
         cell.value = null;
       }
     } finally {
+      if (isSlicePosition) slicePositionDepth--;
       currentSheet = savedSheet;
       currentCell = savedCell;
       visiting.pop();

@@ -22,8 +22,8 @@ import {
 import { Button } from "../components/Button";
 import { ButtonGroup } from "../components/ButtonGroup";
 import { Dropdown } from "../components/Dropdown";
-import { evaluateBook } from "../core/sheet/evaluate";
-import { useDocumentSnapshot } from "./documentStoreHooks";
+import { useWeightBookResults } from "./useWeightBookResults";
+import { useDocumentRuntime, useDocumentSnapshot } from "./documentStoreHooks";
 import { useEditorUi } from "./editorUi";
 import { useStabilityAnalysis } from "./useStabilityAnalysis";
 import {
@@ -739,7 +739,9 @@ function OverlayControls({
 
 export function StabilityPanel() {
   const snapshot = useDocumentSnapshot();
-  const { perf } = useEditorUi();
+  const model = useDocumentRuntime();
+  const { perf, sampling } = useEditorUi();
+  const hullSampling = sampling();
   const { analysis, error } = useStabilityAnalysis(snapshot, perf);
   const curves = analysis?.curves ?? null,
     limit = analysis?.limit ?? EMPTY_LIMIT,
@@ -847,9 +849,11 @@ export function StabilityPanel() {
   // The sheet works in kilograms and metres; the plane works in tonnes and model units. Both readings are
   // taken at their WORST extent, because that is what this plane is for: the question is whether the design
   // still passes when the estimate is as wrong as it is allowed to be.
-  const sheetResults = useMemo(
-    () => evaluateBook(book, analysis?.metrics ?? null),
-    [book, analysis?.metrics],
+  const { results: sheetResults } = useWeightBookResults(
+    book,
+    model,
+    hullSampling,
+    analysis?.metrics ?? null,
   );
   const fromSheet = useMemo(() => {
     const mass = sheetResults.outputs.displacement;
