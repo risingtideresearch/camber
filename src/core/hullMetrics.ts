@@ -4,12 +4,18 @@
 // place that knows what a sheet can ask the geometry, which is what lets the panel build its reference list
 // and its autocomplete from the same source the evaluator resolves against.
 //
-// Two things are settled here rather than at each call site:
+// Three things are settled here rather than at each call site:
 //
 //   UNITS. A document is drawn in whatever unit its author chose — a 5 m hull in millimetres runs x from 0 to
 //   5000 — while a weight sheet works in METRES and KILOGRAMS and nothing else. Every length below is scaled
 //   on the way out (areas by s², volumes by s³), so `HULL.LWL` is a number of metres whatever the drawing is
 //   in, and a formula never has to know or ask.
+//
+//   THE FRAME. Every POSITION is x forward from the transom and height above the keel baseline — the frame a
+//   slice's centroid and a point's coordinates are already in. The geometry works in model coordinates where
+//   neither datum sits at zero, and both are taken off at the bottom of `hullMetrics`. This is what lets one
+//   moment sum mix the hull's own shell with the points beside it: `Weights.shell * HULL.SHELL_CG` and
+//   `Weights.engine * engine` are measured from the same place, so adding them means something.
 //
 //   CERTAINTY. Every one of these is EXACT. The hull is drawn, not guessed: its wetted area is whatever the
 //   geometry says it is, to the accuracy of the integration. Uncertainty enters a sheet only through the ±
@@ -58,8 +64,10 @@ export interface HullMetrics {
   readonly waterplaneArea: number;
   readonly midshipArea: number;
   readonly maxSectionArea: number;
+  /** From the transom, like every other position here — see the header. */
   readonly lcb: number;
   readonly lcf: number;
+  /** Above the keel baseline, as the stability panel reads KG. */
   readonly kb: number;
   readonly bmt: number;
   readonly kmt: number;
@@ -73,7 +81,7 @@ export interface HullMetrics {
   readonly shellArea: number;
   /** Everything inside it, up to the sheer. */
   readonly hullVol: number;
-  /** Where the whole shell acts: its own area centroid, referenced like LCB and KB. */
+  /** Where the whole shell acts: its own area centroid, in the same frame as LCB and KB. */
   readonly shellLcg: number;
   readonly shellVcg: number;
 }
@@ -282,7 +290,46 @@ export const HULL_METRICS: readonly MetricSpec[] = [
   },
 ];
 
+/**
+ * A hull measurement that is a PLACE rather than a number.
+ *
+ * The shell's centroid is already here as `SHELL_LCG` and `SHELL_VCG`, and multiplying a mass by each of
+ * them is how a shell weight has always been placed. But a centre of gravity is a sum of masses times
+ * POSITIONS, and written that way the hull's own contribution had to be spelled out per axis while every
+ * other term named a point — three copies of the schedule instead of one.
+ *
+ * So the same numbers are offered under one name, as a place: `HULL.SHELL_CG` in a coordinate cell is that
+ * cell's own coordinate, exactly as a point row or a slice's centroid is (see `evaluate.ts`). It weighs into
+ * a CG beside them, in one expression:
+ *
+ *   (Weights.shell * HULL.SHELL_CG + Weights.engine * engine + …) / Weights.total
+ *
+ * `y` is zero because an authored hull is symmetric about its centreline, and a shell centroid that was
+ * anywhere else would be saying the surface is not. It is stated rather than omitted so that the place is a
+ * whole place, and the day an asymmetric hull exists this is the line that changes.
+ */
+export interface MetricPointSpec {
+  readonly name: string;
+  readonly label: string;
+  readonly hint: string;
+  readonly x: (m: HullMetrics) => number;
+  readonly y: (m: HullMetrics) => number;
+  readonly z: (m: HullMetrics) => number;
+}
+
+export const HULL_POINTS: readonly MetricPointSpec[] = [
+  {
+    name: "SHELL_CG",
+    label: "shell CG",
+    hint: "Where the shell's own weight acts, as a place — weigh it into a centre of gravity beside the points",
+    x: (m) => m.shellLcg,
+    y: () => 0,
+    z: (m) => m.shellVcg,
+  },
+];
+
 const BY_NAME = new Map(HULL_METRICS.map((spec) => [spec.name, spec]));
+const POINTS_BY_NAME = new Map(HULL_POINTS.map((spec) => [spec.name, spec]));
 
 /** Resolve one `HULL.<name>` to an exact quantity, or `null` if there is no such metric. */
 export function hullMetric(
@@ -294,7 +341,25 @@ export function hullMetric(
   return exact(spec.read(metrics), spec.dim);
 }
 
-export const isHullMetricName = (name: string): boolean => BY_NAME.has(name);
+export const isHullMetricName = (name: string): boolean =>
+  BY_NAME.has(name) || POINTS_BY_NAME.has(name);
+
+/**
+ * Resolve one coordinate of a `HULL.<name>` that is a place, or null if there is no such place.
+ *
+ * A length in every case, and exact — the hull is drawn, not guessed, so nothing here carries a spread.
+ */
+export function hullPoint(
+  metrics: HullMetrics,
+  name: string,
+  axis: "x" | "y" | "z",
+): Quantity | null {
+  const spec = POINTS_BY_NAME.get(name);
+  return spec ? exact(spec[axis](metrics), LENGTH) : null;
+}
+
+export const isHullPointName = (name: string): boolean =>
+  POINTS_BY_NAME.has(name);
 
 /**
  * Measure the hull.
@@ -324,6 +389,22 @@ export function hullMetrics(
   const [lo, hi] = heightSpan(geom, 0);
   const submerged = cut(geom, 0, hi + Math.max(1e-6, (hi - lo) * 1e-3));
 
+  // ---------- one frame, stated once ----------
+  //
+  // Every POSITION below is measured from the same two datums as a slice's centroid and a point's
+  // coordinates: x forward from the transom, height above the keel baseline. The hull's own arithmetic works
+  // in model coordinates, where neither datum is at zero — the plan starts at whatever x its first control
+  // point was drawn at, and the keel sits at some negative height under a deck-flat datum — so both are
+  // taken off here, at the boundary, and nothing downstream ever sees them.
+  //
+  // That boundary is the whole point of this module. A sheet writes `Weights.shell * HULL.SHELL_CG` beside
+  // `Weights.engine * engine` and the two land in one frame, so the moment sum means something. Reporting a
+  // model x here instead would leave the hull's own terms offset from every other term by the plan's origin
+  // — silently, and by exactly zero on a hull that happens to be drawn from x = 0, which is most of them.
+  const x0 = model.plan.at(0)[0];
+  const alongHull = (x: number): number => (x - x0) * s;
+  const aboveKeel = (worldZ: number): number => (worldZ - geom.keelZ) * s;
+
   return {
     loa: loa(model) * s,
     lwl: h.lwl * s,
@@ -336,8 +417,8 @@ export function hullMetrics(
     waterplaneArea: h.waterplaneArea * s2,
     midshipArea: h.midshipArea * s2,
     maxSectionArea: h.maxSectionArea * s2,
-    lcb: h.lcb * s,
-    lcf: h.lcf * s,
+    lcb: alongHull(h.lcb),
+    lcf: alongHull(h.lcf),
     kb: h.kb * s,
     bmt: h.bmt * s,
     kmt: h.kmt * s,
@@ -349,10 +430,7 @@ export function hullMetrics(
     halfEntrance: h.halfEntrance,
     shellArea: submerged.wsa * s2,
     hullVol: submerged.vol * s3,
-    // Referenced exactly as LCB and KB are: x from the transom, height above the keel baseline. That is what
-    // lets a sheet write `shell * HULL.SHELL_VCG` and have the answer land in the same frame the stability
-    // panel reads KG in.
-    shellLcg: submerged.wsaX * s,
-    shellVcg: (submerged.wsaZWorld - geom.keelZ) * s,
+    shellLcg: alongHull(submerged.wsaX),
+    shellVcg: aboveKeel(submerged.wsaZWorld),
   };
 }

@@ -682,6 +682,9 @@ export function sameGesture(a: DocumentCommand, b: DocumentCommand): boolean {
         a.row === (b as typeof a).row &&
         a.field === (b as typeof a).field
       );
+    // A drag in the point editor. Every coordinate it moved rides in one command, so the whole gesture is
+    // one moment however many of the three it touched — which is the reason the command exists.
+    case "setPointPosition":
     case "setSheetUnit":
     case "renameSheetRow":
     case "setSheetRowNote":
@@ -782,7 +785,16 @@ export function describeCommand(cmd: DocumentCommand): string {
       // would be unreadable next to a drag of the same point.
       return cmd.field === "formula"
         ? "Edit a weight formula"
-        : `Move a point's ${cmd.field}`;
+        : cmd.field === "from"
+          ? "Derive a point from others"
+          : `Move a point's ${cmd.field}`;
+    case "setPointPosition":
+      // Named by the coordinates the gesture actually moved: dragging in the profile view says "x, z" and
+      // dragging in the section says "y, z", which is the one thing that tells two moves of the same point
+      // apart in a timeline.
+      return `Move a point (${(["x", "y", "z"] as const)
+        .filter((axis) => cmd[axis] !== undefined)
+        .join(", ")})`;
     case "setSheetUnit":
       return cmd.unit
         ? `Weight item in ${cmd.unit}`

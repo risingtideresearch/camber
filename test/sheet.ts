@@ -24,6 +24,19 @@ import {
 } from "../src/core/sheet/book";
 import { parseUnit, naturalUnit, UnitError } from "../src/core/sheet/units";
 import { measureSlice, sliceMeasurementKey } from "../src/core/sheet/slices";
+import {
+  hullOutlines,
+  likelyRegion,
+  readPlacement,
+  readTolerance,
+  sectionOutline,
+  toModel,
+  toSheet,
+  withNominal,
+  withoutHandle,
+  withTolerance,
+  worstRegion,
+} from "../src/core/sheet/points";
 import { sameGesture, type DocumentCommand } from "../src/core/commands";
 import { bookViolations } from "../src/core/invariants";
 import {
@@ -916,8 +929,9 @@ const problem = (
     kind: "points",
   });
   ok(
-    "rejected" in points,
-    "a points page cannot be made yet — the kind exists, the editor does not",
+    !("rejected" in points) &&
+      points.book.sheets.some((sheet) => sheet.kind === "points"),
+    "a points page is a page like any other now that it has an editor",
   );
 
   // A heading is legal on a page of any kind, because grouping is not a property of what is grouped.
@@ -962,6 +976,7 @@ const problem = (
             x: "1",
             y: "0",
             z: "0",
+            from: "",
           },
         ],
       },
@@ -1116,6 +1131,73 @@ const problem = (
       "no outputs page",
     ),
     "reading an answer from a book that has none says so plainly",
+  );
+
+  // ---- a centre of gravity built as a point answers both centres ----
+  //
+  // The two answers are still two lengths, because that is what the rest of the app asks for. What changed
+  // is where they come from: one point, read twice, rather than two estimates that could disagree.
+  let placed = build([
+    { name: "engine", formula: "180", unit: "kg" },
+    { name: "tank", formula: "140", unit: "kg" },
+    { name: "total", formula: "engine + tank", unit: "kg" },
+    { name: "height", formula: "Places.CG.z", unit: "m" },
+    { name: "arm", formula: "Places.CG.x", unit: "m" },
+  ]);
+  placed = run(placed, {
+    type: "addSheet",
+    id: "pg",
+    name: "Places",
+    kind: "points",
+  });
+  const put = (id: string, name: string, x: string, y: string, z: string) => {
+    placed = run(placed, { type: "addSheetRow", sheet: "pg", id, after: -1 });
+    placed = run(placed, {
+      type: "renameSheetRow",
+      sheet: "pg",
+      row: id,
+      name,
+    });
+    placed = run(placed, {
+      type: "setPointPosition",
+      sheet: "pg",
+      row: id,
+      x,
+      y,
+      z,
+    });
+  };
+  put("qe", "engine", "2.4", "0", "0.42");
+  put("qt", "tank", "1.2", "0", "0.25");
+  placed = run(placed, {
+    type: "addSheetRow",
+    sheet: "pg",
+    id: "qc",
+    after: -1,
+  });
+  placed = run(placed, {
+    type: "renameSheetRow",
+    sheet: "pg",
+    row: "qc",
+    name: "CG",
+  });
+  placed = run(placed, {
+    type: "setSheetFormula",
+    sheet: "pg",
+    row: "qc",
+    field: "from",
+    formula: "(Weights.engine * engine + Weights.tank * tank) / Weights.total",
+  });
+  const wired = answer(
+    answer(placed, "VCG", "Weights.height"),
+    "LCG",
+    "Weights.arm",
+  );
+  const answers = evaluateBook(wired, null).outputs;
+  ok(
+    near(answers.lcg!.v, (180 * 2.4 + 140 * 1.2) / 320, 1e-12) &&
+      near(answers.vcg!.v, (180 * 0.42 + 140 * 0.25) / 320, 1e-12),
+    "one point read twice answers both centres — and cannot disagree with itself",
   );
 
   const wrongDim = answer(
@@ -1496,6 +1578,814 @@ const problem = (
   );
 }
 
+// ---------- points pages ----------
+{
+  const model = assemble(defaultHull());
+  const sampling = computeHullSampling(model, 240, 10);
+  const metrics = hullMetrics(model, sampling)!;
+
+  // A points page beside a calculation page, built the way the panel builds one.
+  let book = build([
+    { name: "engine mass", formula: "180", unit: "kg" },
+    { name: "engine arm", formula: "Places.engine.z" },
+  ]);
+  book = run(book, {
+    type: "addSheet",
+    id: "pts",
+    name: "Places",
+    kind: "points",
+  });
+  book = run(book, {
+    type: "addSheetRow",
+    sheet: "pts",
+    id: "engine",
+    after: -1,
+  });
+  book = run(book, {
+    type: "renameSheetRow",
+    sheet: "pts",
+    row: "engine",
+    name: "engine",
+  });
+  const pointRow = () =>
+    book.sheets.find((sheet) => sheet.id === "pts")!.rows[0] as {
+      kind: string;
+      unit: string;
+      x: string;
+      y: string;
+      z: string;
+    };
+
+  ok(
+    pointRow().kind === "point",
+    "a points page holds point rows without being told which kind to add",
+  );
+  ok(
+    pointRow().unit === "m",
+    "and a fresh point is authored in metres, so a dragged coordinate has a dimension",
+  );
+
+  // ---- one command, however many coordinates the gesture moved ----
+  book = run(book, {
+    type: "setPointPosition",
+    sheet: "pts",
+    row: "engine",
+    x: "2.1",
+    z: "0.35 ± 0.05",
+  });
+  ok(
+    pointRow().x === "2.1" &&
+      pointRow().z === "0.35 ± 0.05" &&
+      pointRow().y === "",
+    "setPointPosition writes the coordinates it names and leaves the rest alone",
+  );
+  ok(
+    "rejected" in
+      interpretSheetCommand(book, {
+        type: "setPointPosition",
+        sheet: "p0",
+        row: "p0r0",
+        x: "1",
+      }),
+    "and refuses a row that is not a point",
+  );
+  ok(
+    sameGesture(
+      { type: "setPointPosition", sheet: "pts", row: "engine", x: "1" },
+      { type: "setPointPosition", sheet: "pts", row: "engine", z: "2" },
+    ) &&
+      !sameGesture(
+        { type: "setPointPosition", sheet: "pts", row: "engine", x: "1" },
+        { type: "setPointPosition", sheet: "pts", row: "tank", x: "1" },
+      ),
+    "a drag of one point is one gesture whichever coordinates it touched — and two points are two",
+  );
+
+  // ---- a point is three values, and only its leaves resolve ----
+  const results = evaluateBook(book, null);
+  ok(
+    resultAt(results, "pts", "engine", "z")!.reading!.v === 0.35,
+    "a coordinate evaluates in the row's own unit — 0.35 m, not 0.35 of nothing",
+  );
+  ok(
+    near(value(book, "engine arm"), 0.35, 1e-12),
+    "and another page reads it as Places.engine.z",
+  );
+  const bare = run(book, {
+    type: "setSheetFormula",
+    sheet: "p0",
+    row: rowOf(book, "engine arm").rowId,
+    field: "formula",
+    formula: "Places.engine",
+  });
+  ok(
+    (problem(bare, "engine arm") ?? "").includes("engine.x"),
+    "naming a point without a coordinate says which coordinates it has",
+  );
+
+  // ---- a point named bare in a coordinate cell means that coordinate ----
+  //
+  // Which is what lets ONE expression state a whole position. Everywhere else a point still has to say which
+  // of its three numbers is meant, and the message that says so is the one that was always there.
+  let cg = build([
+    { name: "engine", formula: "180 ± 20", unit: "kg" },
+    { name: "tank", formula: "140", unit: "kg" },
+    { name: "rig", formula: "95", unit: "kg" },
+    { name: "total", formula: "engine + tank + rig", unit: "kg" },
+  ]);
+  cg = run(cg, { type: "addSheet", id: "pl", name: "Places", kind: "points" });
+  const at = (id: string, name: string, x: string, y: string, z: string) => {
+    cg = run(cg, { type: "addSheetRow", sheet: "pl", id, after: -1 });
+    cg = run(cg, { type: "renameSheetRow", sheet: "pl", row: id, name });
+    cg = run(cg, { type: "setPointPosition", sheet: "pl", row: id, x, y, z });
+  };
+  at("pe", "engine", "2.4", "0", "0.42");
+  at("pt", "tank", "1.2", "0", "0.25");
+  at("pr", "rig", "3.1", "0", "2.8");
+
+  const offCentre = run(cg, {
+    type: "setPointPosition",
+    sheet: "pl",
+    row: "pe",
+    x: "tank + 0.6",
+  });
+  ok(
+    near(
+      resultAt(evaluateBook(offCentre, null), "pl", "pe", "x")!.reading!.v,
+      1.8,
+      1e-12,
+    ),
+    "a point named bare in an x cell is its x — which is how one point sits off another",
+  );
+  ok(
+    (
+      problem(
+        run(cg, {
+          type: "setSheetFormula",
+          sheet: "p0",
+          row: rowOf(cg, "total").rowId,
+          field: "formula",
+          formula: "Places.engine",
+        }),
+        "total",
+      ) ?? ""
+    ).includes("write engine.x"),
+    "and in a cell that is not a coordinate it still has to say which number is meant",
+  );
+
+  // ---- a slice's centroid binds the same way ----
+  //
+  // A cut has a position too, so the centre of area of a set of sections is the centre-of-gravity expression
+  // with areas where the masses were.
+  {
+    let cuts = run(emptyBook(), {
+      type: "addSheet",
+      id: "sx",
+      name: "Sections",
+      kind: "slices",
+    });
+    const cut2 = (id: string, name: string, pos: string) => {
+      cuts = run(cuts, { type: "addSheetRow", sheet: "sx", id, after: -1 });
+      cuts = run(cuts, {
+        type: "renameSheetRow",
+        sheet: "sx",
+        row: id,
+        name,
+      });
+      cuts = run(cuts, {
+        type: "setSheetFormula",
+        sheet: "sx",
+        row: id,
+        field: "pos",
+        formula: pos,
+      });
+    };
+    cut2("c1", "fwd", "HULL.LOA * 0.35");
+    cut2("c2", "aft", "HULL.LOA * 0.65");
+    cuts = run(cuts, {
+      type: "addSheet",
+      id: "px",
+      name: "Places",
+      kind: "points",
+    });
+    cuts = run(cuts, { type: "addSheetRow", sheet: "px", id: "ac", after: -1 });
+    cuts = run(cuts, {
+      type: "renameSheetRow",
+      sheet: "px",
+      row: "ac",
+      name: "area centre",
+    });
+    cuts = run(cuts, {
+      type: "setSheetFormula",
+      sheet: "px",
+      row: "ac",
+      field: "from",
+      formula:
+        "(Sections.fwd.area * Sections.fwd + Sections.aft.area * Sections.aft) / (Sections.fwd.area + Sections.aft.area)",
+    });
+
+    const first = evaluateBook(cuts, metrics);
+    const cutsMeasured = new Map(
+      ["c1", "c2"].map((id) => [
+        sliceMeasurementKey("sx", id),
+        measureSlice(
+          model,
+          sampling,
+          "station",
+          resultAt(first, "sx", id, "pos")!.reading!.v,
+        )!,
+      ]),
+    );
+    const centred = evaluateBook(cuts, metrics, cutsMeasured);
+    const fwd = cutsMeasured.get(sliceMeasurementKey("sx", "c1"))!;
+    const aft = cutsMeasured.get(sliceMeasurementKey("sx", "c2"))!;
+    const weighted = (pick: (m: typeof fwd) => number) =>
+      (fwd.area * pick(fwd) + aft.area * pick(aft)) / (fwd.area + aft.area);
+    ok(
+      near(
+        resultAt(centred, "px", "ac", "x")!.reading!.v,
+        weighted((m) => m.x),
+        1e-12,
+      ) &&
+        near(
+          resultAt(centred, "px", "ac", "z")!.reading!.v,
+          weighted((m) => m.z),
+          1e-12,
+        ),
+      "a slice named bare in a coordinate cell is its centroid, so sections weigh by area into a centre",
+    );
+    ok(
+      resultAt(centred, "px", "ac", "x")!.unit?.label === "m",
+      "and m²·m over m² is a length, so that row checks its own arithmetic too",
+    );
+    ok(
+      (
+        resultAt(
+          evaluateBook(
+            run(cuts, {
+              type: "setSheetFormula",
+              sheet: "sx",
+              row: "c1",
+              field: "pos",
+              formula: "Sections.aft",
+            }),
+            metrics,
+          ),
+          "sx",
+          "c1",
+          "pos",
+        )?.error ?? ""
+      ).includes("write aft.pos"),
+      "outside a coordinate cell a slice still has to say which of its numbers is meant",
+    );
+  }
+
+  // ---- the hull's own shell is a place too ----
+  //
+  // `SHELL_LCG` and `SHELL_VCG` are the same numbers, and multiplying a mass by each is how a shell weight
+  // has always been placed. Offering them as ONE place is what lets the hull weigh into a centre of gravity
+  // in the same expression as everything else, instead of the schedule being written out per axis.
+  {
+    let hull = build([
+      { name: "ply", formula: "6.4", unit: "kg/m2" },
+      { name: "shell", formula: "HULL.SHELL_AREA * ply", unit: "kg" },
+      { name: "engine", formula: "180", unit: "kg" },
+      { name: "total", formula: "shell + engine", unit: "kg" },
+    ]);
+    hull = run(hull, {
+      type: "addSheet",
+      id: "hp",
+      name: "Places",
+      kind: "points",
+    });
+    hull = run(hull, { type: "addSheetRow", sheet: "hp", id: "he", after: -1 });
+    hull = run(hull, {
+      type: "renameSheetRow",
+      sheet: "hp",
+      row: "he",
+      name: "engine",
+    });
+    hull = run(hull, {
+      type: "setPointPosition",
+      sheet: "hp",
+      row: "he",
+      x: "2.4",
+      y: "0",
+      z: "0.42",
+    });
+    hull = run(hull, { type: "addSheetRow", sheet: "hp", id: "hc", after: -1 });
+    hull = run(hull, {
+      type: "renameSheetRow",
+      sheet: "hp",
+      row: "hc",
+      name: "CG",
+    });
+    hull = run(hull, {
+      type: "setSheetFormula",
+      sheet: "hp",
+      row: "hc",
+      field: "from",
+      formula:
+        "(Weights.shell * HULL.SHELL_CG + Weights.engine * engine) / Weights.total",
+    });
+    const placedHull = evaluateBook(hull, metrics);
+    const shellMass = value(hull, "shell", "Weights", metrics);
+    const all = shellMass + 180;
+    ok(
+      near(
+        resultAt(placedHull, "hp", "hc", "x")!.reading!.v,
+        (shellMass * metrics.shellLcg + 180 * 2.4) / all,
+        1e-9,
+      ) &&
+        near(
+          resultAt(placedHull, "hp", "hc", "z")!.reading!.v,
+          (shellMass * metrics.shellVcg + 180 * 0.42) / all,
+          1e-9,
+        ),
+      "the shell weighs into a centre of gravity beside the points, in one expression",
+    );
+    ok(
+      resultAt(placedHull, "hp", "hc", "y")!.reading!.v === 0,
+      "and its y is the centreline, because an authored hull is symmetric about it",
+    );
+    ok(
+      near(
+        value(
+          build([{ name: "h", formula: "HULL.SHELL_CG.z", unit: "m" }]),
+          "h",
+          "Weights",
+          metrics,
+        ),
+        metrics.shellVcg,
+        1e-12,
+      ),
+      "a coordinate of it reads anywhere, as HULL.SHELL_CG.z",
+    );
+    ok(
+      (
+        problem(
+          build([{ name: "h", formula: "HULL.SHELL_CG" }]),
+          "h",
+          "Weights",
+          metrics,
+        ) ?? ""
+      ).includes("is a place"),
+      "and named bare outside a coordinate it says it is a place and which coordinates it has",
+    );
+  }
+
+  // ---- one expression for all three coordinates ----
+  cg = run(cg, { type: "addSheetRow", sheet: "pl", id: "cg", after: -1 });
+  cg = run(cg, { type: "renameSheetRow", sheet: "pl", row: "cg", name: "CG" });
+  cg = run(cg, {
+    type: "setSheetFormula",
+    sheet: "pl",
+    row: "cg",
+    field: "from",
+    formula:
+      "(Weights.engine * engine + Weights.tank * tank + Weights.rig * rig) / Weights.total",
+  });
+  const centre = evaluateBook(cg, null);
+  const coord = (axis: "x" | "y" | "z") => resultAt(centre, "pl", "cg", axis)!;
+  const masses = { e: 180, t: 140, r: 95 };
+  const sum = masses.e + masses.t + masses.r;
+  ok(
+    near(
+      coord("x").reading!.v,
+      (masses.e * 2.4 + masses.t * 1.2 + masses.r * 3.1) / sum,
+      1e-12,
+    ) &&
+      near(
+        coord("z").reading!.v,
+        (masses.e * 0.42 + masses.t * 0.25 + masses.r * 2.8) / sum,
+        1e-12,
+      ),
+    "one expression read once per axis is a centre of gravity, and it lands where the arithmetic says",
+  );
+  ok(
+    coord("x").unit?.label === "m" && coord("z").unit?.label === "m",
+    "kg·m over kg is a length, so the row checks its own arithmetic",
+  );
+  ok(
+    coord("x").reading!.terms[0]?.label === "Weights.engine" &&
+      coord("z").reading!.terms[0]?.label === "Weights.engine",
+    "and the mass that is guessed at drives the spread in every coordinate it reaches",
+  );
+
+  // The payoff of carrying gradients: one mass moving two coordinates ties them together, so the region is
+  // a line rather than a box — a CG that can be anywhere in a rectangle is a claim nothing supports.
+  const tied = worstRegion(
+    coord("x").quantity!,
+    coord("z").quantity!,
+    centre.sources,
+  );
+  ok(
+    tied.length === 2,
+    "a CG whose coordinates lean on one mass is uncertain along a line, not over an area",
+  );
+
+  ok(
+    resultAt(centre, "pl", "cg", "y")!.reading!.v === 0,
+    "and a derivation still produces three cells, so the y everything downstream reads is there",
+  );
+
+  // The three coordinates remain three cells in the dependency graph, which is what keeps a failure local.
+  const halfBroken = run(cg, {
+    type: "setPointPosition",
+    sheet: "pl",
+    row: "pr",
+    z: "nonsense * 2",
+  });
+  const partial = evaluateBook(halfBroken, null);
+  ok(
+    !resultAt(partial, "pl", "cg", "x")!.error &&
+      !!resultAt(partial, "pl", "cg", "z")!.error,
+    "a derivation that fails on one axis still answers on the other two",
+  );
+
+  const looped = run(cg, {
+    type: "setSheetFormula",
+    sheet: "pl",
+    row: "cg",
+    field: "from",
+    formula: "CG + 1",
+  });
+  ok(
+    (
+      resultAt(evaluateBook(looped, null), "pl", "cg", "z")!.error ?? ""
+    ).includes("refers back to itself"),
+    "and a derivation that reaches back to its own row is caught as the loop it is",
+  );
+
+  const engineRow = cg.sheets
+    .find((page) => page.id === "pl")!
+    .rows.find((r) => r.name === "engine") as { x: string; z: string };
+  ok(
+    engineRow.x === "2.4" && engineRow.z === "0.42",
+    "turning a derivation on leaves the coordinates alone, so turning it off gives them back",
+  );
+
+  // ---- what may be dragged is read off the cell ----
+  //
+  // A drag moves ONE literal inside the expression, and adds one where the expression has none. Which
+  // literal that is comes off the parse, never off a mode the user picked.
+  // The panel hands over the parse the EVALUATOR already made, and a cell that would not parse has none —
+  // so the helper mirrors that rather than throwing where the panel would simply see null.
+  const place = (
+    text: string,
+    value = 0,
+    canAppend = true,
+    symbols = ["HULL"],
+  ) => {
+    let tree = null;
+    try {
+      if (text.trim()) tree = parseFormula(text, symbols);
+    } catch {
+      tree = null;
+    }
+    return readPlacement(text, tree, value, canAppend);
+  };
+  const move = (text: string, value: number, target: number) =>
+    withNominal(place(text, value)!, target, 0.001);
+
+  ok(
+    place("")?.handle === null && place("")?.bare === true,
+    "an unwritten coordinate has nothing to move yet — which is how dragging places it",
+  );
+  ok(
+    place("2.1", 2.1)?.handle?.contributes === 2.1 && place("2.1", 2.1)!.bare,
+    "a cell that IS its number is the simple case, and still the common one",
+  );
+  ok(
+    place("0.35 ± 0.05", 0.35)?.handle?.tail === "± 0.05" &&
+      place("160 ± 10%", 160)?.handle?.tail === "± 10%" &&
+      place("900 ± [50, 200]", 900)?.handle?.tail === "± [50, 200]",
+    "with its spread, in any of the three forms, kept verbatim",
+  );
+
+  // The point of the whole thing: a literal added to a reference.
+  const offset = place("HULL.LCB + 2", 4.05)!;
+  ok(
+    offset.handle?.contributes === 2 && !offset.bare,
+    "a literal added to a reference is the literal a drag moves",
+  );
+  ok(
+    move("HULL.LCB + 2", 4.05, 4.35) === "HULL.LCB + 2.3",
+    "and moving the point moves that number, leaving the reference exactly as typed",
+  );
+  ok(
+    move("HULL.LCB - 0.4", 1.65, 1.35) === "HULL.LCB - 0.7" &&
+      move("HULL.LCB - 0.4", 1.65, 2.25) === "HULL.LCB + 0.2",
+    "a subtracted literal moves the other way, and flips its own operator rather than going negative",
+  );
+  ok(
+    move("HULL.LCB + 2 ± 0.15", 4.05, 4.35) === "HULL.LCB + 2.3 ± 0.15",
+    "the ± rides along: moving a position does not make it better or worse known",
+  );
+
+  // Nothing to move: the drag writes one.
+  ok(
+    place("HULL.LCB", 2.05)?.handle === null &&
+      move("HULL.LCB", 2.05, 2.35) === "HULL.LCB + 0.3" &&
+      move("HULL.LCB", 2.05, 1.85) === "HULL.LCB - 0.2",
+    "a coordinate that is a pure reference gets an offset written for it rather than being overwritten",
+  );
+  ok(
+    place("HULL.LCB", 2.05, false) === null,
+    "but only where the row's unit would give that number a dimension — otherwise the drag would break the cell",
+  );
+  ok(
+    move("HULL.LOA * 0.4", 2, 2.3) === "HULL.LOA * 0.4 + 0.3",
+    "and a proportion is never restated: the offset goes beside it, not into it",
+  );
+  ok(
+    place("HULL.LCB + 2 + 3", 7.05) === null,
+    "two literals in one sum is a refusal rather than a guess at which the gesture meant",
+  );
+  ok(
+    place("2.1 + ", 0) === null,
+    "and a cell that will not parse moves not at all — there is no parse to find a literal in",
+  );
+  ok(
+    move("50%", 0.5, 0.8) === "50% + 0.3",
+    "a percentage is an expression like any other: the offset goes beside it, never into it",
+  );
+
+  // A drag writes on every frame, so what each frame computes FROM decides whether crossing a snap is
+  // survivable. From the cell as it stood when the gesture started, a frame past the snap writes a plain
+  // number again; from the cell as it stands now, it would have found a reference there and appended to it —
+  // which is how brushing past a slice used to weld it into the coordinate for the rest of the drag.
+  ok(
+    move("1.2", 1.2, 2.4) === "2.4" && move("1.2", 1.2, 3.2) === "3.2",
+    "every frame of a drag is computed from where the coordinate started, so the last one lands on the pointer",
+  );
+  ok(
+    withNominal(
+      place("Slices.frame 4.pos", 2.4, true, ["Slices", "frame 4"])!,
+      3.2,
+      0.001,
+    ) === "Slices.frame 4.pos + 0.8",
+    "re-reading a snapped cell instead would offset from the reference — correct for a NEW gesture, wrong mid-drag",
+  );
+
+  ok(
+    move("-2 + HULL.LCB", 0.05, 0.35) === "-1.7 + HULL.LCB",
+    "a leading literal keeps its place at the front of the sum, sign and all",
+  );
+  ok(
+    withoutHandle(place("HULL.LCB + 2", 4.05)!) === "HULL.LCB" &&
+      withoutHandle(place("2.1", 2.1)!) === null,
+    "dragged back onto its base, the offset goes entirely — `HULL.LCB`, not `HULL.LCB + 0`",
+  );
+  ok(
+    readTolerance("") === 0 &&
+      readTolerance("± 0.05") === 0.05 &&
+      readTolerance("± 10%") === null &&
+      readTolerance("± [50, 200]") === null,
+    "a tolerance handle stands only where a single ± can express what is written",
+  );
+  ok(
+    withTolerance(place("HULL.LCB + 2", 4.05)!, 0.25, 0.001) ===
+      "HULL.LCB + 2 ± 0.25" &&
+      withTolerance(place("2.1 ± 0.25", 2.1)!, 0.0001, 0.001) === "2.1",
+    "dragging a tolerance out states one; dragging it back onto the point removes it",
+  );
+
+  // ---- a bare term of the outermost sum is read in the row's unit ----
+  //
+  // Which is what lets `HULL.LCB + 2` evaluate at all. The test is what a term WORKS OUT to, not what it
+  // looks like, so nothing that evaluated before this rule existed evaluates differently now.
+  const inUnits = (formula: string, unit: string): number | string => {
+    let one = run(emptyBook(), {
+      type: "addSheet",
+      id: "u",
+      name: "U",
+      kind: "scalars",
+    });
+    one = run(one, { type: "addSheetRow", sheet: "u", id: "r", after: -1 });
+    one = run(one, { type: "setSheetUnit", sheet: "u", row: "r", unit });
+    one = run(one, {
+      type: "setSheetFormula",
+      sheet: "u",
+      row: "r",
+      field: "formula",
+      formula,
+    });
+    const result = resultAt(evaluateBook(one, metrics), "u", "r")!;
+    return result.error ?? result.reading!.v;
+  };
+  ok(
+    near(inUnits("HULL.LCB + 2", "m") as number, metrics.lcb + 2, 1e-9),
+    "a plain number added to a length is read in the row's own unit",
+  );
+  ok(
+    near(inUnits("HULL.LCB + 200", "mm") as number, metrics.lcb + 0.2, 1e-9),
+    "in the row's unit, not in metres — 200 mm is 0.2 m",
+  );
+  ok(
+    inUnits("HULL.LOA * 0.4", "m") === metrics.loa * 0.4,
+    "a multiplier is left alone: 0.4 of the LOA is a proportion, not 0.4 metres",
+  );
+  ok(
+    inUnits("250 + 12 * 3", "kg") === 286,
+    "a term that works out to a plain number counts, however it was written",
+  );
+  ok(
+    inUnits("2 + 3", "t") === 5000 &&
+      inUnits("2 * 3", "t") === 6000 &&
+      inUnits("1.4", "t") === 1400,
+    "and a formula that was already a plain number lands exactly where it always did",
+  );
+  ok(
+    typeof inUnits("HULL.LCB + 2", "") === "string" &&
+      (inUnits("HULL.LCB + 2", "") as string).includes("Give this row a unit"),
+    "with no unit declared there is nothing to read it in — and the refusal says where the fix is",
+  );
+  ok(
+    typeof inUnits("HULL.SHELL_AREA + 2", "m") === "string",
+    "a unit that disagrees with the formula is still a refusal, not a silent conversion",
+  );
+
+  // ---- a guess is ranked by the CELL it was typed in, not by the row ----
+  const guessed = run(
+    run(book, {
+      type: "setPointPosition",
+      sheet: "pts",
+      row: "engine",
+      x: "2.1 ± 0.3",
+    }),
+    {
+      type: "setSheetFormula",
+      sheet: "p0",
+      row: rowOf(book, "engine arm").rowId,
+      field: "formula",
+      formula: "Places.engine.x + Places.engine.z",
+    },
+  );
+  const ranked = evaluateBook(guessed, null);
+  const terms = resultAt(
+    ranked,
+    "p0",
+    rowOf(guessed, "engine arm").rowId,
+  )!.reading!.terms.map((term) => term.label);
+  ok(
+    terms.includes("Places.engine.x") && terms.includes("Places.engine.z"),
+    "a point's two guesses are ranked apart — which is the whole reason its coordinates are separate cells",
+  );
+
+  // ---- the uncertainty region: a box only when the coordinates are independent ----
+  const independent = build([
+    { name: "a", formula: "2 ± 0.5" },
+    { name: "b", formula: "1 ± 0.25" },
+  ]);
+  const ind = evaluateBook(independent, null);
+  const qa = resultAt(ind, "p0", "p0r0")!.quantity!;
+  const qb = resultAt(ind, "p0", "p0r1")!.quantity!;
+  const box = worstRegion(qa, qb, ind.sources);
+  const spanOf = (poly: [number, number][], axis: 0 | 1) => {
+    const values = poly.map((p) => p[axis]);
+    return [Math.min(...values), Math.max(...values)] as const;
+  };
+  ok(
+    box.length === 4 &&
+      near(spanOf(box, 0)[1], 0.5, 1e-12) &&
+      near(spanOf(box, 1)[1], 0.25, 1e-12) &&
+      box.some(([x, y]) => near(x, 0.5, 1e-12) && near(y, 0.25, 1e-12)),
+    "two independent guesses give the axis-aligned rectangle, corners and all",
+  );
+
+  // Both coordinates measured off ONE frame station: the pair is uncertain along a LINE, and a rectangle
+  // would claim a whole area of positions the inputs cannot reach.
+  const shared = build([
+    { name: "frame", formula: "1 ± 0.1" },
+    { name: "a", formula: "frame * 2" },
+    { name: "b", formula: "frame * 1" },
+  ]);
+  const sh = evaluateBook(shared, null);
+  const line = worstRegion(
+    resultAt(sh, "p0", "p0r1")!.quantity!,
+    resultAt(sh, "p0", "p0r2")!.quantity!,
+    sh.sources,
+  );
+  ok(
+    line.length === 2 &&
+      near(Math.abs(line[0][0]), 0.2, 1e-12) &&
+      near(Math.abs(line[0][1]), 0.1, 1e-12) &&
+      near(line[0][0] / line[0][1], 2, 1e-9),
+    "one shared guess collapses the region to the line the pair actually moves along",
+  );
+
+  // The opposite sign is the other diagonal — which an interval box could never tell apart from the first.
+  const opposed = run(shared, {
+    type: "setSheetFormula",
+    sheet: "p0",
+    row: rowOf(shared, "b").rowId,
+    field: "formula",
+    formula: "0 - frame",
+  });
+  const op = evaluateBook(opposed, null);
+  const anti = worstRegion(
+    resultAt(op, "p0", "p0r1")!.quantity!,
+    resultAt(op, "p0", "p0r2")!.quantity!,
+    op.sources,
+  );
+  ok(
+    anti.length === 2 && near(anti[0][0] / anti[0][1], -2, 1e-9),
+    "and a guess two coordinates lean on in opposite directions tilts the other way",
+  );
+
+  // The likely ellipse reaches exactly as far along each axis as the panel's own quadrature figure.
+  const ellipse = likelyRegion(qa, qb, ind.sources);
+  const likelyA = resultAt(ind, "p0", "p0r0")!.reading!.likely.hi;
+  const likelyB = resultAt(ind, "p0", "p0r1")!.reading!.likely.hi;
+  ok(
+    near(spanOf(ellipse, 0)[1], likelyA, 1e-9) &&
+      near(spanOf(ellipse, 1)[1], likelyB, 1e-9),
+    "the likely region is the quadrature the panel quotes, drawn",
+  );
+  const certain = build([
+    { name: "a", formula: "2 ± 0.5" },
+    { name: "b", formula: "1" },
+  ]);
+  const ce = evaluateBook(certain, null);
+  const flat = worstRegion(
+    resultAt(ce, "p0", "p0r0")!.quantity!,
+    resultAt(ce, "p0", "p0r1")!.quantity!,
+    ce.sources,
+  );
+  ok(
+    flat.length === 2 && flat.every(([, y]) => y === 0),
+    "a coordinate nothing can move leaves the region a line along the other one",
+  );
+
+  // ---- the frame, and the two outlines ----
+  const outlines = hullOutlines(model, sampling)!;
+  ok(
+    outlines !== null && outlines.profile.upper.length > 4,
+    "a swept hull yields a side-view silhouette to place a point against",
+  );
+  const metres = unitScale(model.unit, "m");
+  ok(
+    near(outlines.frame.xSpan[0], 0, 1e-9) &&
+      near(outlines.frame.zSpan[0], 0, 1e-9),
+    "stated in the sheet's frame: x from the transom, z above the keel baseline",
+  );
+  const lowest = Math.min(...outlines.profile.lower.map(([, z]) => z));
+  ok(
+    near(lowest, 0, 1e-6),
+    "so the lowest point of the silhouette sits on the datum it is measured from",
+  );
+  ok(
+    near(outlines.frame.xSpan[1], metrics.loa, 1e-6),
+    "and the silhouette spans the LOA the sheet reads from HULL.LOA",
+  );
+
+  // A round trip through model coordinates, which is what the 3D overlay would draw with.
+  const there: [number, number, number] = [1.2, 0.3, 0.8];
+  const back = toSheet(outlines.frame, toModel(outlines.frame, there));
+  ok(
+    near(back[0], there[0], 1e-9) &&
+      near(back[1], there[1], 1e-9) &&
+      near(back[2], there[2], 1e-9),
+    "the sheet frame and the model frame convert back and forth exactly",
+  );
+
+  const amidships = sectionOutline(
+    model,
+    outlines.frame,
+    outlines.frame.xSpan[1] / 2,
+  )!;
+  ok(
+    amidships.starboard.length > 2 &&
+      !amidships.clamped &&
+      amidships.starboard.every(([, z]) => z >= -1e-6),
+    "the section at a point's x is a real cut, above the keel datum",
+  );
+  ok(
+    amidships.port.every(([y], i) =>
+      near(y, -amidships.starboard[i][0], 1e-12),
+    ),
+    "and carries both halves, because a point may sit on either side",
+  );
+  const beyond = sectionOutline(
+    model,
+    outlines.frame,
+    outlines.frame.xSpan[1] * 2,
+  )!;
+  ok(
+    beyond !== null && beyond.clamped,
+    "an x past the bow is clamped to the nearest real section rather than refused — a point outside the hull is still a point",
+  );
+  ok(
+    near(
+      (outlines.frame.x1 - outlines.frame.x0) * metres,
+      outlines.frame.xSpan[1],
+      1e-9,
+    ),
+    "and the frame's model span and its sheet span are the same length",
+  );
+}
+
 // ---------- the hull's own numbers ----------
 {
   const model = assemble(defaultHull());
@@ -1581,6 +2471,70 @@ const problem = (
   );
 }
 
+// ---------- one frame, wherever the hull happens to be drawn ----------
+//
+// The plan starts at whatever x its first control point was drawn at, which is 0 for most hulls and is the
+// reason this went unnoticed: every position the sheet can read has to be measured from the TRANSOM, or the
+// hull's own terms sit offset from the points beside them in a moment sum, silently and by exactly zero on
+// the hulls anyone tests with.
+{
+  const base = defaultHull();
+  const shift = 400;
+  const moved = {
+    ...base,
+    sheerPlan: base.sheerPlan.map((p) => ({ ...p, x: p.x + shift })),
+    sheerTrim: base.sheerTrim.map((p) => ({ ...p, x: p.x + shift })),
+    transom: base.transom.map((p) => ({
+      ...p,
+      x: p.x + shift,
+    })) as typeof base.transom,
+  };
+  const measure = (hull: typeof base) => {
+    const m = assemble(hull);
+    const hs = computeHullSampling(m, 240, 10);
+    const metrics = hullMetrics(m, hs)!;
+    const outlines = hullOutlines(m, hs)!;
+    return {
+      metrics,
+      slice: measureSlice(m, hs, "station", metrics.loa / 2)!,
+      // A real point on the skin, put through the frame the point editor authors in.
+      skin: toSheet(
+        outlines.frame,
+        hs.columns[Math.floor(hs.columns.length / 2)].pts[0].pos,
+      ),
+    };
+  };
+  const here = measure(base);
+  const there = measure(moved);
+
+  ok(
+    near(here.metrics.shellLcg, there.metrics.shellLcg, 1e-9) &&
+      near(here.metrics.lcb, there.metrics.lcb, 1e-9) &&
+      near(here.metrics.lcf, there.metrics.lcf, 1e-9),
+    "moving the whole hull along x does not move where the sheet says its centres are",
+  );
+  ok(
+    near(here.slice.x, there.slice.x, 1e-9) &&
+      near(here.skin[0], there.skin[0], 1e-9),
+    "and a slice's centroid and a point's coordinate hold still with them — one frame, not three",
+  );
+  ok(
+    near(here.metrics.shellVcg, there.metrics.shellVcg, 1e-9) &&
+      near(here.metrics.kb, there.metrics.kb, 1e-9) &&
+      near(here.skin[2], there.skin[2], 1e-9),
+    "the heights were already agreed, and stay agreed",
+  );
+  // The one that makes it matter: the hull's shell and a point, added in one moment sum.
+  ok(
+    near(
+      here.metrics.shellLcg - here.slice.x,
+      there.metrics.shellLcg - there.slice.x,
+      1e-9,
+    ),
+    "so a moment arm between the hull's own shell and anything else is the same arm wherever it was drawn",
+  );
+}
+
 // ---------- SHELL_AREA and its centroid, against an independent integration ----------
 //
 // Both come from a cut taken with the waterplane above the whole hull, relying on `cut` accumulating wsa and
@@ -1626,7 +2580,8 @@ const problem = (
   );
 
   const geom = stationGeometry(model, sampling)!;
-  const meshLcg = (cx / area) * s;
+  // In the sheet's frame, like the metric it is checked against: x forward from the transom.
+  const meshLcg = (cx / area - model.plan.at(0)[0]) * s;
   const meshVcg = (cz / area) * s - geom.keelZ * s;
   ok(
     Math.abs(meshLcg - metrics.shellLcg) < 0.01 * metrics.loa,

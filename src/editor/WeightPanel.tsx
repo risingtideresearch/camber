@@ -8,7 +8,7 @@ import {
 } from "react";
 import type { DocumentCommand } from "../core/commands";
 import { FUNCTIONS } from "../core/sheet/formula";
-import { HULL_METRICS } from "../core/hullMetrics";
+import { HULL_METRICS, HULL_POINTS } from "../core/hullMetrics";
 import { type Reading } from "../core/sheet/quantity";
 import {
   FIRST_SHEET_NAME,
@@ -18,6 +18,7 @@ import {
   outputsSheet,
   rowNamed,
   type PageKind,
+  type PointRow,
   type Sheet,
   type SheetRow,
   type SliceRow,
@@ -28,6 +29,14 @@ import {
   sliceMeasurementKey,
   type SliceMeasurement,
 } from "../core/sheet/slices";
+import { hullOutlines } from "../core/sheet/points";
+import { PointViews, type Move } from "./PointViews";
+import {
+  placementFor,
+  plotPoints,
+  snapTargets,
+  widestCell,
+} from "./pointPlots";
 import { resultAt, type BookResults } from "../core/sheet/evaluate";
 import { Button } from "../components/Button";
 import { Dropdown } from "../components/Dropdown";
@@ -93,6 +102,9 @@ function showSpread(
 
 const pct = (v: number): string => `${Math.round(v * 100)}%`;
 
+/** The page kinds whose table shares the panel with a drawing of what it holds. */
+const SPLIT: ReadonlySet<PageKind> = new Set<PageKind>(["points", "slices"]);
+
 // ---------- the panel ----------
 
 export function WeightPanel() {
@@ -112,6 +124,9 @@ export function WeightPanel() {
   // able to look at different parts of the same schedule, and folding a heading is not an edit anyone would
   // want in their undo history.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  // Which point rows are showing an empty derivation field. A row that HAS a derivation shows it in every
+  // window; only the moment before one is written is local, because nothing has been said yet.
+  const [deriving, setDeriving] = useState<ReadonlySet<string>>(new Set());
 
   const hullSampling = sampling();
   const { measurements: sliceMeasurements, results } = useWeightBookResults(
@@ -139,6 +154,35 @@ export function WeightPanel() {
   }, [focusRow, sheet, sliceMeasurements]);
   // What the toolbar's tools act on: the item the caret was last in on this page.
   const focused = sheet?.rows.find((row) => row.id === focusRow) ?? null;
+
+  // The hull a points page draws against. Kept on the model and its sweep alone, so editing a formula does
+  // not rebuild a silhouette — and computed for a points page only, because nothing else asks for one.
+  const outlines = useMemo(
+    () =>
+      sheet?.kind === "points" && hullSampling
+        ? hullOutlines(model, hullSampling)
+        : null,
+    [sheet?.kind, model, hullSampling],
+  );
+  const plots = useMemo(
+    () => (sheet?.kind === "points" ? plotPoints(sheet, results, reading) : []),
+    [sheet, results, reading],
+  );
+  const snaps = useMemo(
+    () => (sheet?.kind === "points" ? snapTargets(book, results) : []),
+    [book, results, sheet?.kind],
+  );
+
+  /**
+   * A point moved in one of the views.
+   *
+   * One command, however many coordinates the gesture touched: `sameGesture` tells two book edits apart by
+   * their row, so a whole drag collapses into one undo step, and the three coordinates never sit half-moved.
+   */
+  const movePoint = (row: string, move: Move) => {
+    if (!sheet) return;
+    send({ type: "setPointPosition", sheet: sheet.id, row, ...move });
+  };
 
   const addSheet = (name: string, kind: PageKind = "scalars") => {
     const id = newId("p");
@@ -202,7 +246,12 @@ export function WeightPanel() {
         book={book}
         active={sheet}
         onPick={setActiveSheet}
-        onAdd={(kind) => addSheet(kind === "slices" ? "Slices" : "Page", kind)}
+        onAdd={(kind) =>
+          addSheet(
+            { slices: "Slices", points: "Points", scalars: "Page" }[kind],
+            kind,
+          )
+        }
         send={send}
       />
 
@@ -248,7 +297,9 @@ export function WeightPanel() {
 
       {showReference && <Reference book={book} sheet={sheet} />}
 
-      <div className={sheet?.kind === "slices" ? "wslicebody" : "wbody"}>
+      <div
+        className={SPLIT.has(sheet?.kind ?? "scalars") ? "wsplitbody" : "wbody"}
+      >
         <div className="wscroll">
           {sheet && (
             <SheetTable
@@ -260,6 +311,8 @@ export function WeightPanel() {
               setFocusRow={setFocusRow}
               collapsed={collapsed}
               setCollapsed={setCollapsed}
+              deriving={deriving}
+              setDeriving={setDeriving}
               addRow={addRow}
               send={send}
               sliceMeasurements={sliceMeasurements}
@@ -267,7 +320,7 @@ export function WeightPanel() {
           )}
         </div>
         {sheet?.kind === "slices" && (
-          <div className="wslicepreview">
+          <div className="wsplitpreview">
             <View3d
               model={model}
               sampling={hullSampling ?? undefined}
@@ -277,6 +330,27 @@ export function WeightPanel() {
               title="Hull slices"
               sliceOverlay={sliceOverlay}
             />
+          </div>
+        )}
+        {sheet?.kind === "points" && (
+          <div className="wsplitpreview">
+            {outlines ? (
+              <PointViews
+                model={model}
+                outlines={outlines}
+                points={plots}
+                snaps={snaps}
+                activeId={focusRow}
+                reading={reading}
+                onFocus={setFocusRow}
+                onMove={movePoint}
+              />
+            ) : (
+              <p className="whint">
+                The hull has not been swept yet, so there is nothing to place a
+                point against. The coordinates below still evaluate.
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -456,7 +530,7 @@ function SheetTabs({
   readonly book: WeightBook;
   readonly active: Sheet | null;
   readonly onPick: (id: string) => void;
-  readonly onAdd: (kind: "scalars" | "slices") => void;
+  readonly onAdd: (kind: "scalars" | "points" | "slices") => void;
   readonly send: (command: DocumentCommand) => void;
 }) {
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -589,6 +663,15 @@ function SheetTabs({
             <button
               onClick={() => {
                 setAddMenu(null);
+                onAdd("points");
+              }}
+            >
+              <b>Positions</b>
+              <small>Placed in the profile and the section</small>
+            </button>
+            <button
+              onClick={() => {
+                setAddMenu(null);
                 onAdd("slices");
               }}
             >
@@ -613,6 +696,9 @@ interface TableProps {
   readonly setFocusRow: (id: string | null) => void;
   readonly collapsed: ReadonlySet<string>;
   readonly setCollapsed: (next: ReadonlySet<string>) => void;
+  /** Point rows asked to show a derivation they have not written yet. View state, like a folded heading. */
+  readonly deriving: ReadonlySet<string>;
+  readonly setDeriving: (next: ReadonlySet<string>) => void;
   readonly addRow: (after: number, group?: string) => void;
   readonly send: (command: DocumentCommand) => void;
   readonly sliceMeasurements: ReadonlyMap<string, SliceMeasurement>;
@@ -689,7 +775,16 @@ function SheetTable(props: TableProps) {
   return (
     <table className="wsheet">
       <thead>
-        {sheet.kind === "slices" ? (
+        {sheet.kind === "points" ? (
+          <tr>
+            <th className="wcolname">Point</th>
+            <th className="wcolcoord">x — from the transom</th>
+            <th className="wcolcoord">y — off the centreline</th>
+            <th className="wcolcoord">z — above the keel</th>
+            <th className="wcolunit">Unit</th>
+            <th className="wcolact" />
+          </tr>
+        ) : sheet.kind === "slices" ? (
           <tr>
             <th className="wcolname">Slice</th>
             <th className="wcolshape">Cut</th>
@@ -739,7 +834,15 @@ function SheetTable(props: TableProps) {
               />
             ) : (
               !hidden.has(row.id) &&
-              (row.kind === "slice" ? (
+              (row.kind === "point" ? (
+                <PointRowView
+                  {...props}
+                  row={row}
+                  index={i}
+                  completions={completions}
+                  {...dragProps(i)}
+                />
+              ) : row.kind === "slice" ? (
                 <SliceRowView
                   {...props}
                   row={row}
@@ -952,6 +1055,222 @@ interface RowProps extends TableProps {
   readonly onDrop: () => void;
   readonly onDragEnd: () => void;
   readonly onNudge: (delta: -1 | 1) => void;
+}
+
+/**
+ * One position: three formula cells that happen to be draggable.
+ *
+ * The row shows a coordinate's VALUE only where the cell is not already the number — an expression, or a
+ * cell that failed. A literal needs no readout beside itself, and repeating `2.1` next to `2.1` down three
+ * columns would bury the two rows where the readout is the whole point.
+ */
+function PointRowView({
+  sheet,
+  row,
+  index,
+  results,
+  reading,
+  focusRow,
+  setFocusRow,
+  addRow,
+  send,
+  completions,
+  deriving,
+  setDeriving,
+  dragging,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+  onNudge,
+}: Omit<RowProps, "row"> & { readonly row: PointRow }) {
+  const focused = focusRow === row.id;
+  const unitResult = resultAt(results, sheet.id, row.id, "x");
+  const axes = (["x", "y", "z"] as const).map((axis) => ({
+    axis,
+    result: resultAt(results, sheet.id, row.id, axis),
+  }));
+  // A row shows one expression instead of three coordinates when it HAS one. The empty in-between — the
+  // moment after asking for a derivation and before writing it — is a view preference like a folded heading:
+  // nothing has been said yet, so there is nothing for the document to remember.
+  const derived = row.from.trim() !== "" || deriving.has(row.id);
+  return (
+    <tr
+      className={`wrow wpointrow${focused ? " focused" : ""}${dragging ? " dragging" : ""}`}
+      onClick={() => setFocusRow(row.id)}
+      onDragOver={(event) => {
+        event.preventDefault();
+        const box = event.currentTarget.getBoundingClientRect();
+        onDragOver(event.clientY > box.top + box.height / 2);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        onDrop();
+      }}
+      onKeyDown={(event) => {
+        if (!event.altKey) return;
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          onNudge(-1);
+        } else if (event.key === "ArrowDown") {
+          event.preventDefault();
+          onNudge(1);
+        }
+      }}
+    >
+      <td className="wcolname">
+        <Grip onDragStart={onDragStart} onDragEnd={onDragEnd} rowId={row.id} />
+        <Field
+          value={row.name}
+          placeholder="name"
+          className="wname"
+          onCommit={(name) =>
+            send({ type: "renameSheetRow", sheet: sheet.id, row: row.id, name })
+          }
+          onFocus={() => setFocusRow(row.id)}
+        />
+      </td>
+      {derived ? (
+        // Three columns on a points page, where the coordinates are; one beside the answers, where the
+        // scalar rows put their formula and the header says so.
+        <td className="wcolderived" colSpan={3}>
+          <FormulaField
+            value={row.from}
+            error={
+              axes.find(({ result }) => result?.error)?.result?.error ?? null
+            }
+            completions={completions}
+            onCommit={(formula) =>
+              send({
+                type: "setSheetFormula",
+                sheet: sheet.id,
+                row: row.id,
+                field: "from",
+                formula,
+              })
+            }
+            onFocus={() => setFocusRow(row.id)}
+          />
+          {/* Where it landed. One expression states three numbers, and a row showing only the expression
+              would never say which three. */}
+          <span className="wpointval">
+            {axes.every(({ result }) => result?.reading)
+              ? `= ${axes
+                  .map(({ result }) =>
+                    sig(inUnit(result!.reading!.v, result!.unit?.factor ?? 1)),
+                  )
+                  .join(" / ")}`
+              : row.from.trim()
+                ? "—"
+                : "one expression for all three coordinates — a point named in it means that coordinate"}
+          </span>
+        </td>
+      ) : (
+        axes.map(({ axis, result }) => {
+          const factor = result?.unit?.factor ?? 1;
+          // Draggability is a property of the CELL, not a mode: a drag moves one literal inside it, and a cell
+          // with no literal it may move is shown where it computes to and left alone. Saying so on the row is
+          // what stops the views looking broken when a point will not follow the pointer.
+          const placement = placementFor(row[axis], result);
+          const bare = placement?.bare ?? false;
+          return (
+            <td className="wcolcoord" key={axis}>
+              <FormulaField
+                value={row[axis]}
+                error={result?.error ?? null}
+                completions={completions}
+                onCommit={(formula) =>
+                  send({
+                    type: "setSheetFormula",
+                    sheet: sheet.id,
+                    row: row.id,
+                    field: axis,
+                    formula,
+                  })
+                }
+                onFocus={() => setFocusRow(row.id)}
+              />
+              {result?.error ? (
+                <span className="wpointval bad" title={result.error}>
+                  {result.error}
+                </span>
+              ) : !bare && result?.reading ? (
+                <span
+                  className={`wpointval${placement ? "" : " fixed"}`}
+                  title={
+                    placement
+                      ? "Dragging moves the number in this expression, and adds one if it has none — the rest is left exactly as written."
+                      : "Nothing here is a number a drag could move, so this coordinate is shown in the views and not dragged."
+                  }
+                >
+                  = {sig(inUnit(result.reading.v, factor))}{" "}
+                  {showSpread(result.reading, factor, reading)}
+                </span>
+              ) : null}
+            </td>
+          );
+        })
+      )}
+      <td className="wcolunit">
+        <Field
+          value={row.unit}
+          placeholder={unitResult?.unit?.label ?? "m"}
+          className="wunit"
+          title="What all three coordinates are written in — one unit covers the row."
+          onCommit={(unit) =>
+            send({ type: "setSheetUnit", sheet: sheet.id, row: row.id, unit })
+          }
+          onFocus={() => setFocusRow(row.id)}
+        />
+      </td>
+      <td className="wcolact">
+        <button
+          className={`wderive${derived ? " on" : ""}`}
+          title={
+            derived
+              ? "Back to three coordinates, as they were before the derivation"
+              : "State this point as one expression over the others — a centre of gravity, say"
+          }
+          aria-pressed={derived}
+          onClick={() => {
+            const next = new Set(deriving);
+            if (derived) {
+              next.delete(row.id);
+              // Clearing the stored expression is what turns the row back. The coordinates it had are still
+              // there, untouched, which is what makes the switch safe to try.
+              if (row.from)
+                send({
+                  type: "setSheetFormula",
+                  sheet: sheet.id,
+                  row: row.id,
+                  field: "from",
+                  formula: "",
+                });
+            } else next.add(row.id);
+            setDeriving(next);
+            setFocusRow(row.id);
+          }}
+        >
+          ƒ
+        </button>
+        <button
+          title="Add a point below this one"
+          onClick={() => addRow(index)}
+        >
+          +
+        </button>
+        <button
+          className="wremove"
+          title="Remove this point"
+          onClick={() =>
+            send({ type: "removeSheetRow", sheet: sheet.id, row: row.id })
+          }
+        >
+          ×
+        </button>
+      </td>
+    </tr>
+  );
 }
 
 function SliceRowView({
@@ -1456,12 +1775,20 @@ function Footer({
     ? resultAt(results, outputsPage!.id, nominatedRow.id)
     : undefined;
 
+  // A row with more than one cell has no single spread to rank — a point has three coordinates and a slice
+  // has its position — so the footer takes the widest of them and says which one it took.
+  const focusedRow = sheet?.rows.find((r) => r.id === focusRow) ?? null;
+  const widest =
+    sheet && focusedRow ? widestCell(sheet, focusedRow, results) : null;
   const focused =
-    sheet && focusRow ? resultAt(results, sheet.id, focusRow) : undefined;
+    widest?.result ??
+    (sheet && focusRow ? resultAt(results, sheet.id, focusRow) : undefined);
   const subject = output ?? focused?.reading ?? null;
   const subjectName = output
     ? "the estimated displacement"
-    : (sheet?.rows.find((r) => r.id === focusRow)?.name ?? "this item");
+    : widest
+      ? `${focusedRow?.name || "this row"}.${widest.field}`
+      : (focusedRow?.name ?? "this item");
 
   const vcg = results.outputs.vcg;
   const lcg = results.outputs.lcg;
@@ -1617,6 +1944,52 @@ function Reference({
           <Entry term="total * 7%" hint="a percentage is just ÷100" />
         </dl>
       </Section>
+      {sheet?.kind === "points" && (
+        <Section title="Positions">
+          <dl>
+            <Entry
+              term="engine.x / .y / .z"
+              hint="a point is three values — name a coordinate, never the point"
+            />
+            <Entry
+              term="2.1 ± 0.05"
+              hint="a plain number can be dragged in the views; the ± rides along"
+            />
+            <Entry
+              term="HULL.LCB + 2"
+              hint="dragging moves the 2 and leaves the reference alone"
+            />
+            <Entry
+              term="HULL.LWL * 0.4"
+              hint="no literal to move, so dragging appends one — the proportion is never restated"
+            />
+            <Entry
+              term="Slices.tank flat.pos"
+              hint="sit on a slice, and follow it when the hull changes"
+            />
+            <Entry
+              term="engine"
+              hint="a point named bare means whichever coordinate the cell is"
+            />
+            <Entry
+              term="Slices.midship"
+              hint="a slice bare is its centroid — weight by area for a centre of area"
+            />
+            <Entry
+              term="HULL.SHELL_CG"
+              hint="the shell's own centroid, to weigh in beside the points"
+            />
+            <Entry
+              term="(m1 * a + m2 * b) / (m1 + m2)"
+              hint="press ƒ to state all three coordinates at once — a centre of gravity"
+            />
+            <Entry
+              term="Points.CG.z"
+              hint="a coordinate of a point is what OUT.VCG is written as"
+            />
+          </dl>
+        </Section>
+      )}
       {sheet?.kind === "slices" && (
         <Section title="Slice results">
           <dl>
@@ -1637,6 +2010,15 @@ function Reference({
       <Section title="The hull">
         <dl>
           {HULL_METRICS.map((spec) => (
+            <Entry
+              key={spec.name}
+              term={`HULL.${spec.name}`}
+              hint={spec.hint}
+            />
+          ))}
+          {/* The measurements that are a place rather than a number. In a coordinate cell they name that
+              coordinate, so the hull's own shell weighs into a centre of gravity beside the points. */}
+          {HULL_POINTS.map((spec) => (
             <Entry
               key={spec.name}
               term={`HULL.${spec.name}`}

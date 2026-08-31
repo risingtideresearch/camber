@@ -56,6 +56,7 @@ import {
   div,
   exact,
   exp,
+  isDimless,
   ln,
   log10,
   maxOf,
@@ -66,8 +67,10 @@ import {
   QuantityError,
   sin,
   sqrt,
+  stampUnit,
   sub,
   tan,
+  type Dim,
   type Quantity,
   type Source,
 } from "./quantity";
@@ -220,7 +223,21 @@ export function tokenize(
 // ---------- the tree ----------
 
 export type Node =
-  | { readonly k: "num"; readonly v: number }
+  /**
+   * A literal, and where it was written.
+   *
+   * `at`/`end` bracket the number's own source text — the `±` and its amount included, since those are part
+   * of the same literal. They are here so an editor can REWRITE one number without disturbing a character of
+   * the rest of the expression: dragging a point authored as `HULL.LCB + 2` moves the `2` and leaves the
+   * reference exactly as typed. Every other node carries only the position an error message points at; these
+   * two carry a span, because a span is what a rewrite needs.
+   */
+  | {
+      readonly k: "num";
+      readonly v: number;
+      readonly at: number;
+      readonly end: number;
+    }
   /** A number with an uncertainty attached. `lo`/`hi` are already absolute by the time they get here. */
   | {
       readonly k: "spread";
@@ -228,6 +245,7 @@ export type Node =
       readonly lo: number;
       readonly hi: number;
       readonly at: number;
+      readonly end: number;
     }
   /** A dotted path: `hull shell`, `HULL.WSA`, `Weights.hull shell`. */
   | { readonly k: "ref"; readonly path: readonly string[]; readonly at: number }
@@ -237,7 +255,7 @@ export type Node =
       readonly args: readonly Node[];
       readonly at: number;
     }
-  | { readonly k: "neg"; readonly a: Node }
+  | { readonly k: "neg"; readonly a: Node; readonly at: number }
   | { readonly k: "pct"; readonly a: Node }
   | {
       readonly k: "bin";
@@ -321,7 +339,7 @@ class Parser {
     const tok = this.peek();
     if (tok.kind === "op" && tok.text === "-") {
       this.next();
-      return { k: "neg", a: this.unary() };
+      return { k: "neg", a: this.unary(), at: tok.at };
     }
     if (tok.kind === "op" && tok.text === "+") {
       this.next();
@@ -372,6 +390,7 @@ class Parser {
         lo: mid - lo.value,
         hi: hi.value - mid,
         at: tok.at,
+        end: this.literalEnd(),
       });
     }
 
@@ -394,6 +413,7 @@ class Parser {
             lo,
             hi,
             at: tok.at,
+            end: this.literalEnd(),
           });
         }
         const amount = Math.abs(this.amount(tok.value));
@@ -403,9 +423,15 @@ class Parser {
           lo: amount,
           hi: amount,
           at: tok.at,
+          end: this.literalEnd(),
         });
       }
-      return this.maybePercent({ k: "num", v: tok.value });
+      return this.maybePercent({
+        k: "num",
+        v: tok.value,
+        at: tok.at,
+        end: this.literalEnd(),
+      });
     }
 
     if (tok.kind === "lparen") {
@@ -451,6 +477,17 @@ class Parser {
   private maybePercent(node: Node): Node {
     return this.eat("percent") ? { k: "pct", a: node } : node;
   }
+
+  /**
+   * Where the token just consumed ends — the end of the literal being built.
+   *
+   * Taken BEFORE any trailing `%`, deliberately. A percentage is not a literal a drag may move (`7%` is a
+   * proportion, not a distance), so the span never has to cover one.
+   */
+  private literalEnd(): number {
+    const last = this.toks[this.pos - 1];
+    return last ? last.at + last.text.length : 0;
+  }
 }
 
 /**
@@ -482,6 +519,71 @@ export interface EvalEnv {
    * the ROW it was typed in — which is what makes the sensitivity list readable.
    */
   source(lo: number, hi: number): Source;
+  /**
+   * What a bare number in a top-level term is written in, where the row declares a unit with a dimension.
+   *
+   * This is what makes `HULL.LCB + 2` mean LCB plus two metres rather than a refusal to add a length to a
+   * plain number. It reaches ONLY the outermost sum's own literals, for the reason `topLevelTerms` gives —
+   * anywhere else a number is a multiplier, an exponent or an argument, and stamping those would turn
+   * `HULL.LOA * 0.4` into an area.
+   *
+   * Omitted, every literal is a plain number, which is what the language did before and still does in a row
+   * that declares nothing.
+   */
+  literal?: { readonly factor: number; readonly dim: Dim } | null;
+}
+
+/**
+ * One term of the outermost `+`/`−` chain, with the sign it enters under.
+ *
+ * This chain is where the two things a position editor needs both live. A term of a sum must carry the sum's
+ * own dimension, so a term that works out to a plain number can only be meant in the row's unit — that is
+ * the rule `evaluate` applies below, and it is what lets `HULL.LCB + 2` evaluate at all. And a term that IS
+ * one bare literal is the only number in an expression a DRAG may rewrite, because moving a point is adding
+ * a distance to it: `0.4` in `HULL.LOA * 0.4` is a proportion, and nudging a point should never quietly
+ * restate a design ratio.
+ *
+ * The two are close but not the same test — `12 * 3` is a plain number and not a literal — so they are kept
+ * apart deliberately. `termLiteral` is the second one.
+ */
+export interface Term {
+  readonly node: Node;
+  readonly sign: 1 | -1;
+  /** Where the `+` or `−` before it sits. −1 for the first term, which has none. */
+  readonly opAt: number;
+}
+
+/** The terms of the outermost sum. A formula that is not a sum is one term, which is the useful degenerate. */
+export function topLevelTerms(root: Node): Term[] {
+  const out: Term[] = [];
+  const walk = (node: Node, sign: 1 | -1, opAt: number): void => {
+    if (node.k === "bin" && (node.op === "+" || node.op === "-")) {
+      walk(node.a, sign, opAt);
+      walk(node.b, node.op === "+" ? sign : (-sign as 1 | -1), node.at);
+      return;
+    }
+    out.push({ node, sign, opAt });
+  };
+  walk(root, 1, -1);
+  return out;
+}
+
+/** The literal a term IS, unwrapping a leading minus, or null where the term is anything else. */
+export function termLiteral(term: Term): {
+  readonly node: Node & { k: "num" | "spread" };
+  readonly sign: 1 | -1;
+  readonly at: number;
+} | null {
+  const negated = term.node.k === "neg";
+  const inner = negated ? (term.node as { a: Node }).a : term.node;
+  if (inner.k !== "num" && inner.k !== "spread") return null;
+  return {
+    node: inner,
+    sign: negated ? (-term.sign as 1 | -1) : term.sign,
+    // A `-2` starts at its minus sign, not at its digits: rewriting the number without it would leave the
+    // sign behind and silently flip what the drag meant.
+    at: negated ? (term.node as { at: number }).at : inner.at,
+  };
 }
 
 /** The functions a formula may call, with how many arguments each takes. */
@@ -501,7 +603,7 @@ export const FUNCTIONS: Record<
   tan: { arity: 1, hint: "tan(deg) — degrees, not radians" },
 };
 
-export function evaluate(node: Node, env: EvalEnv): Quantity {
+export function evaluate(node: Node, env: EvalEnv, topLevel = true): Quantity {
   // Every arithmetic rule can refuse (mismatched units, a division by zero), and those refusals arrive as
   // QuantityError. They are turned into FormulaError here so a caller has one error type to catch and a
   // position to point at.
@@ -514,6 +616,23 @@ export function evaluate(node: Node, env: EvalEnv): Quantity {
       throw error;
     }
   };
+
+  // One whole TERM of the outermost sum, in a row that says what its numbers are written in. A term that
+  // works out to a plain number is read in that unit, which is what makes `HULL.LCB + 2` mean LCB plus two
+  // metres instead of a refusal to add a length to a number.
+  //
+  // The test is what the term COMES OUT as, not what it looks like. `250 + 12 * 3` in a row of kilograms is
+  // two terms and both are plain numbers, so both are kilograms and the row still totals 286 — where a
+  // syntactic rule that only stamped bare literals would have made the second one dimensionless and broken
+  // a formula that has always worked. Stamping distributes over + and −, so a wholly dimensionless formula
+  // lands on exactly the number it landed on before.
+  const isSum = node.k === "bin" && (node.op === "+" || node.op === "-");
+  if (topLevel && !isSum && env.literal) {
+    const value = evaluate(node, env, false);
+    return isDimless(value.dim)
+      ? stampUnit(value, env.literal.factor, env.literal.dim)
+      : value;
+  }
 
   switch (node.k) {
     case "num":
@@ -534,14 +653,16 @@ export function evaluate(node: Node, env: EvalEnv): Quantity {
       return env.resolve(node.path, node.at);
 
     case "neg":
-      return neg(evaluate(node.a, env));
+      return neg(evaluate(node.a, env, false));
 
     case "pct":
-      return guard(0, () => div(evaluate(node.a, env), exact(100)));
+      return guard(0, () => div(evaluate(node.a, env, false), exact(100)));
 
     case "bin": {
-      const a = evaluate(node.a, env);
-      const b = evaluate(node.b, env);
+      // Only a sum passes the top of the expression down to its sides; every other operator ends it, because
+      // a number under one is a multiplier or an exponent rather than a quantity of the row's own kind.
+      const a = evaluate(node.a, env, isSum);
+      const b = evaluate(node.b, env, isSum);
       return guard(node.at, () => {
         switch (node.op) {
           case "+":

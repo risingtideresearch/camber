@@ -1,0 +1,177 @@
+/* The two projections a point is placed in. Both draw in screen pixels — the fit lives in the component —
+   so every width here is a real width and nothing has to be divided by a zoom. */
+
+.pviews {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pview {
+  position: relative;
+  flex: 1 1 50%;
+  min-height: 120px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.pviewcap {
+  position: absolute;
+  z-index: 1;
+  top: 4px;
+  left: 8px;
+  color: var(--mut);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+.pviewsvg {
+  display: block;
+  touch-action: none;
+}
+
+/* ---------- the hull ---------- */
+
+/* Nothing the hull is drawn with ever takes a pointer: the only things worth pressing are the points and
+   their handles, and an outline that swallowed a press would make a point on top of it ungrabbable. */
+.phull,
+.pdatum,
+.pcut,
+.psnap,
+.psnaplabel,
+.pnone,
+.plabel {
+  pointer-events: none;
+}
+
+.phull {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+  opacity: 0.75;
+}
+
+/* The keel baseline and the centreline: the datums the sheet's frame is stated against, so a coordinate can
+   be read off the drawing rather than taken on trust. */
+.pdatum {
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: 5 5;
+}
+
+/* Where the section is being taken, drawn in the profile. The two views are one gesture apart, and this is
+   the line that says so. */
+.pcut {
+  stroke: var(--slider);
+  stroke-width: 1.2;
+  stroke-dasharray: 3 4;
+  opacity: 0.7;
+}
+
+.psnap {
+  stroke: var(--slider);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+
+.psnaplabel {
+  fill: var(--slider);
+  font-size: 10px;
+  opacity: 0.85;
+}
+
+.pnone {
+  fill: var(--mut);
+  font-size: 11px;
+  text-anchor: middle;
+}
+
+/* ---------- the points ---------- */
+
+.ppoint {
+  cursor: grab;
+}
+.ppoint.locked {
+  cursor: default;
+}
+.ppoint:active {
+  cursor: grabbing;
+}
+
+/* Transparent, not `none` — `none` is not hit-testable, which is the whole point of this circle. */
+.phit {
+  fill: transparent;
+}
+
+.pdot {
+  fill: #2b78c5;
+  stroke: var(--bg);
+  stroke-width: 1.5;
+}
+.ppoint.on .pdot {
+  fill: #e4572e;
+}
+/* A coordinate nobody has written yet. The point is drawn where it would be so it can be grabbed, but it is
+   not claiming to be anywhere. */
+.ppoint.ghost .pdot {
+  fill: none;
+  stroke: var(--mut);
+  stroke-dasharray: 2 2;
+}
+/* Both of this view's coordinates are expressions: shown, and not movable from here. */
+.ppoint.locked .pdot {
+  fill: none;
+  stroke: #2b78c5;
+  stroke-width: 2;
+}
+/* The point with the caret in it stays the point with the caret in it, whether or not this view can move it
+   — a point locked in the profile and free in the section is one point, and must read as one. */
+.ppoint.on.locked .pdot,
+.ppoint.on.ghost .pdot {
+  stroke: #e4572e;
+}
+
+.plabel {
+  fill: var(--mut);
+  font-size: 10px;
+}
+.ppoint.on .plabel {
+  fill: var(--ink);
+}
+
+/* The uncertainty region: the exact first-order image of what the inputs may do, which is a tilted polygon
+   whenever two coordinates lean on the same input. See `points.ts`. */
+.pspread {
+  fill: #2b78c5;
+  fill-opacity: 0.1;
+  stroke: #2b78c5;
+  stroke-width: 1;
+  stroke-opacity: 0.5;
+}
+.ppoint.on .pspread {
+  fill: #e4572e;
+  fill-opacity: 0.14;
+  stroke: #e4572e;
+  stroke-opacity: 0.7;
+}
+.pspread.p-likely {
+  stroke-dasharray: none;
+}
+.pspread.p-worst {
+  stroke-dasharray: 4 3;
+}
+
+.phandle {
+  fill: var(--bg);
+  stroke: #e4572e;
+  stroke-width: 1.4;
+  cursor: ew-resize;
+}

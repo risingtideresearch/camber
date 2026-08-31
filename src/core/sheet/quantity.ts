@@ -134,6 +134,19 @@ const scaleGradient = (a: Gradient, k: number): Gradient =>
 
 // ---------- constructors ----------
 
+/**
+ * A dimensionless value read as a quantity of `dim`, `factor` base units to the one it was written in.
+ *
+ * The gradient scales with the value, which is what keeps `2 ± 0.1` in a row of metres uncertain by 0.1 m
+ * rather than by 0.1 of nothing — the source keeps the reach as WRITTEN, and the coefficient carries the
+ * conversion.
+ */
+export const stampUnit = (q: Quantity, factor: number, dim: Dim): Quantity => ({
+  v: q.v * factor,
+  d: combine(q.d, factor, EMPTY_GRADIENT, 0),
+  dim,
+});
+
 /** A number known exactly: a literal the user typed without a ±, or a measurement off the hull. */
 export const exact = (v: number, dim: Dim = DIMLESS): Quantity => ({
   v,
@@ -164,12 +177,20 @@ const fail = (message: string): never => {
   throw new QuantityError(message);
 };
 
-const requireSameDim = (a: Quantity, b: Quantity, what: string): Dim =>
-  sameDim(a.dim, b.dim)
-    ? a.dim
-    : fail(
-        `cannot ${what} ${dimLabel(a.dim)} and ${dimLabel(b.dim)} — the units do not match`,
-      );
+const requireSameDim = (a: Quantity, b: Quantity, what: string): Dim => {
+  if (sameDim(a.dim, b.dim)) return a.dim;
+  // One side being a PLAIN NUMBER is the common case and has an obvious fix, so it gets said: a row that
+  // declares a unit reads the plain numbers in its outermost sum in that unit (see `formula.ts`), so
+  // `HULL.LCB + 2` works the moment the row says `m`. Saying only "the units do not match" would leave the
+  // reader looking for a mistake in the formula, where the fix is in the column beside it.
+  const bare = isDimless(a.dim) || isDimless(b.dim);
+  const said = `cannot ${what} ${dimLabel(a.dim)} and ${dimLabel(b.dim)} — the units do not match`;
+  return fail(
+    bare
+      ? `${said}. Give this row a unit and the plain number will be read in it`
+      : said,
+  );
+};
 
 // ---------- the algebra ----------
 // Each binary rule is `combine(a.d, ∂f/∂a, b.d, ∂f/∂b)`. Nothing else is going on.

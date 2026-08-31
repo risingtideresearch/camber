@@ -95,6 +95,22 @@ export interface PointRow extends RowBase {
   readonly x: string;
   readonly y: string;
   readonly z: string;
+  /**
+   * One expression standing for all three coordinates, or empty on a point that authors them separately.
+   *
+   * A centre of gravity is not three unrelated statements — it is one statement, made three times over. Held
+   * as three cells it would drift: adding a fortieth item means editing `x`, `y` and `z` in step, and
+   * forgetting one leaves a CG that is right along the boat and wrong up it, with nothing on screen saying
+   * so. Held once, that cannot happen.
+   *
+   * It is read once per coordinate, and a point named in it without a coordinate means the matching one —
+   * so `(Weights.engine * engine + Weights.tank * tank) / Weights.total` is the whole of a CG. See
+   * `evaluate.ts`, which turns this one source into the row's three cells.
+   *
+   * `x`, `y` and `z` are kept while it is set rather than cleared, so turning a derivation off gives back the
+   * coordinates that were there before it.
+   */
+  readonly from: string;
 }
 
 /** What a slice cuts with. A plane is horizontal; a station is normal to the sheer plan's heading. */
@@ -121,8 +137,13 @@ export interface SliceRow extends RowBase {
 
 export type SheetRow = HeadingRow | ItemRow | PointRow | SliceRow;
 
-/** The addressable formula cells of a row. A scalar has one; a point has three. */
-export type RowField = "formula" | "x" | "y" | "z" | "pos";
+/**
+ * The addressable formula cells of a row. A scalar has one; a point has three, and a derivation besides.
+ *
+ * `from` is an address a command can write to, but it is NOT one of the cells a row evaluates to — see the
+ * note on `fieldsOf`, which is the list of those and deliberately does not include it.
+ */
+export type RowField = "formula" | "x" | "y" | "z" | "pos" | "from";
 
 /**
  * What a page holds. One kind of object per page, and the page says which.
@@ -313,12 +334,13 @@ export function freeSheetName(book: WeightBook, wanted: string): string {
 /**
  * The kinds a command may actually create, as against the kinds the types can describe.
  *
- * Points remain deliberately unreachable until their editor is implemented. Slice pages have a specialised
- * editor and geometry resolver, so they are ordinary user-creatable pages alongside scalar calculations.
+ * Every kind is reachable now: points and slices each have a specialised editor and geometry resolver, so
+ * they are ordinary user-creatable pages alongside scalar calculations.
  */
 export const CREATABLE_KINDS: readonly PageKind[] = [
   "scalars",
   "outputs",
+  "points",
   "slices",
 ];
 
@@ -342,7 +364,21 @@ export function blankRow(
     case "item":
       return { id, kind, name, note: "", formula: "", unit: "" };
     case "point":
-      return { id, kind, name, note: "", unit: "", x: "", y: "", z: "" };
+      // A point is the one row whose dimension is known before anything is typed: three lengths. Declaring
+      // the unit up front is what makes `3.2` in a fresh cell mean 3.2 m rather than a bare number — which
+      // matters because the editor AUTHORS these cells by dragging, and a dragged coordinate that came out
+      // dimensionless would fail the first moment arm it was multiplied into.
+      return {
+        id,
+        kind,
+        name,
+        note: "",
+        unit: "m",
+        x: "",
+        y: "",
+        z: "",
+        from: "",
+      };
     case "slice":
       return {
         id,
@@ -356,7 +392,13 @@ export function blankRow(
   }
 }
 
-/** Read one formula cell of a row, or null where the row has no such field. */
+/**
+ * Read the text at one address on a row, or null where the row has no such field.
+ *
+ * The ADDRESSES of a row, which for a point is one more than the cells it evaluates to: `from` is written by
+ * a command like any other formula, and is then the source of all three coordinates rather than a fourth
+ * one. `fieldsOf` is the other list, and the two stopped mirroring each other for exactly that reason.
+ */
 export function fieldOf(row: SheetRow, field: RowField): string | null {
   switch (row.kind) {
     case "heading":
@@ -364,6 +406,7 @@ export function fieldOf(row: SheetRow, field: RowField): string | null {
     case "item":
       return field === "formula" ? row.formula : null;
     case "point":
+      if (field === "from") return row.from;
       return field === "x" || field === "y" || field === "z"
         ? row[field]
         : null;
@@ -372,7 +415,18 @@ export function fieldOf(row: SheetRow, field: RowField): string | null {
   }
 }
 
-/** Every formula cell a row carries, in the order the editor shows them. */
+/** True when a point states its coordinates as one expression rather than three. */
+export const isDerived = (row: SheetRow): boolean =>
+  row.kind === "point" && row.from.trim() !== "";
+
+/**
+ * Every formula cell a row EVALUATES TO, in the order the editor shows them.
+ *
+ * A point has three whether or not it derives them: a derivation changes where their text comes from, never
+ * how many there are, which is what lets `Places.CG.z`, the views and the sensitivity ranking go on working
+ * without knowing the difference. So `from` is absent here and present in `fieldOf`, and that asymmetry is
+ * the whole distinction between the two.
+ */
 export function fieldsOf(row: SheetRow): RowField[] {
   switch (row.kind) {
     case "heading":
@@ -417,6 +471,24 @@ export type SheetCommand =
     }
   | { type: "setSheetUnit"; sheet: string; row: string; unit: string }
   | { type: "setSliceShape"; sheet: string; row: string; shape: SliceShape }
+  /**
+   * A point moved, as ONE edit.
+   *
+   * Three `setSheetFormula`s would say the same thing, and they are what this replaces. A drag in the point
+   * editor writes two coordinates per frame, and `sameGesture` tells two gestures apart by their FIELD — so
+   * alternating x and z would coalesce into nothing and leave one undo step per pointer move. It also keeps
+   * the three coordinates atomic: a point half-moved is not a position anyone authored.
+   *
+   * An omitted coordinate is one the gesture did not touch, and is left exactly as it was.
+   */
+  | {
+      type: "setPointPosition";
+      sheet: string;
+      row: string;
+      x?: string;
+      y?: string;
+      z?: string;
+    }
   | { type: "setSheetRowNote"; sheet: string; row: string; note: string }
   | { type: "setSheetDensity"; density: number }
   | { type: "installSheet"; book: WeightBook };
@@ -438,6 +510,7 @@ export const SHEET_COMMAND_TYPES = {
   setSheetFormula: 1,
   setSheetUnit: 1,
   setSliceShape: 1,
+  setPointPosition: 1,
   setSheetRowNote: 1,
   setSheetDensity: 1,
   installSheet: 1,
@@ -632,6 +705,18 @@ export function interpretSheetCommand(
         if (row.kind !== "slice")
           return { rejected: "only a slice has a shape" };
         return { ...row, shape: command.shape };
+      });
+
+    case "setPointPosition":
+      return editRow(book, command.sheet, command.row, (row) => {
+        if (row.kind !== "point")
+          return { rejected: "only a point has a position" };
+        return {
+          ...row,
+          x: command.x ?? row.x,
+          y: command.y ?? row.y,
+          z: command.z ?? row.z,
+        };
       });
 
     case "setSheetRowNote":

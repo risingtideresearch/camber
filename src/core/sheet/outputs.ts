@@ -42,6 +42,11 @@ export interface OutputSpec {
 
 /**
  * The catalogue, in the order the outputs page lists them: what it weighs, then where that weight is.
+ *
+ * The two centres are stated apart, as two lengths, because that is what the rest of the app asks for — the
+ * stability panel wants a KG and an LCG, not a place. A book that has built its centre of gravity as a POINT
+ * answers them with `Places.CG.z` and `Places.CG.x`, which is the same one statement read twice and costs a
+ * line each.
  */
 export const OUTPUTS: readonly OutputSpec[] = [
   {

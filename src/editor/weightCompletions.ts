@@ -1,5 +1,5 @@
 import { FUNCTIONS } from "../core/sheet/formula";
-import { HULL_METRICS } from "../core/hullMetrics";
+import { HULL_METRICS, HULL_POINTS } from "../core/hullMetrics";
 import { groupAt, type Sheet, type WeightBook } from "../core/sheet/book";
 import { SLICE_VALUE_FIELDS } from "../core/sheet/slices";
 
@@ -45,6 +45,21 @@ export function completionsFor(
           kind: "item",
           hint: `position of ${row.name}`,
         });
+      } else if (row.kind === "point") {
+        // On a points page a bare point name resolves: in a coordinate cell it means the matching
+        // coordinate, which is what a derivation is written in. It comes first because that is the form the
+        // interesting formula on this page uses — a centre of gravity names each point once, not three times.
+        out.push({
+          insert: row.name,
+          kind: "item",
+          hint: `${row.name}, in whichever coordinate this cell is`,
+        });
+        for (const axis of ["x", "y", "z"] as const)
+          out.push({
+            insert: `${row.name}.${axis}`,
+            kind: "item",
+            hint: `${axis} of ${row.name}`,
+          });
       } else
         out.push({
           insert: row.name,
@@ -57,11 +72,34 @@ export function completionsFor(
     for (const row of other.rows) {
       if (!row.name || row.kind === "heading") continue;
       if (row.kind === "slice") {
+        // A slice has a position of its own — the centroid of what it cuts — so in a coordinate cell it
+        // binds like a point does, and an area-weighted centre of several sections is one expression.
+        if (sheet?.kind === "points")
+          out.push({
+            insert: `${other.name}.${row.name}`,
+            kind: "page",
+            hint: `centroid of ${row.name}, in this cell's coordinate`,
+          });
         for (const field of ["pos", ...SLICE_VALUE_FIELDS])
           out.push({
             insert: `${other.name}.${row.name}.${field}`,
             kind: "page",
             hint: `${field} on ${other.name}`,
+          });
+      } else if (row.kind === "point") {
+        // The bare form is offered only where it resolves — a coordinate cell, which is to say a points
+        // page. Offering it on a weights page would complete to the evaluator's "write engine.x" refusal.
+        if (sheet?.kind === "points")
+          out.push({
+            insert: `${other.name}.${row.name}`,
+            kind: "page",
+            hint: `${row.name} on ${other.name}, in this cell's coordinate`,
+          });
+        for (const axis of ["x", "y", "z"] as const)
+          out.push({
+            insert: `${other.name}.${row.name}.${axis}`,
+            kind: "page",
+            hint: `${axis} of ${row.name}, on ${other.name}`,
           });
       } else
         out.push({
@@ -73,6 +111,22 @@ export function completionsFor(
   }
   for (const spec of HULL_METRICS)
     out.push({ insert: `HULL.${spec.name}`, kind: "hull", hint: spec.hint });
+  for (const spec of HULL_POINTS) {
+    // Bare where it resolves — a coordinate cell — and by its leaves everywhere else, the same shape a
+    // point row and a slice centroid are offered in.
+    if (sheet?.kind === "points")
+      out.push({
+        insert: `HULL.${spec.name}`,
+        kind: "hull",
+        hint: `${spec.hint}, in this cell's coordinate`,
+      });
+    for (const axis of ["x", "y", "z"] as const)
+      out.push({
+        insert: `HULL.${spec.name}.${axis}`,
+        kind: "hull",
+        hint: `${axis} of the ${spec.label}`,
+      });
+  }
   for (const [name, spec] of Object.entries(FUNCTIONS))
     out.push({ insert: `${name}(`, kind: "function", hint: spec.hint });
   return out;

@@ -33,11 +33,19 @@
 // it lazily means a row that references nothing is evaluated even when the rest of the book is tangled.
 
 import { evaluate, FormulaError, parseFormula, type Node } from "./formula";
-import { hullMetric, isHullMetricName, type HullMetrics } from "../hullMetrics";
+import {
+  hullMetric,
+  hullPoint,
+  isHullMetricName,
+  isHullPointName,
+  type HullMetrics,
+} from "../hullMetrics";
 import {
   AREA,
+  isDimless,
   LENGTH,
   read,
+  type Dim,
   type Quantity,
   type Reading,
   type Source,
@@ -45,9 +53,11 @@ import {
 import {
   fieldOf,
   fieldsOf,
+  isDerived,
   isHeading,
   outputsSheet,
   symbolsOf,
+  type PointRow,
   type RowField,
   type Sheet,
   type SheetRef,
@@ -73,6 +83,27 @@ export interface RowResult {
   /** A blank formula has no value and no error — it is simply empty. */
   readonly empty: boolean;
   readonly reading: Reading | null;
+  /**
+   * The value with its GRADIENT still attached, which `reading` has spent.
+   *
+   * A `Reading` reports each source's downward and upward reach as two non-negative numbers, so the SIGN of
+   * ∂v/∂xᵢ is gone by then — and with it any way to tell whether two values move together or apart. That is
+   * exactly what the point editor needs: two coordinates that lean on one uncertain input are correlated,
+   * and their uncertainty region is a tilted parallelogram rather than the axis-aligned box the two readings
+   * alone would draw. Nothing else reads this, and a reading remains the right thing for everything that
+   * looks at one value at a time.
+   */
+  readonly quantity: Quantity | null;
+  /**
+   * The parse the evaluation ran on, for a caller that needs to REWRITE the source rather than read the
+   * value.
+   *
+   * The point editor moves a literal inside an expression by splicing its span, and the spans are on the
+   * tree (`formula.ts`). Handing over the parse that was already done beats re-parsing three cells per point
+   * on every render, and — more to the point — guarantees the editor is rewriting the very expression the
+   * evaluator read. Null where the cell is empty or would not parse.
+   */
+  readonly tree: Node | null;
   /** What went wrong, in a sentence a person can act on. */
   readonly error: string | null;
   /** Where in the formula, for a caret. −1 when the message is not about a position. */
@@ -196,8 +227,12 @@ export function evaluateBook(
             error instanceof UnitError ? error.message : String(error);
         }
       }
+      // A derived point states its three coordinates once. The row still produces THREE cells — the same
+      // three keys everything downstream reads — and they simply all read from the one expression, which is
+      // then evaluated once per axis under the rule in `bareRowValue`. Nothing but this line knows.
+      const derivation = isDerived(row) ? (row as PointRow).from : null;
       for (const field of fieldsOf(row)) {
-        const text = (fieldOf(row, field) ?? "").trim();
+        const text = (derivation ?? fieldOf(row, field) ?? "").trim();
         let tree: Node | null = null;
         let parseError: FormulaError | null = null;
         if (text) {
@@ -294,13 +329,29 @@ export function evaluateBook(
     const [head, ...rest] = path;
 
     if (head === "HULL") {
-      if (rest.length !== 1)
+      // One segment for a measurement, and optionally a second for a coordinate of one that is a PLACE:
+      // `HULL.SHELL_CG.z` is a height, and `HULL.SHELL_CG` in a coordinate cell is that cell's own
+      // coordinate — the same binding a point row and a slice's centroid get, so the hull's own shell
+      // weighs into a centre of gravity in the same expression as everything else.
+      if (rest.length < 1 || rest.length > 2)
         fail(`HULL.${rest.join(".") || "?"} is not a hull measurement`, at);
       if (!metrics)
         fail(
           "the hull has not been measured yet — it may not float at its own waterline",
           at,
         );
+      if (isHullPointName(rest[0])) {
+        // Named with a leaf, or named bare in a cell that already says which coordinate it wants.
+        const axis = rest.length === 2 ? rest[1] : currentCell?.field;
+        if (axis === "x" || axis === "y" || axis === "z")
+          return hullPoint(metrics!, rest[0], axis)!;
+        fail(
+          `HULL.${rest[0]} is a place — write HULL.${rest[0]}.x (or .y, .z), or name it in a coordinate`,
+          at,
+        );
+      }
+      if (rest.length !== 1)
+        fail(`HULL.${rest.join(".") || "?"} is not a hull measurement`, at);
       const value = hullMetric(metrics!, rest[0]);
       if (!value)
         fail(
@@ -376,6 +427,24 @@ export function evaluateBook(
    */
   const bareRowValue = (sheet: Sheet, row: SheetRow, at: number): Quantity => {
     if (row.kind === "item") return rowValue(sheet.id, row.id, at);
+    // Anything with a POSITION, named in a coordinate cell, means that coordinate of it. `engine` in an x
+    // cell is `engine.x`, in a z cell `engine.z` — which is what lets one expression stand for a whole
+    // place: a centre of gravity is `(m1 * a + m2 * b) / (m1 + m2)` whichever axis you read it along, and
+    // writing it out three times with three different leaves would be writing one statement three times.
+    //
+    // A SLICE has a position too — the centroid of what it cuts — so it binds the same way, and the
+    // area-weighted centre of a set of sections is that same expression with areas where the masses were. A
+    // slice also carries an authored `pos` and two perimeters, so a bare one is ambiguous everywhere else;
+    // here it is not, because the cell has already said which of its numbers is wanted.
+    //
+    // The binding exists only where there is an axis to bind to. Anywhere else a row with more than one
+    // number still has to say which is meant, and the message below is what says so.
+    const axis = currentCell?.field;
+    if (axis === "x" || axis === "y" || axis === "z") {
+      if (row.kind === "point") return rowValue(sheet.id, row.id, at, axis);
+      // Through `leafValue`: that is where a measured cut is looked up and its slope carried across.
+      if (row.kind === "slice") return leafValue(sheet, row, axis, at);
+    }
     const leaves =
       row.kind === "slice" ? ["pos", ...SLICE_VALUE_FIELDS] : fieldsOf(row);
     fail(
@@ -441,10 +510,27 @@ export function evaluateBook(
 
   const env = {
     resolve,
+    /**
+     * What a bare term of the cell's outermost sum is written in.
+     *
+     * Only a unit with a DIMENSION says anything: a row that declares nothing leaves its numbers plain, as
+     * the language always has, and a dimensionless declaration has nothing to say about what a number means.
+     * Read off `currentCell` rather than passed in, because one env serves every cell in the book.
+     */
+    get literal(): { factor: number; dim: Dim } | null {
+      const unit = currentCell?.declared;
+      return unit && !isDimless(unit.dim)
+        ? { factor: unit.factor, dim: unit.dim }
+        : null;
+    },
     source: (lo: number, hi: number): Source => {
       const cell = currentCell!;
       const base = cell.row.name || "an unnamed item";
-      const label = authoredPages > 1 ? `${cell.sheet.name}.${base}` : base;
+      // A row with more than one cell holds more than one guess. A tank's x may be known well and its z
+      // badly, and they are two different things to go and measure — so the ranking names the CELL. Calling
+      // both of them "tank" would answer "which of these is costing me" with the question.
+      const named = cell.field === "formula" ? base : `${base}.${cell.field}`;
+      const label = authoredPages > 1 ? `${cell.sheet.name}.${named}` : named;
       const id = `s${sourceSeq++}`;
       const source: Source = { id, label, lo, hi };
       sources.set(id, source);
@@ -539,6 +625,8 @@ export function evaluateBook(
       field: cell.field,
       empty: !cell.source,
       reading: cell.value ? read(cell.value, sources) : null,
+      quantity: cell.value,
+      tree: cell.tree,
       error: cell.error?.message ?? null,
       errorAt: cell.error?.at ?? -1,
       unit,

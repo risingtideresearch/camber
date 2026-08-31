@@ -72,7 +72,7 @@
 /* ---------- the sheet ---------- */
 
 .wbody,
-.wslicebody {
+.wsplitbody {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
@@ -84,10 +84,10 @@
   min-width: 0;
   overflow: auto;
 }
-.wslicebody .wscroll {
+.wsplitbody .wscroll {
   flex-basis: 58%;
 }
-.wslicepreview {
+.wsplitpreview {
   display: flex;
   flex: 1 1 42%;
   min-width: 320px;
@@ -284,6 +284,52 @@
   font-style: italic;
   opacity: 0.85;
 }
+/* A point's three coordinates. Each is a formula cell that may also be dragged, so the column has to be wide
+   enough to type an expression in and narrow enough that three of them fit beside a name. */
+/* Three of these sit between the name and the unit, and the row's controls have to stay reachable beside
+   the drawing — so they are as narrow as a coordinate and its readout can be read in. */
+.wcolcoord {
+  position: relative;
+  min-width: 118px;
+  vertical-align: top;
+}
+/* The value under a coordinate, shown only where the cell is NOT already the number: an expression, or one
+   that failed. A literal needs no readout of itself. */
+.wpointval {
+  display: block;
+  padding: 0 6px 3px;
+  overflow: hidden;
+  color: var(--mut);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.wpointval.bad {
+  color: var(--danger);
+}
+/* A coordinate with nothing in it a drag could move. It still shows what it works out to. */
+.wpointval.fixed {
+  font-style: italic;
+}
+
+/* A derivation stands across the three coordinate columns, because it states all three at once. */
+.wcolderived {
+  position: relative;
+  min-width: 240px;
+  vertical-align: top;
+}
+
+/* The switch between three coordinates and one expression. Quiet until it is on, because most points are
+   just points. */
+.wsheet .wcolact button.wderive {
+  font-style: italic;
+  font-size: 13px;
+}
+.wsheet .wcolact button.wderive.on {
+  color: var(--accent);
+}
+
 .wcolsection,
 .wcolcentroid {
   width: 1%;
@@ -639,10 +685,10 @@
 }
 
 @media (max-width: 820px) {
-  .wslicebody {
+  .wsplitbody {
     flex-direction: column;
   }
-  .wslicepreview {
+  .wsplitpreview {
     flex-basis: 42%;
     min-width: 0;
     border-left: 0;

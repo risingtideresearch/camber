@@ -48,6 +48,7 @@ interface StoredRow {
   x?: string;
   y?: string;
   z?: string;
+  from?: string;
   shape?: string;
   pos?: string;
 }
@@ -72,7 +73,14 @@ function storeRow(row: SheetRow): StoredRow {
     case "item":
       return { ...base, formula: row.formula, unit: row.unit };
     case "point":
-      return { ...base, unit: row.unit, x: row.x, y: row.y, z: row.z };
+      return {
+        ...base,
+        unit: row.unit,
+        x: row.x,
+        y: row.y,
+        z: row.z,
+        from: row.from,
+      };
     case "slice":
       return { ...base, shape: row.shape, unit: row.unit, pos: row.pos };
   }
@@ -156,10 +164,13 @@ function readRow(
       return {
         ...row,
         note,
+        // A point written before derivations existed carries no `from`, and reads back as the three
+        // coordinates it always was — which is what `str` defaulting to "" already means here.
         unit: str(r.unit),
         x: str(r.x),
         y: str(r.y),
         z: str(r.z),
+        from: str(r.from),
       };
     case "slice": {
       const shape = str(r.shape);
