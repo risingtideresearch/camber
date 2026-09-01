@@ -8,16 +8,20 @@ export const supabasePersistenceAdapter: PersistenceAdapter = {
   loadDesign: getDesign,
   async saveDesign(request) {
     if (request.create) {
-      return {
-        currentId: await insertDesign(
-          request.name,
-          request.document,
-          request.preview,
-        ),
-        created: true,
-      };
+      const { id, weightsStored } = await insertDesign(
+        request.name,
+        request.document,
+        request.preview,
+        request.weights,
+      );
+      return { currentId: id, created: true, weightsStored };
     }
-    await updateDesign(request.currentId!, request.document, request.preview);
-    return { currentId: request.currentId!, created: false };
+    const { weightsStored } = await updateDesign(
+      request.currentId!,
+      request.document,
+      request.preview,
+      request.weights,
+    );
+    return { currentId: request.currentId!, created: false, weightsStored };
   },
 };

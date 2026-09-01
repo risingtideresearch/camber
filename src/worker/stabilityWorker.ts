@@ -3,6 +3,7 @@
 // this worker, and neither cross-curve integration nor the upright KM sweep can block pointer handling.
 
 import { hydrostatics } from "../core/hydro";
+import { hullMetrics } from "../core/hullMetrics";
 import {
   crossCurves,
   limitingKgCurve,
@@ -24,10 +25,12 @@ self.onmessage = (event: MessageEvent<StabilityRequest>) => {
     geom = stationGeometry(model, sampling);
   let analysis: StabilityAnalysis | null = null;
   if (curves && geom) {
+    const hydro = hydrostatics(model, sampling);
     analysis = {
       curves,
       limit: limitingKgCurve(geom, curves),
-      hydro: hydrostatics(model, sampling),
+      hydro,
+      metrics: hullMetrics(model, sampling, hydro),
       lowestSheerKg: geom.lowestSheerZ - geom.keelZ,
     };
   }

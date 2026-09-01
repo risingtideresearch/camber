@@ -41,11 +41,11 @@ import {
   type Model,
 } from "../src/core/model";
 import {
-  ALL_SLICES,
-  interpretDocumentCommand,
+  ALL_HULL_SLICES,
+  interpretHullCommand,
   rejected,
   SLICE,
-  type DocumentCommand,
+  type HullCommand,
   type CommandOutcome,
 } from "../src/core/commands";
 import { buildJson, parseHullState } from "../src/core/json";
@@ -268,8 +268,8 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
 // editor, the promoter and (from phase 5) another window's command all go through.
 {
   let model = assemble(defaultHull());
-  const run = (cmd: DocumentCommand): CommandOutcome => {
-    const out = interpretDocumentCommand(model, cmd);
+  const run = (cmd: HullCommand): CommandOutcome => {
+    const out = interpretHullCommand(model, cmd);
     if (!rejected(out)) {
       const session = { ...sessionOf(model), ...out.session };
       model = assemble(out.state, session);
@@ -475,8 +475,8 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
 // over-reports costs a sampler rebuild per edit, and one that under-reports draws a stale hull.
 {
   const model = assemble(defaultHull());
-  const maskOf = (cmd: DocumentCommand): number => {
-    const out = interpretDocumentCommand(model, cmd);
+  const maskOf = (cmd: HullCommand): number => {
+    const out = interpretHullCommand(model, cmd);
     return rejected(out) ? -1 : out.touched;
   };
   ok(
@@ -500,12 +500,12 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
     "a station drag touches the stations alone",
   );
   ok(
-    maskOf({ type: "installHull", state: defaultHull() }) === ALL_SLICES,
+    maskOf({ type: "installHull", state: defaultHull() }) === ALL_HULL_SLICES,
     "installing a hull touches everything",
   );
   // The rescaling unit change is the one that genuinely spans them all.
   ok(
-    maskOf({ type: "setUnit", unit: "m", rescale: true }) === ALL_SLICES,
+    maskOf({ type: "setUnit", unit: "m", rescale: true }) === ALL_HULL_SLICES,
     "a rescaling unit change touches every slice",
   );
   ok(
@@ -513,7 +513,7 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
     "a non-rescaling unit change touches the scalars alone",
   );
   ok(
-    maskOf({ type: "setLoa", length: 1234 }) === ALL_SLICES,
+    maskOf({ type: "setLoa", length: 1234 }) === ALL_HULL_SLICES,
     "scaling to a length overall touches every slice",
   );
 }
@@ -525,7 +525,7 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
     ...defaultHull(),
     sheerPlan: defaultHull().sheerPlan.map((p) => ({ x: p.x * 4, y: p.y })),
   };
-  const out = interpretDocumentCommand(start, {
+  const out = interpretHullCommand(start, {
     type: "installHull",
     state: long,
   });
@@ -541,7 +541,7 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
     ...defaultHull(),
     sheerPlan: defaultHull().sheerPlan.map((p) => ({ x: p.x / 10, y: p.y })),
   };
-  const out2 = interpretDocumentCommand(start, {
+  const out2 = interpretHullCommand(start, {
     type: "installHull",
     state: shortHull,
   });

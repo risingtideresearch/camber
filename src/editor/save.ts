@@ -1,6 +1,6 @@
 // Window-side save presentation and browser confirmation helpers.
 
-import type { HullState } from "../core/hull";
+import type { SessionDocument } from "../core/sessionDocument";
 import type { SessionMeta } from "../core/meta";
 
 export interface SaveView {
@@ -34,7 +34,10 @@ export function saveView(dirty: boolean, meta: SessionMeta): SaveView {
   return { buttonLabel, kind: "saved", text: "Saved" };
 }
 
-export function revertTo(dirty: boolean, meta: SessionMeta): HullState | null {
+export function revertTo(
+  dirty: boolean,
+  meta: SessionMeta,
+): SessionDocument | null {
   if (!dirty || !meta.design.savedState) return null;
   if (!confirm("Discard changes since the last save?")) return null;
   return meta.design.savedState;

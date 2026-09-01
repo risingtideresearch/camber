@@ -52,6 +52,8 @@ export interface SliceRevs {
   readonly stations: number;
   readonly transom: number;
   readonly scalars: number;
+  /** The weight book. Derives no hull sampler at all; it is here so a reader can key its evaluation on it. */
+  readonly weights: number;
 }
 
 export const initialSliceRevs = (): SliceRevs => ({
@@ -60,6 +62,7 @@ export const initialSliceRevs = (): SliceRevs => ({
   stations: 0,
   transom: 0,
   scalars: 0,
+  weights: 0,
 });
 
 export interface RuntimeLocal {

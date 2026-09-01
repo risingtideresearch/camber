@@ -6,7 +6,7 @@
 
 import type {
   DocumentCommand,
-  CommandOutcome,
+  DocumentOutcome,
   SessionCommand,
 } from "../core/commands";
 import type { Model } from "../core/model";
@@ -23,6 +23,8 @@ export interface SaveResult {
   readonly currentId: string;
   readonly name: string;
   readonly created: boolean;
+  /** False when the design had a weight sheet and the store had nowhere to put it — see PersistenceResult. */
+  readonly weightsStored: boolean;
 }
 
 /** Transport-neutral document API exposed to the editor. */
@@ -34,8 +36,9 @@ export interface DocumentStore {
   readonly windowId: string;
   snapshot(): DocumentSnapshot;
   subscribe(listener: () => void): () => void;
+  /** The HULL, assembled. The weight sheet needs no assembly; a panel evaluates it from the snapshot. */
   runtime(): Model;
-  dispatch(command: DocumentCommand): Promise<CommandOutcome>;
+  dispatch(command: DocumentCommand): Promise<DocumentOutcome>;
   dispatchSession(command: SessionCommand): void;
   undo(): Promise<boolean>;
   redo(): Promise<boolean>;

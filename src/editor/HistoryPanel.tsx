@@ -27,7 +27,8 @@ import "./HistoryPanel.css";
 // only name one, and every other window follows because the jump is an ordinary authoritative transition.
 
 // What a gesture was working on, taken from the slices it touched. The document's own division of the hull is
-// also the reader's: "stations" is the section editor, "plan" the sheer, "scalars" the waterline and the rake.
+// also the reader's: "stations" is the section editor, "plan" the sheer, "scalars" the waterline and the rake,
+// "weights" the weight estimate.
 // Each keeps a hue of its own, down the dots and in the pills, so a run of work on one part of the boat reads
 // as one colour in the margin — which is the thing worth telling apart at a glance. (Which WINDOW made an edit
 // is not: a windowId is a UUID, so one person with a panel detached would read as two strangers.)
@@ -38,6 +39,7 @@ const TOOL_HUE: Record<Tool, number> = {
   transom: 272,
   stations: 28,
   scalars: 330,
+  weights: 95,
 };
 const toolsOf = (touched: SliceMask): Tool[] =>
   (Object.keys(SLICE) as Tool[]).filter(

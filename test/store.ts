@@ -1,11 +1,11 @@
-import { defaultHull } from "../src/core/hull";
+import { defaultDocument } from "../src/core/sessionDocument";
 import { parseHullState } from "../src/core/json";
 import type { SessionMeta } from "../src/core/meta";
 import { createLocalDocumentStore } from "../src/document-store/localStore";
 import type { PersistenceAdapter } from "../src/document-store/persistence/persistenceAdapter";
 import { SaveCoordinator } from "../src/document-store/saveCoordinator";
 import { createDocumentStoreServer } from "../src/document-store/server";
-import { isDirty } from "../src/document-store/snapshot";
+import { isDirty, type DocumentSnapshot } from "../src/document-store/snapshot";
 
 let failures = 0;
 const check = (condition: unknown, message: string) => {
@@ -17,7 +17,7 @@ const check = (condition: unknown, message: string) => {
 };
 
 const initializedMeta = (currentId: string | null = null): SessionMeta => {
-  const state = defaultHull();
+  const state = defaultDocument();
   return {
     initialized: true,
     name: currentId ? "Test" : "",
@@ -70,7 +70,7 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
   const server = createDocumentStoreServer({
     historyOptions: { now: () => time, coalesceMs: 400 },
   });
-  const original = server.snapshot().state.sheerPlan[1].y;
+  const original = server.snapshot().state.hull.sheerPlan[1].y;
   for (let i = 0; i < 20; i++) {
     server.execute({
       command: {
@@ -87,7 +87,7 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
   const revision = server.snapshot().revision;
   check(server.undo("a"), "undo restores the gesture");
   check(
-    server.snapshot().state.sheerPlan[1].y === original,
+    server.snapshot().state.hull.sheerPlan[1].y === original,
     "a coalesced drag undoes in one step",
   );
   check(
@@ -131,6 +131,7 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
       return {
         currentId: request.currentId ?? "row-1",
         created: request.create,
+        weightsStored: true,
       };
     },
   };
@@ -155,7 +156,8 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
   );
   check(persistedWaterline === 100, "persistence receives the captured state");
   check(
-    server.snapshot().state.waterline === 200 && isDirty(server.snapshot()),
+    server.snapshot().state.hull.waterline === 200 &&
+      isDirty(server.snapshot()),
     "an edit during save remains current and dirty",
   );
   check(!server.snapshot().meta.saving, "save completion clears save state");
@@ -169,7 +171,11 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
   check(!server.snapshot().meta.saving, "failSave releases the save interlock");
   let staleRejected = false;
   try {
-    server.completeSave(failed, { currentId: "row-1", created: false });
+    server.completeSave(failed, {
+      currentId: "row-1",
+      created: false,
+      weightsStored: true,
+    });
   } catch {
     staleRejected = true;
   }
@@ -185,6 +191,7 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
     saveDesign: async (request) => ({
       currentId: request.currentId ?? "row-1",
       created: request.create,
+      weightsStored: true,
     }),
   };
   const server = createDocumentStoreServer({ meta: initializedMeta("row-1") });
@@ -192,12 +199,229 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
   check(store.runtime() === store.runtime(), "runtime identity is stable");
   await store.dispatch({ type: "setWaterline", depth: 321 });
   check(
-    store.snapshot().state.waterline === 321,
+    store.snapshot().state.hull.waterline === 321,
     "local dispatch updates replica",
   );
   await store.save("Test");
   check(!isDirty(store.snapshot()), "local saves use the coordinator");
   store.close();
+}
+
+// ---- one session, two documents, one history ----
+// The point of putting the weight estimate in the session rather than beside it: hull edits and estimate
+// edits go into the SAME tree, in the order they were made, and undo walks back across both without knowing
+// or caring which part each moment belonged to. This is what a second history stack could not have given.
+{
+  let time = 2000;
+  const server = createDocumentStoreServer({
+    historyOptions: { now: () => time, coalesceMs: 400 },
+  });
+  const step = (command: Parameters<typeof server.execute>[0]["command"]) => {
+    time += 1000; // far enough apart that nothing coalesces
+    return server.execute({ command, author: "a" });
+  };
+
+  step({ type: "setWaterline", depth: 200 });
+  step({ type: "addItem", id: "i1", name: "hull shell", after: -1 });
+  step({ type: "addField", item: "i1", key: "mass", kind: "scalar" });
+  step({
+    type: "setFieldFormula",
+    item: "i1",
+    field: "mass",
+    leaf: "formula",
+    formula: "12 ± 2",
+  });
+  step({ type: "setWaterline", depth: 250 });
+
+  const now = server.snapshot();
+  check(
+    now.state.hull.waterline === 250 && now.state.weights.items.length === 1,
+    "the hull and the estimate advance in one document",
+  );
+  // A field is a union over the kinds there are, so reading a formula off one means saying which kind it is.
+  const scalarAt = (snapshot: DocumentSnapshot, item: number, key: string) => {
+    const found = snapshot.state.weights.items[item]?.fields[key];
+    return found?.k === "scalar" ? found : null;
+  };
+  check(
+    now.state.weights.items[0].name === "hull shell" &&
+      scalarAt(now, 0, "mass")?.formula === "12 ± 2",
+    "an estimate edit lands where it was aimed, spaces in the name and all",
+  );
+
+  const revs = now.sliceRevs;
+  check(
+    revs.weights === 3 && revs.scalars === 2,
+    "each part's slice clock counts only its own edits",
+  );
+
+  server.undo("a"); // the second waterline
+  check(
+    server.snapshot().state.hull.waterline === 200 &&
+      scalarAt(server.snapshot(), 0, "mass")?.formula === "12 ± 2",
+    "undoing a hull edit leaves the estimate exactly where it was",
+  );
+  server.undo("a"); // the formula
+  check(
+    scalarAt(server.snapshot(), 0, "mass")?.formula === "" &&
+      server.snapshot().state.hull.waterline === 200,
+    "undo crosses into the estimate without disturbing the hull",
+  );
+  server.undo("a"); // the field
+  server.undo("a"); // the item
+  check(
+    server.snapshot().state.weights.items.length === 0,
+    "undo walks the estimate back out of the tree",
+  );
+  server.undo("a"); // the first waterline
+  check(
+    server.snapshot().state.hull.waterline !== 200,
+    "and on into the hull edits underneath it",
+  );
+
+  server.redo("a");
+  server.redo("a");
+  check(
+    server.snapshot().state.hull.waterline === 200 &&
+      server.snapshot().state.weights.items.length === 1,
+    "redo comes back across the same boundary",
+  );
+}
+
+// An estimate edit that breaks the book's own invariants is refused the way an invalid hull is: the reducer
+// or the validator says no, and nothing is published.
+{
+  const server = createDocumentStoreServer();
+  const run = (command: Parameters<typeof server.execute>[0]["command"]) =>
+    server.execute({ command, author: "a" });
+  run({ type: "addItem", id: "i1", name: "hull shell", after: -1 });
+  run({ type: "addItem", id: "i2", name: "", after: 0 });
+  const before = server.snapshot();
+  const clash = run({ type: "renameItem", item: "i2", name: "hull shell" });
+  check(
+    "rejected" in clash,
+    "two items may not answer to one name — that namespace is the book's only global one",
+  );
+  check(
+    server.snapshot() === before,
+    "a refused estimate edit publishes nothing",
+  );
+
+  const bad = run({ type: "renameItem", item: "i2", name: "2 fast" });
+  check("rejected" in bad, "a name a formula could not use is refused");
+
+  // The same KEY on two items is fine, and is the point: a field key is local to its item and means nothing
+  // outside it, so `shell.area` and `deck.area` are unrelated numbers that happen to share a word.
+  run({ type: "addField", item: "i1", key: "area", kind: "scalar" });
+  const across = run({
+    type: "addField",
+    item: "i2",
+    key: "area",
+    kind: "scalar",
+  });
+  check(
+    !("rejected" in across),
+    "…while the same field key on another item is exactly what makes keys local",
+  );
+}
+
+// ---------- a database that has never heard of the weights column ----------
+//
+// PostgREST refuses the whole request when a column it is asked for is not there, so naming `weights` in a
+// select would stop EVERY design from opening on a database that predates the feature — a hull editor broken
+// by a feature nobody had used yet. `supabase.ts` treats the column as optional: the first refusal is
+// recorded and the request retried without it. These drive that logic through a fake `fetch`, because the
+// only other way to exercise it is to un-migrate a real database.
+{
+  const real = globalThis.fetch;
+  const calls: { url: string; body: unknown }[] = [];
+  // Flipped partway through, so both halves are covered: a migrated database first, then the same code
+  // meeting a database that has never had the column.
+  let hasColumn = true;
+
+  const respond = (status: number, body: unknown): Response =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    calls.push({ url, body });
+    const asksForWeights =
+      url.includes("weights") || (body !== null && "weights" in body);
+    if (asksForWeights && !hasColumn)
+      return respond(400, {
+        code: url.includes("select=") ? "42703" : "PGRST204",
+        message: "column designs.weights does not exist",
+      });
+    if (init?.method === "POST") return respond(201, [{ id: "new-row" }]);
+    if (init?.method === "PATCH") return respond(200, [{ id: "row-1" }]);
+    return respond(200, [
+      {
+        name: "Loaded",
+        document: { version: 2 },
+        weights: hasColumn ? { version: 1, rows: [] } : undefined,
+      },
+    ]);
+  }) as typeof fetch;
+
+  try {
+    const { getDesign, insertDesign, updateDesign, weightsColumnState } =
+      await import("../src/core/supabase");
+
+    // ---- a migrated database: one request, and the sheet comes back ----
+    const migrated = await getDesign("row-1");
+    check(
+      calls.length === 1 && calls[0].url.includes("weights"),
+      "a migrated database is read in one request",
+    );
+    check(
+      migrated.weightsText !== null && weightsColumnState() === "present",
+      "the sheet comes back, and the column is noted as present",
+    );
+
+    // ---- and now the same code against one that has never had the column ----
+    hasColumn = false;
+    calls.length = 0;
+    const loaded = await getDesign("row-1");
+    check(
+      loaded.name === "Loaded" && loaded.weightsText === null,
+      "a design still opens on a database with no weights column",
+    );
+    check(
+      calls.length === 2 &&
+        calls[0].url.includes("weights") &&
+        !calls[1].url.includes("weights"),
+      "the refusal is met by retrying the same read without the column",
+    );
+    check(
+      weightsColumnState() === "absent",
+      "and the absence is remembered rather than rediscovered per request",
+    );
+
+    calls.length = 0;
+    const created = await insertDesign("A", "{}", "", '{"rows":[]}');
+    check(created.id === "new-row", "a new design is still created");
+    check(
+      created.weightsStored === false,
+      "…but says its weight sheet did not go with it, rather than losing it quietly",
+    );
+    check(
+      calls.length === 1 &&
+        !(calls[0].body as Record<string, unknown>)?.weights,
+      "and having learned the column is absent, it no longer asks for it",
+    );
+
+    const updated = await updateDesign("row-1", "{}", "", null);
+    check(
+      updated.weightsStored === true,
+      "a design with no sheet loses nothing to the missing column, so its save is clean",
+    );
+  } finally {
+    globalThis.fetch = real;
+  }
 }
 
 if (failures) process.exitCode = 1;

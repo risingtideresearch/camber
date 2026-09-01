@@ -82,7 +82,7 @@ export async function saveBlend(
   const json = buildJson(model); // the blended hull is already in `model`
   const preview = buildPreviewSvg(model);
   let currentId = id.currentId;
-  if (fork) currentId = await insertDesign(finalName, json, preview);
+  if (fork) currentId = (await insertDesign(finalName, json, preview)).id;
   else await updateDesign(currentId!, json, preview);
   return {
     id: { currentId, savedName: finalName, savedSnapshot: json },

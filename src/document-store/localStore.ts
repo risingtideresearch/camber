@@ -39,7 +39,7 @@ export function createLocalDocumentStore(
       return () => listeners.delete(listener);
     },
     runtime: () =>
-      assemble(seen.state, seen.session, {
+      assemble(seen.state.hull, seen.session, {
         sliceRevs: seen.sliceRevs,
         cacheKey,
       }),

@@ -24,7 +24,7 @@ import {
   type TrimPlanCurves,
 } from "../../core/hullLines3d";
 import type { HullSampling } from "../../core/mesh";
-import type { Model } from "../../core/model";
+import { loa, type Model } from "../../core/model";
 import { selStationIdx, type ModelSelection } from "../../core/modelSelection";
 import { perfBegin, perfEnd, perfStep, PERF_MESH } from "../../core/perf";
 import type { StlState } from "../../core/stlImport";
@@ -35,6 +35,7 @@ import type {
 } from "../../core/view3dDisplay";
 import { CameraFacingCurves } from "./CameraFacingCurves";
 import { StlOverlay } from "./StlOverlay";
+import { SliceOverlay, type SliceOverlayState } from "./SliceOverlay";
 import { useCameraFraming } from "./useCameraFraming";
 
 function meshToGeometry(m: {
@@ -69,6 +70,7 @@ interface SceneProps {
   sampling: HullSampling | null;
   curvature: CurvatureSettings;
   stl?: StlState | null;
+  sliceOverlay?: SliceOverlayState | null;
 }
 
 export function Scene({
@@ -84,6 +86,7 @@ export function Scene({
   sampling,
   curvature,
   stl,
+  sliceOverlay,
 }: SceneProps) {
   useCameraFraming(model);
 
@@ -297,6 +300,9 @@ export function Scene({
         <lineSegments geometry={wireGeometry} material={wireMaterial} />
       )}
       {stl && <StlOverlay stl={stl} uLight={uLight} />}
+      {sliceOverlay && sliceOverlay.entries.length > 0 && (
+        <SliceOverlay overlay={sliceOverlay} markerSize={loa(model) * 0.006} />
+      )}
       <CameraFacingCurves
         model={model}
         guideIdx={guideIdx}

@@ -1,0 +1,2547 @@
+/* The weight panel.
+   Three panes: the explorer on the left, the view being edited in the middle, and the inspector beside it —
+   the spread of whatever is selected, or the geometry editor where the selection has geometry. The two
+   things the whole panel exists to produce — the estimated displacement, and what drives its spread — are
+   the head of the summary tab rather than a strip under all of them. */
+
+.weightpanel {
+  display: flex;
+  flex-direction: column;
+  /* The app shell's `.main` is a flex row, so the panel has to claim the slot rather than be sized by its
+     content — a schedule that stopped at its widest formula would leave the window half empty. */
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+  /* `.app` turns selection off because the editor's panes are drawing surfaces dragged with the pointer.
+     This one is a document: its formulas and its error messages are meant to be read and copied. */
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.wspacer {
+  flex: 1;
+}
+
+/* ---------- the sheet ---------- */
+
+.wbody {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+.wscroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+}
+/* `Area` keeps the split size; this inner flex box gives the scrolling document the whole area. */
+.wviewpane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ---------- the third pane ---------- */
+/* One slot, whatever is in it. A geometry editor is a drawing surface and takes a share of the width, as the
+   points and slices pages did; the spread is a column of text and takes a column's worth. */
+
+.wside {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+}
+/* A visible line in a forgiving hit area. `AreaSeparator` supplies pointer and keyboard resizing. */
+.wsideseparator {
+  position: relative;
+  flex: 0 0 auto;
+}
+.wsideseparator::after {
+  content: "";
+  position: absolute;
+  border-radius: 2px;
+  background: var(--line);
+}
+.wsideseparator[aria-orientation="vertical"] {
+  width: 9px;
+  cursor: ew-resize;
+  /* The hit area sits between surfaces with different backgrounds; carry each one to the centre line. */
+  background: linear-gradient(to right, var(--bg) 50%, var(--panel) 50%);
+}
+.wsideseparator[aria-orientation="vertical"]::after {
+  inset: 0 4px;
+}
+.wsideseparator[aria-orientation="horizontal"] {
+  height: 9px;
+  cursor: ns-resize;
+  background: linear-gradient(to bottom, var(--bg) 50%, var(--panel) 50%);
+}
+.wsideseparator[aria-orientation="horizontal"]::after {
+  inset: 4px 0;
+}
+.wsideseparator:hover::after,
+.wsideseparator:focus-visible::after,
+.wsideseparator[data-separator="drag"]::after {
+  background: var(--accent);
+}
+.wsideseparator:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.wsidetabs {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+  padding: 0 4px 0 6px;
+  border-bottom: 1px solid var(--line);
+}
+.wsidetab {
+  border: 0;
+  background: transparent;
+  color: var(--mut);
+  font: inherit;
+  font-size: 11px;
+  padding: 6px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+}
+.wsidetab.on {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+.wsidetab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* The geometry editors are flex drawing surfaces and size themselves; the inspector is a document and
+   scrolls. Both are handed the same slot, so the padding belongs to whichever needs it. */
+.wsidebody {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+}
+.wside.geometry .wsidebody {
+  padding: 8px;
+}
+
+.wsheet {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.wsheet thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--mut);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.wsheet td {
+  padding: 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+/* The formula is what the schedule is FOR — a truncated one is a row you cannot read — so it takes whatever
+   the fixed columns leave. */
+.wcolname {
+  width: 22%;
+  min-width: 140px;
+}
+.wcolformula {
+  width: auto;
+  min-width: 200px;
+}
+/* The unit sits between the formula and the number it qualifies, and needs air on both sides: pushed up
+   against the value it reads as part of it, and up against the formula it reads as part of that. */
+.wcolunit {
+  width: 1%;
+  min-width: 104px;
+  padding-left: 20px !important;
+  padding-right: 16px !important;
+}
+.wcolvalue {
+  width: 1%;
+  min-width: 92px;
+  padding-left: 12px !important;
+  text-align: right;
+  padding-right: 8px !important;
+  font-size: 13px;
+}
+.wcolspread {
+  width: 1%;
+  min-width: 104px;
+  padding-left: 14px !important;
+  text-align: right;
+  padding-right: 8px !important;
+  font-size: 12px;
+  color: var(--mut);
+}
+.wcolact {
+  width: 1%;
+  min-width: 84px;
+  white-space: nowrap;
+  text-align: right;
+  padding-right: 6px !important;
+}
+
+.wrow:hover {
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.wrow.focused {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+/* The row nominated as the estimated displacement, marked down its leading edge rather than by a badge —
+   there is exactly one, and it should read as the sheet's conclusion. */
+.wrow.output td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.wrow.output .wcolvalue {
+  font-weight: 700;
+}
+
+/* inputs sit flush in their cells; the table's own rules are the only grid lines */
+.wsheet input {
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--ink);
+  padding: 6px 8px;
+  outline: 0;
+}
+.wsheet input:focus {
+  background: var(--panel);
+  box-shadow: inset 0 0 0 2px var(--accent);
+  border-radius: 3px;
+}
+.wsheet input::placeholder {
+  color: var(--line);
+}
+
+.wname {
+  font-weight: 600;
+}
+.wformula {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+}
+.wformula.bad {
+  color: var(--danger);
+  text-decoration: underline wavy var(--danger) 1px;
+  text-underline-offset: 3px;
+}
+.wunit {
+  font-size: 12px;
+  color: var(--mut);
+}
+
+.wcolvalue.bad {
+  text-align: left;
+  padding-left: 8px !important;
+  color: var(--danger);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 0;
+}
+
+/* Errors and warnings use one textual issue row everywhere a formula is edited. Severity changes the colour,
+   not the shape or whether the explanation is available. */
+.wissue {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin: 3px 6px 4px;
+  font-size: 10px;
+  line-height: 1.35;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.wissue.error {
+  color: var(--danger);
+}
+.wissue.warning {
+  color: var(--sheer);
+}
+.wissuemark {
+  display: inline-flex;
+  flex: 0 0 13px;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+.wissue.error .wissuemark {
+  background: var(--danger);
+}
+.wissue.warning .wissuemark {
+  background: var(--sheer);
+}
+
+/* ---------- row actions ---------- */
+
+.wcolshape {
+  width: 1%;
+  min-width: 112px;
+  padding: 0 8px !important;
+}
+.wcolshape select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 5px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+.wcolpos {
+  position: relative;
+  min-width: 180px;
+}
+.wcolpos .wformula {
+  padding-right: 58px;
+}
+.wsheet input.wpositionunit {
+  position: absolute;
+  z-index: 2;
+  right: 3px;
+  top: 2px;
+  width: 50px;
+  padding: 4px 5px;
+  color: var(--mut);
+  font-size: 11px;
+  text-align: center;
+}
+.wpositionunit.derived::placeholder {
+  color: var(--mut);
+  font-style: italic;
+  opacity: 0.85;
+}
+/* A point's three coordinates. Each is a formula cell that may also be dragged, so the column has to be wide
+   enough to type an expression in and narrow enough that three of them fit beside a name. */
+/* Three of these sit between the name and the unit, and the row's controls have to stay reachable beside
+   the drawing — so they are as narrow as a coordinate and its readout can be read in. */
+.wcolcoord {
+  position: relative;
+  min-width: 118px;
+  vertical-align: top;
+}
+/* The value under a coordinate, shown only where the cell is NOT already the number: an expression, or one
+   that failed. A literal needs no readout of itself. */
+.wpointval {
+  display: block;
+  padding: 0 6px 3px;
+  overflow: hidden;
+  color: var(--mut);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.wpointval.bad {
+  color: var(--danger);
+}
+/* A coordinate with nothing in it a drag could move. It still shows what it works out to. */
+.wpointval.fixed {
+  font-style: italic;
+}
+
+/* A derivation stands across the three coordinate columns, because it states all three at once. */
+.wcolderived {
+  position: relative;
+  min-width: 240px;
+  vertical-align: top;
+}
+
+/* The switch between three coordinates and one expression. Quiet until it is on, because most points are
+   just points. */
+.wsheet .wcolact button.wderive {
+  font-style: italic;
+  font-size: 13px;
+}
+.wsheet .wcolact button.wderive.on {
+  color: var(--accent);
+}
+
+.wcolsection,
+.wcolcentroid {
+  width: 1%;
+  min-width: 150px;
+  padding: 0 8px !important;
+  text-align: right;
+  color: var(--mut);
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.wcolsection.bad {
+  color: var(--danger);
+}
+
+.wcolact button {
+  border: 0;
+  background: none;
+  color: var(--line);
+  font-size: 14px;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.wrow:hover .wcolact button {
+  color: var(--mut);
+}
+.wcolact button:hover {
+  background: var(--line);
+  color: var(--ink);
+}
+.wcolact button:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.wremove:hover {
+  background: var(--danger) !important;
+  color: #fff !important;
+}
+
+/* ---------- groups ---------- */
+
+.wgroupname {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+/* ---------- empty state ---------- */
+
+.wempty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 64px 32px;
+  text-align: center;
+  color: var(--mut);
+}
+.wempty p {
+  margin: 0;
+  max-width: 46ch;
+}
+
+.whint {
+  font-size: 12px;
+  color: var(--mut);
+  line-height: 1.55;
+  margin: 6px 0 0;
+  max-width: 52ch;
+}
+.whint code,
+.wnote code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  background: var(--line);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.wnote {
+  font-size: 11.5px;
+  color: var(--mut);
+  margin: 8px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+  line-height: 1.5;
+  max-width: 52ch;
+}
+.wkey {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* ---------- what it all comes to ---------- */
+/* The figure the estimate exists to produce, and the ranking of what moves it. It used to be a strip under
+   every view; it is now the head of the summary tab, which is the one place that is about the book rather
+   than about a selection in it. */
+
+.wanswer {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  align-items: start;
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+.wanswer.empty {
+  display: block;
+}
+.wanswer > .wsummary {
+  padding-right: 22px;
+}
+.wanswer > .wsensitivity {
+  border-left: 1px solid var(--line);
+  padding-left: 22px;
+  min-width: 0;
+}
+/* Too narrow to read a ranking beside a headline, so the ranking goes under it. */
+@media (max-width: 720px) {
+  .wanswer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wanswer > .wsummary {
+    padding-right: 0;
+    padding-bottom: 14px;
+  }
+  .wanswer > .wsensitivity {
+    border-left: 0;
+    padding-left: 0;
+  }
+}
+
+.wanswertitle {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+  margin-bottom: 8px;
+}
+
+/* The sensitivity ranking. This is the list the whole gradient design exists to produce: it can name the
+   input because the row it was typed in has a name, which a coordinate never would. */
+.wterms {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wterms li {
+  display: grid;
+  grid-template-columns: minmax(80px, 150px) 1fr 40px auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.wtermlabel {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+/* A driver names a cell, and the next thing anyone does with "82% of this is the crew" is go and look at the
+   crew. Underlined on hover rather than always: a list of thirty links reads as a menu. */
+button.wtermgo {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  padding: 0;
+  cursor: pointer;
+}
+button.wtermgo:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+button.wtermgo:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* What this one guess alone is worth, in the unit the value is quoted in — the share says which to go and
+   improve, this says whether improving it is worth the trip. */
+.wtermreach {
+  color: var(--mut);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.wtermbar {
+  height: 8px;
+  background: var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.wtermfill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+}
+.wtermshare {
+  text-align: right;
+  color: var(--mut);
+  font-variant-numeric: tabular-nums;
+}
+
+.wsummary {
+  min-width: 0;
+}
+.wsummarylabel {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+}
+.wsummaryvalue {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.wsummaryunit {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--mut);
+}
+.wsummaryspread {
+  font-size: 12px;
+  color: var(--mut);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- reference ---------- */
+
+.wreference {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 18px 28px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  max-height: 42%;
+  overflow: auto;
+}
+.wrefsection h3 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+}
+.wrefsection dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  align-items: baseline;
+}
+.wrefsection dt {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.wrefsection dd {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--mut);
+}
+
+/* ---------- the pages ---------- */
+/* The second axis of the estimate. Tabs rather than a select, because a book has two or three pages and
+   they are switched between constantly — a select would hide the others behind a click each time. */
+.wtabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 6px 8px 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+  overflow-x: auto;
+}
+.wtab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  background: none;
+  color: var(--mut);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wtab:hover {
+  color: var(--ink);
+}
+.wtab.on {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--ink);
+  font-weight: 600;
+  margin-bottom: -1px;
+  padding-bottom: 7px;
+}
+/* The page that holds what the estimate answers, rather than a page of the estimate. Marked, not moved: it
+   keeps its place in the strip so the tabs stay where the user put them. */
+.wtab.answers {
+  font-style: italic;
+}
+.wtab.answers::before {
+  content: "→ ";
+  opacity: 0.55;
+}
+
+.wtab:focus-visible,
+.wtabadd:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.wtabclose {
+  color: var(--line);
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  border-radius: 3px;
+}
+.wtabclose:hover {
+  background: var(--danger);
+  color: #fff;
+}
+.wtabaddwrap {
+  position: relative;
+  display: inline-flex;
+}
+.wtabaddmenu {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  min-width: 210px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  box-shadow: 0 8px 26px rgb(0 0 0 / 14%);
+}
+.wtabaddmenu button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 0;
+  border-radius: 4px;
+  padding: 7px 9px;
+  background: none;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.wtabaddmenu button:hover {
+  background: var(--line);
+}
+.wtabaddmenu small {
+  color: var(--mut);
+}
+.wtabadd {
+  border: 0;
+  background: none;
+  color: var(--mut);
+  font-size: 17px;
+  line-height: 1;
+  padding: 4px 10px;
+  cursor: pointer;
+  border-radius: 5px;
+  align-self: center;
+}
+.wtabadd:hover {
+  background: var(--line);
+  color: var(--ink);
+}
+.wtabedit {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px 6px 0 0;
+  background: var(--panel);
+  color: var(--ink);
+  min-width: 90px;
+  outline: 0;
+}
+
+/* Too narrow to sit two surfaces side by side, so the third pane goes under the view instead of beside it —
+   both of them are worth less at half a width than either is at full. */
+
+/* ---------- groups ---------- */
+
+.wfold {
+  border: 0;
+  background: none;
+  margin-right: 4px;
+  color: var(--mut);
+  font-size: 10px;
+  line-height: 1;
+  width: 18px;
+  cursor: pointer;
+  padding: 0;
+}
+.wfold:focus-visible {
+  outline: 2px solid var(--accent);
+  border-radius: 3px;
+}
+.wgrouphead td {
+  padding: 12px 8px 4px 6px !important;
+  border-bottom: 1px solid var(--line);
+}
+.wgroupbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.wgroupname {
+  border: 0;
+  background: none;
+  outline: 0;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink);
+  padding: 3px 5px;
+  border-radius: 3px;
+  max-width: 340px;
+}
+.wgroupname:focus {
+  background: var(--panel);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+/* The heading's own controls sit outside `.wcolact`, so they need the same reset the row buttons get there:
+   a bare button in a table otherwise arrives with the platform's border and background. */
+.wgroupbar button {
+  border: 0;
+  background: none;
+  color: var(--line);
+  font-size: 14px;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+}
+.wgrouphead:hover .wgroupbar button {
+  color: var(--mut);
+}
+.wgroupbar button:hover {
+  background: var(--line);
+  color: var(--ink);
+}
+.wgroupbar button:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.wgroupremove {
+  margin-left: auto;
+}
+.wgroupremove:hover {
+  background: var(--danger) !important;
+  color: #fff !important;
+}
+.wgroupcount {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--line);
+  font-style: italic;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+.wgrouphead:hover .wgroupcount {
+  color: var(--mut);
+}
+
+/* ---------- the add-an-item line ---------- */
+/* The last line of the table is an invitation, not a button somewhere else: a schedule is written straight
+   down, and reaching back to a toolbar between every item would break that rhythm. */
+.waddrow td {
+  padding: 9px 8px !important;
+  color: var(--line);
+  cursor: pointer;
+  font-size: 13px;
+  border-bottom: 1px solid var(--line);
+}
+.waddrow:hover td {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.waddmark {
+  display: inline-block;
+  width: 18px;
+  font-size: 15px;
+  line-height: 1;
+}
+.whintrow td {
+  padding: 10px 8px !important;
+  border: 0;
+}
+
+/* ---------- autocomplete ---------- */
+/* Anchored to the field rather than the row, so it opens where the caret is. */
+.wformulawrap {
+  position: relative;
+  display: block;
+}
+.wac {
+  position: absolute;
+  left: 4px;
+  top: calc(100% - 2px);
+  z-index: 20;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  min-width: 260px;
+  max-width: 420px;
+  max-height: 232px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  box-shadow: 0 8px 26px rgb(0 0 0 / 14%);
+}
+.wacitem {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.wacitem.on {
+  background: var(--accent);
+}
+.wacitem.on .wacname,
+.wacitem.on .wachint {
+  color: #fff;
+}
+.wacname {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  color: var(--ink);
+  white-space: nowrap;
+}
+/* The kinds are told apart by the colour of the name, not by an icon column: there are five of them and a
+   badge each would take more room than the names. */
+.k-hull .wacname {
+  color: var(--keel);
+}
+.k-function .wacname {
+  color: var(--fore);
+}
+.k-group .wacname,
+.k-page .wacname {
+  color: var(--accent);
+}
+.wachint {
+  font-size: 11px;
+  color: var(--mut);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+/* a unit the formula worked out on its own, shown as a suggestion rather than as typed text */
+.wunit.derived::placeholder {
+  color: var(--mut);
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.wsummarycg {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--mut);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.wsummarycg b {
+  color: var(--ink);
+}
+
+/* ---------- reordering ---------- */
+/* The handle is only drawn on hover: a schedule is read far more often than it is rearranged, and a column
+   of grip dots down a table of numbers is noise the rest of the time. */
+/* The handle sits beside the name field rather than above it: the field is width:100% like every other cell's,
+   so it has to be told to leave room, or the two stack and every row doubles in height. */
+.wcolname {
+  white-space: nowrap;
+  padding-left: 6px !important;
+}
+.wsheet .wcolname input {
+  width: calc(100% - 20px);
+}
+/* Drawn before the pointer arrives, not on hover: a control nobody can see is a control nobody uses, and a
+   reader who does not know a row can be dragged will never hover it to find out. Muted enough to sit under a
+   table of numbers without competing with them, and given a real target to aim at — the dots are 6px across,
+   the box around them is 20. */
+.wdrag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 26px;
+  /* No negative margin: the table sits against the panel's own edge, and pulling the handle outwards put it
+     under that border where it was half-hidden. It gets its own room instead — the first column is padded to
+     make it. */
+  margin-left: 0;
+  vertical-align: middle;
+  border-radius: 4px;
+  cursor: grab;
+  color: var(--station);
+  opacity: 0.5;
+  user-select: none;
+}
+/* Two things this has to say out loud. `fill` is not reliably inherited from an HTML element into an SVG
+   child, so the circles take the colour through `currentColor`, which every browser inherits. And the editor
+   sets `svg { width: 100% }` app-wide — for the drawing surfaces, which fill their panes — so an icon has to
+   state its own size or it stretches to the width of whatever holds it and takes its height along by aspect
+   ratio. That is what turned the first grip into a dotted rule down the edge of the table. */
+.wdrag svg {
+  display: block;
+  width: 6px;
+  height: 16px;
+  fill: currentColor;
+}
+.wrow:hover .wdrag,
+.wrow.focused .wdrag {
+  opacity: 0.95;
+}
+.wdrag:hover {
+  opacity: 1;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.wdrag:active {
+  cursor: grabbing;
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.wrow.dragging {
+  opacity: 0.4;
+}
+/* Where it would land. A line between rows rather than a highlight on one, because the item goes BETWEEN
+   two rows and highlighting either would be ambiguous about which side. */
+.wdropline td {
+  padding: 0 !important;
+  height: 0;
+  border: 0;
+  border-top: 2px solid var(--accent);
+}
+.wgrouphead.folded .wgroupname {
+  color: var(--mut);
+}
+
+/* ---------- the toolbar's tools ---------- */
+/* Disabled rather than hidden when nothing is selected: the bar keeps its shape, and the tooltip says what
+   the control needs instead of leaving a gap where it used to be. */
+.wtooloff {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.wmenurow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink);
+  text-align: left;
+  padding: 5px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wmenurow:hover {
+  background: var(--line);
+}
+.wmenurow.on {
+  color: var(--accent);
+  font-weight: 600;
+}
+.wmenurow:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* Which item currently holds an output this one could take, so moving it reads as a move rather than a
+   second nomination. */
+.wmenunote {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--mut);
+  font-weight: 400;
+}
+
+/* ---------- what a row IS ---------- */
+/* Set from the toolbar, shown on the row. A mark rather than a control: there are three of these in a whole
+   estimate, and a menu on every line to express that would be twenty controls for three facts. */
+.wrole {
+  display: inline-block;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 3px;
+  background: var(--accent);
+  color: #fff;
+  vertical-align: middle;
+  margin-right: 3px;
+}
+.wrole.r-displacement {
+  font-size: 11px;
+  padding: 2px 6px;
+}
+
+/* ---------- the three panes ---------- */
+
+.wpanes {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+.wsidebar {
+  flex: 0 0 220px;
+  min-width: 160px;
+  max-width: 320px;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.wmain {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.wpad {
+  padding: 16px;
+}
+
+/* ---------- the explorer ---------- */
+
+.wexplorer {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.wexptabs {
+  display: flex;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--line);
+}
+.wexptabs button {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--mut);
+  font: inherit;
+  font-size: 12px;
+  padding: 7px 4px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.wexptabs button.on {
+  color: var(--fore);
+  border-bottom-color: var(--accent);
+}
+.wexphead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  flex: 0 0 auto;
+}
+.wexpby {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--mut);
+}
+.wexpby select {
+  font: inherit;
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--fore);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 4px;
+  max-width: 96px;
+}
+.wexpsearch {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--fore);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+/* Creation belongs beside search: both act on the whole tree, whatever it is currently grouped by. */
+.wexpadd,
+.wexpgroupadd {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mut);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+.wexpadd {
+  width: 24px;
+  height: 24px;
+  font-size: 17px;
+}
+.wexpgroupadd {
+  width: 18px;
+  height: 18px;
+  font-size: 14px;
+  opacity: 0.55;
+}
+.wexprow:hover .wexpgroupadd,
+.wexpgroupadd:focus-visible {
+  opacity: 1;
+}
+.wexpadd:hover,
+.wexpgroupadd:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.wexpadd:focus-visible,
+.wexpgroupadd:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.wexplist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.wexproot {
+  overflow: auto;
+  flex: 1 1 auto;
+  padding-bottom: 12px;
+}
+.wexprow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 6px;
+  min-height: 22px;
+  border-radius: 4px;
+}
+/* Reordering is an insertion, not a drop ON the node. Draw the exact boundary that will receive it. */
+.wexprow.drop-before::before,
+.wexprow.drop-after::after {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  left: 12px;
+  right: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.wexprow.drop-before::before {
+  top: -1px;
+}
+.wexprow.drop-after::after {
+  bottom: -1px;
+}
+.wexprow:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+/* A drop target has to be unmistakable: dragging an item onto a node FILES it, and a near miss would file it
+   somewhere else without saying so. */
+.wexprow.over {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: 1px solid var(--accent);
+}
+.wexpitem.on {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.wexpitem[draggable="true"],
+.wexpfield[draggable="true"] {
+  cursor: grab;
+}
+.wexpitem[draggable="true"]:active,
+.wexpfield[draggable="true"]:active {
+  cursor: grabbing;
+}
+.wexptwist {
+  border: 0;
+  background: transparent;
+  color: var(--mut);
+  font: inherit;
+  font-size: 10px;
+  width: 14px;
+  padding: 0;
+  cursor: pointer;
+}
+.wexplabel {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--fore);
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 0;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wexplabel:disabled {
+  color: var(--mut);
+  cursor: default;
+}
+.wexpitem .wexplabel {
+  font-size: 12px;
+  color: var(--mut);
+}
+.wexpitem.on .wexplabel {
+  color: var(--fore);
+}
+.wexpcount {
+  font-size: 10px;
+  color: var(--mut);
+  font-variant-numeric: tabular-nums;
+}
+.wexpwarn {
+  color: var(--danger);
+  font-weight: 700;
+  font-size: 11px;
+  padding: 0 3px;
+}
+.wexphint {
+  padding: 8px 10px;
+}
+
+/* The Fields tab: usage counts, so key drift is visible. Nothing here declares anything. */
+.wfieldlist {
+  list-style: none;
+  margin: 0;
+  padding: 6px 8px;
+  overflow: auto;
+}
+.wfieldlist li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+}
+.wfieldkey {
+  flex: 0 0 auto;
+  font-size: 12px;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wfieldbar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+.wfieldfill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.wfieldcount {
+  font-size: 10px;
+  color: var(--mut);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- the views on offer ---------- */
+
+.wviewbar {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex: 0 0 auto;
+  overflow-x: auto;
+}
+.wview {
+  border: 0;
+  background: transparent;
+  color: var(--mut);
+  font: inherit;
+  font-size: 12px;
+  padding: 8px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+}
+.wview.on {
+  color: var(--fore);
+  border-bottom-color: var(--accent);
+}
+/* Always reserve the badge's room, including when the book is clean. Problems appearing or disappearing
+   must not move the tabs or the controls to their right. */
+.wproblembadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 16px;
+  margin-left: 6px;
+  border-radius: 8px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.wproblembadge.empty {
+  visibility: hidden;
+}
+/* The view choices and their few global actions share this one bar. These are quieter than the tabs, so they
+   do not turn the right end back into a second toolbar. */
+.wviewtool {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--mut);
+  font: inherit;
+  font-size: 11px;
+  padding: 0 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wviewtool:hover {
+  color: var(--fore);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.wviewtool:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.wviewadd {
+  font-size: 18px;
+  line-height: 1;
+  padding-inline: 10px;
+}
+/* A per-item or per-facet view is not on the list — there would be hundreds — so it appears beside it while
+   you are in it, and leaving is clicking anything else. */
+.wviewad {
+  font-style: italic;
+  cursor: default;
+}
+
+/* ---------- table cells ---------- */
+
+.wbandrow th {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mut);
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.wband {
+  text-align: center;
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+.wcolmeasured {
+  color: var(--mut);
+  font-style: italic;
+}
+.wcell {
+  vertical-align: top;
+  padding: 2px 6px;
+  min-width: 96px;
+}
+/* A scalar's expression is the substance of the row, not a coordinate-sized input. Let the table scroll
+   rather than reducing formulas to a few visible characters when several ad-hoc keys are in use. */
+.wcolscalar,
+.wcellscalar {
+  min-width: 260px;
+}
+.wcellrow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.wcellrow .wformulawrap {
+  flex: 1;
+  min-width: 0;
+}
+.wcellval {
+  display: block;
+  font-size: 10px;
+  color: var(--mut);
+  font-variant-numeric: tabular-nums;
+  padding-left: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wcellval.bad {
+  color: var(--danger);
+}
+.wcellval.fixed {
+  font-style: italic;
+}
+/* A blank cell is a question the item has not answered. It stays quiet until the pointer is over the row,
+   and then offers to give the item the field the column is asking for. */
+.wblank {
+  text-align: center;
+}
+.wfill {
+  border: 1px dashed transparent;
+  background: transparent;
+  color: transparent;
+  font: inherit;
+  border-radius: 4px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.wrow:hover .wfill {
+  border-color: var(--line);
+  color: var(--mut);
+}
+.wfill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.wmeasured {
+  color: var(--mut);
+  font-variant-numeric: tabular-nums;
+  font-style: italic;
+}
+.wgroupadd {
+  border: 0;
+  background: transparent;
+  color: var(--mut);
+  font: inherit;
+  cursor: pointer;
+  padding: 0 6px;
+}
+.wgroupadd:hover {
+  color: var(--accent);
+}
+/* The last line is an invitation, not a button somewhere else. */
+.waddrow td {
+  padding: 0;
+}
+.waddline {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--mut);
+  font: inherit;
+  font-size: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.waddline:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.wsheet .wcolact button.wopen {
+  font-size: 12px;
+}
+
+/* ---------- one item, and everything it carries ---------- */
+
+.wdetail {
+  padding: 16px;
+  max-width: 860px;
+}
+.wdetailhead {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.wdetail input {
+  font: inherit;
+  background: var(--bg);
+  color: var(--fore);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+.wdetail input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.wdetailname {
+  font-size: 18px;
+  font-weight: 600;
+}
+.wdetailnote {
+  font-size: 12px;
+  color: var(--mut);
+}
+.wfacets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+.wfacet {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 2px 4px 2px 8px;
+  font-size: 11px;
+}
+.wfacetkey {
+  color: var(--mut);
+}
+.wdetail input.wfacetvalue {
+  font-size: 11px;
+  width: 140px;
+  padding: 1px 4px;
+}
+.wfacetadd input {
+  font: inherit;
+  font-size: 11px;
+  background: transparent;
+  color: var(--mut);
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  padding: 3px 8px;
+  width: 120px;
+}
+/* Fields read as compact records rather than cards with a toolbar. Name, declared unit, evaluated value
+   and formula stay visible; ordering and removal occupy a quiet, stable gutter at either edge. */
+.wfieldblock {
+  position: relative;
+  container-type: inline-size;
+  border-top: 1px solid var(--line);
+  margin-bottom: 2px;
+  overflow: visible;
+  cursor: default;
+}
+.wfieldblock:last-child {
+  border-bottom: 1px solid var(--line);
+}
+.wfieldblock:focus-within {
+  position: relative;
+  z-index: 5;
+}
+.wfieldblock.selected {
+  background: color-mix(in srgb, var(--accent) 3%, transparent);
+  box-shadow: inset 2px 0 var(--accent);
+}
+.wfieldblock.dragging {
+  opacity: 0.4;
+}
+.wfieldblock.drop-before::before,
+.wfieldblock.drop-after::after {
+  content: "";
+  position: absolute;
+  z-index: 6;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.wfieldblock.drop-before::before {
+  top: -1px;
+}
+.wfieldblock.drop-after::after {
+  bottom: -1px;
+}
+.wfieldblock header {
+  display: grid;
+  /* Name, unit, mode and remove keep their affordance; the live summary owns only what remains and ellipsizes
+     there. In particular, changing a point in the geometry inspector cannot push Coordinates onto a new row. */
+  grid-template-columns:
+    14px 18px minmax(90px, 160px) auto auto minmax(0, 1fr)
+    28px;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 5px 8px 4px 5px;
+}
+.wfieldorder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 28px;
+  color: var(--station);
+  opacity: 0.5;
+  border-radius: 4px;
+  cursor: grab;
+}
+/* The fold, in the same gutter as the grip and the same twisty the explorer and the grouped table use — a
+   block folds the way a group does, because it is the same gesture on a smaller thing. */
+.wfieldtwist {
+  height: 28px;
+  color: var(--mut);
+  border-radius: 4px;
+}
+.wfieldtwist:hover,
+.wfieldtwist:focus-visible {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  outline: none;
+}
+.wfieldorder:hover,
+.wfieldorder:focus-visible {
+  color: var(--accent);
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  outline: none;
+}
+.wfieldorder:active {
+  cursor: grabbing;
+}
+.wfieldorder svg {
+  display: block;
+  width: 6px;
+  height: 16px;
+  fill: currentColor;
+}
+.wremovefield {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mut);
+  font: 18px/1 sans-serif;
+  padding: 0;
+  cursor: pointer;
+}
+.wremovefield:hover,
+.wremovefield:focus-visible {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  outline: none;
+}
+.wdetail input.wfieldname {
+  min-width: 0;
+  width: 100%;
+  font-weight: 650;
+  font-size: 14px;
+  color: var(--ink);
+}
+.wfieldblock header input.wunit {
+  width: 68px;
+  text-align: left;
+  border-color: var(--line);
+  background: var(--bg);
+}
+.wfieldblock header select,
+.wfieldblock header .wderive {
+  font: inherit;
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--mut);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wfieldblock header .wderive.on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+.wfieldsummary {
+  grid-column: 6;
+  min-width: 0;
+  max-width: 100%;
+  justify-self: stretch;
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.wfieldsummaryvalue {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.wfieldsummaryspread {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--mut);
+}
+.wfieldsummaryunit {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mut);
+}
+.wfieldsummary.empty {
+  color: var(--line);
+}
+.wfieldsummary .wissue {
+  flex-basis: 100%;
+  justify-content: flex-end;
+  margin: 1px 0 0;
+}
+.wfieldblock header > .wissue {
+  grid-column: 6;
+  min-width: 0;
+  max-width: 100%;
+  justify-self: stretch;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.wfieldblock header > .wissue > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wfieldblock header > .wremovefield {
+  grid-column: 7;
+}
+/* Asking before removing a field that other formulas name. It takes the summary's column as well as the
+   remove button's, because there is no room for a question in 28px and the value it replaces is the one
+   thing on the header that does not matter while the question is open. */
+.wremoveconfirm {
+  grid-column: 6 / 8;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--mut);
+}
+.wremoveconfirm > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wremoveconfirm button {
+  font: inherit;
+  font-size: 11px;
+  flex: 0 0 auto;
+  background: var(--bg);
+  color: var(--fore);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.wremoveconfirm button.danger {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+  color: var(--danger);
+}
+.wfieldcells {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 3px 44px 9px 53px;
+}
+.wfieldcell {
+  display: grid;
+  grid-template-columns: 42px minmax(180px, 1fr) minmax(110px, auto);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.wfieldcell.wide {
+  grid-template-columns: 42px minmax(180px, 1fr);
+}
+.wfieldblock.scalar .wfieldcell {
+  display: block;
+  min-width: 280px;
+}
+.wfieldblock.scalar .wfieldcell .wformula {
+  font-size: 13px;
+  padding: 8px 9px;
+}
+.wfieldblock.scalar .wfieldcell > span:first-child {
+  display: none;
+}
+.wfieldcell > span:first-child {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--mut);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wfieldcell .wformulawrap,
+.wfieldcell .wformula {
+  min-width: 0;
+  width: 100%;
+}
+.wfieldcell .wcellval {
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+.wfieldcell > .wissue {
+  grid-column: 3;
+  margin: 0;
+}
+.wmeasurelist {
+  display: grid;
+  grid-template-columns:
+    max-content minmax(max-content, 1fr)
+    max-content minmax(max-content, 1fr);
+  gap: 4px 14px;
+  margin: 0;
+  padding: 1px 44px 11px 103px;
+  font-size: 11px;
+}
+.wmeasurelist dt {
+  color: var(--mut);
+}
+.wmeasurelist dd {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+/* Formula rows may stack when the field itself is narrow, independently of the viewport. The header does
+   not: its name, unit, mode and summary remain one stable line, with the summary ellipsized in its allotted
+   column above. */
+@container (max-width: 480px) {
+  .wfieldcells {
+    padding-left: 53px;
+    padding-right: 8px;
+  }
+  .wfieldcell {
+    grid-template-columns: 34px minmax(130px, 1fr);
+  }
+  .wfieldcell .wcellval,
+  .wfieldcell > .wissue {
+    grid-column: 2;
+    text-align: left;
+  }
+  .wmeasurelist {
+    padding-left: 87px;
+    grid-template-columns: auto 1fr;
+  }
+}
+
+.wdetailadd {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.wdetailadd button {
+  border: 1px dashed var(--line);
+  background: transparent;
+  color: var(--mut);
+  font: inherit;
+  font-size: 12px;
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.wdetailadd button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.wdetaildanger {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 24px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.wdeleteitem,
+.wdeleteconfirm button {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mut);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.wdeleteitem:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.wdeleteconfirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--mut);
+  font-size: 11px;
+}
+.wdeleteconfirm button:hover {
+  color: var(--ink);
+}
+.wdeleteconfirm button.danger {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ---------- the summary, and the problems ---------- */
+
+/* Book outputs use the same row rhythm and selection treatment as an item schedule. Their formulas remain
+   the wide editing column; result and spread stay narrow, comparable readouts at the right. */
+.wsummarytable .wsummaryname {
+  width: 1%;
+  min-width: 128px;
+  padding: 6px 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+.wsummarytable tbody .wsummaryname {
+  border-bottom: 1px solid var(--line);
+}
+.wsummarytable .wsummaryname .woutputlabel {
+  display: inline-block;
+  min-width: 34px;
+  margin-right: 8px;
+}
+.wsummarytable .wsummaryresult {
+  width: 1%;
+  min-width: 120px;
+  padding: 6px 10px;
+  text-align: right;
+  white-space: nowrap;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--line);
+}
+
+.wsummaryview {
+  padding: 16px;
+  max-width: 760px;
+}
+.woutputs h3,
+.wproblemstrip h3 {
+  font-size: 13px;
+  margin: 0 0 6px;
+}
+.woutputlist {
+  margin: 10px 0 12px;
+}
+.woutput {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+.woutput dt {
+  flex: 0 0 120px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.woutput dd {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.woutputlabel {
+  font-size: 15px;
+  font-weight: 600;
+}
+.woutputname {
+  font-size: 10px;
+  color: var(--mut);
+  letter-spacing: 0.04em;
+}
+.woutput .wformula {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fore);
+}
+.wproblemstrip {
+  margin-top: 20px;
+}
+.wproblems {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.wproblems li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+/* An empty cell is a gap, not a fault: it reads quieter than something that actually broke. */
+.wproblems li.soft .wproblemwhat {
+  color: var(--mut);
+  font-style: italic;
+}
+.wproblemwhere {
+  flex: 0 0 220px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  padding: 0;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wproblemwhat {
+  flex: 1;
+  color: var(--danger);
+}
+
+/* The unit sits BESIDE the formula in a table cell, and must not squeeze it: `.wsheet input` is width:100%,
+   which as a flex item would make the unit box claim the whole cell and leave the formula nothing. */
+.wcellrow .wunit {
+  flex: 0 0 64px;
+  width: 64px;
+  margin-left: 4px;
+  padding: 5px 6px;
+  border-left: 1px solid var(--line);
+  text-align: left;
+  color: var(--mut);
+}
+.wcellrow .wformulawrap {
+  flex: 1 1 auto;
+}
+.wcellrow .wformula {
+  width: 100%;
+}
+.wdetail input::placeholder {
+  color: var(--line);
+}
+
+/* A field is a leaf of the explorer's tree: it has nothing under it, and its kind rides at the end so a
+   point and a section are told apart without opening either. */
+.wexpfield .wexplabel {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  color: var(--mut);
+}
+.wexpfield:hover .wexplabel {
+  color: var(--fore);
+}
+.wexpkind {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--line);
+}
+.wexptwist:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.wexpnote {
+  font-size: 11px;
+  color: var(--mut);
+  padding: 8px 10px;
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+.wexpnote code {
+  font-size: 10px;
+}
+
+/* ---------- the inspector ---------- */
+/* A column of text in the third pane. It is READ rather than edited — every cell it names is a link back to
+   the surface that edits it — so it is set tighter than the sheet and leans on the monospace face only for
+   the addresses, which are the parts a reader matches against a formula. */
+
+.winspector {
+  padding: 12px 12px 20px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.winsphead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.winspaddress {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.winspkind {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+}
+/* The cell as it was typed, echoed because the table's own column is usually too narrow to read it in. */
+.winspsource {
+  display: block;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  color: var(--mut);
+  overflow-wrap: anywhere;
+  margin-bottom: 8px;
+}
+
+.winspvalue {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.winspnumber {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+.winspunit {
+  font-size: 14px;
+  color: var(--mut);
+}
+
+/* ---------- the two readings, on one axis ---------- */
+/* Worst is the whole track and likely the band inside it, so the gap at either end IS the disagreement
+   between them — a width to look at rather than four numbers to subtract. */
+
+.winspband {
+  margin: 10px 0 4px;
+}
+.winspworst {
+  position: relative;
+  height: 14px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.winsplikely {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.winspnominal {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+.winspscale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--mut);
+  font-variant-numeric: tabular-nums;
+  padding-top: 2px;
+}
+
+.winspreadings {
+  margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.winspreading {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 5px;
+  border-radius: 4px;
+}
+/* Which of the two the rest of the panel is quoting. Both are always here — the point of the pane is that
+   you do not have to flip the toolbar to see the other one. */
+.winspreading.on {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.winspreading dt {
+  font-size: 11px;
+  color: var(--mut);
+}
+.winspreading dd {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
+}
+.winspspread {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.winsprel {
+  font-size: 11px;
+  color: var(--mut);
+}
+.winsprange {
+  font-size: 10.5px;
+  color: var(--mut);
+  white-space: nowrap;
+}
+
+.winspsection {
+  margin-top: 16px;
+}
+.winspsection h4 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mut);
+}
+.winspsection .whint {
+  margin-top: 6px;
+}
+
+/* The parts of a thing, one row each: a point's three axes, or a cut's position and everything measured
+   about it. Same two-number shape either way, so the same table — and every row picks itself, because the
+   list is the index and the reading underneath is what it indexes into. */
+.winspaxes {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  margin: 10px 0 4px;
+}
+.winspaxes th,
+.winspaxes td {
+  text-align: left;
+  padding: 3px 6px 3px 0;
+  font-size: 11.5px;
+  font-weight: 400;
+  border-bottom: 1px solid var(--line);
+}
+.winspaxes th {
+  color: var(--mut);
+  width: 1%;
+  white-space: nowrap;
+}
+.winspaxes td:nth-child(2) {
+  text-align: right;
+  width: 1%;
+  white-space: nowrap;
+}
+.winsppick {
+  cursor: pointer;
+}
+.winsppick:hover td,
+.winsppick:hover th {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.winspaxes tr.on td,
+.winspaxes tr.on th {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+/* The picked row, marked down its leading edge rather than by a badge — the reading below IS the badge. */
+.winspaxes tr.on th {
+  box-shadow: inset 2px 0 0 var(--accent);
+  color: var(--ink);
+  font-weight: 600;
+}
+.winspaxes th {
+  padding-left: 5px;
+}
+/* The unit rides with the value, because a cut's rows are not all in the same one: an area is m² beside
+   perimeters in m, and a column heading could not say that. */
+.winsprowunit {
+  color: var(--mut);
+  font-size: 10.5px;
+}
+.winspaxes th button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.winspaxes th button:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* Every cell the item carries, one line each — the record the selection belongs to. */
+.winspleaves {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.winspleaves li {
+  display: grid;
+  grid-template-columns: minmax(70px, 1fr) auto auto;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11.5px;
+  padding: 2px 0;
+  border-bottom: 1px solid var(--line);
+}
+.winspleafname {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.winspleafname:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.winspleafvalue {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.winspleaves .winspspread,
+.winspleaves .whint {
+  color: var(--mut);
+  font-size: 10.5px;
+  white-space: nowrap;
+  margin: 0;
+}
+
+/* Reverse dependencies: the address is the action and the expression beneath it explains the occurrence. */
+.winspuses {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+.winspuses li {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+}
+.winspuses button {
+  display: block;
+  max-width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font:
+    600 11.5px ui-monospace,
+    "SF Mono",
+    Menlo,
+    monospace;
+  padding: 0;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.winspuses button:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.winspuses button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.winspuses code {
+  display: block;
+  margin-top: 3px;
+  color: var(--mut);
+  font:
+    10.5px ui-monospace,
+    "SF Mono",
+    Menlo,
+    monospace;
+  overflow-wrap: anywhere;
+}
+
+.winspbad {
+  color: var(--danger);
+  font-size: 11.5px;
+  margin: 6px 0 0;
+}
+.winspwarn {
+  color: var(--sheer);
+  font-size: 11.5px;
+  margin: 6px 0 0;
+}

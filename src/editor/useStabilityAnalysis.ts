@@ -48,7 +48,7 @@ export function useStabilityAnalysis(
   const request = useMemo<StabilityRequest>(
     () => ({
       key,
-      state: snapshot.state,
+      state: snapshot.state.hull,
       session: snapshot.session,
       sliceRevs: snapshot.sliceRevs,
       numSections: perf.numSections,
@@ -56,7 +56,7 @@ export function useStabilityAnalysis(
     }),
     [
       key,
-      snapshot.state,
+      snapshot.state.hull,
       snapshot.session,
       snapshot.sliceRevs,
       perf.numSections,

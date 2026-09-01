@@ -12,6 +12,7 @@ import { SelectionInfo } from "./SelectionInfo";
 import { StationsGrid } from "./StationsGrid";
 import { StabilityPanel } from "./StabilityPanel";
 import { Toolbar } from "./Toolbar";
+import { WeightPanel } from "./weight/WeightPanel";
 import "./EditorApp.css";
 import "./PanelApp.css";
 
@@ -82,6 +83,8 @@ function PanelBody({ kind }: { readonly kind: PanelKind }) {
       return <HistoryPanel />;
     case "stability":
       return <StabilityPanel />;
+    case "weights":
+      return <WeightPanel />;
   }
 }
 
@@ -121,6 +124,7 @@ function PanelControls({ kind }: { readonly kind: PanelKind }) {
     // the current moment is one step back, and a click reaches any moment rather than only the next one.
     case "history":
     case "stability":
+    case "weights":
       return null;
   }
 }

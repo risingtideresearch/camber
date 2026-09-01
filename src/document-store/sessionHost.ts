@@ -6,8 +6,14 @@
 
 import { rejected } from "../core/commands";
 import { documentVersion, VERSION } from "../core/document";
-import { cloneHull, defaultHull } from "../core/hull";
 import { parseHullState } from "../core/json";
+import {
+  cloneDocument,
+  defaultDocument,
+  documentOf,
+  type SessionDocument,
+} from "../core/sessionDocument";
+import { parseSheet } from "../core/sheet/json";
 import type { SessionMeta } from "../core/meta";
 import {
   PROTOCOL_VERSION,
@@ -58,7 +64,7 @@ interface HostedSession {
 }
 
 const initializedMeta = (
-  state: ReturnType<typeof defaultHull>,
+  state: SessionDocument,
   identity: {
     currentId: string | null;
     savedName: string | null;
@@ -70,7 +76,7 @@ const initializedMeta = (
   design: {
     currentId: identity.currentId,
     savedName: identity.savedName,
-    savedState: cloneHull(state),
+    savedState: cloneDocument(state),
   },
   saving: false,
 });
@@ -108,14 +114,21 @@ export function createSessionHost(
     const existing = sessions.get(id);
     if (existing) return existing;
 
-    let state = defaultHull();
+    let state = defaultDocument();
     let meta: SessionMeta;
     if (source.type === "design") {
       // Persistence returns storage data. Parsing, version conversion, and session identity are application
       // concerns performed before the server is exposed to any client.
+      //
+      // The two parts are parsed independently and on purpose. A hull that will not decode must stop the
+      // load — the design cannot be opened at all — while a weight sheet that will not decode comes back
+      // empty rather than taking the design down with it (see `parseSheet`).
       const loaded = await persistence.loadDesign(source.designId);
       const version = documentVersion(JSON.parse(loaded.documentText));
-      state = parseHullState(loaded.documentText);
+      state = documentOf(
+        parseHullState(loaded.documentText),
+        parseSheet(loaded.weightsText),
+      );
       const name =
         version < VERSION
           ? `${loaded.name} converted to v${VERSION}`

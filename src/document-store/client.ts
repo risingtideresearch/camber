@@ -4,7 +4,7 @@
 // It installs whole snapshots published by SessionHost, computes window-local runtime data, and correlates
 // asynchronous requests with replies over an injected transport.
 
-import type { DocumentCommand, CommandOutcome } from "../core/commands";
+import type { DocumentCommand, DocumentOutcome } from "../core/commands";
 import type { Model } from "../core/model";
 import { assemble } from "../core/runtime";
 import type { DocumentStore, SessionSource } from "./api";
@@ -170,13 +170,13 @@ export async function connectDocumentStore(
       // assemble() uses slice revisions rather than object identity because structuredClone replaces every
       // object reference crossing the worker boundary.
       const current = snapshot!;
-      model = assemble(current.state, current.session, {
+      model = assemble(current.state.hull, current.session, {
         sliceRevs: current.sliceRevs,
         cacheKey,
       });
       return model;
     },
-    async dispatch(command: DocumentCommand): Promise<CommandOutcome> {
+    async dispatch(command: DocumentCommand): Promise<DocumentOutcome> {
       // The base revision is what this window saw when composing the command. The server decides whether an
       // intervening edit makes a structural command stale.
       const reply = await request((requestId) => ({
@@ -195,7 +195,7 @@ export async function connectDocumentStore(
       if ("rejected" in reply.outcome)
         return { rejected: reply.outcome.rejected };
       return {
-        state: snapshot!.state,
+        doc: snapshot!.state,
         touched: reply.outcome.touched,
         result: reply.outcome.result,
       };

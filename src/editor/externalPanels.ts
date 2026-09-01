@@ -9,10 +9,14 @@
 // station editor. The point is a second look at the same hull — a big 3D view on another monitor, or every
 // station laid out side by side instead of behind tabs.
 //
-// Hull views are opened from the pane being duplicated (DetachPanelButton). The two window-only analytical
-// panels are labelled in an app bar instead: History travels with the session's undo controls, while Stability
-// is opened from the main editor because it is a reading of the complete design rather than of one pane.
-export type PanelKind = "view3d" | "stations" | "history" | "stability";
+// Hull views are opened from the pane being duplicated (DetachPanelButton). The window-only analytical panels
+// are labelled in an app bar instead: History travels with the session's undo controls, while Stability and
+// Weights are opened from the main editor because each is a reading of the complete design rather than of one
+// pane. Weights is also the one panel that EDITS something other than the hull — the weight sheet is the
+// session's second authored document (see `core/sessionDocument.ts`) — so its edits undo alongside hull edits
+// in the same history.
+export type PanelKind =
+  "view3d" | "stations" | "history" | "stability" | "weights";
 
 export interface PanelSpec {
   /** Caption in the panel window's own bar, and in its document title. */
@@ -49,6 +53,13 @@ export const PANELS: Record<PanelKind, PanelSpec> = {
     hint: "Open the limiting KG envelope and inspect the GZ curve for any displacement and VCG.",
     width: 1280,
     height: 760,
+  },
+  weights: {
+    title: "Weights",
+    hint: "Estimate what the boat will displace: a schedule of named items, each with an uncertainty, read against the hull's own measurements.",
+    // A schedule: as wide as its columns need and no wider, and tall, because it is read as a list.
+    width: 1080,
+    height: 820,
   },
 };
 

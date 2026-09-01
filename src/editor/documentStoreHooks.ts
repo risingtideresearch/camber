@@ -10,7 +10,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import type { DocumentCommand, CommandOutcome } from "../core/commands";
+import type { DocumentCommand, DocumentOutcome } from "../core/commands";
 import type { Model } from "../core/model";
 import { perfFrame } from "../core/perf";
 import type { DocumentStore } from "../document-store/api";
@@ -39,7 +39,7 @@ export function useDocumentRuntime(): Model {
 /** Authored command dispatch, also marking the start of the editor's frame performance measurement. */
 export function useDocumentDispatch(): (
   command: DocumentCommand,
-) => Promise<CommandOutcome> {
+) => Promise<DocumentOutcome> {
   const store = useDocumentStore();
   return useCallback(
     (command: DocumentCommand) => {
