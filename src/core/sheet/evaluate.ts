@@ -1,38 +1,46 @@
 // ---------- evaluating a weight book ----------
 //
-// Takes the authored pages and the hull's numbers, and produces a value, a spread and a sensitivity ranking
-// for every row. Everything that can go wrong is reported PER ROW and nothing throws: a half-written formula
-// is a normal state for a schedule to be in, and one bad line must not take the other thirty with it.
+// Takes the authored items and the hull's numbers, and produces a value, a spread and a sensitivity ranking
+// for every cell. Everything that can go wrong is reported PER CELL and nothing throws: a half-written
+// formula is a normal state for a schedule to be in, and one bad line must not take the other thirty with it.
 //
 // ---------- how a name is resolved ----------
 //
-// A bare `hull shell` is a row on the page the formula is written on. Everything else is a dotted path:
+// A path is read from the inside out, so the shortest thing that could have been meant is what was meant:
 //
-//   HULL.LWL, HULL.SHELL_AREA …   the geometry, exact, in metres and kilograms (`../hullMetrics.ts`)
-//   Weights.hull shell            a row on ANOTHER page — which is what pages are for
+//   area                  a SIBLING field — another field of the item the formula is written on
+//   cg.z                  a sibling field's leaf
+//   hull shell.mass       a field of another item
+//   engine.cg.z           a leaf of a field of another item
+//   HULL.LWL              the geometry, exact, in metres and kilograms (`../hullMetrics.ts`)
+//   OUT.DISPLACEMENT      what the book itself answers (`outputs.ts`)
 //
-// Names may contain spaces, and the lexer is handed the symbol table that makes that unambiguous — see
-// `symbolsOf`.
+// Two segments are ambiguous in principle — `cg.z` could be a sibling's leaf or another item's field — and
+// the sibling wins, for the same reason a local variable shadows a global. It is the scope you are standing
+// in, and the alternative is reachable by writing the item's name.
 //
-// ---------- groups do not add up ----------
+// Note what is NOT in that list: nothing addresses a facet. An item's `system` or `status` is how it is
+// FILED, and filing is exactly the thing a user must be free to change without rewriting formulas. That is
+// the rule the whole model turns on, and this module is where it is enforced by omission.
 //
-// A group is a HEADING and nothing more: it collects rows under a name and folds them away. It carries no
-// subtotal, and no formula can ask for one.
+// ---------- names may contain spaces ----------
 //
-// That is not a gap. A group is not a declaration that everything under it is the same kind of thing — a real
-// schedule puts the plywood density next to the shell it prices, and the fraction next to the framing it
-// scales — so a group's rows routinely mix a mass, an area and a plain number, and asking them to add has no
-// answer. Guessing at one, however carefully hedged, produces a number that looks authoritative and is not.
-// A total that means something is written out: `hull shell + frames + bulkheads`, which says exactly what it
-// adds and fails loudly if those stop being the same kind of thing.
+// The lexer is handed the symbol table that makes that unambiguous — one table for the whole book now, where
+// the page model needed one per page. See `symbolsOf`.
 //
 // ---------- cycles ----------
 //
-// Resolution is depth-first with a visiting set, so a cycle is caught at the moment it closes and every row
+// Resolution is depth-first with a visiting set, so a cycle is caught at the moment it closes and every cell
 // on it gets the same message naming the loop. There is no topological pre-pass: the graph is tiny, and doing
-// it lazily means a row that references nothing is evaluated even when the rest of the book is tangled.
+// it lazily means a cell that references nothing is evaluated even when the rest of the book is tangled.
 
-import { evaluate, FormulaError, parseFormula, type Node } from "./formula";
+import {
+  evaluate,
+  FormulaError,
+  parseFormula,
+  referencesOf,
+  type Node,
+} from "./formula";
 import {
   hullMetric,
   hullPoint,
@@ -45,27 +53,25 @@ import {
   isDimless,
   LENGTH,
   read,
+  sameDim,
   type Dim,
   type Quantity,
   type Reading,
   type Source,
 } from "./quantity";
 import {
-  fieldOf,
-  fieldsOf,
+  fieldUnit,
   isDerived,
-  isHeading,
-  outputsSheet,
+  leafOf,
+  leavesOf,
   symbolsOf,
-  type PointRow,
-  type RowField,
-  type Sheet,
-  type SheetRef,
-  type SheetRow,
+  type Field,
+  type FieldLeaf,
+  type Item,
+  type CellRef,
   type WeightBook,
 } from "./book";
 import { isOutputName, OUTPUTS, outputSpec } from "./outputs";
-import { sameDim } from "./quantity";
 import { naturalUnit, parseUnit, UnitError, type UnitSpec } from "./units";
 import {
   SLICE_VALUE_FIELDS,
@@ -74,12 +80,21 @@ import {
   type SliceValueField,
 } from "./slices";
 
-/** One evaluated row. */
-export interface RowResult {
-  readonly sheetId: string;
-  readonly rowId: string;
-  /** Which cell of the row this is. A scalar has only `"formula"`; a point has three. */
-  readonly field: RowField;
+/**
+ * The pseudo item the book's own answers are evaluated under.
+ *
+ * They are cells like any other — they parse, they can fail, they can join a cycle — and giving them a home
+ * in the same map is what lets `OUT.DISPLACEMENT` appear in the middle of a loop and be named in the message
+ * along with everything else. Not a real id: `newId` mints `i`-prefixed ids, so nothing can collide with it.
+ */
+export const OUTPUT_ITEM = "OUT";
+
+/** One evaluated cell. */
+export interface CellResult {
+  readonly itemId: string;
+  readonly fieldKey: string;
+  /** Which cell of the field this is. A scalar has only `"formula"`; a point has three. */
+  readonly leaf: FieldLeaf;
   /** A blank formula has no value and no error — it is simply empty. */
   readonly empty: boolean;
   readonly reading: Reading | null;
@@ -90,18 +105,13 @@ export interface RowResult {
    * ∂v/∂xᵢ is gone by then — and with it any way to tell whether two values move together or apart. That is
    * exactly what the point editor needs: two coordinates that lean on one uncertain input are correlated,
    * and their uncertainty region is a tilted parallelogram rather than the axis-aligned box the two readings
-   * alone would draw. Nothing else reads this, and a reading remains the right thing for everything that
-   * looks at one value at a time.
+   * alone would draw.
    */
   readonly quantity: Quantity | null;
   /**
    * The parse the evaluation ran on, for a caller that needs to REWRITE the source rather than read the
-   * value.
-   *
-   * The point editor moves a literal inside an expression by splicing its span, and the spans are on the
-   * tree (`formula.ts`). Handing over the parse that was already done beats re-parsing three cells per point
-   * on every render, and — more to the point — guarantees the editor is rewriting the very expression the
-   * evaluator read. Null where the cell is empty or would not parse.
+   * value. The point editor moves a literal inside an expression by splicing its span, and the spans are on
+   * the tree (`formula.ts`). Null where the cell is empty or would not parse.
    */
   readonly tree: Node | null;
   /** What went wrong, in a sentence a person can act on. */
@@ -109,25 +119,24 @@ export interface RowResult {
   /** Where in the formula, for a caret. −1 when the message is not about a position. */
   readonly errorAt: number;
   /**
-   * The unit the value is SHOWN in: what the row declares, or — where it declares nothing — the natural unit
-   * of whatever the formula worked out to. That is what makes units appear on their own the moment a row
-   * acquires a dimension, and lets typing `t` over a `kg` convert rather than complain.
+   * The unit the value is SHOWN in: what the field declares, or — where it declares nothing — the natural
+   * unit of whatever the formula worked out to.
    */
   readonly unit: UnitSpec | null;
   /** True when the shown unit was derived rather than typed, so the panel can render it as a suggestion. */
   readonly unitIsDerived: boolean;
   /**
    * The declared unit's dimension disagrees with the formula's own. Not an error: the value is reported as
-   * the formula computed it, and the row is flagged so the mismatch is visible rather than silently believed.
+   * the formula computed it, and the cell is flagged so the mismatch is visible rather than silently believed.
    */
   readonly unitWarning: string | null;
 }
 
 export interface BookResults {
-  /** Keyed `sheetId + " " + rowId`. */
-  readonly rows: ReadonlyMap<string, RowResult>;
+  /** Keyed by `cellKey`. Includes the book's answers, under `OUTPUT_ITEM`. */
+  readonly cells: ReadonlyMap<string, CellResult>;
   readonly sources: ReadonlyMap<string, Source>;
-  /** The book's declared outputs, resolved. Null where nothing is nominated or the row failed. */
+  /** The book's declared outputs, resolved. Null where nothing is written or the formula failed. */
   readonly outputs: {
     readonly displacement: Reading | null;
     readonly vcg: Reading | null;
@@ -138,35 +147,154 @@ export interface BookResults {
 /**
  * Where a result lives.
  *
- * The field defaults to `"formula"`, which is the only cell a scalar row has — so every caller that knew
- * about rows and not about fields keeps working and keeps meaning what it meant. A point row occupies three
- * keys under this scheme, one per coordinate.
+ * The leaf defaults to `"formula"`, which is the only cell a scalar has. A point occupies three keys under
+ * this scheme, one per coordinate.
  */
-export const rowKey = (
-  sheetId: string,
-  rowId: string,
-  field: RowField = "formula",
-): string => `${sheetId} ${rowId} ${field}`;
+export const cellKey = (
+  itemId: string,
+  fieldKey: string,
+  leaf: FieldLeaf = "formula",
+): string => `${itemId} ${fieldKey} ${leaf}`;
 
 export const resultAt = (
   results: BookResults,
-  sheetId: string,
-  rowId: string,
-  field: RowField = "formula",
-): RowResult | undefined => results.rows.get(rowKey(sheetId, rowId, field));
+  itemId: string,
+  fieldKey: string,
+  leaf: FieldLeaf = "formula",
+): CellResult | undefined => results.cells.get(cellKey(itemId, fieldKey, leaf));
 
 export const resultFor = (
   results: BookResults,
-  ref: SheetRef | null,
-): RowResult | undefined =>
-  ref ? results.rows.get(rowKey(ref.sheet, ref.row)) : undefined;
+  ref: CellRef | null,
+): CellResult | undefined =>
+  ref ? results.cells.get(cellKey(ref.item, ref.field)) : undefined;
+
+/**
+ * What names each field of one item, by the address a person would recognise.
+ *
+ * The reverse of the dependency edge the evaluator follows, and the answer to "what does removing this
+ * break". Read off the parse trees the evaluation already built rather than by re-parsing: a formula that
+ * would not lex contributes nothing, which is the right answer, because it resolves to nothing either.
+ *
+ * The two ways to name a field are the two `resolve` accepts — bare from a formula on the same item, where a
+ * sibling wins, and `item.field` from anywhere else, where a sibling of the SAME name on the naming item
+ * would shadow it and so does not count. One pass over every cell answers for every field at once, and a
+ * point that names one in two of its three coordinates counts once: it is one thing to go and edit.
+ */
+export function fieldUsers(
+  book: WeightBook,
+  results: BookResults,
+  itemId: string,
+): ReadonlyMap<string, readonly string[]> {
+  const owner = book.items.find((item) => item.id === itemId);
+  const found = new Map<string, Set<string>>();
+  if (!owner) return new Map();
+  for (const key of Object.keys(owner.fields)) found.set(key, new Set());
+
+  const byId = new Map(book.items.map((item) => [item.id, item]));
+  for (const cell of results.cells.values()) {
+    if (!cell.tree) continue;
+    const from = byId.get(cell.itemId);
+    for (const path of referencesOf(cell.tree)) {
+      const key =
+        cell.itemId === itemId && found.has(path[0])
+          ? path[0]
+          : owner.name &&
+              path[0] === owner.name &&
+              found.has(path[1]) &&
+              !from?.fields[path[0]]
+            ? path[1]
+            : null;
+      // A cell of the field itself is not a user of it — that is a cycle, and `evaluate` already says so.
+      if (!key || (cell.itemId === itemId && cell.fieldKey === key)) continue;
+      found
+        .get(key)!
+        .add(
+          cell.itemId === OUTPUT_ITEM
+            ? `OUT.${cell.fieldKey}`
+            : `${from?.name || "an unnamed item"}.${cell.fieldKey}`,
+        );
+    }
+  }
+  return new Map([...found].map(([key, users]) => [key, [...users]]));
+}
+
+/** One authored cell whose formula names a field. */
+export interface FieldUse {
+  readonly itemId: string;
+  readonly fieldKey: string;
+  readonly leaf: FieldLeaf;
+  /** The full cell address a person sees in a formula editor. */
+  readonly address: string;
+}
+
+/**
+ * The individual formula cells that name one field.
+ *
+ * Unlike `fieldUsers`, this keeps the leaf and stable ids needed to follow an occurrence from the inspector.
+ * A derived point is evaluated once per coordinate from the same authored `from` expression, so its three
+ * results collapse back to that one editable use.
+ */
+export function fieldUses(
+  book: WeightBook,
+  results: BookResults,
+  itemId: string,
+  fieldKey: string,
+): readonly FieldUse[] {
+  const owner = book.items.find((item) => item.id === itemId);
+  if (!owner?.fields[fieldKey]) return [];
+  const byId = new Map(book.items.map((item) => [item.id, item]));
+  const found = new Map<string, FieldUse>();
+
+  for (const cell of results.cells.values()) {
+    if (!cell.tree) continue;
+    const from = byId.get(cell.itemId);
+    const namesTarget = referencesOf(cell.tree).some((path) =>
+      cell.itemId === itemId && owner.fields[path[0]]
+        ? path[0] === fieldKey
+        : !!owner.name &&
+          path[0] === owner.name &&
+          path[1] === fieldKey &&
+          !from?.fields[path[0]],
+    );
+    if (!namesTarget || (cell.itemId === itemId && cell.fieldKey === fieldKey))
+      continue;
+
+    const field = from?.fields[cell.fieldKey];
+    const sharedDerivation = field?.k === "point" && isDerived(field);
+    const base =
+      cell.itemId === OUTPUT_ITEM
+        ? `OUT.${cell.fieldKey}`
+        : `${from?.name || "an unnamed item"}.${cell.fieldKey}`;
+    const address =
+      cell.itemId === OUTPUT_ITEM || field?.k === "scalar" || sharedDerivation
+        ? base
+        : `${base}.${cell.leaf}`;
+    if (!found.has(address))
+      found.set(address, {
+        itemId: cell.itemId,
+        fieldKey: cell.fieldKey,
+        leaf: sharedDerivation ? "from" : cell.leaf,
+        address,
+      });
+  }
+  return [...found.values()];
+}
+
+/** One of the book's answers, as an evaluated cell — what the summary view renders and edits. */
+export const outputResult = (
+  results: BookResults,
+  name: string,
+): CellResult | undefined => results.cells.get(cellKey(OUTPUT_ITEM, name));
 
 // ---------- the evaluator ----------
 
 interface Cell {
-  readonly sheet: Sheet;
-  readonly row: SheetRow;
-  readonly field: RowField;
+  /** Null on one of the book's answers, which belongs to no item and has no siblings. */
+  readonly item: Item | null;
+  readonly fieldKey: string;
+  readonly field: Field | null;
+  readonly leaf: FieldLeaf;
   readonly source: string;
   /** Parsed once, whatever it is referenced from. */
   tree: Node | null;
@@ -177,7 +305,7 @@ interface Cell {
   value: Quantity | null;
   error: { message: string; at: number } | null;
   unitWarning: string | null;
-  /** This cell's dependency graph reaches a geometry-derived slice leaf. */
+  /** This cell's dependency graph reaches a geometry-derived cut leaf. */
   usesSliceMeasurement: boolean;
 }
 
@@ -196,76 +324,109 @@ export function evaluateBook(
   const sources = new Map<string, Source>();
   let sourceSeq = 0;
 
-  // Row names are resolved PER PAGE — the same name may mean different things on the weight page and the VCG
-  // page, which is the point of pages — so each gets its own index and its own symbol table.
-  const rowsByName = new Map<string, Map<string, SheetRow>>();
-  const sheetsByName = new Map<string, Sheet>();
-  const symbols = new Map<string, string[]>();
-  for (const sheet of book.sheets) {
-    if (sheet.name) sheetsByName.set(sheet.name, sheet);
-    const index = new Map<string, SheetRow>();
-    for (const row of sheet.rows)
-      if (row.name && !isHeading(row)) index.set(row.name, row);
-    rowsByName.set(sheet.id, index);
-    symbols.set(sheet.id, symbolsOf(book, sheet.id));
-  }
+  // Item names are globally unique, so ONE index serves the whole book — the page model needed one per page
+  // because the same name could mean different things on two pages, and that is exactly the ambiguity items
+  // removed.
+  const itemsByName = new Map<string, Item>();
+  for (const item of book.items)
+    if (item.name) itemsByName.set(item.name, item);
+  const symbols = symbolsOf(book);
 
-  // One cell per FORMULA CELL, not per row: a scalar contributes one, a point three, a heading none —
-  // headings are where a group starts and nothing more.
-  for (const sheet of book.sheets)
-    for (const row of sheet.rows) {
-      if (isHeading(row)) continue;
-      // Every cell of a row shares the row's unit, which is why a point declares one unit and not three.
-      const declaredUnit = row.unit.trim();
-      let declared: UnitSpec | null = null;
-      let unitError: string | null = null;
-      if (declaredUnit) {
-        try {
-          declared = parseUnit(declaredUnit);
-        } catch (error) {
-          unitError =
-            error instanceof UnitError ? error.message : String(error);
-        }
-      }
-      // A derived point states its three coordinates once. The row still produces THREE cells — the same
-      // three keys everything downstream reads — and they simply all read from the one expression, which is
-      // then evaluated once per axis under the rule in `bareRowValue`. Nothing but this line knows.
-      const derivation = isDerived(row) ? (row as PointRow).from : null;
-      for (const field of fieldsOf(row)) {
-        const text = (derivation ?? fieldOf(row, field) ?? "").trim();
-        let tree: Node | null = null;
-        let parseError: FormulaError | null = null;
-        if (text) {
-          try {
-            tree = parseFormula(text, symbols.get(sheet.id));
-          } catch (error) {
-            parseError =
-              error instanceof FormulaError
-                ? error
-                : new FormulaError(String(error));
-          }
-        }
-        cells.set(rowKey(sheet.id, row.id, field), {
-          sheet,
-          row,
-          field,
-          source: text,
-          tree,
-          parseError,
-          declared,
-          unitError,
-          state: "fresh",
-          value: null,
-          error: null,
-          unitWarning: null,
-          usesSliceMeasurement: false,
-        });
+  const declare = (
+    unit: string,
+  ): { declared: UnitSpec | null; unitError: string | null } => {
+    const text = unit.trim();
+    if (!text) return { declared: null, unitError: null };
+    try {
+      return { declared: parseUnit(text), unitError: null };
+    } catch (error) {
+      return {
+        declared: null,
+        unitError: error instanceof UnitError ? error.message : String(error),
+      };
+    }
+  };
+
+  const addCell = (
+    item: Item | null,
+    fieldKey: string,
+    field: Field | null,
+    leaf: FieldLeaf,
+    text: string,
+    unit: string,
+  ): void => {
+    const declaration = declare(unit);
+    const position = field?.k === "point" || field?.k === "cut";
+    // Positions have a known dimension independent of their formula. A mass unit on a scalar is useful; on
+    // a coordinate it would make geometry interpret kilograms as metres, so refuse it at the cell boundary.
+    const unitError =
+      declaration.unitError ??
+      (position &&
+      declaration.declared &&
+      !sameDim(declaration.declared.dim, LENGTH)
+        ? `${field.k === "point" ? "point coordinates" : "cut positions"} must use a distance unit — try m, cm, mm, in, or ft`
+        : null);
+    const declared = declaration.declared;
+    let tree: Node | null = null;
+    let parseError: FormulaError | null = null;
+    const trimmed = text.trim();
+    if (trimmed) {
+      try {
+        tree = parseFormula(trimmed, symbols);
+      } catch (error) {
+        parseError =
+          error instanceof FormulaError
+            ? error
+            : new FormulaError(String(error));
       }
     }
+    cells.set(cellKey(item?.id ?? OUTPUT_ITEM, fieldKey, leaf), {
+      item,
+      fieldKey,
+      field,
+      leaf,
+      source: trimmed,
+      tree,
+      parseError,
+      declared,
+      unitError,
+      state: "fresh",
+      value: null,
+      error: null,
+      unitWarning: null,
+      usesSliceMeasurement: false,
+    });
+  };
+
+  // One cell per LEAF, not per field: a scalar contributes one, a point three, a cut one.
+  for (const item of book.items)
+    for (const [key, field] of Object.entries(item.fields)) {
+      // A derived point states its three coordinates once. It still produces THREE cells — the same three
+      // keys everything downstream reads — and they simply all read from the one expression, evaluated once
+      // per axis under the rule in `bareFieldValue`. Nothing but this line knows.
+      const derivation = isDerived(field)
+        ? (field as { from: string }).from
+        : null;
+      for (const leaf of leavesOf(field))
+        addCell(
+          item,
+          key,
+          field,
+          leaf,
+          derivation ?? leafOf(field, leaf) ?? "",
+          fieldUnit(field),
+        );
+    }
+
+  // The book's own answers, as cells in the same space. They declare no unit — an output is whatever its
+  // formula works out to, and `outputSpec` says what that ought to be.
+  for (const spec of OUTPUTS)
+    if ((book.outputs[spec.name] ?? "").trim())
+      addCell(null, spec.name, null, "formula", book.outputs[spec.name], "");
 
   // The path currently being resolved, so a cycle is reported as the loop it actually is.
   const visiting: string[] = [];
-  // Rows whose message is already final because they sit ON a cycle. Without this the loop would be reported
+  // Cells whose message is already final because they sit ON a cycle. Without this the loop would be reported
   // by exactly one of its members — whichever closed it — and the others would each say only that a
   // neighbour failed, which tells the reader nothing about where the knot is.
   const cycled = new Set<string>();
@@ -274,25 +435,37 @@ export function evaluateBook(
     throw new FormulaError(message, at);
   };
 
+  /** How a cell is named in a cycle message and in the sensitivity ranking. */
   const describe = (key: string): string => {
     const cell = cells.get(key);
-    if (!cell) return "a missing item";
-    const name = cell.row.name || "an unnamed item";
-    // A point's three cells are three different things to be in a cycle with, so the coordinate is part of
-    // how one is named — "Points.engine.z", not "Points.engine" three times over.
-    const leaf = cell.field === "formula" ? name : `${name}.${cell.field}`;
-    return book.sheets.length > 1 ? `${cell.sheet.name}.${leaf}` : leaf;
+    if (!cell) return "a missing value";
+    if (!cell.item) return `OUT.${cell.fieldKey}`;
+    const item = cell.item.name || "an unnamed item";
+    // A field with more than one cell holds more than one guess. A tank's x may be known well and its z
+    // badly, and they are two different things to go and measure — so the ranking names the LEAF. Calling
+    // both of them "tank" would answer "which of these is costing me" with the question.
+    const leaf = cell.leaf === "formula" ? "" : `.${cell.leaf}`;
+    return `${item}.${cell.fieldKey}${leaf}`;
   };
 
-  const rowValue = (
-    sheetId: string,
-    rowId: string,
+  // Which item the cell being evaluated belongs to, so a bare reference means "a sibling field".
+  let currentItem: Item | null = null;
+  let currentCell: Cell | null = null;
+  // Geometry is evaluated after authored formulas have produced cut positions. Letting a position depend on
+  // any measured leaf would require solving an implicit geometry system, not another evaluation pass. Track
+  // the root computation so an indirect dependency through scalar fields is refused just as clearly as a
+  // direct `other.area` reference.
+  let cutPositionDepth = 0;
+
+  const valueAt = (
+    itemId: string,
+    fieldKey: string,
     at: number,
-    field: RowField = "formula",
+    leaf: FieldLeaf = "formula",
   ): Quantity => {
-    const key = rowKey(sheetId, rowId, field);
+    const key = cellKey(itemId, fieldKey, leaf);
     const cell = cells.get(key);
-    if (!cell) fail("no such item", at);
+    if (!cell) fail("no such value", at);
     if (cell!.state === "running") {
       const loop = visiting.slice(visiting.indexOf(key));
       const text = `this refers back to itself: ${[...loop, key].map(describe).join(" → ")}`;
@@ -310,20 +483,125 @@ export function evaluateBook(
     if (cell!.usesSliceMeasurement) {
       if (currentCell && currentCell !== cell)
         currentCell.usesSliceMeasurement = true;
-      if (slicePositionDepth > 0)
-        fail("a slice position cannot depend on measured slice values", at);
+      if (cutPositionDepth > 0)
+        fail("a cut position cannot depend on measured cut values", at);
     }
     return cell!.value!;
   };
 
-  // Which page the row being evaluated sits on, so a bare reference means "this page".
-  let currentSheet: Sheet = book.sheets[0] ?? { id: "", name: "", rows: [] };
-  let currentCell: Cell | null = null;
-  // Geometry is evaluated after authored formulas have produced slice positions. Letting a position depend on
-  // any measured slice leaf would require solving an implicit geometry system, not another evaluation pass.
-  // Track the root computation so an indirect dependency through scalar rows is refused just as clearly as a
-  // direct `other.area` reference.
-  let slicePositionDepth = 0;
+  /**
+   * A field named with no leaf after it.
+   *
+   * A scalar IS its value. A point is not — it is three of them — so naming one bare is a mistake with an
+   * obvious fix, and saying so beats "there is no such name", which is what a lexer-level answer would be.
+   */
+  const bareFieldValue = (
+    item: Item,
+    key: string,
+    field: Field,
+    at: number,
+  ): Quantity => {
+    if (field.k === "scalar") return valueAt(item.id, key, at);
+    // Anything with a POSITION, named in a coordinate cell, means that coordinate of it. `engine.cg` in an x
+    // cell is `engine.cg.x`, in a z cell `engine.cg.z` — which is what lets one expression stand for a whole
+    // place: a centre of gravity is `(m1 * a + m2 * b) / (m1 + m2)` whichever axis you read it along, and
+    // writing it out three times with three different leaves would be writing one statement three times.
+    //
+    // A CUT has a position too — the centroid of what it cuts — so it binds the same way, and the
+    // area-weighted centre of a set of sections is that same expression with areas where the masses were.
+    const axis = currentCell?.leaf;
+    if (axis === "x" || axis === "y" || axis === "z") {
+      if (field.k === "point") return valueAt(item.id, key, at, axis);
+      return leafValue(item, key, field, axis, at);
+    }
+    const leaves =
+      field.k === "cut" ? ["pos", ...SLICE_VALUE_FIELDS] : leavesOf(field);
+    fail(
+      `${item.name}.${key} is a ${field.k} — write ${item.name}.${key}.${leaves[0]}${
+        leaves.length > 1 ? ` (or .${leaves.slice(1).join(", .")})` : ""
+      }`,
+      at,
+    );
+    return null!;
+  };
+
+  const leafValue = (
+    item: Item,
+    key: string,
+    field: Field,
+    leaf: string,
+    at: number,
+  ): Quantity => {
+    if (field.k === "scalar")
+      fail(
+        `${item.name}.${key} is a single value — .${leaf} is one dot too deep`,
+        at,
+      );
+    if (field.k === "cut") {
+      if (leaf === "pos") return valueAt(item.id, key, at, "pos");
+      if (!(SLICE_VALUE_FIELDS as readonly string[]).includes(leaf))
+        fail(
+          `a cut has no ${leaf} — try .pos, .${SLICE_VALUE_FIELDS.join(", .")}`,
+          at,
+        );
+      const measured = sliceMeasurements.get(sliceMeasurementKey(item.id, key));
+      if (!measured)
+        return fail(
+          `${item.name}.${key} has not produced a valid hull cut`,
+          at,
+        );
+      const measuredField = leaf as SliceValueField;
+      currentCell!.usesSliceMeasurement = true;
+      // A direct measured leaf has no intervening valueAt call to propagate the marker back to the position.
+      if (currentCell!.field?.k === "cut" && currentCell!.leaf === "pos")
+        fail("a cut position cannot depend on measured cut values", at);
+      const position = valueAt(item.id, key, at, "pos");
+      const slope = measured.derivative[measuredField];
+      return {
+        v: measured[measuredField],
+        d: Object.fromEntries(
+          Object.entries(position.d).map(([source, gradient]) => [
+            source,
+            gradient * slope,
+          ]),
+        ),
+        dim: measuredField === "area" ? AREA : LENGTH,
+      };
+    }
+    const leaves = leavesOf(field);
+    if (!(leaves as string[]).includes(leaf))
+      fail(`a point has no ${leaf} — try .${leaves.join(", .")}`, at);
+    return valueAt(item.id, key, at, leaf as FieldLeaf);
+  };
+
+  /** `item.field`, `item.field.leaf` — the two shapes that start from a named item. */
+  const fromItem = (
+    item: Item,
+    rest: readonly string[],
+    path: readonly string[],
+    at: number,
+  ): Quantity => {
+    const key = rest[0];
+    const field = item.fields[key];
+    if (!field) {
+      const near = Object.keys(item.fields).find(
+        (candidate) => candidate.toLowerCase() === key.toLowerCase(),
+      );
+      fail(
+        `${item.name} has nothing called ${key}${
+          near
+            ? ` — did you mean ${near}?`
+            : Object.keys(item.fields).length
+              ? ` — it has ${Object.keys(item.fields).join(", ")}`
+              : " — it has no fields yet"
+        }`,
+        at,
+      );
+    }
+    if (rest.length === 1) return bareFieldValue(item, key, field!, at);
+    if (rest.length > 2) fail(`${path.join(".")} is one dot too deep`, at);
+    return leafValue(item, key, field!, rest[1], at);
+  };
 
   const resolve = (path: readonly string[], at: number): Quantity => {
     const [head, ...rest] = path;
@@ -331,8 +609,8 @@ export function evaluateBook(
     if (head === "HULL") {
       // One segment for a measurement, and optionally a second for a coordinate of one that is a PLACE:
       // `HULL.SHELL_CG.z` is a height, and `HULL.SHELL_CG` in a coordinate cell is that cell's own
-      // coordinate — the same binding a point row and a slice's centroid get, so the hull's own shell
-      // weighs into a centre of gravity in the same expression as everything else.
+      // coordinate — the same binding a point field and a cut's centroid get, so the hull's own shell weighs
+      // into a centre of gravity in the same expression as everything else.
       if (rest.length < 1 || rest.length > 2)
         fail(`HULL.${rest.join(".") || "?"} is not a hull measurement`, at);
       if (!metrics)
@@ -341,8 +619,7 @@ export function evaluateBook(
           at,
         );
       if (isHullPointName(rest[0])) {
-        // Named with a leaf, or named bare in a cell that already says which coordinate it wants.
-        const axis = rest.length === 2 ? rest[1] : currentCell?.field;
+        const axis = rest.length === 2 ? rest[1] : currentCell?.leaf;
         if (axis === "x" || axis === "y" || axis === "z")
           return hullPoint(metrics!, rest[0], axis)!;
         fail(
@@ -361,8 +638,7 @@ export function evaluateBook(
       return value!;
     }
 
-    // What the book itself answers. Resolved by page KIND rather than page name, so the outputs page can be
-    // called anything and every `OUT.` reference keeps working.
+    // What the book itself answers. An ordinary cell, so it can fail, and can be named in a cycle.
     if (head === "OUT") {
       if (rest.length !== 1)
         fail(
@@ -374,146 +650,57 @@ export function evaluateBook(
           `the book has no answer called ${rest[0]} — it has ${OUTPUTS.map((spec) => spec.name).join(", ")}`,
           at,
         );
-      const sheet = outputsSheet(book);
-      if (!sheet) fail("this book has no outputs page yet", at);
-      const row = rowsByName.get(sheet!.id)?.get(rest[0]);
-      if (!row) fail(`nothing on ${sheet!.name} answers ${rest[0]} yet`, at);
-      return rowValue(sheet!.id, row!.id, at);
+      if (!cells.has(cellKey(OUTPUT_ITEM, rest[0])))
+        fail(`nothing answers ${rest[0]} yet`, at);
+      return valueAt(OUTPUT_ITEM, rest[0], at);
     }
 
-    // A bare name is a row on THIS page, and that is tried first: a page and a row may share a name, and the
-    // page you are writing on is the one you meant.
+    // A SIBLING field is tried first, at both lengths it could have: `area`, and `cg.z`. The scope you are
+    // standing in wins, and the alternative is always reachable by writing the item's name.
+    if (currentItem) {
+      const sibling = currentItem.fields[head];
+      if (sibling) {
+        if (rest.length === 0)
+          return bareFieldValue(currentItem, head, sibling, at);
+        if (rest.length === 1)
+          return leafValue(currentItem, head, sibling, rest[0], at);
+        fail(`${path.join(".")} is one dot too deep`, at);
+      }
+    }
+
     if (rest.length === 0) {
-      const row = rowsByName.get(currentSheet.id)?.get(head);
-      if (row) return bareRowValue(currentSheet, row, at);
-      const near = [...(rowsByName.get(currentSheet.id)?.keys() ?? [])].find(
-        (name) => name.toLowerCase() === head.toLowerCase(),
-      );
-      fail(
-        `nothing on this page is called ${head}${
-          near
-            ? ` — did you mean ${near}?`
-            : sheetsByName.has(head)
-              ? ` — ${head} is a page; write ${head}.something`
-              : ""
-        }`,
-        at,
-      );
-    }
-
-    // A leaf on a structured row on this page: `engine.z`, `bulkhead.area`. This is what autocomplete offers;
-    // a scalar has no leaves and reports that explicitly through `leafValue`.
-    if (rest.length === 1) {
-      const local = rowsByName.get(currentSheet.id)?.get(head);
-      if (local) return leafValue(currentSheet, local, rest[0], at);
-    }
-
-    // Otherwise it names another page.
-    const sheet = sheetsByName.get(head);
-    if (!sheet) fail(`there is no page called ${head}`, at);
-    const row = rowsByName.get(sheet!.id)?.get(rest[0]);
-    if (!row) fail(`${sheet!.name} has nothing called ${rest[0]}`, at);
-    if (rest.length === 1) return bareRowValue(sheet!, row!, at);
-    // A leaf past the row: `Points.engine.z`. Only a row with more than one cell has any.
-    if (rest.length > 2) fail(`${path.join(".")} is one dot too deep`, at);
-    return leafValue(sheet!, row!, rest[1], at);
-  };
-
-  /**
-   * A row named with no leaf after it.
-   *
-   * A scalar IS its value. A point is not — it is three of them — so naming one bare is a mistake with an
-   * obvious fix, and saying so beats "there is no such name", which is what a lexer-level answer would be.
-   */
-  const bareRowValue = (sheet: Sheet, row: SheetRow, at: number): Quantity => {
-    if (row.kind === "item") return rowValue(sheet.id, row.id, at);
-    // Anything with a POSITION, named in a coordinate cell, means that coordinate of it. `engine` in an x
-    // cell is `engine.x`, in a z cell `engine.z` — which is what lets one expression stand for a whole
-    // place: a centre of gravity is `(m1 * a + m2 * b) / (m1 + m2)` whichever axis you read it along, and
-    // writing it out three times with three different leaves would be writing one statement three times.
-    //
-    // A SLICE has a position too — the centroid of what it cuts — so it binds the same way, and the
-    // area-weighted centre of a set of sections is that same expression with areas where the masses were. A
-    // slice also carries an authored `pos` and two perimeters, so a bare one is ambiguous everywhere else;
-    // here it is not, because the cell has already said which of its numbers is wanted.
-    //
-    // The binding exists only where there is an axis to bind to. Anywhere else a row with more than one
-    // number still has to say which is meant, and the message below is what says so.
-    const axis = currentCell?.field;
-    if (axis === "x" || axis === "y" || axis === "z") {
-      if (row.kind === "point") return rowValue(sheet.id, row.id, at, axis);
-      // Through `leafValue`: that is where a measured cut is looked up and its slope carried across.
-      if (row.kind === "slice") return leafValue(sheet, row, axis, at);
-    }
-    const leaves =
-      row.kind === "slice" ? ["pos", ...SLICE_VALUE_FIELDS] : fieldsOf(row);
-    fail(
-      `${row.name} is a ${row.kind} — write ${row.name}.${leaves[0]}${leaves.length > 1 ? ` (or .${leaves.slice(1).join(", .")})` : ""}`,
-      at,
-    );
-    return null!;
-  };
-
-  const leafValue = (
-    sheet: Sheet,
-    row: SheetRow,
-    leaf: string,
-    at: number,
-  ): Quantity => {
-    if (row.kind === "item")
-      fail(
-        `${row.name} is a single value — ${row.name}.${leaf} is one dot too deep`,
-        at,
-      );
-    if (row.kind === "slice") {
-      if (leaf === "pos") return rowValue(sheet.id, row.id, at, "pos");
-      if (!(SLICE_VALUE_FIELDS as readonly string[]).includes(leaf))
+      const item = itemsByName.get(head);
+      if (item)
         fail(
-          `a slice has no ${leaf} — try .pos, .${SLICE_VALUE_FIELDS.join(", .")}`,
+          `${head} is an item — write ${head}.something${
+            Object.keys(item.fields).length
+              ? ` (it has ${Object.keys(item.fields).join(", ")})`
+              : ""
+          }`,
           at,
         );
-      const measured = sliceMeasurements.get(
-        sliceMeasurementKey(sheet.id, row.id),
+      const near = currentItem
+        ? Object.keys(currentItem.fields).find(
+            (candidate) => candidate.toLowerCase() === head.toLowerCase(),
+          )
+        : undefined;
+      fail(
+        `nothing here is called ${head}${near ? ` — did you mean ${near}?` : ""}`,
+        at,
       );
-      if (!measured)
-        return fail(`${row.name} has not produced a valid hull cut`, at);
-      const field = leaf as SliceValueField;
-      currentCell!.usesSliceMeasurement = true;
-      // A direct measured leaf has no intervening rowValue call to propagate the marker back to the position.
-      if (currentCell!.row.kind === "slice" && currentCell!.field === "pos")
-        fail("a slice position cannot depend on measured slice values", at);
-      const position = rowValue(sheet.id, row.id, at, "pos");
-      const slope = measured.derivative[field];
-      return {
-        v: measured[field],
-        d: Object.fromEntries(
-          Object.entries(position.d).map(([source, gradient]) => [
-            source,
-            gradient * slope,
-          ]),
-        ),
-        dim: field === "area" ? AREA : LENGTH,
-      };
     }
-    const leaves = fieldsOf(row);
-    if (!(leaves as string[]).includes(leaf))
-      fail(`a ${row.kind} has no ${leaf} — try .${leaves.join(", .")}`, at);
-    return rowValue(sheet.id, row.id, at, leaf as RowField);
-  };
 
-  // Whether a sensitivity label has to say which page it came from. Counted over the pages that hold
-  // AUTHORED numbers: the outputs page holds the book's answers, which are aliases for rows counted here
-  // already, so its presence must not start qualifying every label on a book with one schedule.
-  const authoredPages = book.sheets.filter(
-    (sheet) => sheet.kind !== "outputs",
-  ).length;
+    const item = itemsByName.get(head);
+    if (!item) fail(`there is no item called ${head}`, at);
+    return fromItem(item!, rest, path, at);
+  };
 
   const env = {
     resolve,
     /**
      * What a bare term of the cell's outermost sum is written in.
      *
-     * Only a unit with a DIMENSION says anything: a row that declares nothing leaves its numbers plain, as
+     * Only a unit with a DIMENSION says anything: a field that declares nothing leaves its numbers plain, as
      * the language always has, and a dimensionless declaration has nothing to say about what a number means.
      * Read off `currentCell` rather than passed in, because one env serves every cell in the book.
      */
@@ -525,25 +712,26 @@ export function evaluateBook(
     },
     source: (lo: number, hi: number): Source => {
       const cell = currentCell!;
-      const base = cell.row.name || "an unnamed item";
-      // A row with more than one cell holds more than one guess. A tank's x may be known well and its z
-      // badly, and they are two different things to go and measure — so the ranking names the CELL. Calling
-      // both of them "tank" would answer "which of these is costing me" with the question.
-      const named = cell.field === "formula" ? base : `${base}.${cell.field}`;
-      const label = authoredPages > 1 ? `${cell.sheet.name}.${named}` : named;
+      const at = cellKey(
+        cell.item?.id ?? OUTPUT_ITEM,
+        cell.fieldKey,
+        cell.leaf,
+      );
       const id = `s${sourceSeq++}`;
-      const source: Source = { id, label, lo, hi };
+      // The cell key rides along with the label so a ranking can be FOLLOWED and not merely read: the
+      // inspector turns a driver into the cell it was typed in, which is the whole point of naming it.
+      const source: Source = { id, label: describe(at), at, lo, hi };
       sources.set(id, source);
       return source;
     },
   };
 
   /**
-   * Apply the row's unit.
+   * Apply the field's unit.
    *
-   * A DIMENSIONLESS formula is scaled and stamped: `26` in a row marked `t` is 26000 kg. A formula that
-   * already carries a dimension — because it touched `HULL.SHELL_AREA` or another stamped row — is already in
-   * base units, so a matching unit is a DISPLAY choice handled at render time, and a mismatched one is a
+   * A DIMENSIONLESS formula is scaled and stamped: `26` in a field marked `t` is 26000 kg. A formula that
+   * already carries a dimension — because it touched `HULL.SHELL_AREA` or another stamped value — is already
+   * in base units, so a matching unit is a DISPLAY choice handled at render time, and a mismatched one is a
    * warning rather than a refusal.
    */
   const stamp = (value: Quantity, cell: Cell): Quantity => {
@@ -565,15 +753,15 @@ export function evaluateBook(
   };
 
   const compute = (cell: Cell): void => {
-    const key = rowKey(cell.sheet.id, cell.row.id, cell.field);
-    const isSlicePosition = cell.row.kind === "slice" && cell.field === "pos";
+    const key = cellKey(cell.item?.id ?? OUTPUT_ITEM, cell.fieldKey, cell.leaf);
+    const isCutPosition = cell.field?.k === "cut" && cell.leaf === "pos";
     cell.state = "running";
     visiting.push(key);
-    const savedSheet = currentSheet;
+    const savedItem = currentItem;
     const savedCell = currentCell;
-    currentSheet = cell.sheet;
+    currentItem = cell.item;
     currentCell = cell;
-    if (isSlicePosition) slicePositionDepth++;
+    if (isCutPosition) cutPositionDepth++;
     try {
       if (cell.unitError) cell.error = { message: cell.unitError, at: -1 };
       else if (cell.parseError)
@@ -581,9 +769,18 @@ export function evaluateBook(
           message: cell.parseError.message,
           at: cell.parseError.at,
         };
-      else if (cell.tree) cell.value = stamp(evaluate(cell.tree, env), cell);
+      else if (cell.tree) {
+        const value = stamp(evaluate(cell.tree, env), cell);
+        const position = cell.field?.k === "point" || cell.field?.k === "cut";
+        if (position && !sameDim(value.dim, LENGTH))
+          cell.error = {
+            message: `${cell.field?.k === "point" ? "a point coordinate" : "a cut position"} must be a distance, and this works out to ${naturalUnit(value.dim).label || "a plain number"}`,
+            at: -1,
+          };
+        else cell.value = value;
+      }
     } catch (error) {
-      // A row already named by a cycle keeps that message: "x could not be worked out" is true but useless
+      // A cell already named by a cycle keeps that message: "x could not be worked out" is true but useless
       // next to the loop itself.
       if (!cycled.has(key)) {
         cell.error =
@@ -593,8 +790,8 @@ export function evaluateBook(
         cell.value = null;
       }
     } finally {
-      if (isSlicePosition) slicePositionDepth--;
-      currentSheet = savedSheet;
+      if (isCutPosition) cutPositionDepth--;
+      currentItem = savedItem;
       currentCell = savedCell;
       visiting.pop();
       cell.state = "done";
@@ -605,24 +802,23 @@ export function evaluateBook(
 
   // ---------- the reported shape ----------
 
-  const rows = new Map<string, RowResult>();
+  const results = new Map<string, CellResult>();
   for (const [key, cell] of cells) {
     // With nothing declared, the unit shown is the one the formula worked out to — which is why units appear
-    // on their own the moment a row acquires a dimension, and why a plain number shows none.
+    // on their own the moment a value acquires a dimension, and why a plain number shows none.
     const derived = cell.value ? naturalUnit(cell.value.dim) : null;
     const unit = cell.declared ?? (derived && derived.label ? derived : null);
     // An answer that is not the kind of thing it claims to be. A warning and not a refusal, exactly as a
     // declared unit that disagrees with its formula is: the number is reported as written and flagged.
-    const spec =
-      cell.sheet.kind === "outputs" ? outputSpec(cell.row.name) : undefined;
+    const spec = cell.item ? undefined : outputSpec(cell.fieldKey);
     const outputWarning =
       spec && cell.value && !sameDim(cell.value.dim, spec.dim)
         ? `${spec.name} should be ${naturalUnit(spec.dim).label || "a plain number"}, and this works out to ${naturalUnit(cell.value.dim).label || "a plain number"}`
         : null;
-    rows.set(key, {
-      sheetId: cell.sheet.id,
-      rowId: cell.row.id,
-      field: cell.field,
+    results.set(key, {
+      itemId: cell.item?.id ?? OUTPUT_ITEM,
+      fieldKey: cell.fieldKey,
+      leaf: cell.leaf,
       empty: !cell.source,
       reading: cell.value ? read(cell.value, sources) : null,
       quantity: cell.value,
@@ -635,22 +831,13 @@ export function evaluateBook(
     });
   }
 
-  // ---------- what the book answers ----------
-  //
-  // Read off the outputs page by name rather than from a stored nomination, which is what lets the answer be
-  // an ordinary row: deleting it removes the answer, and renaming anything it refers to rewrites nothing.
-  const outputsPage = outputsSheet(book);
-
   const outputOf = (name: string): Reading | null => {
-    if (!outputsPage) return null;
-    const row = rowsByName.get(outputsPage.id)?.get(name);
-    if (!row) return null;
-    const cell = cells.get(rowKey(outputsPage.id, row.id));
+    const cell = cells.get(cellKey(OUTPUT_ITEM, name));
     return cell?.value ? read(cell.value, sources) : null;
   };
 
   return {
-    rows,
+    cells: results,
     sources,
     outputs: {
       displacement: outputOf("DISPLACEMENT"),

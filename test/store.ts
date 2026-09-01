@@ -222,57 +222,55 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
   };
 
   step({ type: "setWaterline", depth: 200 });
-  step({ type: "addSheet", id: "p1", name: "Weights", kind: "scalars" });
-  step({ type: "addSheetRow", sheet: "p1", id: "r1", after: -1 });
-  step({ type: "renameSheetRow", sheet: "p1", row: "r1", name: "hull shell" });
+  step({ type: "addItem", id: "i1", name: "hull shell", after: -1 });
+  step({ type: "addField", item: "i1", key: "mass", kind: "scalar" });
   step({
-    type: "setSheetFormula",
-    sheet: "p1",
-    row: "r1",
-    field: "formula",
+    type: "setFieldFormula",
+    item: "i1",
+    field: "mass",
+    leaf: "formula",
     formula: "12 ± 2",
   });
   step({ type: "setWaterline", depth: 250 });
 
   const now = server.snapshot();
   check(
-    now.state.hull.waterline === 250 && now.state.weights.sheets.length === 1,
+    now.state.hull.waterline === 250 && now.state.weights.items.length === 1,
     "the hull and the estimate advance in one document",
   );
-  // A row is a union over what its page holds, so reading a formula off one means saying which kind it is.
-  const scalarAt = (snapshot: DocumentSnapshot, page: number, row: number) => {
-    const found = snapshot.state.weights.sheets[page].rows[row];
-    return found.kind === "item" ? found : null;
+  // A field is a union over the kinds there are, so reading a formula off one means saying which kind it is.
+  const scalarAt = (snapshot: DocumentSnapshot, item: number, key: string) => {
+    const found = snapshot.state.weights.items[item]?.fields[key];
+    return found?.k === "scalar" ? found : null;
   };
   check(
-    scalarAt(now, 0, 0)?.name === "hull shell" &&
-      scalarAt(now, 0, 0)?.formula === "12 ± 2",
+    now.state.weights.items[0].name === "hull shell" &&
+      scalarAt(now, 0, "mass")?.formula === "12 ± 2",
     "an estimate edit lands where it was aimed, spaces in the name and all",
   );
 
   const revs = now.sliceRevs;
   check(
-    revs.weights === 4 && revs.scalars === 2,
+    revs.weights === 3 && revs.scalars === 2,
     "each part's slice clock counts only its own edits",
   );
 
   server.undo("a"); // the second waterline
   check(
     server.snapshot().state.hull.waterline === 200 &&
-      scalarAt(server.snapshot(), 0, 0)?.formula === "12 ± 2",
+      scalarAt(server.snapshot(), 0, "mass")?.formula === "12 ± 2",
     "undoing a hull edit leaves the estimate exactly where it was",
   );
   server.undo("a"); // the formula
   check(
-    scalarAt(server.snapshot(), 0, 0)?.formula === "" &&
+    scalarAt(server.snapshot(), 0, "mass")?.formula === "" &&
       server.snapshot().state.hull.waterline === 200,
     "undo crosses into the estimate without disturbing the hull",
   );
-  server.undo("a"); // the rename
-  server.undo("a"); // the row
-  server.undo("a"); // the page
+  server.undo("a"); // the field
+  server.undo("a"); // the item
   check(
-    server.snapshot().state.weights.sheets.length === 0,
+    server.snapshot().state.weights.items.length === 0,
     "undo walks the estimate back out of the tree",
   );
   server.undo("a"); // the first waterline
@@ -283,10 +281,9 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
 
   server.redo("a");
   server.redo("a");
-  server.redo("a");
   check(
     server.snapshot().state.hull.waterline === 200 &&
-      server.snapshot().state.weights.sheets[0].rows.length === 1,
+      server.snapshot().state.weights.items.length === 1,
     "redo comes back across the same boundary",
   );
 }
@@ -297,43 +294,34 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
   const server = createDocumentStoreServer();
   const run = (command: Parameters<typeof server.execute>[0]["command"]) =>
     server.execute({ command, author: "a" });
-  run({ type: "addSheet", id: "p1", name: "Weights", kind: "scalars" });
-  run({ type: "addSheetRow", sheet: "p1", id: "r1", after: -1 });
-  run({ type: "renameSheetRow", sheet: "p1", row: "r1", name: "hull shell" });
-  run({ type: "addSheetRow", sheet: "p1", id: "r2", after: 0 });
+  run({ type: "addItem", id: "i1", name: "hull shell", after: -1 });
+  run({ type: "addItem", id: "i2", name: "", after: 0 });
   const before = server.snapshot();
-  const clash = run({
-    type: "renameSheetRow",
-    sheet: "p1",
-    row: "r2",
-    name: "hull shell",
-  });
-  check("rejected" in clash, "two items on a page may not answer to one name");
+  const clash = run({ type: "renameItem", item: "i2", name: "hull shell" });
+  check(
+    "rejected" in clash,
+    "two items may not answer to one name — that namespace is the book's only global one",
+  );
   check(
     server.snapshot() === before,
     "a refused estimate edit publishes nothing",
   );
 
-  const bad = run({
-    type: "renameSheetRow",
-    sheet: "p1",
-    row: "r2",
-    name: "2 fast",
-  });
+  const bad = run({ type: "renameItem", item: "i2", name: "2 fast" });
   check("rejected" in bad, "a name a formula could not use is refused");
 
-  // The same name on two PAGES is fine — it is the same item answering a different question.
-  run({ type: "addSheet", id: "p2", name: "VCG", kind: "scalars" });
-  run({ type: "addSheetRow", sheet: "p2", id: "r3", after: -1 });
+  // The same KEY on two items is fine, and is the point: a field key is local to its item and means nothing
+  // outside it, so `shell.area` and `deck.area` are unrelated numbers that happen to share a word.
+  run({ type: "addField", item: "i1", key: "area", kind: "scalar" });
   const across = run({
-    type: "renameSheetRow",
-    sheet: "p2",
-    row: "r3",
-    name: "hull shell",
+    type: "addField",
+    item: "i2",
+    key: "area",
+    kind: "scalar",
   });
   check(
     !("rejected" in across),
-    "…while the same name on another page is exactly what pages are for",
+    "…while the same field key on another item is exactly what makes keys local",
   );
 }
 

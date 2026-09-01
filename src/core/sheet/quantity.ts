@@ -83,6 +83,12 @@ export interface Source {
   readonly id: string;
   /** What the sensitivity list calls it. The row it was typed in, which is why rows have names. */
   readonly label: string;
+  /**
+   * An OPAQUE handle on the cell the `±` was typed in, for a reader that wants to go there rather than
+   * only read the name. A plain string because nothing at this layer knows what a cell is: the evaluator puts
+   * its own `cellKey` in, and is the only thing that takes it back out again.
+   */
+  readonly at?: string;
   readonly lo: number;
   readonly hi: number;
 }
@@ -374,6 +380,8 @@ export function branchIsTight(
 export interface Contribution {
   readonly source: string;
   readonly label: string;
+  /** The source's `at`, carried through so a ranking can be navigated and not merely read. */
+  readonly at?: string;
   /** How far this source alone can pull the result down, and up. Both non-negative. */
   readonly lo: number;
   readonly hi: number;
@@ -426,7 +434,7 @@ export function read(q: Quantity, sources: SourceTable): Reading {
     const half = (lo + hi) / 2;
     variance += half * half;
     raw.push({
-      c: { source: id, label: source.label, lo, hi },
+      c: { source: id, label: source.label, at: source.at, lo, hi },
       halfWidth: half,
     });
   }

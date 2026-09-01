@@ -612,10 +612,10 @@ export const isInsert = (cmd: DocumentCommand): boolean =>
 /**
  * Structural commands are meaningful only against the collection indices they were composed from.
  *
- * No SHEET command is here, and the two positional ones are a deliberate exception. `addSheetRow` and
- * `moveSheetRow` carry an index, so a concurrent edit in another window can land a row one place from where
- * it was aimed — but the alternative is refusing to add a row because someone else was typing in a cell, and
- * a row in the wrong place is dragged back in one gesture where a rejection loses the edit outright.
+ * No SHEET command is here, and the two positional ones are a deliberate exception. `addItem` and `moveItem`
+ * carry an index, so a concurrent edit in another window can land an item one place from where it was aimed —
+ * but the alternative is refusing to add an item because someone else was typing in a cell, and an item in
+ * the wrong place is dragged back in one gesture where a rejection loses the edit outright.
  */
 export function requiresCurrentBase(cmd: DocumentCommand): boolean {
   return (
@@ -672,25 +672,31 @@ export function commandSlices(cmd: DocumentCommand): SliceMask {
 export function sameGesture(a: DocumentCommand, b: DocumentCommand): boolean {
   if (a.type !== b.type) return false;
   switch (a.type) {
-    // The book's text fields, held open while the user types. Coalesced per ROW, so tabbing to the next
-    // field starts a new step rather than absorbing the last one.
-    // A point row carries three formula cells, so the row alone no longer tells two gestures apart: tabbing
-    // from x to y would coalesce into one moment and undoing the height would silently undo the station too.
-    case "setSheetFormula":
+    // The book's text cells, held open while the user types. Coalesced per CELL, so tabbing to the next one
+    // starts a new step rather than absorbing the last one — a point carries three formula cells, and
+    // tabbing from x to y must not coalesce, or undoing the height would silently undo the station too.
+    case "setFieldFormula":
       return (
-        a.sheet === (b as typeof a).sheet &&
-        a.row === (b as typeof a).row &&
-        a.field === (b as typeof a).field
+        a.item === (b as typeof a).item &&
+        a.field === (b as typeof a).field &&
+        a.leaf === (b as typeof a).leaf
       );
     // A drag in the point editor. Every coordinate it moved rides in one command, so the whole gesture is
     // one moment however many of the three it touched — which is the reason the command exists.
     case "setPointPosition":
-    case "setSheetUnit":
-    case "renameSheetRow":
-    case "setSheetRowNote":
-      return a.sheet === (b as typeof a).sheet && a.row === (b as typeof a).row;
-    case "renameSheet":
-      return a.sheet === (b as typeof a).sheet;
+    case "setFieldUnit":
+      return (
+        a.item === (b as typeof a).item && a.field === (b as typeof a).field
+      );
+    case "renameItem":
+    case "setItemNote":
+      return a.item === (b as typeof a).item;
+    // Filing is coalesced per (item, facet) so that dragging through a tree lands as one step, and per
+    // OUTPUT so that typing an answer is one moment rather than one per keystroke.
+    case "setFacet":
+      return a.item === (b as typeof a).item && a.key === (b as typeof a).key;
+    case "setOutput":
+      return a.name === (b as typeof a).name;
     case "setSheetDensity":
       return true;
     case "movePlanPoint":
@@ -770,24 +776,38 @@ export function describeCommand(cmd: DocumentCommand): string {
     // ---- the weight book ----
     // A book moment reads by what it did, not by which id it did it to: an id is meaningless in a timeline,
     // and the thing it names may since have been removed.
-    case "addSheet":
-      return cmd.kind === "outputs"
-        ? "Add the outputs page"
-        : `Add the page "${cmd.name}"`;
-    case "removeSheet":
-      return "Remove a page";
-    case "renameSheet":
-      return `Rename a page to "${cmd.name}"`;
-    case "moveSheet":
-      return "Reorder the pages";
-    case "setSheetFormula":
-      // A point's three cells are three different edits, and a timeline that called them all "edit a formula"
-      // would be unreadable next to a drag of the same point.
-      return cmd.field === "formula"
-        ? "Edit a weight formula"
-        : cmd.field === "from"
+    case "addItem":
+      return cmd.name ? `Add "${cmd.name}"` : "Add an item";
+    case "removeItem":
+      return "Remove an item";
+    case "renameItem":
+      return cmd.name ? `Rename an item to "${cmd.name}"` : "Unname an item";
+    case "moveItem":
+      return "Reorder the items";
+    case "setItemNote":
+      return "Note on an item";
+    // Filing, which is what grouping IS now — so the timeline says where something was put rather than that
+    // a row was dragged past a heading, which was all the page model could report.
+    case "setFacet":
+      return cmd.value
+        ? `File under ${cmd.key}: ${cmd.value}`
+        : `Unfile from ${cmd.key}`;
+    case "addField":
+      return `Add a ${cmd.kind === "cut" ? "section" : cmd.kind} called "${cmd.key}"`;
+    case "removeField":
+      return `Remove "${cmd.key}"`;
+    case "moveField":
+      return `Reorder an item's fields`;
+    case "renameField":
+      return `Rename a field to "${cmd.name}"`;
+    case "setFieldFormula":
+      // A point's three cells are three different edits, and a timeline that called them all "edit a
+      // formula" would be unreadable next to a drag of the same point.
+      return cmd.leaf === "formula" || cmd.leaf === "pos"
+        ? `Edit ${cmd.field}`
+        : cmd.leaf === "from"
           ? "Derive a point from others"
-          : `Move a point's ${cmd.field}`;
+          : `Move a point's ${cmd.leaf}`;
     case "setPointPosition":
       // Named by the coordinates the gesture actually moved: dragging in the profile view says "x, z" and
       // dragging in the section says "y, z", which is the one thing that tells two moves of the same point
@@ -795,31 +815,14 @@ export function describeCommand(cmd: DocumentCommand): string {
       return `Move a point (${(["x", "y", "z"] as const)
         .filter((axis) => cmd[axis] !== undefined)
         .join(", ")})`;
-    case "setSheetUnit":
-      return cmd.unit
-        ? `Weight item in ${cmd.unit}`
-        : "Clear a weight item's unit";
-    case "addSheetRow":
-      switch (cmd.kind) {
-        case "heading":
-          return "Add a heading";
-        case "point":
-          return "Add a point";
-        case "slice":
-          return "Add a slice";
-        default:
-          return "Add a weight item";
-      }
-    case "removeSheetRow":
-      return "Remove a weight item";
-    case "moveSheetRow":
-      return "Reorder a weight page";
-    case "renameSheetRow":
-      return cmd.name ? `Name a weight item "${cmd.name}"` : "Unname an item";
-    case "setSheetRowNote":
-      return "Note on a weight item";
-    case "setSliceShape":
+    case "setFieldUnit":
+      return cmd.unit ? `Write ${cmd.field} in ${cmd.unit}` : "Clear a unit";
+    case "setCutShape":
       return `Cut with a ${cmd.shape}`;
+    case "setOutput":
+      return cmd.formula.trim()
+        ? `Answer ${cmd.name}`
+        : `Stop answering ${cmd.name}`;
     case "setSheetDensity":
       return "Set the water density";
     case "installSheet":

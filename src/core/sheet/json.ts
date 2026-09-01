@@ -10,39 +10,35 @@
 // would make the format hostage to the language's grammar.
 
 import {
-  blankRow,
+  blankField,
   emptyBook,
-  isPageKind,
+  fieldUnit,
+  isFieldKind,
   isSliceShape,
-  ROW_KIND_OF,
+  isValidFacetValue,
   SEAWATER_DENSITY,
-  type PageKind,
-  type Sheet,
-  type SheetRow,
+  tidyFacetValue,
+  type Field,
+  type FieldKind,
+  type Item,
+  type View,
+  type ViewLayout,
+  type ViewScope,
   type WeightBook,
 } from "./book";
+import { isOutputName } from "./outputs";
 
 /**
  * The one weight-sheet format this build writes and reads.
  *
- * It stays at 1 through the typed-pages change, and that is a decision rather than an oversight. A version
- * field exists to stop an OLD build from reading a new file and mangling it, and there is no old build: the
- * weight book has never shipped, so nothing but this branch has ever written a `SheetDocument`. An upgrade
- * path would be dead code the day it was written.
- *
- * That expires the moment a build carrying the weight book reaches a browser that is not the author's. From
- * then on the installed base is real, and the next change to this format bumps the number and writes the
- * upgrade properly. The two reader defaults below — a page with no `kind` is `scalars`, a row whose kind
- * disagrees with its page is dropped — are what let books written earlier on the branch open with their rows
- * intact, and they are not a migration.
+ * The weight estimate has not shipped, so the item model remains version 1 rather than carrying a migration
+ * from the page model used during development. Once this format ships, incompatible changes must increment
+ * the version and provide an upgrade path.
  */
 export const SHEET_VERSION = 1;
 
-interface StoredRow {
-  id: string;
-  kind: SheetRow["kind"];
-  name: string;
-  note: string;
+interface StoredField {
+  k: FieldKind;
   formula?: string;
   unit?: string;
   x?: string;
@@ -53,48 +49,63 @@ interface StoredRow {
   pos?: string;
 }
 
+interface StoredItem {
+  id: string;
+  name: string;
+  note: string;
+  facets: Record<string, string>;
+  fields: Record<string, StoredField>;
+}
+
 export interface SheetDocument {
   version: typeof SHEET_VERSION;
-  sheets: {
-    id: string;
-    name: string;
-    kind: PageKind;
-    rows: StoredRow[];
-  }[];
+  items: StoredItem[];
+  views: View[];
+  outputs: Record<string, string>;
   density: number;
 }
 
-/** Only the fields the row's kind actually carries, so the file says nothing a reader would have to ignore. */
-function storeRow(row: SheetRow): StoredRow {
-  const base = { id: row.id, kind: row.kind, name: row.name, note: row.note };
-  switch (row.kind) {
-    case "heading":
-      return base;
-    case "item":
-      return { ...base, formula: row.formula, unit: row.unit };
+/** Only the cells the field's kind actually carries, so the file says nothing a reader would have to ignore. */
+function storeField(field: Field): StoredField {
+  switch (field.k) {
+    case "scalar":
+      return { k: field.k, formula: field.formula, unit: field.unit };
     case "point":
       return {
-        ...base,
-        unit: row.unit,
-        x: row.x,
-        y: row.y,
-        z: row.z,
-        from: row.from,
+        k: field.k,
+        unit: fieldUnit(field),
+        x: field.x,
+        y: field.y,
+        z: field.z,
+        from: field.from,
       };
-    case "slice":
-      return { ...base, shape: row.shape, unit: row.unit, pos: row.pos };
+    case "cut":
+      return {
+        k: field.k,
+        shape: field.shape,
+        unit: fieldUnit(field),
+        pos: field.pos,
+      };
   }
 }
 
 export function buildSheetJson(book: WeightBook): string {
   const doc: SheetDocument = {
     version: SHEET_VERSION,
-    sheets: book.sheets.map((sheet) => ({
-      id: sheet.id,
-      name: sheet.name,
-      kind: sheet.kind,
-      rows: sheet.rows.map(storeRow),
+    items: book.items.map((item) => ({
+      id: item.id,
+      name: item.name,
+      note: item.note,
+      facets: { ...item.facets },
+      fields: Object.fromEntries(
+        Object.entries(item.fields).map(([key, field]) => [
+          key,
+          storeField(field),
+        ]),
+      ),
     })),
+    views: book.views.map((view) => ({ ...view, groupBy: [...view.groupBy] })),
+    outputs: { ...book.outputs },
     density: book.density,
   };
   return JSON.stringify(doc, null, 2);
@@ -104,16 +115,142 @@ const str = (v: unknown, fallback = ""): string =>
   typeof v === "string" ? v : fallback;
 
 const dict = (v: unknown): Record<string, unknown> =>
-  typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+  typeof v === "object" && v !== null && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
+
+/**
+ * One stored field, back into the shape its kind carries.
+ *
+ * Starts from `blankField` so that every cell the kind carries is present and empty, then fills in whatever
+ * the file actually had. A field missing half its cells therefore reads as a half-written field rather than
+ * as an object with holes in it — the same forgiveness the rest of this reader extends, applied per cell.
+ */
+function readField(raw: Record<string, unknown>, kind: FieldKind): Field {
+  const field = blankField(kind);
+  switch (field.k) {
+    case "scalar":
+      return { ...field, formula: str(raw.formula), unit: str(raw.unit) };
+    case "point":
+      return {
+        ...field,
+        // Point coordinates are always lengths, so empty and omitted units both take the metre default.
+        unit: str(raw.unit, field.unit) || field.unit,
+        x: str(raw.x),
+        y: str(raw.y),
+        z: str(raw.z),
+        from: str(raw.from),
+      };
+    case "cut": {
+      const shape = str(raw.shape);
+      return {
+        ...field,
+        shape: isSliceShape(shape) ? shape : field.shape,
+        // A cut position is always a length, so empty and omitted units both take the field's metre default.
+        unit: str(raw.unit, field.unit) || field.unit,
+        pos: str(raw.pos),
+      };
+    }
+  }
+}
+
+function readScope(raw: unknown): ViewScope | null {
+  const s = dict(raw);
+  switch (str(s.k)) {
+    case "all":
+      return { k: "all" };
+    case "item":
+      return str(s.item) ? { k: "item", item: str(s.item) } : null;
+    case "fieldType":
+      return isFieldKind(str(s.type))
+        ? { k: "fieldType", type: str(s.type) as FieldKind }
+        : null;
+    case "facet":
+      return str(s.key) && str(s.value)
+        ? { k: "facet", key: str(s.key), value: str(s.value) }
+        : null;
+    default:
+      return null;
+  }
+}
+
+const LAYOUTS: readonly ViewLayout[] = ["table", "split", "detail"];
+
+function readView(raw: unknown): View | null {
+  const v = dict(raw);
+  const id = str(v.id);
+  const scope = readScope(v.scope);
+  if (!id || !scope) return null;
+  const layout = str(v.layout) as ViewLayout;
+  return {
+    id,
+    name: str(v.name),
+    scope,
+    groupBy: Array.isArray(v.groupBy)
+      ? v.groupBy.filter((key): key is string => typeof key === "string")
+      : [],
+    layout: LAYOUTS.includes(layout) ? layout : "table",
+  };
+}
+
+/** Everything the current format holds, read forgivingly. */
+export function readDocument(raw: Record<string, unknown>): WeightBook {
+  const items: Item[] = [];
+  const seenItems = new Set<string>();
+  if (Array.isArray(raw.items))
+    for (const entry of raw.items) {
+      const s = dict(entry);
+      const id = str(s.id);
+      if (!id || seenItems.has(id)) continue; // no identity, not an item
+      seenItems.add(id);
+
+      const facets: Record<string, string> = {};
+      for (const [key, value] of Object.entries(dict(s.facets))) {
+        const tidied = tidyFacetValue(str(value));
+        // A facet that will not read is dropped rather than kept as something the tree cannot split on.
+        if (tidied && isValidFacetValue(tidied)) facets[key] = tidied;
+      }
+
+      const fields: Record<string, Field> = {};
+      for (const [key, value] of Object.entries(dict(s.fields))) {
+        const f = dict(value);
+        const kind = str(f.k);
+        // A field whose kind is unreadable is dropped, per the rule that anything unreadable goes and the
+        // rest opens. There is no page to fall back on any more, so the kind has to be on the field.
+        if (!isFieldKind(kind)) continue;
+        fields[key] = readField(f, kind);
+      }
+
+      items.push({ id, name: str(s.name), note: str(s.note), facets, fields });
+    }
+
+  const views: View[] = [];
+  if (Array.isArray(raw.views))
+    for (const entry of raw.views) {
+      const view = readView(entry);
+      if (view) views.push(view);
+    }
+
+  const outputs: Record<string, string> = {};
+  for (const [name, formula] of Object.entries(dict(raw.outputs)))
+    if (isOutputName(name) && typeof formula === "string" && formula.trim())
+      outputs[name] = formula;
+
+  const density =
+    typeof raw.density === "number" && isFinite(raw.density) && raw.density > 0
+      ? raw.density
+      : SEAWATER_DENSITY;
+
+  return { items, views, outputs, density };
+}
 
 /**
  * Read a stored book.
  *
  * Deliberately FORGIVING, unlike the hull parser. A hull that decodes wrongly draws a wrong boat and must be
- * refused; a weight sheet that loses a malformed row loses a line of an estimate the user can retype, and
+ * refused; a weight sheet that loses a malformed field loses a line of an estimate the user can retype, and
  * refusing to open the design over it would be far worse. So anything unreadable is dropped and the rest
- * opens. A book with any other format version is the exception — its rows may mean something else — and
- * comes back empty rather than half-understood.
+ * opens.
  */
 export function parseSheet(text: string | null | undefined): WeightBook {
   if (!text) return emptyBook();
@@ -127,109 +264,12 @@ export function parseSheet(text: string | null | undefined): WeightBook {
     return emptyBook();
   const raw = doc as Record<string, unknown>;
   if (raw.version !== SHEET_VERSION) return emptyBook();
-
-  const density =
-    typeof raw.density === "number" && isFinite(raw.density) && raw.density > 0
-      ? raw.density
-      : SEAWATER_DENSITY;
-
-  return { ...readDocument(raw), density };
-}
-
-/**
- * One stored row, back into the shape its page holds.
- *
- * Starts from `blankRow` so that every field the kind carries is present and empty, then fills in whatever the
- * file actually had. A row missing half its fields therefore reads as a half-written row rather than as an
- * object with holes in it — which is the same forgiveness the rest of this reader extends, applied per field.
- */
-function readRow(
-  r: Record<string, unknown>,
-  id: string,
-  kind: SheetRow["kind"],
-): SheetRow {
-  const row = blankRow(kind, id, str(r.name));
-  const note = str(r.note);
-  switch (row.kind) {
-    case "heading":
-      return { ...row, note };
-    case "item":
-      return {
-        ...row,
-        note,
-        formula: str(r.formula),
-        unit: str(r.unit),
-      };
-    case "point":
-      return {
-        ...row,
-        note,
-        // A point written before derivations existed carries no `from`, and reads back as the three
-        // coordinates it always was — which is what `str` defaulting to "" already means here.
-        unit: str(r.unit),
-        x: str(r.x),
-        y: str(r.y),
-        z: str(r.z),
-        from: str(r.from),
-      };
-    case "slice": {
-      const shape = str(r.shape);
-      return {
-        ...row,
-        note,
-        shape: isSliceShape(shape) ? shape : row.shape,
-        unit: str(r.unit),
-        pos: str(r.pos),
-      };
-    }
-  }
-}
-
-function readDocument(raw: Record<string, unknown>): WeightBook {
-  const sheets: Sheet[] = [];
-  const seenSheets = new Set<string>();
-  let haveOutputs = false;
-  if (Array.isArray(raw.sheets))
-    for (const entry of raw.sheets) {
-      const s = dict(entry);
-      const id = str(s.id);
-      if (!id || seenSheets.has(id)) continue;
-      seenSheets.add(id);
-      // A page written before pages had kinds is a page of scalars, which is what every page was.
-      const stored = str(s.kind);
-      let kind: PageKind = isPageKind(stored) ? stored : "scalars";
-      // Two outputs pages would make `OUT.` ambiguous, and only one can win. The later one reads as scalars,
-      // which keeps its rows rather than dropping them.
-      if (kind === "outputs" && haveOutputs) kind = "scalars";
-      if (kind === "outputs") haveOutputs = true;
-      const rows: SheetRow[] = [];
-      const seenRows = new Set<string>();
-      if (Array.isArray(s.rows))
-        for (const rowEntry of s.rows) {
-          const r = dict(rowEntry);
-          const rowId = str(r.id);
-          if (!rowId || seenRows.has(rowId)) continue; // no identity, not a row
-          // A row whose kind disagrees with its page is dropped, per the rule that anything unreadable goes
-          // and the rest opens. A row with no kind at all is whatever the page holds.
-          const rowKind =
-            r.kind === "heading"
-              ? "heading"
-              : (ROW_KIND_OF[kind] as SheetRow["kind"]);
-          if (
-            r.kind !== undefined &&
-            r.kind !== "heading" &&
-            r.kind !== rowKind
-          )
-            continue;
-          seenRows.add(rowId);
-          rows.push(readRow(r, rowId, rowKind));
-        }
-      sheets.push({ id, name: str(s.name), kind, rows });
-    }
-  return { sheets, density: SEAWATER_DENSITY };
+  return readDocument(raw);
 }
 
 /** Whether a book is worth persisting at all — an untouched one is stored as `null`, not as `{}`. */
 export const sheetIsEmpty = (book: WeightBook): boolean =>
-  book.sheets.every((sheet) => sheet.rows.length === 0) &&
+  book.items.length === 0 &&
+  book.views.length === 0 &&
+  Object.keys(book.outputs).length === 0 &&
   book.density === SEAWATER_DENSITY;

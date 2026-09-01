@@ -103,14 +103,145 @@ export interface ProfileOutline {
   readonly lower: readonly Vec2[];
 }
 
-/** One station, in sheet (y, z). Both halves, because a point may sit on either side. */
+/**
+ * Which kind of cut an outline is.
+ *
+ * A VERTICAL slice is the plane x = const. A point's own x puts it exactly in that plane, which is the only
+ * way the pane's question — is this inside the boat — can be asked honestly of a point; and from the side the
+ * plane is a plain vertical rule, so the point sits on its own marker at every height.
+ *
+ * A STATION is the hull's own cut, normal to the plan heading. It is what `slices.ts` measures and what a cut
+ * field's `pos` names, so a selected cut is previewed as one — otherwise the shape on screen would not be the
+ * shape whose area the inspector is reporting.
+ */
+export type SectionKind = "vertical" | "station";
+
+/** One cut through the hull, in sheet (y, z). Both halves, because a point may sit on either side. */
 export interface SectionOutline {
+  readonly kind: SectionKind;
   /** The x the cut was actually taken at, which is the requested one clamped into the hull. */
   readonly x: number;
   /** True when the requested x fell outside the hull and the cut was clamped to reach it. */
   readonly clamped: boolean;
   readonly starboard: readonly Vec2[];
   readonly port: readonly Vec2[];
+  /**
+   * The same cut seen from the side, in sheet (x, z).
+   *
+   * For a STATION this is a curve, not a rule: the plane is normal to the plan heading rather than square
+   * across the boat, so its x runs with the athwartships offset — 38 mm across the beam at the stock hull's
+   * first metre, 198 mm by its third. For a VERTICAL slice every point shares the one x, so it is a rule.
+   *
+   * One half: the two are mirrored in y and carry the same x, so from the side they lie on each other.
+   */
+  readonly trace: readonly Vec2[];
+}
+
+/**
+ * Which station to cut.
+ *
+ * The two are NOT the same station, and the difference is the whole reason this is a union. `at` is the
+ * plane whose plan point sits at that x — what a cut's `pos` names, and what `slices.ts` measures. `through`
+ * is the plane that CONTAINS a given place, which is the one a point has to be judged against: a point is in
+ * the plane through it and is not in the plane its x looks up, and on the stock hull those are up to 300 mm
+ * apart because the plan curve is the sheer and runs a metre off the centreline.
+ */
+export type SectionAt =
+  | { readonly k: "at"; readonly x: number }
+  | { readonly k: "through"; readonly x: number; readonly y: number };
+
+// ---------- the vertical slice ----------
+
+/**
+ * The hull cut by the plane x = `xSheet`, in sheet (y, z).
+ *
+ * This is the cut a POINT is judged against, and the reason it exists beside the station: a point's x puts it
+ * exactly in this plane, where the station its x looks up misses it by up to 300 mm and the station THROUGH
+ * it is a plane whose skin an interior point is never on. Here the question "is this inside the outline" is
+ * the question "is this inside the boat", with nothing lost in the asking.
+ *
+ * Built by walking the sampling's ROWS rather than its columns. A column is a station and has almost no
+ * extent in x; a row is a longitudinal curve and crosses the plane exactly once, so one crossing per row is
+ * one point of the section, and the rows the trims removed simply do not contribute. That keeps the outline
+ * trimmed without this having to know what the trims were — and the hull's two EDGES are rows of the same
+ * kind, which is what makes the slice reach the sheer at the top and close on the centreline at the keel.
+ *
+ * A drawing, at pointer resolution: the crossing is linear between neighbouring columns. `slices.ts` remains
+ * the only thing that measures.
+ */
+export function verticalSection(
+  sampling: HullSampling,
+  frame: PointFrame,
+  xSheet: number,
+): SectionOutline | null {
+  // Every longitudinal curve of the trimmed hull, each as the columns it survives in.
+  //
+  // The interior ones are the sheet's own rows. The other two are the EDGES: a column's first point is where
+  // the sheer trim cut it and its last is where the centreline or the transom did, and those land on
+  // fractional rows — 5.18 and 36.93 on the stock hull's twentieth column — so neither is a row and both are
+  // curves all the same. Leaving them out is what truncated the slice below the sheer and left it hanging
+  // short of the centreline, where the two halves are supposed to meet.
+  const runs = new Map<number, { i: number; pos: Vec3 }[]>();
+  const SHEER = -1;
+  const KEEL = Infinity;
+  const push = (k: number, i: number, pos: Vec3): void => {
+    const run = runs.get(k);
+    if (run) run.push({ i, pos });
+    else runs.set(k, [{ i, pos }]);
+  };
+  for (const column of sampling.columns) {
+    if (!column.pts.length) continue;
+    push(SHEER, column.i, column.pts[0].pos);
+    push(KEEL, column.i, column.pts[column.pts.length - 1].pos);
+    for (const sample of column.pts)
+      if (Number.isInteger(sample.vSheetIndex))
+        push(sample.vSheetIndex, column.i, sample.pos);
+  }
+
+  /**
+   * Where one curve crosses the plane, in the sheet's frame.
+   *
+   * Only between ADJACENT columns: a row the trims interrupt would otherwise be bridged across the gap, and
+   * the crossing invented there is on no part of the hull. One crossing is taken, because x runs
+   * monotonically along a hull's length.
+   */
+  const cross = (run: { i: number; pos: Vec3 }[]): Vec3 | null => {
+    for (let n = 1; n < run.length; n++) {
+      if (run[n].i !== run[n - 1].i + 1) continue;
+      const a = toSheet(frame, run[n - 1].pos);
+      const b = toSheet(frame, run[n].pos);
+      const da = a[0] - xSheet;
+      const db = b[0] - xSheet;
+      if (da !== 0 && da < 0 === db < 0) continue;
+      const t = da === 0 ? 0 : da / (da - db);
+      return [xSheet, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+    }
+    return null;
+  };
+
+  // Sheer first, then down the rows, then the keel — the order a section is drawn in, and the order that
+  // makes the last point the one the mirrored half meets.
+  const order = [...runs.keys()].sort((a, b) => a - b);
+  const starboard: Vec2[] = [];
+  const trace: Vec2[] = [];
+  for (const k of order) {
+    const at = cross(runs.get(k)!);
+    if (!at) continue;
+    starboard.push([at[1], at[2]]);
+    trace.push([at[0], at[2]]);
+  }
+
+  // Fewer than two crossings is a plane that misses the hull, or grazes its very end. Nothing to draw, and
+  // saying so beats a one-point outline that reads as a section with no beam.
+  if (starboard.length < 2) return null;
+  return {
+    kind: "vertical",
+    x: xSheet,
+    clamped: false,
+    starboard,
+    port: starboard.map(([y, z]): Vec2 => [-y, z]),
+    trace,
+  };
 }
 
 export interface HullOutlines {
@@ -186,7 +317,7 @@ export function hullOutlines(
 }
 
 /**
- * The hull's section at a sheet-frame x, in sheet (y, z).
+ * The hull's section at a place, in sheet (y, z).
  *
  * The cut is normal to the plan's heading, exactly as a slice row's station is — the same `sweptSection`
  * every hull integral is built on — so the outline a point is judged against is the one the hull is measured
@@ -196,10 +327,16 @@ export function hullOutlines(
 export function sectionOutline(
   model: Model,
   frame: PointFrame,
-  xSheet: number,
+  where: SectionAt,
 ): SectionOutline | null {
   const [uLo, uHi] = frame.uSpan;
-  const wanted = model.plan.uAtX(xSheet / frame.s + frame.x0);
+  // `uAtPoint` is the foot of the perpendicular from the place onto the plan, which is exactly the u whose
+  // station plane contains it: the plane is normal to the heading, and the foot is where the offset from the
+  // curve has no component along it.
+  const wanted =
+    where.k === "at"
+      ? model.plan.uAtX(where.x / frame.s + frame.x0)
+      : model.plan.uAtPoint([where.x / frame.s + frame.x0, where.y / frame.s]);
   const u0 = Math.min(uHi, Math.max(uLo, wanted));
   let clamped = Math.abs(u0 - wanted) > 1e-9;
 
@@ -222,15 +359,15 @@ export function sectionOutline(
   }
   if (!section) return null;
 
-  const starboard = section.pts.map((p): Vec2 => {
-    const [, y, z] = toSheet(frame, p);
-    return [y, z];
-  });
+  const sheet = section.pts.map((p) => toSheet(frame, p));
+  const starboard = sheet.map(([, y, z]): Vec2 => [y, z]);
   return {
+    kind: "station",
     x: (model.plan.at(u)[0] - frame.x0) * frame.s,
     clamped,
     starboard,
     port: starboard.map(([y, z]): Vec2 => [-y, z]),
+    trace: sheet.map(([x, , z]): Vec2 => [x, z]),
   };
 }
 

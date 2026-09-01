@@ -26,12 +26,11 @@ import {
 } from "./hull";
 import type { SessionDocument } from "./sessionDocument";
 import {
-  isHeading,
-  isPageKind,
+  isFieldKind,
   isReserved,
   isSliceShape,
+  isValidFacetValue,
   isValidName,
-  ROW_KIND_OF,
   type WeightBook,
 } from "./sheet/book";
 import { isOutputName } from "./sheet/outputs";
@@ -166,88 +165,78 @@ export function assertValidHull(
 // ---------- the weight book ----------
 //
 // Far fewer promises than a hull, because a schedule is text until it is evaluated and a formula that does
-// not parse is a per-row ERROR rather than an invalid document — the whole point is that you can leave a
+// not parse is a per-cell ERROR rather than an invalid document — the whole point is that you can leave a
 // half-written line in it. What must hold is only what the book's own addressing depends on: ids that are
-// unique, names a formula could actually resolve, and rows that are the kind their page holds.
+// unique, names a formula could actually resolve, and fields that are one of the kinds there are.
 //
-// Note what is NOT here any more. The book used to nominate its answers by storing a reference to a row, and
-// that reference could dangle, so it had to be checked. An answer is now a row on the outputs page, named
-// from the `OUTPUTS` table — there is no reference to go stale, and its uniqueness is the ordinary per-page
-// rule below rather than a clause of its own.
+// Note what is NOT here. Nothing checks that facets are consistent, that two items agree on a field key, or
+// that anything is filed at all. Those are matters of tidiness, not of validity — a half-organised book is a
+// normal book — and the Fields tab and the Problems view are where they belong. The one rule facets do have
+// is that a value has to be something a tree can split on.
 
 export function bookViolations(book: WeightBook): string[] {
   const out: string[] = [];
-  let seenOutputs = false;
 
   if (!finite(book.density) || book.density <= 0)
     out.push("density must be a positive number");
 
-  const sheetIds = new Set<string>();
-  const sheetNames = new Set<string>();
-  book.sheets.forEach((sheet, i) => {
-    if (typeof sheet.id !== "string" || !sheet.id)
-      out.push(`sheets[${i}] must carry an id`);
-    else if (sheetIds.has(sheet.id))
-      out.push(`sheets[${i}] repeats the id ${sheet.id}`);
-    else sheetIds.add(sheet.id);
+  const itemIds = new Set<string>();
+  const itemNames = new Set<string>();
+  book.items.forEach((item, i) => {
+    if (typeof item.id !== "string" || !item.id)
+      out.push(`items[${i}] must carry an id`);
+    else if (itemIds.has(item.id))
+      out.push(`items[${i}] repeats the id ${item.id}`);
+    else itemIds.add(item.id);
 
-    if (!isValidName(sheet.name))
-      out.push(`sheets[${i}] name "${sheet.name}" is not usable in a formula`);
-    else if (sheetNames.has(sheet.name))
-      out.push(`sheets[${i}] repeats the name ${sheet.name}`);
-    else sheetNames.add(sheet.name);
-
-    if (!isPageKind(sheet.kind))
-      out.push(`sheets[${i}] has an unknown kind "${sheet.kind}"`);
-    // `OUT.` finds the outputs page by kind, so a second one would make every answer ambiguous.
-    else if (sheet.kind === "outputs") {
-      if (seenOutputs) out.push(`sheets[${i}] is a second outputs page`);
-      seenOutputs = true;
+    // An unnamed item is legal — it is the scratch line a grid would spend a spare column on. A named one
+    // has to be resolvable, and has to be the only item answering to that name: item names are the book's
+    // one global namespace, which is what lets a formula address a thing without naming where it is filed.
+    if (item.name) {
+      if (!isValidName(item.name))
+        out.push(`items[${i}] name "${item.name}" is not usable in a formula`);
+      else if (isReserved(item.name))
+        out.push(`items[${i}] takes a reserved name`);
+      else if (itemNames.has(item.name))
+        out.push(`items[${i}] repeats the name ${item.name}`);
+      else itemNames.add(item.name);
     }
 
-    const rowIds = new Set<string>();
-    const rowNames = new Set<string>();
-    sheet.rows.forEach((row, j) => {
-      if (typeof row.id !== "string" || !row.id)
-        out.push(`sheets[${i}].rows[${j}] must carry an id`);
-      else if (rowIds.has(row.id))
-        out.push(`sheets[${i}].rows[${j}] repeats the id ${row.id}`);
-      else rowIds.add(row.id);
+    for (const [key, value] of Object.entries(item.facets)) {
+      if (!isValidName(key))
+        out.push(`items[${i}] has an unusable facet "${key}"`);
+      if (!isValidFacetValue(value))
+        out.push(`items[${i}].${key} is not a usable facet value`);
+    }
 
-      // A page holds one kind of object, so a row that is not that kind — and is not a heading, which is
-      // legal anywhere — cannot be edited by anything the page's editor offers. The commands refuse to make
-      // one, so this catches a book assembled some other way.
-      if (!isHeading(row) && row.kind !== ROW_KIND_OF[sheet.kind])
-        out.push(
-          `sheets[${i}].rows[${j}] is a ${row.kind} on a ${sheet.kind} page`,
-        );
+    // Field keys are unique WITHIN the item and nowhere else, which the object already guarantees — so what
+    // is left to check is only that each one could be written in a formula, and that the field is one of the
+    // kinds that exist.
+    for (const [key, field] of Object.entries(item.fields)) {
+      if (!isValidName(key))
+        out.push(`items[${i}].${key} is not a name a formula can use`);
+      if (!isFieldKind(field.k))
+        out.push(`items[${i}].${key} has an unknown kind "${field.k}"`);
+      else if (field.k === "cut" && !isSliceShape(field.shape))
+        out.push(`items[${i}].${key} cuts with an unknown "${field.shape}"`);
+    }
+  });
 
-      if (row.kind === "slice" && !isSliceShape(row.shape))
-        out.push(`sheets[${i}].rows[${j}] cuts with an unknown "${row.shape}"`);
+  for (const name of Object.keys(book.outputs))
+    if (!isOutputName(name))
+      out.push(`"${name}" is not one of the book's answers`);
 
-      // A heading is not a value and nothing can refer to one, so its text is under no rules at all.
-      // An unnamed ITEM is legal too — it is the scratch line a grid would spend a spare column on. A named
-      // one has to be resolvable, and has to be the only item on its page answering to that name.
-      if (row.name && !isHeading(row)) {
-        if (!isValidName(row.name))
-          out.push(
-            `sheets[${i}].rows[${j}] name "${row.name}" is not usable in a formula`,
-          );
-        else if (isReserved(row.name))
-          out.push(`sheets[${i}].rows[${j}] takes a reserved name`);
-        else if (rowNames.has(row.name))
-          out.push(`sheets[${i}].rows[${j}] repeats the name ${row.name}`);
-        else {
-          rowNames.add(row.name);
-          // The outputs page answers the questions the rest of the app asks, and it can only answer the ones
-          // there are names for. Anything else on it is a row nothing will ever read.
-          if (sheet.kind === "outputs" && !isOutputName(row.name))
-            out.push(
-              `sheets[${i}].rows[${j}] "${row.name}" is not one of the book's answers`,
-            );
-        }
-      }
-    });
+  const viewIds = new Set<string>();
+  book.views.forEach((view, i) => {
+    if (typeof view.id !== "string" || !view.id)
+      out.push(`views[${i}] must carry an id`);
+    else if (viewIds.has(view.id))
+      out.push(`views[${i}] repeats the id ${view.id}`);
+    else viewIds.add(view.id);
+    // A view scoped to an item that has gone shows nothing, which is a view worth deleting rather than a
+    // document worth refusing — so this is the only thing said about a scope.
+    if (view.scope.k === "item" && !itemIds.has(view.scope.item))
+      out.push(`views[${i}] is scoped to an item that is not here`);
   });
 
   return out;

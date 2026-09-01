@@ -72,17 +72,17 @@ export function useWeightBookResults(
     const signature: string[] = [];
     let measure: ReturnType<typeof createSliceMeasurer> | null = null;
 
-    for (const page of book.sheets)
-      for (const row of page.rows) {
-        if (row.kind !== "slice") continue;
-        const position = resultAt(positions, page.id, row.id, "pos");
+    for (const item of book.items)
+      for (const [fieldKey, field] of Object.entries(item.fields)) {
+        if (field.k !== "cut") continue;
+        const position = resultAt(positions, item.id, fieldKey, "pos");
         if (position?.error || !position?.reading) continue;
-        const key = sliceMeasurementKey(page.id, row.id);
-        const geometryKey = `${row.shape}\u0000${position.reading.v}`;
+        const key = sliceMeasurementKey(item.id, fieldKey);
+        const geometryKey = `${field.shape}\u0000${position.reading.v}`;
         let value = cached.values.get(geometryKey);
         if (!value) {
           measure ??= createSliceMeasurer(model, sampling);
-          value = measure(row.shape, position.reading.v) ?? undefined;
+          value = measure(field.shape, position.reading.v) ?? undefined;
           if (value) {
             // Position edits can produce an unbounded stream of nominal values. Retain enough cuts for undo
             // and cross-panel reuse without turning a long editing session into a geometry archive.

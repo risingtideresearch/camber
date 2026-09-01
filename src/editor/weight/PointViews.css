@@ -70,10 +70,75 @@
 /* Where the section is being taken, drawn in the profile. The two views are one gesture apart, and this is
    the line that says so. */
 .pcut {
+  fill: none;
   stroke: var(--slider);
   stroke-width: 1.2;
   stroke-dasharray: 3 4;
   opacity: 0.7;
+}
+
+/* ---------- a cut, edge-on ---------- */
+/* A cut is a plane and a plane seen edge-on is a line: a station stands up in the profile, a horizontal cut
+   lies level in both views. Drawn in the station colour and under the points, because a point sitting ON a
+   cut is the thing being read and the line must not cover its marker. */
+
+.pcutline {
+  cursor: pointer;
+}
+/* A station is drawn as its own outline: a leaning CURVE, because the two mirrored halves carry the same x
+   and project onto the same line from the side. Never filled — there is no enclosed area to fill. */
+.pcutedge {
+  fill: none;
+  stroke: var(--station);
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+/* Where the position could actually be. A station known to ±5 cm is a band, and a bare outline would claim a
+   precision the cell does not have. */
+.pcutband {
+  fill: var(--station);
+  opacity: 0.13;
+  stroke: none;
+  pointer-events: none;
+}
+/* A shape a few pixels wide is not something a pointer can hit, so the target is a fat invisible stroke of
+   the same outline. It must not be filled: a filled hit area over the profile would swallow presses meant
+   for the points inside it. */
+.pcuthit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 11;
+}
+/* A name is written where it is being ASKED for — the selection, or whatever is under the pointer — and not
+   before. A drawing captioned everywhere is one nobody can read the shapes in, and the shapes are the point:
+   what the schedule beside it cannot show is where things are in relation to each other. */
+.pcutlabel {
+  fill: var(--station);
+  font-size: 10px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+}
+.pcutline:hover .pcutlabel,
+.pcutline.on .pcutlabel {
+  opacity: 1;
+}
+.pcutline.on .pcutlabel {
+  fill: var(--accent);
+  font-weight: 600;
+}
+.pcutline:hover .pcutedge,
+.pcutline.on .pcutedge {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.pcutline:hover .pcutlabel {
+  fill: var(--accent);
+}
+.pcutline.on .pcutband {
+  fill: var(--accent);
+  opacity: 0.16;
 }
 
 .psnap {
@@ -96,14 +161,22 @@
 
 /* ---------- the points ---------- */
 
-.ppoint {
+.ppoint.free-both {
   cursor: grab;
+}
+.ppoint.free-both:active {
+  cursor: grabbing;
+}
+/* A formula may leave only one of the projection's coordinates editable. Do not promise a free drag when
+   the gesture can only move along one axis. */
+.ppoint.free-across {
+  cursor: ew-resize;
+}
+.ppoint.free-up {
+  cursor: ns-resize;
 }
 .ppoint.locked {
   cursor: default;
-}
-.ppoint:active {
-  cursor: grabbing;
 }
 
 /* Transparent, not `none` — `none` is not hit-testable, which is the whole point of this circle. */
@@ -139,9 +212,17 @@
   stroke: #e4572e;
 }
 
+/* Same rule as a cut's name: written for the selection and for whatever is under the pointer, and not for
+   everything at once. A profile captioned at every marker hides the arrangement it exists to show. */
 .plabel {
   fill: var(--mut);
   font-size: 10px;
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+}
+.ppoint:hover .plabel,
+.ppoint.on .plabel {
+  opacity: 1;
 }
 .ppoint.on .plabel {
   fill: var(--ink);
@@ -173,5 +254,10 @@
   fill: var(--bg);
   stroke: #e4572e;
   stroke-width: 1.4;
+}
+.phandle.horizontal {
   cursor: ew-resize;
+}
+.phandle.vertical {
+  cursor: ns-resize;
 }

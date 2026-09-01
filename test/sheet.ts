@@ -1,29 +1,56 @@
+// The weight book: the item model, its evaluation, and the views over it.
+//
+// What is being checked, throughout, is that an ADDRESS names a thing and never where the thing is filed.
+// That is the one rule the model turns on, and most of what follows is a way of asking whether it still
+// holds: rename an item and formulas follow it; refile it and nothing moves; reorder the book and no value
+// changes.
+
 import { defaultHull } from "../src/core/hull";
 import { buildHullMesh } from "../src/core/hullGeometry";
 import { hullMetrics, HULL_METRICS } from "../src/core/hullMetrics";
 import { unitScale } from "../src/core/json";
 import { computeHullSampling } from "../src/core/mesh";
+import { stationGeometry } from "../src/core/sweep";
 import { assemble } from "../src/core/runtime";
-import { cut, stationGeometry } from "../src/core/sweep";
 import {
   FormulaError,
   parseFormula,
   tokenize,
 } from "../src/core/sheet/formula";
-import { evaluateBook, resultAt } from "../src/core/sheet/evaluate";
+import {
+  evaluateBook,
+  fieldUsers,
+  fieldUses,
+  outputResult,
+  resultAt,
+} from "../src/core/sheet/evaluate";
 import { buildSheetJson, parseSheet } from "../src/core/sheet/json";
 import {
   emptyBook,
-  groupAt,
+  facetContains,
   interpretSheetCommand,
-  rowsUnder,
-  sheetHeadings,
+  isValidFacetValue,
+  primaryFacet,
   symbolsOf,
+  tidyFacetValue,
+  type FieldLeaf,
   type SheetCommand,
   type WeightBook,
 } from "../src/core/sheet/book";
+import {
+  facetView,
+  fieldKeyOrder,
+  groupItems,
+  problemsOf,
+  resolveView,
+  scopeItems,
+  standardViews,
+  UNFILED,
+  viewColumns,
+  viewRows,
+} from "../src/core/sheet/views";
 import { parseUnit, naturalUnit, UnitError } from "../src/core/sheet/units";
-import { measureSlice, sliceMeasurementKey } from "../src/core/sheet/slices";
+import { createSliceMeasurer, measureSlice } from "../src/core/sheet/slices";
 import {
   hullOutlines,
   likelyRegion,
@@ -31,6 +58,7 @@ import {
   readTolerance,
   sectionOutline,
   toModel,
+  verticalSection,
   toSheet,
   withNominal,
   withoutHandle,
@@ -41,9 +69,8 @@ import { sameGesture, type DocumentCommand } from "../src/core/commands";
 import { bookViolations } from "../src/core/invariants";
 import {
   completionsFor,
-  fragmentStart,
   suggestAt,
-} from "../src/editor/weightCompletions";
+} from "../src/editor/weight/weightCompletions";
 
 let failures = 0;
 const ok = (condition: unknown, message: string) => {
@@ -58,144 +85,137 @@ const near = (a: number, b: number, tol: number): boolean =>
 
 // ---------- a book builder, so the tests read like the panel ----------
 
-interface Line {
-  name?: string;
-  group?: string;
-  formula?: string;
-  unit?: string;
-}
-
 const run = (book: WeightBook, command: SheetCommand): WeightBook => {
   const out = interpretSheetCommand(book, command);
   if ("rejected" in out) throw new Error(out.rejected);
   return out.book;
 };
 
-/** One page called `Weights`, plus any extra pages given as [name, lines]. */
-const build = (lines: Line[], extra: [string, Line[]][] = []): WeightBook => {
+interface Line {
+  name?: string;
+  /** The `system` facet, since that is what the tree is built from by default. */
+  system?: string;
+  formula?: string;
+  unit?: string;
+  /** The field key. `value` unless a test wants to say otherwise. */
+  key?: string;
+}
+
+/** A book of scalar items, ids `i0`, `i1`, … so a test can address one without looking it up. */
+function build(lines: Line[]): WeightBook {
   let book = emptyBook();
-  const page = (pageName: string, rows: Line[], p: number) => {
-    const id = `p${p}`;
-    book = run(book, { type: "addSheet", id, name: pageName, kind: "scalars" });
-    let at = -1;
-    let heading = "";
-    rows.forEach((line, i) => {
-      // A heading is a row, so a change of group emits one before the item that starts it.
-      if ((line.group ?? "") !== heading) {
-        heading = line.group ?? "";
-        if (heading) {
-          book = run(book, {
-            type: "addSheetRow",
-            sheet: id,
-            id: `p${p}h${i}`,
-            after: at,
-            kind: "heading",
-            name: heading,
-          });
-          at++;
-        }
-      }
-      const rowId = `p${p}r${i}`;
+  lines.forEach((line, i) => {
+    const id = `i${i}`;
+    const key = line.key ?? "value";
+    book = run(book, {
+      type: "addItem",
+      id,
+      name: line.name ?? "",
+      after: i - 1,
+    });
+    book = run(book, { type: "addField", item: id, key, kind: "scalar" });
+    if (line.formula !== undefined)
       book = run(book, {
-        type: "addSheetRow",
-        sheet: id,
-        id: rowId,
-        after: at,
+        type: "setFieldFormula",
+        item: id,
+        field: key,
+        leaf: "formula",
+        formula: line.formula,
       });
-      at++;
-      if (line.name)
-        book = run(book, {
-          type: "renameSheetRow",
-          sheet: id,
-          row: rowId,
-          name: line.name,
-        });
-      if (line.formula !== undefined)
-        book = run(book, {
-          type: "setSheetFormula",
-          sheet: id,
-          row: rowId,
-          field: "formula",
-          formula: line.formula,
-        });
-      if (line.unit)
-        book = run(book, {
-          type: "setSheetUnit",
-          sheet: id,
-          row: rowId,
-          unit: line.unit,
-        });
-    });
-  };
-  page("Weights", lines, 0);
-  extra.forEach(([name, rows], i) => page(name, rows, i + 1));
+    if (line.unit !== undefined)
+      book = run(book, {
+        type: "setFieldUnit",
+        item: id,
+        field: key,
+        unit: line.unit,
+      });
+    if (line.system !== undefined)
+      book = run(book, {
+        type: "setFacet",
+        item: id,
+        key: "system",
+        value: line.system,
+      });
+  });
   return book;
-};
+}
 
-/**
- * Make the book answer one of its outputs, the way the panel's "use as" menu does: a row on the outputs page
- * whose formula names the row that actually carries the number.
- */
-const answer = (
+const idOf = (book: WeightBook, name: string): string =>
+  book.items.find((item) => item.name === name)!.id;
+
+/** Give an existing item a point, so a test can mix kinds on one item the way the model allows. */
+function point(
   book: WeightBook,
   name: string,
-  formula: string,
-): WeightBook => {
-  let out = book;
-  let page = out.sheets.find((sheet) => sheet.kind === "outputs");
-  if (!page) {
+  cells: { x?: string; y?: string; z?: string; unit?: string; from?: string },
+  key = "position",
+): WeightBook {
+  const item = idOf(book, name);
+  let out = run(book, { type: "addField", item, key, kind: "point" });
+  for (const leaf of ["x", "y", "z", "from"] as const)
+    if (cells[leaf] !== undefined)
+      out = run(out, {
+        type: "setFieldFormula",
+        item,
+        field: key,
+        leaf,
+        formula: cells[leaf]!,
+      });
+  if (cells.unit !== undefined)
     out = run(out, {
-      type: "addSheet",
-      id: "out",
-      name: "Outputs",
-      kind: "outputs",
+      type: "setFieldUnit",
+      item,
+      field: key,
+      unit: cells.unit,
     });
-    page = out.sheets.find((sheet) => sheet.kind === "outputs")!;
-  }
-  const id = `o-${name}`;
-  out = run(out, {
-    type: "addSheetRow",
-    sheet: page.id,
-    id,
-    after: page.rows.length - 1,
-  });
-  out = run(out, { type: "renameSheetRow", sheet: page.id, row: id, name });
-  return run(out, {
-    type: "setSheetFormula",
-    sheet: page.id,
-    row: id,
-    field: "formula",
-    formula,
-  });
-};
+  return out;
+}
 
-const rowOf = (book: WeightBook, name: string, page = "Weights") => {
-  const sheet = book.sheets.find((s) => s.name === page)!;
-  const row = sheet.rows.find((r) => r.name === name)!;
-  return { sheetId: sheet.id, rowId: row.id };
-};
-
-const value = (
+function cut(
   book: WeightBook,
   name: string,
-  page = "Weights",
+  spec: { shape?: "plane" | "station"; pos?: string; unit?: string },
+  key = "section",
+): WeightBook {
+  const item = idOf(book, name);
+  let out = run(book, { type: "addField", item, key, kind: "cut" });
+  if (spec.shape)
+    out = run(out, {
+      type: "setCutShape",
+      item,
+      field: key,
+      shape: spec.shape,
+    });
+  if (spec.pos !== undefined)
+    out = run(out, {
+      type: "setFieldFormula",
+      item,
+      field: key,
+      leaf: "pos",
+      formula: spec.pos,
+    });
+  if (spec.unit !== undefined)
+    out = run(out, { type: "setFieldUnit", item, field: key, unit: spec.unit });
+  return out;
+}
+
+const cellAt = (
+  book: WeightBook,
+  name: string,
+  key = "value",
+  leaf: FieldLeaf = "formula",
   metrics: Parameters<typeof evaluateBook>[1] = null,
-): number => {
-  const { sheetId, rowId } = rowOf(book, name, page);
-  return (
-    resultAt(evaluateBook(book, metrics), sheetId, rowId)?.reading?.v ?? NaN
-  );
-};
+) => resultAt(evaluateBook(book, metrics), idOf(book, name), key, leaf);
+
+const value = (book: WeightBook, name: string, key = "value"): number =>
+  cellAt(book, name, key)!.reading!.v;
 
 const problem = (
   book: WeightBook,
   name: string,
-  page = "Weights",
+  key = "value",
   metrics: Parameters<typeof evaluateBook>[1] = null,
-): string | null => {
-  const { sheetId, rowId } = rowOf(book, name, page);
-  return resultAt(evaluateBook(book, metrics), sheetId, rowId)?.error ?? null;
-};
+): string | null => cellAt(book, name, key, "formula", metrics)!.error;
 
 // ---------- the grammar ----------
 {
@@ -218,11 +238,8 @@ const problem = (
   ok(one("5 − 2") === 3, "and a pasted en-dash as a minus");
   ok(one("1e3") === 1000, "exponent notation");
 
-  const spread = (source: string) => {
-    const book = build([{ name: "x", formula: source }]);
-    const { sheetId, rowId } = rowOf(book, "x");
-    return resultAt(evaluateBook(book, null), sheetId, rowId)!.reading!;
-  };
+  const spread = (source: string) =>
+    cellAt(build([{ name: "x", formula: source }]), "x")!.reading!;
   let r = spread("4.2 ± 0.3");
   ok(
     r.v === 4.2 && near(r.worst.lo, 0.3, 1e-12) && near(r.worst.hi, 0.3, 1e-12),
@@ -262,1791 +279,1174 @@ const problem = (
 }
 
 // ---------- names with spaces ----------
-//
-// The whole reason this is safe is that the language has no implicit multiplication: two names side by side
-// could never have meant anything else, so the lexer may take the longest known name at each position.
 {
   const book = build([
-    { name: "shell area", formula: "14.8" },
     { name: "ply density", formula: "4.2" },
-    { name: "hull shell", formula: "shell area * ply density" },
+    { name: "shell area", formula: "30" },
+    { name: "hull shell", formula: "ply density.value * shell area.value" },
   ]);
   ok(
-    near(value(book, "hull shell"), 62.16, 1e-9),
-    "a name with a space in it is one token",
+    value(book, "hull shell") === 126,
+    "two multi-word names either side of an operator read as two names",
+  );
+  ok(
+    symbolsOf(book).includes("ply density"),
+    "the symbol table carries every item name",
+  );
+  ok(
+    symbolsOf(book)[0].length >= symbolsOf(book)[1].length,
+    "longest first, so a name that is the prefix of another cannot win",
   );
 
-  // A name that is a PREFIX of another. Longest-first is what makes this come out right.
-  const prefixed = build([
-    { name: "shell", formula: "10" },
-    { name: "shell area", formula: "20" },
-    { name: "a", formula: "shell area / shell" },
+  const nested = build([
+    { name: "shell", formula: "2" },
+    { name: "shell area", formula: "30" },
+    { name: "x", formula: "shell area.value + shell.value" },
   ]);
   ok(
-    value(prefixed, "a") === 2,
-    "the longer of two overlapping names wins, and the shorter is still reachable",
-  );
-
-  // A name may not swallow the characters after it.
-  const boundary = build([
-    { name: "shell", formula: "10" },
-    { name: "a", formula: "shellfish" },
-  ]);
-  ok(
-    problem(boundary, "a") !== null,
-    "a known name is not taken out of the middle of a longer word",
-  );
-
-  const symbols = symbolsOf(book, book.sheets[0].id);
-  ok(
-    symbols.indexOf("shell area") < symbols.indexOf("shell".slice(0, 5)) ||
-      !symbols.includes("shell"),
-    "the symbol table is ordered longest first",
-  );
-
-  const bad = interpretSheetCommand(book, {
-    type: "renameSheetRow",
-    sheet: book.sheets[0].id,
-    row: book.sheets[0].rows[0].id,
-    name: "2 fast",
-  });
-  ok("rejected" in bad, "a name that could not be read back is refused");
-  const reserved = interpretSheetCommand(book, {
-    type: "renameSheetRow",
-    sheet: book.sheets[0].id,
-    row: book.sheets[0].rows[0].id,
-    name: "HULL",
-  });
-  ok("rejected" in reserved, "and so is one the language reserves");
-
-  const tidied = interpretSheetCommand(book, {
-    type: "renameSheetRow",
-    sheet: book.sheets[0].id,
-    row: book.sheets[0].rows[0].id,
-    name: "  hull   shell plating  ",
-  });
-  ok(
-    !("rejected" in tidied) &&
-      tidied.book.sheets[0].rows[0].name === "hull shell plating",
-    "a name is tidied on the way in, so a stray double space cannot break a reference",
-  );
-}
-
-// ---------- names, not positions ----------
-{
-  const book = build([
-    { name: "shell area", formula: "14.8" },
-    { name: "ply density", formula: "4.2" },
-    { name: "shell", formula: "shell area * ply density" },
-  ]);
-  const sheetId = book.sheets[0].id;
-
-  // Insert a row ABOVE everything. In a grid this rewrites every reference below it; here it is invisible.
-  const inserted = interpretSheetCommand(book, {
-    type: "addSheetRow",
-    sheet: sheetId,
-    id: "top",
-    after: -1,
-  });
-  ok(
-    !("rejected" in inserted) &&
-      near(value(inserted.book, "shell"), 62.16, 1e-9),
-    "inserting a row above changes no formula at all",
-  );
-
-  const moved = interpretSheetCommand(book, {
-    type: "moveSheetRow",
-    sheet: sheetId,
-    row: book.sheets[0].rows[2].id,
-    to: 0,
-  });
-  ok(
-    !("rejected" in moved) && near(value(moved.book, "shell"), 62.16, 1e-9),
-    "a formula may sit above the rows it reads — order is presentation only",
-  );
-
-  const renamed = interpretSheetCommand(book, {
-    type: "renameSheetRow",
-    sheet: sheetId,
-    row: book.sheets[0].rows[1].id,
-    name: "skin density",
-  });
-  ok(
-    !("rejected" in renamed) && problem(renamed.book, "shell") !== null,
-    "renaming a row leaves a formula that still uses the old name broken, and says so",
+    value(nested, "x") === 32,
+    "and `shell area` is taken whole rather than as `shell` followed by a stray `area`",
   );
 
   ok(
-    (
-      problem(build([{ name: "x", formula: "Shell_Area" }]), "x") ?? ""
-    ).includes("nothing on this page is called"),
-    "an unknown name says so",
+    "rejected" in
+      interpretSheetCommand(build([{ name: "a" }]), {
+        type: "renameItem",
+        item: "i0",
+        name: "2 bad",
+      }),
+    "a name a formula could not resolve is refused",
   );
   ok(
-    (
-      problem(
-        build([
-          { name: "shell area", formula: "1" },
-          { name: "x", formula: "Shell Area" },
-        ]),
-        "x",
-      ) ?? ""
-    ).includes("did you mean shell area"),
-    "and suggests the row that differs only in case",
-  );
-}
-
-// ---------- pages ----------
-{
-  const book = build(
-    [
-      { name: "hull shell", formula: "70", unit: "kg" },
-      { name: "crew", formula: "160", unit: "kg" },
-      { name: "displacement", formula: "hull shell + crew", unit: "kg" },
-    ],
-    [["VCG", { 0: 0 } as never]].slice(0, 0) as [string, Line[]][],
-  );
-  ok(value(book, "displacement") === 230, "a single page works as it did");
-
-  const withVcg = build(
-    [
-      { name: "hull shell", formula: "70", unit: "kg" },
-      { name: "crew", formula: "160", unit: "kg" },
-      { name: "displacement", formula: "hull shell + crew", unit: "kg" },
-    ],
-    [
-      [
-        "VCG",
-        [
-          { name: "hull shell", formula: "0.30", unit: "m" },
-          { name: "crew", formula: "0.85", unit: "m" },
-          {
-            name: "kg",
-            formula:
-              "(Weights.hull shell * hull shell + Weights.crew * crew) / Weights.displacement",
-            unit: "m",
-          },
-        ],
-      ],
-    ],
-  );
-  const expected = (70 * 0.3 + 160 * 0.85) / 230;
-  ok(
-    near(value(withVcg, "kg", "VCG"), expected, 1e-12),
-    "a page reaches across to another with Page.item",
+    "rejected" in
+      interpretSheetCommand(build([{ name: "a" }]), {
+        type: "renameItem",
+        item: "i0",
+        name: "HULL",
+      }),
+    "and so is a name the language reserves",
   );
   ok(
-    value(withVcg, "hull shell", "VCG") === 0.3 &&
-      value(withVcg, "hull shell") === 70,
-    "the same name on two pages is two different items — which is what pages are for",
-  );
-  ok(
-    (problem(withVcg, "kg", "VCG") ?? "").length === 0,
-    "and none of that is a cycle",
-  );
-
-  ok(
-    (problem(build([{ name: "a", formula: "Nowhere.x" }]), "a") ?? "").includes(
-      "no page called",
+    !(
+      "rejected" in
+      interpretSheetCommand(build([{ name: "a" }]), {
+        type: "renameItem",
+        item: "i0",
+        name: "",
+      })
     ),
-    "an unknown page says so",
+    "but an unnamed item is legal — it is the scratch line a grid spends a column on",
   );
-  ok(
-    (problem(build([{ name: "a", formula: "Weights" }]), "a") ?? "").includes(
-      "is a page",
-    ),
-    "and naming a page with no item on it says what to write instead",
-  );
-
-  const dropped = run(withVcg, {
-    type: "removeSheet",
-    sheet: withVcg.sheets[1].id,
-  });
-  ok(
-    dropped.sheets.length === 1 && bookViolations(dropped).length === 0,
-    "removing a page leaves the book valid",
-  );
-
-  const clash = interpretSheetCommand(withVcg, {
-    type: "addSheet",
-    id: "dupe",
-    name: "VCG",
-    kind: "scalars",
-  });
-  ok("rejected" in clash, "two pages may not share a name");
 }
 
-// ---------- groups ----------
-//
-// A heading is a ROW, and an item belongs to whichever heading it sits under. There is no command that puts
-// an item in a group, because position already says it — which is why moving one in is the only way in.
+// ---------- an address names a thing, never where it is filed ----------
 {
-  const book = build([
-    { name: "shell", group: "Hull structure", formula: "70" },
-    { name: "frames", group: "Hull structure", formula: "15" },
-    { name: "outboard", group: "Machinery", formula: "26" },
-    { name: "total", formula: "shell + frames + outboard" },
+  let book = build([
+    { name: "shell", system: "structure/hull", formula: "12" },
+    { name: "total", system: "totals", formula: "shell.value * 2" },
   ]);
-  const sheet = book.sheets[0];
+  ok(value(book, "total") === 24, "a formula reads another item's field");
 
-  ok(
-    sheetHeadings(sheet)
-      .map((h) => h.name)
-      .join() === "Hull structure,Machinery",
-    "a change of heading is a row of its own",
-  );
-  ok(
-    value(book, "total") === 111,
-    "a total is written out, and says what it adds",
-  );
-
-  const idx = (name: string) => sheet.rows.findIndex((r) => r.name === name);
-  ok(
-    groupAt(sheet, idx("frames")) === "Hull structure" &&
-      groupAt(sheet, idx("outboard")) === "Machinery",
-    "an item's group is read from where it sits",
-  );
-  ok(
-    groupAt(sheet, idx("total")) === "Machinery",
-    "…including an item that simply follows the last heading",
-  );
-  ok(
-    rowsUnder(sheet, idx("Hull structure") - 1 + 1).length === 0 ||
-      rowsUnder(
-        sheet,
-        sheet.rows.findIndex((r) => r.name === "Hull structure"),
-      ).length === 2,
-    "a heading covers the rows up to the next one",
-  );
-
-  // Moving an item is the ONLY way to change its group, and the move alone does it.
-  const moved = run(book, {
-    type: "moveSheetRow",
-    sheet: sheet.id,
-    row: sheet.rows[idx("outboard")].id,
-    to: 1,
+  const refiled = run(book, {
+    type: "setFacet",
+    item: idOf(book, "shell"),
+    key: "system",
+    value: "machinery",
   });
-  const after = moved.sheets[0];
   ok(
-    groupAt(
-      after,
-      after.rows.findIndex((r) => r.name === "outboard"),
-    ) === "Hull structure",
-    "moving an item under another heading puts it in that group, with no second command",
+    value(refiled, "total") === 24,
+    "refiling the item it names changes nothing — filing is not part of the address",
   );
-  ok(value(moved, "total") === 111, "and disturbs no value at all");
 
-  // Renaming a heading is renaming a row — and a heading is under no naming rules, because nothing can
-  // refer to one.
   const renamed = run(book, {
-    type: "renameSheetRow",
-    sheet: sheet.id,
-    row: sheet.rows.find((r) => r.name === "Machinery")!.id,
-    name: "Propulsion & tanks",
+    type: "renameItem",
+    item: idOf(book, "shell"),
+    name: "hull shell",
   });
   ok(
-    sheetHeadings(renamed.sheets[0])
-      .map((h) => h.name)
-      .includes("Propulsion & tanks"),
-    "a heading may say anything — it is not a name a formula could use",
-  );
-  ok(value(renamed, "total") === 111, "and renaming one disturbs nothing");
-
-  // An item, by contrast, still has to be nameable.
-  const badItem = interpretSheetCommand(book, {
-    type: "renameSheetRow",
-    sheet: sheet.id,
-    row: sheet.rows[idx("shell")].id,
-    name: "2 fast",
-  });
-  ok("rejected" in badItem, "an item's name is still checked");
-
-  // A heading is not a value, and cannot be referred to.
-  ok(
-    problem(build([{ name: "x", formula: "Structure" }]), "x") !== null,
-    "a heading cannot be referred to from a formula",
+    (problem(renamed, "total") ?? "").includes("no item called shell"),
+    "renaming DOES break the formulas that named it, loudly and by name",
   );
 
-  // An empty heading is the normal starting state: you add one, then move items in.
-  const bare = run(book, {
-    type: "addSheetRow",
-    sheet: sheet.id,
-    id: "h-new",
-    after: sheet.rows.length - 1,
-    kind: "heading",
-    name: "Tanks",
-  });
+  book = run(book, { type: "moveItem", item: idOf(book, "total"), to: 0 });
   ok(
-    sheetHeadings(bare.sheets[0]).length === 3 &&
-      rowsUnder(
-        bare.sheets[0],
-        bare.sheets[0].rows.findIndex((r) => r.id === "h-new"),
-      ).length === 0,
-    "a heading may hold nothing at all, which is how one is made",
-  );
-  ok(bookViolations(bare).length === 0, "and an empty heading is valid");
-
-  // Removing a heading leaves its items where they are; they join whatever is above.
-  const dropped = run(book, {
-    type: "removeSheetRow",
-    sheet: sheet.id,
-    row: sheet.rows.find((r) => r.name === "Machinery")!.id,
-  });
-  const d = dropped.sheets[0];
-  ok(
-    groupAt(
-      d,
-      d.rows.findIndex((r) => r.name === "outboard"),
-    ) === "Hull structure",
-    "removing a heading rolls its items into the one above",
-  );
-
-  // A group of mixed kinds is an ordinary thing, and nothing about it fails.
-  const mixed = build([
-    { name: "shell area", group: "Structure", formula: "14.8", unit: "m2" },
-    { name: "ply density", group: "Structure", formula: "4.2", unit: "kg/m2" },
-    { name: "shell", group: "Structure", formula: "shell area * ply density" },
-    { name: "frames", group: "Structure", formula: "15", unit: "kg" },
-    { name: "structure", formula: "shell + frames" },
-  ]);
-  ok(
-    near(value(mixed, "structure"), 14.8 * 4.2 + 15, 1e-9),
-    "a heading may hold a mass, an area and a density at once, and nothing complains",
+    value(book, "total") === 24,
+    "and order is presentation: a formula may name an item that comes after it",
   );
 }
 
-// ---------- failure is per row ----------
+// ---------- what names a field, which is what removing it would break ----------
+{
+  let book = build([
+    { name: "shell", key: "area", formula: "30" },
+    { name: "total", formula: "shell.area * 2" },
+    { name: "other", formula: "shell.area" },
+  ]);
+  book = run(book, {
+    type: "addField",
+    item: idOf(book, "shell"),
+    key: "mass",
+    kind: "scalar",
+  });
+  book = run(book, {
+    type: "setFieldFormula",
+    item: idOf(book, "shell"),
+    field: "mass",
+    leaf: "formula",
+    formula: "area * 5",
+  });
+  // Two of the three coordinates name it, which is still ONE thing to go and edit.
+  book = point(book, "shell", { x: "area", z: "area" }, "cg");
+  book = run(book, {
+    type: "setOutput",
+    name: "DISPLACEMENT",
+    formula: "shell.area",
+  });
+  // `other` carries a field of its own called `shell`, so `shell.area` written there is its own point being
+  // asked for an `area` it has not got — not a reference to the item at all. A sibling shadows an item.
+  book = point(book, "other", { x: "0" }, "shell");
+
+  const named = fieldUsers(book, evaluateBook(book, null), idOf(book, "shell"));
+  const users = [...(named.get("area") ?? [])].sort();
+  ok(
+    users.join(" | ") ===
+      "OUT.DISPLACEMENT | shell.cg | shell.mass | total.value",
+    `every cell that names shell.area, once each and by address (${users.join(", ")})`,
+  );
+  ok(
+    !users.includes("other.value"),
+    "and not the one where a sibling of the same name shadows the item — that names nothing here",
+  );
+  ok(
+    (named.get("mass") ?? []).length === 0,
+    "a field nothing names has no users, which is what makes removing it a one-click affair",
+  );
+
+  const occurrences = fieldUses(
+    book,
+    evaluateBook(book, null),
+    idOf(book, "shell"),
+    "area",
+  );
+  ok(
+    occurrences
+      .map((use) => use.address)
+      .sort()
+      .join(" | ") ===
+      "OUT.DISPLACEMENT | shell.cg.x | shell.cg.z | shell.mass | total.value",
+    "individual uses retain the formula cell that the inspector can navigate to",
+  );
+  ok(
+    occurrences.find((use) => use.address === "OUT.DISPLACEMENT")?.itemId ===
+      "OUT",
+    "an output use retains its pseudo-item address so navigation can open the summary",
+  );
+}
+
+// ---------- fields are local to their item ----------
 {
   const book = build([
-    { name: "a", formula: "b + 1" },
-    { name: "b", formula: "a + 1" },
-    { name: "c", formula: "42" },
+    { name: "shell", key: "area", formula: "30" },
+    { name: "deck", key: "area", formula: "12" },
   ]);
-  const results = evaluateBook(book, null);
-  const sheetId = book.sheets[0].id;
-  const err =
-    resultAt(results, sheetId, book.sheets[0].rows[0].id)!.error ?? "";
-  ok(err.includes("refers back to itself"), "a cycle is caught and named");
-  ok(err.includes("a") && err.includes("b"), "and the message names the loop");
   ok(
-    resultAt(results, sheetId, book.sheets[0].rows[2].id)!.reading!.v === 42,
-    "a row off the cycle still produces its number",
+    value(book, "shell", "area") === 30 && value(book, "deck", "area") === 12,
+    "two items may use one field key for unrelated numbers — a key means nothing outside its item",
+  );
+
+  let sibling = run(book, {
+    type: "addField",
+    item: idOf(book, "shell"),
+    key: "density",
+    kind: "scalar",
+  });
+  sibling = run(sibling, {
+    type: "setFieldFormula",
+    item: idOf(book, "shell"),
+    field: "density",
+    leaf: "formula",
+    formula: "4.2",
+  });
+  sibling = run(sibling, {
+    type: "addField",
+    item: idOf(book, "shell"),
+    key: "mass",
+    kind: "scalar",
+  });
+  sibling = run(sibling, {
+    type: "setFieldFormula",
+    item: idOf(book, "shell"),
+    field: "mass",
+    leaf: "formula",
+    formula: "area * density",
+  });
+  ok(
+    near(value(sibling, "shell", "mass"), 126, 1e-9),
+    "a bare name is a SIBLING field — the scope you are standing in wins",
+  );
+  ok(
+    problem(sibling, "deck", "area") === null &&
+      value(sibling, "deck", "area") === 12,
+    "and the same bare name on another item resolves to that item's own",
+  );
+
+  const shadowed = run(sibling, {
+    type: "setFieldFormula",
+    item: idOf(book, "deck"),
+    field: "area",
+    leaf: "formula",
+    formula: "shell.area / 2",
+  });
+  ok(
+    value(shadowed, "deck", "area") === 15,
+    "the other item's field is always reachable by naming the item",
   );
 
   ok(
-    (problem(build([{ name: "a", formula: "a + 1" }]), "a") ?? "").includes(
-      "refers back to itself",
+    (problem(book, "shell", "area") === null) === true &&
+      (
+        problem(
+          run(book, {
+            type: "setFieldFormula",
+            item: idOf(book, "deck"),
+            field: "area",
+            leaf: "formula",
+            formula: "shell",
+          }),
+          "deck",
+          "area",
+        ) ?? ""
+      ).includes("is an item — write shell.something"),
+    "naming an item with no field says which fields it has rather than 'no such name'",
+  );
+
+  ok(
+    "rejected" in
+      interpretSheetCommand(book, {
+        type: "addField",
+        item: idOf(book, "shell"),
+        key: "area",
+        kind: "scalar",
+      }),
+    "one item cannot carry the same key twice",
+  );
+
+  const renamedField = run(book, {
+    type: "renameField",
+    item: idOf(book, "shell"),
+    key: "area",
+    name: "wetted area",
+  });
+  ok(
+    Object.keys(renamedField.items[0].fields).join() === "wetted area",
+    "a field renames in place rather than moving to the end — its column stays put",
+  );
+}
+
+// ---------- facets ----------
+{
+  ok(
+    isValidFacetValue("structure/hull/shell") &&
+      isValidFacetValue("weighed") &&
+      !isValidFacetValue("") &&
+      !isValidFacetValue("a//b"),
+    "a facet value is one or more path segments",
+  );
+  ok(
+    tidyFacetValue(" structure / hull / ") === "structure/hull",
+    "and commits tidied, so a stray separator is not a level",
+  );
+  ok(
+    facetContains("structure", "structure/hull/shell") &&
+      facetContains("structure", "structure") &&
+      !facetContains("structure", "structures/hull"),
+    "containment is by whole segment — `structures` is not under `structure`",
+  );
+
+  let book = build([
+    { name: "a", system: "structure/hull" },
+    { name: "b", system: "structure/deck" },
+    { name: "c" },
+  ]);
+  ok(primaryFacet(book) === "system", "`system` is the tree's default facet");
+
+  const unfiled = run(book, {
+    type: "setFacet",
+    item: idOf(book, "a"),
+    key: "system",
+    value: "",
+  });
+  ok(
+    !("system" in unfiled.items[0].facets),
+    "unfiling REMOVES the key rather than storing a blank, so there is one shape for 'not filed'",
+  );
+
+  book = run(book, {
+    type: "setFacet",
+    item: idOf(book, "a"),
+    key: "status",
+    value: "weighed",
+  });
+  ok(
+    book.items[0].facets.system === "structure/hull" &&
+      book.items[0].facets.status === "weighed",
+    "a second facet cuts across the first — an item is in both trees at once",
+  );
+
+  ok(
+    "rejected" in
+      interpretSheetCommand(book, {
+        type: "setFacet",
+        item: idOf(book, "a"),
+        key: "system",
+        value: "bad-value",
+      }),
+    "a value the tree could not split on is refused",
+  );
+}
+
+// ---------- grouping ----------
+{
+  const book = build([
+    { name: "shell", system: "structure/hull" },
+    { name: "frames", system: "structure/hull" },
+    { name: "deck", system: "structure/deck" },
+    { name: "engine", system: "machinery" },
+    { name: "spare" },
+  ]);
+  const groups = groupItems(book.items, ["system"]);
+  const labels = groups.map((group) => group.label);
+  ok(
+    labels[0] === "structure" && labels[1] === "machinery",
+    "one level per leading segment, in the order the items appear",
+  );
+  ok(
+    labels[labels.length - 1] === UNFILED,
+    "and the unfiled bucket goes last, so a half-organised book shows its own state",
+  );
+  ok(
+    groups[0].count === 3 && groups[0].items.length === 0,
+    "a node counts everything beneath it, and holds only what stops there",
+  );
+  const hull = groups[0].children.find((child) => child.label === "hull")!;
+  ok(
+    hull.items.map((item) => item.name).join() === "shell,frames" &&
+      hull.value === "structure/hull",
+    "a path value nests without anything storing a parent",
+  );
+
+  const flat = groupItems(book.items, []);
+  ok(flat.length === 0, "no grouping keys means no groups at all");
+
+  const two = groupItems(
+    run(book, {
+      type: "setFacet",
+      item: idOf(book, "shell"),
+      key: "status",
+      value: "weighed",
+    }).items,
+    ["system", "status"],
+  );
+  ok(
+    two.length > 0 && two[0].children.length > 0,
+    "a second key nests inside the first",
+  );
+}
+
+// ---------- views ----------
+{
+  let book = build([
+    { name: "shell", system: "structure", key: "mass", formula: "900" },
+    { name: "engine", system: "machinery", key: "mass", formula: "780" },
+    { name: "ply", key: "density", formula: "4.2" },
+  ]);
+  book = point(book, "engine", { x: "1.8", y: "0", z: "0.4" }, "cg");
+  book = cut(book, "shell", { shape: "station", pos: "2" }, "midship");
+
+  ok(
+    scopeItems(book, { k: "all" }).length === 3,
+    "an `all` scope takes the whole book",
+  );
+  ok(
+    scopeItems(book, { k: "fieldType", type: "point" })
+      .map((item) => item.name)
+      .join() === "engine",
+    "a `fieldType` scope takes every item carrying that kind of field",
+  );
+  ok(
+    scopeItems(book, { k: "facet", key: "system", value: "structure" })
+      .map((item) => item.name)
+      .join() === "shell",
+    "and a `facet` scope takes a value and everything under it",
+  );
+  ok(
+    scopeItems(book, { k: "item", item: idOf(book, "ply") }).length === 1,
+    "an `item` scope is the detail view's own",
+  );
+
+  const views = standardViews(book);
+  const names = views.map((view) => view.name);
+  ok(
+    names[0] === "Summary" && names[names.length - 1] === "Problems",
+    "the standard views open on what the estimate answers and end with what is wrong",
+  );
+  ok(
+    !names.some((name) =>
+      ["Values", "Positions", "Sections", "Everything"].includes(name),
     ),
-    "a row referring to itself is caught too",
+    "editing scopes are opened from the explorer rather than added as automatic tabs",
   );
 
-  const empty = build([{ name: "a" }, { name: "b", formula: "a + 1" }]);
+  // Column derivation remains available to explorer-opened and saved views even though field-kind views are
+  // no longer automatically listed in the bar.
+  const valuesView = {
+    id: "test-values",
+    name: "Values",
+    scope: { k: "fieldType", type: "scalar" },
+    groupBy: ["system"],
+    layout: "table",
+  } as const;
+  const scoped = scopeItems(book, valuesView.scope);
+  const columns = viewColumns(valuesView, scoped);
+  ok(
+    columns.map((column) => column.label).join() === "mass,density",
+    "a kind view shows that kind's keys and nothing else — the column axis is emergent",
+  );
+  ok(
+    fieldKeyOrder(book.items).join() === "mass,midship,cg,density",
+    "columns come in first-appearance order, so a second item cannot move an existing one",
+  );
+
+  const positions = {
+    ...valuesView,
+    id: "test-positions",
+    name: "Positions",
+    scope: { k: "fieldType", type: "point" },
+    layout: "split",
+  } as const;
+  const pointColumns = viewColumns(
+    positions,
+    scopeItems(book, positions.scope),
+  );
+  ok(
+    pointColumns.map((column) => column.label).join() === "x,y,z" &&
+      pointColumns.every((column) => column.band === "cg"),
+    "a point is three columns under one spanned header",
+  );
+
+  const sections = {
+    ...valuesView,
+    id: "test-sections",
+    name: "Sections",
+    scope: { k: "fieldType", type: "cut" },
+    layout: "split",
+  } as const;
+  const cutColumns = viewColumns(sections, scopeItems(book, sections.scope));
+  ok(
+    cutColumns.map((column) => column.source.k).join() === "leaf,measure",
+    "a cut is its authored position and one measured column, and the two are different shapes",
+  );
+
+  const rows = viewRows(valuesView, scoped);
+  ok(
+    rows.filter((row) => row.k === "group").length > 0 &&
+      rows.filter((row) => row.k === "item").length === scoped.length,
+    "a grouped view interleaves headers with every item it scopes",
+  );
+  ok(
+    viewRows({ ...valuesView, groupBy: [] }, scoped).every(
+      (row) => row.k === "item",
+    ),
+    "and an ungrouped one is a flat list",
+  );
+
+  ok(
+    resolveView(book, "nope").id === views[0].id,
+    "an id nothing answers to falls back to the first standard view",
+  );
+  ok(
+    resolveView(book, `item-${idOf(book, "ply")}`).layout === "detail",
+    "a per-item view is built on demand rather than listed",
+  );
+  const fv = facetView("system", "structure/hull");
+  ok(
+    resolveView(book, fv.id).scope.k === "facet" &&
+      (resolveView(book, fv.id).scope as { value: string }).value ===
+        "structure/hull",
+    "and a facet view round-trips through its id, path and all",
+  );
+}
+
+// ---------- failure is per cell ----------
+{
+  const book = build([
+    { name: "good", formula: "2 + 2" },
+    { name: "bad", formula: "1 +" },
+    { name: "leans", formula: "bad.value * 2" },
+    { name: "fine", formula: "good.value * 3" },
+  ]);
+  ok(value(book, "good") === 4, "a good cell evaluates");
+  ok(problem(book, "bad") !== null, "a broken one reports");
+  ok(
+    (problem(book, "leans") ?? "").includes("could not be worked out"),
+    "one that leans on it says whose fault it was",
+  );
+  ok(value(book, "fine") === 12, "and the rest of the book is untouched");
+
+  const loop = build([
+    { name: "a", formula: "b.value" },
+    { name: "b", formula: "a.value" },
+  ]);
+  ok(
+    (problem(loop, "a") ?? "").includes("refers back to itself") &&
+      (problem(loop, "b") ?? "").includes("refers back to itself"),
+    "every cell on a cycle names the loop, not just the one that closed it",
+  );
+  ok(
+    (problem(loop, "a") ?? "").includes("a.value") &&
+      (problem(loop, "a") ?? "").includes("b.value"),
+    "and names it as item.field, which is what a reader would go and look for",
+  );
+
+  const empty = build([{ name: "a" }, { name: "b", formula: "a.value" }]);
+  ok(
+    cellAt(empty, "a")!.empty && cellAt(empty, "a")!.error === null,
+    "an empty cell is empty rather than wrong",
+  );
   ok(
     (problem(empty, "b") ?? "").includes("is empty"),
-    "referring to a blank row says it is blank rather than treating it as zero",
-  );
-  ok(
-    resultAt(
-      evaluateBook(empty, null),
-      empty.sheets[0].id,
-      empty.sheets[0].rows[0].id,
-    )!.empty,
-    "and a blank row is reported as blank, not as an error",
-  );
-
-  ok(
-    (problem(build([{ name: "a", formula: "1/0" }]), "a") ?? "").includes(
-      "division by zero",
-    ),
-    "division by zero is a message, not an Infinity",
-  );
-  ok(
-    (
-      problem(build([{ name: "a", formula: "nosuchfn(2)" }]), "a") ?? ""
-    ).includes("no function called"),
-    "an unknown function says so",
+    "though naming one is an error, and says so plainly",
   );
 }
 
 // ---------- units ----------
 {
   ok(parseUnit("kg").dim.m === 1, "kg is a mass");
-  ok(parseUnit("m2").dim.l === 2, "m2 is an area");
-  ok(
-    parseUnit("kg/m2").dim.m === 1 && parseUnit("kg/m2").dim.l === -2,
-    "kg/m2 divides",
-  );
-  ok(near(parseUnit("t").factor, 1000, 1e-12), "a tonne is 1000 kg");
-  ok(
-    near(parseUnit("oz").factor, 0.028349523125, 1e-12),
-    "an ounce is 0.028349523125 kg",
-  );
-  ok(
-    parseUnit("L").dim.l === 3 && near(parseUnit("L").factor, 0.001, 1e-12),
-    "a litre is 0.001 cubic metres",
-  );
-  ok(
-    parseUnit("kgs").factor === parseUnit("kg").factor &&
-      parseUnit("tonne").factor === parseUnit("t").factor &&
-      parseUnit("lbs").factor === parseUnit("lb").factor &&
-      parseUnit("liter").factor === parseUnit("litre").factor,
-    "common unit aliases have the same scales as their canonical units",
-  );
-  let threw = false;
+  ok(near(parseUnit("t").factor, 1000, 1e-12), "a tonne is 1000 of them");
+  ok(parseUnit("kg/m2").dim.l === -2, "an areal density divides by an area");
+  ok(naturalUnit(parseUnit("kg").dim).label === "kg", "and reads back");
+  let caught: unknown = null;
   try {
     parseUnit("furlong");
   } catch (error) {
-    threw = error instanceof UnitError;
+    caught = error;
   }
-  ok(threw, "an unknown unit is refused with a message");
+  ok(caught instanceof UnitError, "an unknown unit is refused");
 
-  ok(naturalUnit({ m: 1, l: 0 }).label === "kg", "a mass is naturally kg");
-  ok(naturalUnit({ m: 0, l: 2 }).label === "m2", "an area is naturally m2");
+  const declared = build([{ name: "a", formula: "1.4", unit: "t" }]);
   ok(
-    naturalUnit({ m: 1, l: -2 }).label === "kg/m2",
-    "and a density kg/m2, which is what a row shows without being told",
+    value(declared, "a") === 1400,
+    "a dimensionless formula is READ in the declared unit: 1.4 t is 1400 kg",
   );
   ok(
-    naturalUnit({ m: 0, l: 0 }).label === "",
-    "a plain number shows no unit at all",
-  );
-
-  // A bare number in a row marked `t` is scaled into kilograms.
-  const scaled = build([{ name: "engine", formula: "1.4", unit: "t" }]);
-  ok(value(scaled, "engine") === 1400, "a declared unit scales a bare number");
-  const ounces = build([{ name: "fitting", formula: "16", unit: "oz" }]);
-  ok(
-    near(value(ounces, "fitting"), 0.45359237, 1e-12),
-    "ounces are scaled into kilograms",
-  );
-  const litres = build([{ name: "fuel", formula: "25", unit: "L" }]);
-  ok(
-    near(value(litres, "fuel"), 0.025, 1e-12),
-    "litres are scaled into cubic metres",
-  );
-  const scaledSpread = build([
-    { name: "engine", formula: "1.4 ± 0.1", unit: "t" },
-  ]);
-  const { sheetId, rowId } = rowOf(scaledSpread, "engine");
-  ok(
-    near(
-      resultAt(evaluateBook(scaledSpread, null), sheetId, rowId)!.reading!.worst
-        .hi,
-      100,
-      1e-9,
-    ),
-    "and the uncertainty is scaled with it",
+    cellAt(declared, "a")!.unit?.label === "t" &&
+      !cellAt(declared, "a")!.unitIsDerived,
+    "and is shown in the unit it was written in",
   );
 
-  // Units appear on their own once a formula has a dimension.
-  const derived = build([
-    { name: "area", formula: "10", unit: "m2" },
+  const derivedUnit = build([
+    { name: "area", formula: "30", unit: "m2" },
     { name: "density", formula: "4.2", unit: "kg/m2" },
-    { name: "shell", formula: "area * density" },
+    { name: "mass", formula: "area.value * density.value" },
   ]);
-  const shown = resultAt(
-    evaluateBook(derived, null),
-    derived.sheets[0].id,
-    rowOf(derived, "shell").rowId,
-  )!;
-  ok(value(derived, "shell") === 42, "consistent units multiply out");
   ok(
-    shown.unit?.label === "kg" && shown.unitIsDerived,
-    "and the row shows kg without anyone typing it",
+    near(value(derivedUnit, "mass"), 126, 1e-9) &&
+      cellAt(derivedUnit, "mass")!.unit?.label === "kg" &&
+      cellAt(derivedUnit, "mass")!.unitIsDerived,
+    "a unit appears on its own the moment a formula acquires a dimension",
   );
 
-  // Typing a unit of the same kind is a DISPLAY choice, not a redefinition.
-  const inTonnes = build([
-    { name: "area", formula: "10", unit: "m2" },
-    { name: "density", formula: "4.2", unit: "kg/m2" },
-    { name: "shell", formula: "area * density", unit: "t" },
+  const mismatch = build([
+    { name: "area", formula: "30", unit: "m2" },
+    { name: "wrong", formula: "area.value", unit: "kg" },
   ]);
-  const asTonnes = resultAt(
-    evaluateBook(inTonnes, null),
-    inTonnes.sheets[0].id,
-    rowOf(inTonnes, "shell").rowId,
-  )!;
   ok(
-    asTonnes.reading!.v === 42 &&
-      near(asTonnes.reading!.v / asTonnes.unit!.factor, 0.042, 1e-12),
-    "asking for tonnes converts the display and leaves the value in kilograms",
-  );
-  ok(
-    asTonnes.unitWarning === null && !asTonnes.unitIsDerived,
-    "and raises no warning, because the dimension agrees",
+    cellAt(mismatch, "wrong")!.unitWarning !== null &&
+      cellAt(mismatch, "wrong")!.error === null,
+    "a declared unit that disagrees is a warning, not a refusal — the number is reported as computed",
   );
 
-  const mismatched = build([
-    { name: "area", formula: "10", unit: "m2" },
-    { name: "density", formula: "4.2" },
-    { name: "shell", formula: "area * density", unit: "kg" },
-  ]);
-  const warn = resultAt(
-    evaluateBook(mismatched, null),
-    mismatched.sheets[0].id,
-    rowOf(mismatched, "shell").rowId,
-  )!;
-  ok(warn.unitWarning !== null, "a unit of the wrong kind is flagged");
+  const bad = build([{ name: "a", formula: "1", unit: "nope" }]);
   ok(
-    warn.reading!.v === 42,
-    "but the value is still reported — a warning, not a refusal",
-  );
-
-  ok(
-    problem(build([{ name: "a", formula: "1", unit: "kg" }]), "a") === null,
-    "a good unit is not an error",
-  );
-  ok(
-    problem(build([{ name: "a", formula: "1", unit: "sausages" }]), "a") !==
-      null,
-    "an unreadable unit is a row error",
-  );
-  ok(
-    (
-      problem(
-        build([
-          { name: "a", formula: "1", unit: "kg" },
-          { name: "b", formula: "2", unit: "m" },
-          { name: "c", formula: "a + b" },
-        ]),
-        "c",
-      ) ?? ""
-    ).includes("units do not match"),
-    "adding kg to m is refused with a readable message",
+    problem(bad, "a") !== null,
+    "but a unit that will not parse is an error on the cell",
   );
 }
 
-// ---------- the uncertainty reaches the output under the row's name ----------
+// ---------- the uncertainty reaches the answer under the cell's own name ----------
 {
   const book = build([
-    { name: "shell area", formula: "14.8", unit: "m2" },
-    { name: "ply density", formula: "4.2 ± 0.3", unit: "kg/m2" },
-    { name: "hull shell", formula: "shell area * ply density" },
-    { name: "crew", formula: "160 ± 15", unit: "kg" },
-    { name: "displacement", formula: "hull shell + crew" },
+    { name: "crew", key: "mass", formula: "160 ± 40" },
+    { name: "gear", key: "mass", formula: "80 ± 5" },
+    { name: "total", key: "mass", formula: "crew.mass + gear.mass" },
   ]);
-  const answered = answer(book, "DISPLACEMENT", "Weights.displacement");
-  const out = evaluateBook(answered, null).outputs.displacement!;
-  ok(near(out.v, 14.8 * 4.2 + 160, 1e-9), "the output carries the total");
+  const reading = cellAt(book, "total", "mass")!.reading!;
+  ok(reading.v === 240, "two guesses add");
+  ok(near(reading.worst.hi, 45, 1e-12), "and their worst cases add");
   ok(
-    out.terms.length === 2 &&
-      out.terms[0].label === "crew" &&
-      out.terms[1].label === "ply density",
-    "the sensitivity list names the ROWS the ± were typed in, ranked",
+    near(reading.likely.hi, Math.hypot(40, 5), 1e-12),
+    "while the likely one is the quadrature",
   );
   ok(
-    near(
-      out.terms.reduce((s, t) => s + t.share, 0),
-      1,
-      1e-12,
-    ),
-    "and the shares still sum to 1 after the trip through the book",
+    reading.terms[0].label === "crew.mass" && reading.terms[0].share > 0.9,
+    "and the ranking names the CELL it was typed in, item and field both",
   );
-  ok(out.likely.hi < out.worst.hi, "both readings survive to the output");
 }
 
 // ---------- autocomplete ----------
-//
-// It is built from the same tables the evaluator resolves against, so a name that is offered exists and one
-// that exists is offered. The awkward part is finding the fragment being completed, because names have
-// spaces in them — scanning back over "name characters" would stop at the first one.
 {
-  const book = build(
-    [
-      { name: "hull shell", group: "Structure", formula: "70" },
-      { name: "ply density", group: "Structure", formula: "4.2" },
-    ],
-    [["VCG", [{ name: "datum", formula: "0" }]]],
-  );
-  const all = completionsFor(book, book.sheets[0]);
+  let book = build([
+    { name: "hull shell", key: "mass", formula: "900" },
+    { name: "ply", key: "density", formula: "4.2" },
+  ]);
+  book = point(book, "hull shell", { x: "1", y: "0", z: "0.5" }, "cg");
 
+  const here = completionsFor(book, book.items[0], "formula");
   ok(
-    all.some((c) => c.insert === "hull shell" && c.kind === "item"),
-    "items on this page are offered",
+    here.some((item) => item.insert === "mass" && item.kind === "sibling"),
+    "an item's own fields are offered bare, because that is what a bare name means",
   );
   ok(
-    !all.some((c) => c.insert.startsWith("GROUP.")),
-    "groups are not offered, because they are headings rather than values",
+    here.findIndex((item) => item.kind === "sibling") <
+      here.findIndex((item) => item.kind === "item"),
+    "and they come first — the scope you are standing in is the one you meant",
   );
   ok(
-    all.some((c) => c.insert === "VCG.datum" && c.kind === "page"),
-    "items on other pages are, already qualified",
+    here.some((item) => item.insert === "ply.density"),
+    "another item's fields are offered through its name",
   );
   ok(
-    all.some((c) => c.insert === "HULL.SHELL_AREA") &&
-      all.some((c) => c.insert === "sqrt("),
-    "along with the hull's measurements and the functions",
-  );
-
-  ok(
-    fragmentStart("2 * hull sh", 11) === 3,
-    "the fragment starts after the operator, spaces and all",
-  );
-  ok(fragmentStart("sqrt(hull", 9) === 5, "and after a bracket");
-  ok(fragmentStart("", 0) === 0, "an empty formula is all fragment");
-
-  const s1 = suggestAt(all, "2 * hull sh", 11)!;
-  ok(
-    s1 && s1.items[0].insert === "hull shell",
-    "a fragment with a space in it still completes",
+    !here.some((item) => item.insert === "cg"),
+    "a point is NOT offered bare outside a coordinate cell, where it would not resolve",
   );
   ok(
-    s1.from === 4,
-    "and the insertion replaces the fragment, not the operator",
+    completionsFor(book, book.items[0], "z").some(
+      (item) => item.insert === "cg",
+    ),
+    "and is offered bare inside one, where it means that coordinate",
+  );
+  ok(
+    here.some((item) => item.insert.startsWith("HULL.")) &&
+      here.some((item) => item.insert === "sqrt("),
+    "the hull's numbers and the functions are always on the list",
   );
 
-  const s2 = suggestAt(all, "shell", 5)!;
+  const suggest = suggestAt(here, "hull sh", 7)!;
   ok(
-    s2.items.some((c) => c.insert === "hull shell"),
-    "a word inside a name finds it",
-  );
-
-  ok(
-    suggestAt(all, "2 * ", 4) === null,
-    "nothing is offered after a bare operator",
-  );
-  ok(
-    (suggestAt(all, "HULL.SH", 7)?.items.length ?? 0) > 0,
-    "a namespace prefix narrows to that namespace",
+    suggest.items[0].insert.startsWith("hull shell.") && suggest.from === 0,
+    "a fragment with a space in it still completes — names have spaces",
   );
 }
 
-// ---------- typed pages ----------
-//
-// A page holds one kind of object and says which. Points remain deliberately unreachable because they have no
-// editor yet; slice pages become creatable once their specialised editor and geometry resolver are present.
+// ---------- a point is three cells, and may be one expression ----------
 {
-  const book = build([{ name: "crew", formula: "160" }]);
-  ok(
-    book.sheets[0].kind === "scalars",
-    "a page made without saying otherwise holds scalars",
+  let book = build([
+    { name: "engine", key: "mass", formula: "780" },
+    { name: "tank", key: "mass", formula: "220" },
+  ]);
+  book = point(
+    book,
+    "engine",
+    { x: "1.8", y: "0", z: "0.42", unit: "m" },
+    "cg",
   );
+  book = point(book, "tank", { x: "3.1", y: "0", z: "0.30", unit: "m" }, "cg");
 
-  const points = interpretSheetCommand(book, {
-    type: "addSheet",
-    id: "pts",
-    name: "Points",
-    kind: "points",
+  ok(
+    book.items.find((item) => item.name === "engine")?.fields.cg.unit === "m",
+    "a point shows metres by default",
+  );
+  const clearedUnit = run(book, {
+    type: "setFieldUnit",
+    item: idOf(book, "engine"),
+    field: "cg",
+    unit: "",
   });
   ok(
-    !("rejected" in points) &&
-      points.book.sheets.some((sheet) => sheet.kind === "points"),
-    "a points page is a page like any other now that it has an editor",
+    clearedUnit.items.find((item) => item.name === "engine")?.fields.cg.unit ===
+      "m",
+    "and clearing a point unit restores metres rather than making its coordinates plain numbers",
   );
-
-  // A heading is legal on a page of any kind, because grouping is not a property of what is grouped.
-  const withHeading = run(book, {
-    type: "addSheetRow",
-    sheet: book.sheets[0].id,
-    id: "h1",
-    after: -1,
-    kind: "heading",
-    name: "Hull",
+  const dimensionedMass = run(book, {
+    type: "setFieldUnit",
+    item: idOf(book, "engine"),
+    field: "mass",
+    unit: "kg",
+  });
+  const massPosition = run(dimensionedMass, {
+    type: "setFieldFormula",
+    item: idOf(book, "engine"),
+    field: "cg",
+    leaf: "x",
+    formula: "mass",
   });
   ok(
-    withHeading.sheets[0].rows[0].kind === "heading",
-    "a heading is still a row, on whatever kind of page",
+    (cellAt(massPosition, "engine", "cg", "x")?.error ?? "").includes(
+      "must be a distance",
+    ),
+    "a point coordinate refuses a formula that does not produce a distance",
   );
-
-  const wrongKind = interpretSheetCommand(book, {
-    type: "addSheetRow",
-    sheet: book.sheets[0].id,
-    id: "bad",
-    after: -1,
-    kind: "point",
+  const massUnit = run(book, {
+    type: "setFieldUnit",
+    item: idOf(book, "engine"),
+    field: "cg",
+    unit: "kg",
   });
   ok(
-    "rejected" in wrongKind,
-    "and a page refuses a row of a kind it does not hold",
+    (cellAt(massUnit, "engine", "cg", "x")?.error ?? "").includes(
+      "must use a distance unit",
+    ),
+    "a point refuses a non-distance display unit",
   );
 
-  // Hand-assembled, the way a corrupt file or a bad merge would be — which is what the invariants are for.
-  const mixed: WeightBook = {
-    ...book,
-    sheets: [
+  ok(
+    cellAt(book, "engine", "cg", "x")!.reading!.v === 1.8 &&
+      cellAt(book, "engine", "cg", "z")!.reading!.v === 0.42 &&
+      cellAt(book, "engine", "cg", "formula") === undefined,
+    "each coordinate is its own cell, and a point has no single one",
+  );
+  const named = run(book, {
+    type: "setFieldFormula",
+    item: idOf(book, "tank"),
+    field: "mass",
+    leaf: "formula",
+    formula: "engine.cg",
+  });
+  ok(
+    (problem(named, "tank", "mass") ?? "").includes("write engine.cg.x"),
+    "and naming the point in a scalar cell says which coordinate to ask for",
+  );
+
+  let cg = run(book, {
+    type: "addItem",
+    id: "cg",
+    name: "CG",
+    after: book.items.length - 1,
+  });
+  cg = run(cg, { type: "addField", item: "cg", key: "place", kind: "point" });
+  cg = run(cg, {
+    type: "setFieldFormula",
+    item: "cg",
+    field: "place",
+    leaf: "from",
+    formula:
+      "(engine.mass * engine.cg + tank.mass * tank.cg) / (engine.mass + tank.mass)",
+  });
+  const results = evaluateBook(cg, null);
+  const x = resultAt(results, "cg", "place", "x")!.reading!.v;
+  const z = resultAt(results, "cg", "place", "z")!.reading!.v;
+  ok(
+    near(x, (780 * 1.8 + 220 * 3.1) / 1000, 1e-9) &&
+      near(z, (780 * 0.42 + 220 * 0.3) / 1000, 1e-9),
+    "one expression states all three coordinates, each read in its own axis",
+  );
+
+  const off = run(cg, {
+    type: "setFieldFormula",
+    item: "cg",
+    field: "place",
+    leaf: "from",
+    formula: "",
+  });
+  const field = off.items.find((item) => item.id === "cg")!.fields.place;
+  ok(
+    field.k === "point" && field.x === "" && field.z === "",
+    "turning a derivation off gives back whatever the coordinates were — here, nothing",
+  );
+
+  const moved = run(book, {
+    type: "setPointPosition",
+    item: idOf(book, "engine"),
+    field: "cg",
+    x: "2.4",
+    z: "0.5",
+  });
+  const engine = moved.items.find((item) => item.name === "engine")!.fields.cg;
+  ok(
+    engine.k === "point" && engine.x === "2.4" && engine.z === "0.5",
+    "a drag writes every coordinate it touched",
+  );
+  ok(
+    engine.k === "point" && engine.y === "0",
+    "and leaves the one it did not exactly as it was",
+  );
+  ok(
+    sameGesture(
       {
-        ...book.sheets[0],
-        rows: [
-          {
-            id: "p1",
-            kind: "point",
-            name: "engine",
-            note: "",
-            unit: "m",
-            x: "1",
-            y: "0",
-            z: "0",
-            from: "",
-          },
-        ],
-      },
-    ],
-  };
-  ok(
-    bookViolations(mixed).some((v) => v.includes("point on a scalars page")),
-    "a row of the wrong kind for its page is a violation, however it got there",
-  );
-}
-
-// ---------- a formula cell is addressed by field ----------
-//
-// A scalar row has one cell and a point has three, so a row id no longer says which formula is meant. What
-// matters beyond the plumbing is UNDO: two cells of one row are two gestures, and coalescing them would make
-// undoing a point's height silently undo its station too.
-{
-  const a: DocumentCommand = {
-    type: "setSheetFormula",
-    sheet: "p0",
-    row: "r0",
-    field: "formula",
-    formula: "1",
-  };
-  ok(
-    sameGesture(a, { ...a, formula: "12" }),
-    "two edits to one cell are one gesture, as they always were",
+        type: "setPointPosition",
+        item: "a",
+        field: "cg",
+        x: "1",
+      } as DocumentCommand,
+      {
+        type: "setPointPosition",
+        item: "a",
+        field: "cg",
+        z: "2",
+      } as DocumentCommand,
+    ),
+    "two frames of one drag coalesce into one undo step",
   );
   ok(
-    !sameGesture(a, { ...a, field: "z", formula: "12" }),
-    "but two cells of one row are two, so undo takes them apart",
-  );
-  ok(
-    !sameGesture(a, { ...a, row: "r1", formula: "12" }),
-    "and two rows are still two",
-  );
-
-  const book = build([{ name: "crew", formula: "160" }]);
-  const bad = interpretSheetCommand(book, {
-    type: "setSheetFormula",
-    sheet: book.sheets[0].id,
-    row: rowOf(book, "crew").rowId,
-    field: "z",
-    formula: "1",
-  });
-  ok(
-    "rejected" in bad,
-    "a scalar has no z to set, and writing one anyway is refused rather than stored",
+    !sameGesture(
+      {
+        type: "setFieldFormula",
+        item: "a",
+        field: "cg",
+        leaf: "x",
+        formula: "1",
+      } as DocumentCommand,
+      {
+        type: "setFieldFormula",
+        item: "a",
+        field: "cg",
+        leaf: "z",
+        formula: "2",
+      } as DocumentCommand,
+    ),
+    "while tabbing from one cell to the next does not — undoing a height must not undo a station",
   );
 }
 
 // ---------- what the book answers ----------
-//
-// The answers are ROWS on a page of their own, named from a fixed table, rather than a stored nomination
-// pointing at a row by id. So there is nothing to prune when a row goes, and renaming rewrites nothing.
 {
-  const book = build([
-    { name: "hull shell", formula: "800", unit: "kg" },
-    { name: "crew", formula: "160 ± 15", unit: "kg" },
-    { name: "all up weight", formula: "hull shell + crew", unit: "kg" },
+  let book = build([
+    { name: "hull", key: "mass", formula: "900 ± 50" },
+    { name: "engine", key: "mass", formula: "780" },
   ]);
-  const answered = answer(book, "DISPLACEMENT", "Weights.all up weight");
+  book = point(book, "hull", { x: "2.0", y: "0", z: "0.5", unit: "m" }, "cg");
+  book = run(book, {
+    type: "setOutput",
+    name: "DISPLACEMENT",
+    formula: "hull.mass + engine.mass",
+  });
+  book = run(book, { type: "setOutput", name: "VCG", formula: "hull.cg.z" });
 
+  const results = evaluateBook(book, null);
   ok(
-    bookViolations(answered).length === 0,
-    "a book with an outputs page is valid",
+    results.outputs.displacement!.v === 1680,
+    "an answer is an ordinary formula over the items",
   );
   ok(
-    near(evaluateBook(answered, null).outputs.displacement!.v, 960, 1e-9),
-    "and the stability panel's reading comes off that row",
+    near(results.outputs.displacement!.worst.hi, 50, 1e-12),
+    "and carries the uncertainty of whatever it named",
   );
-  // A formula can read the book's own answer back: a margin stated as a share of the total is the case that
-  // makes it worth having, and the cycle it would close if the total included the margin is the existing one.
+  ok(results.outputs.vcg!.v === 0.5, "a centre reads a coordinate of a point");
+  ok(
+    results.outputs.lcg === null,
+    "an answer nothing is written for is simply absent",
+  );
+
+  const chained = run(book, {
+    type: "addItem",
+    id: "m",
+    name: "margin",
+    after: book.items.length - 1,
+  });
   const withMargin = run(
-    run(
-      run(answered, {
-        type: "addSheetRow",
-        sheet: answered.sheets[0].id,
-        id: "margin",
-        after: answered.sheets[0].rows.length - 1,
-      }),
-      {
-        type: "renameSheetRow",
-        sheet: answered.sheets[0].id,
-        row: "margin",
-        name: "margin",
-      },
-    ),
+    run(chained, {
+      type: "addField",
+      item: "m",
+      key: "mass",
+      kind: "scalar",
+    }),
     {
-      type: "setSheetFormula",
-      sheet: answered.sheets[0].id,
-      row: "margin",
-      field: "formula",
-      formula: "OUT.DISPLACEMENT * 10%",
+      type: "setFieldFormula",
+      item: "m",
+      field: "mass",
+      leaf: "formula",
+      formula: "OUT.DISPLACEMENT * 7%",
     },
   );
   ok(
-    near(value(withMargin, "margin"), 96, 1e-9),
-    "a formula reads the book's own answer back — a margin as a share of the total",
+    near(value(withMargin, "margin", "mass"), 117.6, 1e-9),
+    "an item may read what the book answers, so a margin is a percentage of the total",
   );
 
-  // The schedule keeps its own vocabulary: the row is still called what its author called it.
-  ok(
-    rowOf(answered, "all up weight").rowId !== undefined,
-    "the row that carries the number keeps its name",
-  );
-
-  // Removing the answer removes the claim, and nothing anywhere needs pruning to make that true.
-  const page = answered.sheets.find((sheet) => sheet.kind === "outputs")!;
-  const cleared = run(answered, {
-    type: "removeSheetRow",
-    sheet: page.id,
-    row: page.rows[0].id,
+  const looped = run(withMargin, {
+    type: "setOutput",
+    name: "DISPLACEMENT",
+    formula: "hull.mass + engine.mass + margin.mass",
   });
   ok(
-    evaluateBook(cleared, null).outputs.displacement === null &&
-      bookViolations(cleared).length === 0,
-    "deleting the row deletes the answer, and leaves nothing dangling",
+    (
+      outputResult(evaluateBook(looped, null), "DISPLACEMENT")!.error ?? ""
+    ).includes("refers back to itself"),
+    "and an answer that leans on something leaning on it is a cycle like any other",
   );
 
-  const second = interpretSheetCommand(answered, {
-    type: "addSheet",
-    id: "out2",
-    name: "More",
-    kind: "outputs",
+  const wrongKind = run(book, {
+    type: "setOutput",
+    name: "DISPLACEMENT",
+    formula: "hull.cg.z",
   });
   ok(
-    "rejected" in second,
-    "a book has one outputs page — OUT. finds it by kind, and two would be ambiguous",
+    outputResult(evaluateBook(wrongKind, null), "DISPLACEMENT")!.unitWarning !==
+      null,
+    "an answer that is not the kind of thing it claims to be is flagged, not refused",
   );
 
-  const strayName: WeightBook = {
-    ...answered,
-    sheets: answered.sheets.map((sheet) =>
-      sheet.kind === "outputs"
-        ? {
-            ...sheet,
-            rows: [{ ...sheet.rows[0], name: "profit" }],
-          }
-        : sheet,
-    ),
+  const cleared = run(book, {
+    type: "setOutput",
+    name: "VCG",
+    formula: "",
+  });
+  ok(
+    !("VCG" in cleared.outputs),
+    "and clearing one removes it rather than leaving an empty formula behind",
+  );
+}
+
+// ---------- what must hold ----------
+{
+  ok(bookViolations(emptyBook()).length === 0, "an empty book is valid");
+  ok(
+    bookViolations(build([{ name: "a" }, { name: "b" }])).length === 0,
+    "and so is an ordinary one",
+  );
+  const clash: WeightBook = {
+    ...build([{ name: "a" }, { name: "b" }]),
+    items: build([{ name: "a" }, { name: "b" }]).items.map((item) => ({
+      ...item,
+      name: "a",
+    })),
   };
   ok(
-    bookViolations(strayName).some((v) =>
-      v.includes("not one of the book's answers"),
+    bookViolations(clash).some((message) =>
+      message.includes("repeats the name"),
     ),
-    "and a name the app never asks for has no business on that page",
+    "two items with one name is a violation — item names are the one global namespace",
   );
-
-  ok(
-    (problem(build([{ name: "x", formula: "OUT.VCG" }]), "x") ?? "").includes(
-      "no outputs page",
-    ),
-    "reading an answer from a book that has none says so plainly",
-  );
-
-  // ---- a centre of gravity built as a point answers both centres ----
-  //
-  // The two answers are still two lengths, because that is what the rest of the app asks for. What changed
-  // is where they come from: one point, read twice, rather than two estimates that could disagree.
-  let placed = build([
-    { name: "engine", formula: "180", unit: "kg" },
-    { name: "tank", formula: "140", unit: "kg" },
-    { name: "total", formula: "engine + tank", unit: "kg" },
-    { name: "height", formula: "Places.CG.z", unit: "m" },
-    { name: "arm", formula: "Places.CG.x", unit: "m" },
-  ]);
-  placed = run(placed, {
-    type: "addSheet",
-    id: "pg",
-    name: "Places",
-    kind: "points",
-  });
-  const put = (id: string, name: string, x: string, y: string, z: string) => {
-    placed = run(placed, { type: "addSheetRow", sheet: "pg", id, after: -1 });
-    placed = run(placed, {
-      type: "renameSheetRow",
-      sheet: "pg",
-      row: id,
-      name,
-    });
-    placed = run(placed, {
-      type: "setPointPosition",
-      sheet: "pg",
-      row: id,
-      x,
-      y,
-      z,
-    });
+  const badFacet: WeightBook = {
+    ...build([{ name: "a" }]),
+    items: [{ ...build([{ name: "a" }]).items[0], facets: { system: "a//b" } }],
   };
-  put("qe", "engine", "2.4", "0", "0.42");
-  put("qt", "tank", "1.2", "0", "0.25");
-  placed = run(placed, {
-    type: "addSheetRow",
-    sheet: "pg",
-    id: "qc",
-    after: -1,
-  });
-  placed = run(placed, {
-    type: "renameSheetRow",
-    sheet: "pg",
-    row: "qc",
-    name: "CG",
-  });
-  placed = run(placed, {
-    type: "setSheetFormula",
-    sheet: "pg",
-    row: "qc",
-    field: "from",
-    formula: "(Weights.engine * engine + Weights.tank * tank) / Weights.total",
-  });
-  const wired = answer(
-    answer(placed, "VCG", "Weights.height"),
-    "LCG",
-    "Weights.arm",
-  );
-  const answers = evaluateBook(wired, null).outputs;
   ok(
-    near(answers.lcg!.v, (180 * 2.4 + 140 * 1.2) / 320, 1e-12) &&
-      near(answers.vcg!.v, (180 * 0.42 + 140 * 0.25) / 320, 1e-12),
-    "one point read twice answers both centres — and cannot disagree with itself",
-  );
-
-  const wrongDim = answer(
-    build([{ name: "crew", formula: "160", unit: "kg" }]),
-    "VCG",
-    "Weights.crew",
-  );
-  const vcgRow = wrongDim.sheets.find((sheet) => sheet.kind === "outputs")!;
-  ok(
-    !!resultAt(evaluateBook(wrongDim, null), vcgRow.id, vcgRow.rows[0].id)
-      ?.unitWarning,
-    "a VCG that works out to a mass is flagged, and still reported",
+    bookViolations(badFacet).length > 0,
+    "and a facet value nothing could split on is one too",
   );
 }
 
 // ---------- persistence ----------
 {
-  const book = build([
-    { name: "hull shell", group: "Hull", formula: "70 ± 5", unit: "kg" },
-    { name: "crew", group: "Load", formula: "160", unit: "kg" },
+  let book = build([
+    {
+      name: "hull shell",
+      system: "structure/hull",
+      key: "mass",
+      formula: "900 ± 50",
+    },
+    { name: "ply", key: "density", formula: "4.2", unit: "kg/m2" },
   ]);
-  const json = buildSheetJson(book);
-  const back = parseSheet(json);
-  ok(
-    JSON.parse(json).version === 1,
-    "a sheet document writes format version 1",
-  );
+  book = point(book, "hull shell", { x: "2", y: "0", z: "0.5" }, "cg");
+  book = cut(book, "hull shell", { shape: "plane", pos: "0.4" }, "waterplane");
+  book = run(book, {
+    type: "setOutput",
+    name: "DISPLACEMENT",
+    formula: "hull shell.mass",
+  });
+  book = run(book, { type: "setSheetDensity", density: 1.0 });
+
+  const back = parseSheet(buildSheetJson(book));
   ok(
     JSON.stringify(back) === JSON.stringify(book),
     "a book round-trips through JSON unchanged",
   );
-  ok(bookViolations(back).length === 0, "and comes back valid");
-
-  // The outputs page is a page like any other on disk, so it round-trips with everything else — and the
-  // answer survives as a row, which is the whole point of it not being a stored reference.
-  const answered = answer(book, "DISPLACEMENT", "Weights.crew");
-  const answeredBack = parseSheet(buildSheetJson(answered));
   ok(
-    JSON.stringify(answeredBack) === JSON.stringify(answered) &&
-      answeredBack.sheets[1].kind === "outputs",
-    "a book with an outputs page round-trips, kind and all",
-  );
-  ok(
-    evaluateBook(answeredBack, null).outputs.displacement?.v === 160,
-    "and still answers after the trip",
+    buildSheetJson(book).includes("900 ± 50"),
+    "and formulas are stored as the source the user typed, never pre-parsed",
   );
 
-  // A page whose kind the file does not name is a page of scalars; a row whose kind disagrees with its page
-  // is dropped, which is the same forgiveness the reader has always extended to a row it cannot read.
-  const mixed = parseSheet(
+  ok(
+    parseSheet("not json").items.length === 0,
+    "unreadable text opens as an empty book rather than taking the design down",
+  );
+  ok(
+    parseSheet(JSON.stringify({ version: 99, items: [] })).items.length === 0,
+    "and so does a version this build does not know",
+  );
+
+  const holey = parseSheet(
     JSON.stringify({
       version: 1,
-      sheets: [
+      items: [
+        { id: "a", name: "keep", fields: { m: { k: "scalar", formula: "1" } } },
+        { name: "no id" },
         {
-          id: "s1",
-          name: "Weights",
-          rows: [
-            {
-              id: "a",
-              kind: "item",
-              name: "crew",
-              formula: "160",
-              unit: "kg",
-              note: "",
-            },
-            {
-              id: "b",
-              kind: "point",
-              name: "engine",
-              x: "1",
-              y: "0",
-              z: "0",
-              note: "",
-            },
-            { id: "c", kind: "heading", name: "Hull", note: "" },
-          ],
+          id: "b",
+          name: "half",
+          fields: { good: { k: "scalar" }, bad: { k: "nonsense" } },
         },
       ],
       density: 1.025,
     }),
   );
   ok(
-    mixed.sheets[0].kind === "scalars" &&
-      mixed.sheets[0].rows.length === 2 &&
-      mixed.sheets[0].rows.map((row) => row.id).join() === "a,c",
-    "a row of the wrong kind for its page is dropped, and the rest of the page opens",
+    holey.items.length === 2 &&
+      Object.keys(holey.items[1].fields).join() === "good",
+    "anything unreadable is dropped and the rest opens — a lost line is retyped, a lost design is not",
   );
 
-  ok(
-    parseSheet(null).sheets.length === 0,
-    "a design with no estimate opens empty",
-  );
-  ok(
-    parseSheet("{not json").sheets.length === 0,
-    "and so does one whose estimate is corrupt, rather than failing the load",
-  );
-  ok(
-    parseSheet(JSON.stringify({ version: 99, sheets: [] })).sheets.length === 0,
-    "an estimate from a newer build opens empty rather than half-understood",
-  );
-
-  ok(
-    parseSheet(JSON.stringify({ version: 0, sheets: [] })).sheets.length === 0,
-    "an estimate in any other version opens empty",
-  );
-
-  // A book written before pages had kinds. Its pages are pages of scalars, which is what every page was, and
-  // its `outputs` block is a field this reader does not look for — so it opens with its rows intact.
-  const older = parseSheet(
+  const positionsWithoutUnits = parseSheet(
     JSON.stringify({
       version: 1,
-      sheets: [
+      items: [
         {
-          id: "s1",
-          name: "Weights",
-          rows: [
-            {
-              id: "r1",
-              kind: "item",
-              name: "crew",
-              formula: "160",
-              unit: "kg",
-              note: "",
-            },
-          ],
+          id: "positions",
+          name: "positions",
+          fields: {
+            section: { k: "cut", unit: "", pos: "2" },
+            cg: { k: "point", unit: "", x: "2", y: "0", z: "1" },
+          },
         },
       ],
-      outputs: {
-        displacement: { sheet: "s1", row: "gone" },
-        vcg: null,
-        lcg: null,
-      },
-      density: 1.025,
     }),
   );
   ok(
-    older.sheets.length === 1 &&
-      older.sheets[0].kind === "scalars" &&
-      older.sheets[0].rows.length === 1 &&
-      bookViolations(older).length === 0,
-    "a page written before pages had kinds reads as a page of scalars, rows intact",
+    positionsWithoutUnits.items[0].fields.section?.unit === "m" &&
+      positionsWithoutUnits.items[0].fields.cg?.unit === "m",
+    "empty stored point and cut units read as the metre default rather than as a blank",
   );
 }
 
-// ---------- hull slice pages ----------
+// ---------- cuts ----------
 {
-  let book = build([
-    { name: "double section", formula: "Sections.midship.area * 2" },
-    { name: "open perimeter", formula: "Sections.midship.openPerimeter" },
-    { name: "closed perimeter", formula: "Sections.midship.closedPerimeter" },
-  ]);
-  book = run(book, {
-    type: "addSheet",
-    id: "sections",
-    name: "Sections",
-    kind: "slices",
-  });
-  book = run(book, {
-    type: "addSheetRow",
-    sheet: "sections",
-    id: "midship",
-    after: -1,
-  });
-  book = run(book, {
-    type: "renameSheetRow",
-    sheet: "sections",
-    row: "midship",
-    name: "midship",
-  });
-  book = run(book, {
-    type: "setSheetFormula",
-    sheet: "sections",
-    row: "midship",
-    field: "pos",
-    formula: "HULL.LOA / 2",
-  });
-
   const model = assemble(defaultHull());
   const sampling = computeHullSampling(model, 240, 10);
   const metrics = hullMetrics(model, sampling)!;
-  const positions = evaluateBook(book, metrics);
-  const pos = resultAt(positions, "sections", "midship", "pos")!.reading!.v;
-  const section = measureSlice(model, sampling, "station", pos)!;
-  const measured = new Map([
-    [sliceMeasurementKey("sections", "midship"), section],
-  ]);
-  const results = evaluateBook(book, metrics, measured);
+  const measure = createSliceMeasurer(model, sampling);
 
+  let book = build([{ name: "midship", key: "mass", formula: "0" }]);
+  book = cut(book, "midship", { shape: "station", pos: "2" });
   ok(
-    section.area > 0 &&
-      section.openPerimeter > 0 &&
-      section.closedPerimeter > section.openPerimeter,
-    "a station slice measures open and closed perimeters",
+    book.items[0].fields.section?.unit === "m",
+    "a fresh cut authors its position in metres by default",
   );
+  book = run(book, {
+    type: "setFieldUnit",
+    item: idOf(book, "midship"),
+    field: "section",
+    unit: "",
+  });
   ok(
-    section.curve.length > 3 && section.z > 0,
-    "and returns a curve and centroid for the 3D overlay",
+    book.items[0].fields.section?.unit === "m",
+    "and clearing a cut unit restores that default rather than making its position dimensionless",
   );
+  const areaPosition = run(book, {
+    type: "setFieldFormula",
+    item: idOf(book, "midship"),
+    field: "section",
+    leaf: "pos",
+    formula: "HULL.SHELL_AREA",
+  });
   ok(
-    resultAt(results, book.sheets[0].id, rowOf(book, "double section").rowId)!
-      .reading!.v ===
-      section.area * 2,
-    "a scalar formula can read a slice's measured area",
+    (
+      cellAt(areaPosition, "midship", "section", "pos", metrics)?.error ?? ""
+    ).includes("must be a distance"),
+    "a cut position refuses a formula that does not produce a distance",
   );
+  const massUnit = run(book, {
+    type: "setFieldUnit",
+    item: idOf(book, "midship"),
+    field: "section",
+    unit: "kg",
+  });
   ok(
-    resultAt(results, book.sheets[0].id, rowOf(book, "open perimeter").rowId)!
-      .reading!.v === section.openPerimeter &&
+    (cellAt(massUnit, "midship", "section", "pos")?.error ?? "").includes(
+      "must use a distance unit",
+    ),
+    "a cut refuses a non-distance display unit",
+  );
+  const measurement = measure("station", 2)!;
+  const measurements = new Map([
+    [`${idOf(book, "midship")} section`, measurement],
+  ]);
+
+  let withArea = run(book, {
+    type: "addItem",
+    id: "p",
+    name: "panel",
+    after: book.items.length - 1,
+  });
+  withArea = run(withArea, {
+    type: "addField",
+    item: "p",
+    key: "mass",
+    kind: "scalar",
+  });
+  withArea = run(withArea, {
+    type: "setFieldFormula",
+    item: "p",
+    field: "mass",
+    leaf: "formula",
+    formula: "midship.section.area * 4.2",
+  });
+  const results = evaluateBook(withArea, metrics, measurements);
+  ok(
+    near(
+      resultAt(results, "p", "mass")!.reading!.v,
+      measurement.area * 4.2,
+      1e-9,
+    ),
+    "a measured cut feeds a formula like any other number",
+  );
+
+  const circular = run(book, {
+    type: "setFieldFormula",
+    item: idOf(book, "midship"),
+    field: "section",
+    leaf: "pos",
+    formula: "midship.section.area",
+  });
+  ok(
+    (
       resultAt(
-        results,
-        book.sheets[0].id,
-        rowOf(book, "closed perimeter").rowId,
-      )!.reading!.v === section.closedPerimeter,
-    "scalar formulas can read both slice perimeters",
+        evaluateBook(circular, metrics, measurements),
+        idOf(book, "midship"),
+        "section",
+        "pos",
+      )!.error ?? ""
+    ).length > 0,
+    "but a cut's position cannot depend on what the cut measures — that would be an implicit solve",
   );
 
-  const feetBook = run(
-    run(book, {
-      type: "setSheetUnit",
-      sheet: "sections",
-      row: "midship",
-      unit: "ft",
-    }),
-    {
-      type: "setSheetFormula",
-      sheet: "sections",
-      row: "midship",
-      field: "pos",
-      formula: "10",
-    },
-  );
-  ok(
-    near(
-      resultAt(evaluateBook(feetBook, metrics), "sections", "midship", "pos")!
-        .reading!.v,
-      3.048,
-      1e-12,
-    ),
-    "a slice position can be authored in a custom unit",
-  );
-  const feetBack = parseSheet(buildSheetJson(feetBook)).sheets[1].rows[0];
-  ok(
-    feetBack.kind === "slice" && feetBack.unit === "ft",
-    "a slice's position unit round-trips",
-  );
-
-  const uncertainBook = run(book, {
-    type: "setSheetFormula",
-    sheet: "sections",
-    row: "midship",
-    field: "pos",
-    formula: "2.5 ± 0.1",
+  const bareCut = run(book, {
+    type: "setFieldFormula",
+    item: idOf(book, "midship"),
+    field: "mass",
+    leaf: "formula",
+    formula: "section",
   });
-  const uncertainPositions = evaluateBook(uncertainBook, metrics);
-  const uncertainPos = resultAt(
-    uncertainPositions,
-    "sections",
-    "midship",
-    "pos",
-  )!.reading!.v;
-  const uncertainMeasurement = measureSlice(
-    model,
-    sampling,
-    "station",
-    uncertainPos,
-  )!;
-  const uncertainResults = evaluateBook(
-    uncertainBook,
-    metrics,
-    new Map([
-      [sliceMeasurementKey("sections", "midship"), uncertainMeasurement],
-    ]),
-  );
   ok(
-    resultAt(
-      uncertainResults,
-      uncertainBook.sheets[0].id,
-      rowOf(uncertainBook, "double section").rowId,
-    )!.reading!.worst.hi > 0,
-    "position uncertainty propagates through the measured slice",
-  );
-
-  const horizontalPosition = metrics.draft * 0.5;
-  const horizontal = measureSlice(model, sampling, "plane", horizontalPosition);
-  ok(
-    !!horizontal && horizontal.area > 0 && horizontal.curve.length > 3,
-    "a horizontal slice measures and returns its intersection curve",
-  );
-  const geom = stationGeometry(model, sampling)!;
-  const scale = unitScale(model.unit, "m");
-  const rawHorizontal = cut(
-    geom,
-    0,
-    geom.keelZ + horizontalPosition / scale,
-    true,
-  );
-  const runLength = (points: readonly (readonly number[])[]): number => {
-    let length = 0;
-    for (let i = 1; i < points.length; i++)
-      length += Math.hypot(
-        points[i][0] - points[i - 1][0],
-        points[i][1] - points[i - 1][1],
-        points[i][2] - points[i - 1][2],
-      );
-    return length;
-  };
-  const skinOnly =
-    (runLength(rawHorizontal.waterlineSkin[0]) +
-      runLength(rawHorizontal.waterlineSkin[1])) *
-    scale;
-  ok(
-    near(horizontal!.openPerimeter, skinOnly, 1e-12),
-    "a horizontal open perimeter excludes both centreline end caps",
-  );
-
-  let dependent = run(book, {
-    type: "addSheetRow",
-    sheet: "sections",
-    id: "dependent",
-    after: 0,
-  });
-  dependent = run(dependent, {
-    type: "renameSheetRow",
-    sheet: "sections",
-    row: "dependent",
-    name: "dependent",
-  });
-  dependent = run(dependent, {
-    type: "setSheetFormula",
-    sheet: "sections",
-    row: "dependent",
-    field: "pos",
-    formula: "Weights.double section",
-  });
-  const dependencyError =
-    resultAt(
-      evaluateBook(dependent, metrics, measured),
-      "sections",
-      "dependent",
-      "pos",
-    )!.error ?? "";
-  ok(
-    dependencyError.includes("cannot depend on measured slice values"),
-    `a slice position visibly refuses an indirect measured-value dependency (${dependencyError})`,
-  );
-
-  const shifted = defaultHull();
-  const dx = 1000;
-  const shiftedModel = assemble({
-    ...shifted,
-    sheerPlan: shifted.sheerPlan.map((point) => ({
-      ...point,
-      x: point.x + dx,
-    })),
-    sheerTrim: shifted.sheerTrim.map((point) => ({
-      ...point,
-      x: point.x + dx,
-    })),
-    transom: shifted.transom.map((point) => ({
-      ...point,
-      x: point.x + dx,
-    })) as typeof shifted.transom,
-  });
-  const shiftedSampling = computeHullSampling(shiftedModel, 240, 10);
-  const shiftedSection = measureSlice(
-    shiftedModel,
-    shiftedSampling,
-    "station",
-    pos,
-  )!;
-  ok(
-    near(shiftedSection.area, section.area, 1e-9) &&
-      near(shiftedSection.x, section.x, 1e-9),
-    "station position and centroid x are relative to a nonzero transom",
-  );
-  ok(
-    bookViolations(book).length === 0,
-    "a slice page is a valid authored page",
+    (
+      resultAt(
+        evaluateBook(bareCut, metrics, measurements),
+        idOf(book, "midship"),
+        "mass",
+      )!.error ?? ""
+    ).includes("write midship.section"),
+    "and naming a cut in a scalar cell says which of its numbers to ask for",
   );
 }
 
-// ---------- points pages ----------
+// ---------- what a drag may move, read off the cell ----------
+//
+// A drag moves ONE literal inside the expression, and adds one where the expression has none. Which literal
+// that is comes off the parse, never off a mode the user picked. The panel hands over the parse the EVALUATOR
+// already made, and a cell that would not parse has none — so the helper mirrors that rather than throwing
+// where the panel would simply see null.
 {
-  const model = assemble(defaultHull());
-  const sampling = computeHullSampling(model, 240, 10);
-  const metrics = hullMetrics(model, sampling)!;
-
-  // A points page beside a calculation page, built the way the panel builds one.
-  let book = build([
-    { name: "engine mass", formula: "180", unit: "kg" },
-    { name: "engine arm", formula: "Places.engine.z" },
-  ]);
-  book = run(book, {
-    type: "addSheet",
-    id: "pts",
-    name: "Places",
-    kind: "points",
-  });
-  book = run(book, {
-    type: "addSheetRow",
-    sheet: "pts",
-    id: "engine",
-    after: -1,
-  });
-  book = run(book, {
-    type: "renameSheetRow",
-    sheet: "pts",
-    row: "engine",
-    name: "engine",
-  });
-  const pointRow = () =>
-    book.sheets.find((sheet) => sheet.id === "pts")!.rows[0] as {
-      kind: string;
-      unit: string;
-      x: string;
-      y: string;
-      z: string;
-    };
-
-  ok(
-    pointRow().kind === "point",
-    "a points page holds point rows without being told which kind to add",
-  );
-  ok(
-    pointRow().unit === "m",
-    "and a fresh point is authored in metres, so a dragged coordinate has a dimension",
-  );
-
-  // ---- one command, however many coordinates the gesture moved ----
-  book = run(book, {
-    type: "setPointPosition",
-    sheet: "pts",
-    row: "engine",
-    x: "2.1",
-    z: "0.35 ± 0.05",
-  });
-  ok(
-    pointRow().x === "2.1" &&
-      pointRow().z === "0.35 ± 0.05" &&
-      pointRow().y === "",
-    "setPointPosition writes the coordinates it names and leaves the rest alone",
-  );
-  ok(
-    "rejected" in
-      interpretSheetCommand(book, {
-        type: "setPointPosition",
-        sheet: "p0",
-        row: "p0r0",
-        x: "1",
-      }),
-    "and refuses a row that is not a point",
-  );
-  ok(
-    sameGesture(
-      { type: "setPointPosition", sheet: "pts", row: "engine", x: "1" },
-      { type: "setPointPosition", sheet: "pts", row: "engine", z: "2" },
-    ) &&
-      !sameGesture(
-        { type: "setPointPosition", sheet: "pts", row: "engine", x: "1" },
-        { type: "setPointPosition", sheet: "pts", row: "tank", x: "1" },
-      ),
-    "a drag of one point is one gesture whichever coordinates it touched — and two points are two",
-  );
-
-  // ---- a point is three values, and only its leaves resolve ----
-  const results = evaluateBook(book, null);
-  ok(
-    resultAt(results, "pts", "engine", "z")!.reading!.v === 0.35,
-    "a coordinate evaluates in the row's own unit — 0.35 m, not 0.35 of nothing",
-  );
-  ok(
-    near(value(book, "engine arm"), 0.35, 1e-12),
-    "and another page reads it as Places.engine.z",
-  );
-  const bare = run(book, {
-    type: "setSheetFormula",
-    sheet: "p0",
-    row: rowOf(book, "engine arm").rowId,
-    field: "formula",
-    formula: "Places.engine",
-  });
-  ok(
-    (problem(bare, "engine arm") ?? "").includes("engine.x"),
-    "naming a point without a coordinate says which coordinates it has",
-  );
-
-  // ---- a point named bare in a coordinate cell means that coordinate ----
-  //
-  // Which is what lets ONE expression state a whole position. Everywhere else a point still has to say which
-  // of its three numbers is meant, and the message that says so is the one that was always there.
-  let cg = build([
-    { name: "engine", formula: "180 ± 20", unit: "kg" },
-    { name: "tank", formula: "140", unit: "kg" },
-    { name: "rig", formula: "95", unit: "kg" },
-    { name: "total", formula: "engine + tank + rig", unit: "kg" },
-  ]);
-  cg = run(cg, { type: "addSheet", id: "pl", name: "Places", kind: "points" });
-  const at = (id: string, name: string, x: string, y: string, z: string) => {
-    cg = run(cg, { type: "addSheetRow", sheet: "pl", id, after: -1 });
-    cg = run(cg, { type: "renameSheetRow", sheet: "pl", row: id, name });
-    cg = run(cg, { type: "setPointPosition", sheet: "pl", row: id, x, y, z });
-  };
-  at("pe", "engine", "2.4", "0", "0.42");
-  at("pt", "tank", "1.2", "0", "0.25");
-  at("pr", "rig", "3.1", "0", "2.8");
-
-  const offCentre = run(cg, {
-    type: "setPointPosition",
-    sheet: "pl",
-    row: "pe",
-    x: "tank + 0.6",
-  });
-  ok(
-    near(
-      resultAt(evaluateBook(offCentre, null), "pl", "pe", "x")!.reading!.v,
-      1.8,
-      1e-12,
-    ),
-    "a point named bare in an x cell is its x — which is how one point sits off another",
-  );
-  ok(
-    (
-      problem(
-        run(cg, {
-          type: "setSheetFormula",
-          sheet: "p0",
-          row: rowOf(cg, "total").rowId,
-          field: "formula",
-          formula: "Places.engine",
-        }),
-        "total",
-      ) ?? ""
-    ).includes("write engine.x"),
-    "and in a cell that is not a coordinate it still has to say which number is meant",
-  );
-
-  // ---- a slice's centroid binds the same way ----
-  //
-  // A cut has a position too, so the centre of area of a set of sections is the centre-of-gravity expression
-  // with areas where the masses were.
-  {
-    let cuts = run(emptyBook(), {
-      type: "addSheet",
-      id: "sx",
-      name: "Sections",
-      kind: "slices",
-    });
-    const cut2 = (id: string, name: string, pos: string) => {
-      cuts = run(cuts, { type: "addSheetRow", sheet: "sx", id, after: -1 });
-      cuts = run(cuts, {
-        type: "renameSheetRow",
-        sheet: "sx",
-        row: id,
-        name,
-      });
-      cuts = run(cuts, {
-        type: "setSheetFormula",
-        sheet: "sx",
-        row: id,
-        field: "pos",
-        formula: pos,
-      });
-    };
-    cut2("c1", "fwd", "HULL.LOA * 0.35");
-    cut2("c2", "aft", "HULL.LOA * 0.65");
-    cuts = run(cuts, {
-      type: "addSheet",
-      id: "px",
-      name: "Places",
-      kind: "points",
-    });
-    cuts = run(cuts, { type: "addSheetRow", sheet: "px", id: "ac", after: -1 });
-    cuts = run(cuts, {
-      type: "renameSheetRow",
-      sheet: "px",
-      row: "ac",
-      name: "area centre",
-    });
-    cuts = run(cuts, {
-      type: "setSheetFormula",
-      sheet: "px",
-      row: "ac",
-      field: "from",
-      formula:
-        "(Sections.fwd.area * Sections.fwd + Sections.aft.area * Sections.aft) / (Sections.fwd.area + Sections.aft.area)",
-    });
-
-    const first = evaluateBook(cuts, metrics);
-    const cutsMeasured = new Map(
-      ["c1", "c2"].map((id) => [
-        sliceMeasurementKey("sx", id),
-        measureSlice(
-          model,
-          sampling,
-          "station",
-          resultAt(first, "sx", id, "pos")!.reading!.v,
-        )!,
-      ]),
-    );
-    const centred = evaluateBook(cuts, metrics, cutsMeasured);
-    const fwd = cutsMeasured.get(sliceMeasurementKey("sx", "c1"))!;
-    const aft = cutsMeasured.get(sliceMeasurementKey("sx", "c2"))!;
-    const weighted = (pick: (m: typeof fwd) => number) =>
-      (fwd.area * pick(fwd) + aft.area * pick(aft)) / (fwd.area + aft.area);
-    ok(
-      near(
-        resultAt(centred, "px", "ac", "x")!.reading!.v,
-        weighted((m) => m.x),
-        1e-12,
-      ) &&
-        near(
-          resultAt(centred, "px", "ac", "z")!.reading!.v,
-          weighted((m) => m.z),
-          1e-12,
-        ),
-      "a slice named bare in a coordinate cell is its centroid, so sections weigh by area into a centre",
-    );
-    ok(
-      resultAt(centred, "px", "ac", "x")!.unit?.label === "m",
-      "and m²·m over m² is a length, so that row checks its own arithmetic too",
-    );
-    ok(
-      (
-        resultAt(
-          evaluateBook(
-            run(cuts, {
-              type: "setSheetFormula",
-              sheet: "sx",
-              row: "c1",
-              field: "pos",
-              formula: "Sections.aft",
-            }),
-            metrics,
-          ),
-          "sx",
-          "c1",
-          "pos",
-        )?.error ?? ""
-      ).includes("write aft.pos"),
-      "outside a coordinate cell a slice still has to say which of its numbers is meant",
-    );
-  }
-
-  // ---- the hull's own shell is a place too ----
-  //
-  // `SHELL_LCG` and `SHELL_VCG` are the same numbers, and multiplying a mass by each is how a shell weight
-  // has always been placed. Offering them as ONE place is what lets the hull weigh into a centre of gravity
-  // in the same expression as everything else, instead of the schedule being written out per axis.
-  {
-    let hull = build([
-      { name: "ply", formula: "6.4", unit: "kg/m2" },
-      { name: "shell", formula: "HULL.SHELL_AREA * ply", unit: "kg" },
-      { name: "engine", formula: "180", unit: "kg" },
-      { name: "total", formula: "shell + engine", unit: "kg" },
-    ]);
-    hull = run(hull, {
-      type: "addSheet",
-      id: "hp",
-      name: "Places",
-      kind: "points",
-    });
-    hull = run(hull, { type: "addSheetRow", sheet: "hp", id: "he", after: -1 });
-    hull = run(hull, {
-      type: "renameSheetRow",
-      sheet: "hp",
-      row: "he",
-      name: "engine",
-    });
-    hull = run(hull, {
-      type: "setPointPosition",
-      sheet: "hp",
-      row: "he",
-      x: "2.4",
-      y: "0",
-      z: "0.42",
-    });
-    hull = run(hull, { type: "addSheetRow", sheet: "hp", id: "hc", after: -1 });
-    hull = run(hull, {
-      type: "renameSheetRow",
-      sheet: "hp",
-      row: "hc",
-      name: "CG",
-    });
-    hull = run(hull, {
-      type: "setSheetFormula",
-      sheet: "hp",
-      row: "hc",
-      field: "from",
-      formula:
-        "(Weights.shell * HULL.SHELL_CG + Weights.engine * engine) / Weights.total",
-    });
-    const placedHull = evaluateBook(hull, metrics);
-    const shellMass = value(hull, "shell", "Weights", metrics);
-    const all = shellMass + 180;
-    ok(
-      near(
-        resultAt(placedHull, "hp", "hc", "x")!.reading!.v,
-        (shellMass * metrics.shellLcg + 180 * 2.4) / all,
-        1e-9,
-      ) &&
-        near(
-          resultAt(placedHull, "hp", "hc", "z")!.reading!.v,
-          (shellMass * metrics.shellVcg + 180 * 0.42) / all,
-          1e-9,
-        ),
-      "the shell weighs into a centre of gravity beside the points, in one expression",
-    );
-    ok(
-      resultAt(placedHull, "hp", "hc", "y")!.reading!.v === 0,
-      "and its y is the centreline, because an authored hull is symmetric about it",
-    );
-    ok(
-      near(
-        value(
-          build([{ name: "h", formula: "HULL.SHELL_CG.z", unit: "m" }]),
-          "h",
-          "Weights",
-          metrics,
-        ),
-        metrics.shellVcg,
-        1e-12,
-      ),
-      "a coordinate of it reads anywhere, as HULL.SHELL_CG.z",
-    );
-    ok(
-      (
-        problem(
-          build([{ name: "h", formula: "HULL.SHELL_CG" }]),
-          "h",
-          "Weights",
-          metrics,
-        ) ?? ""
-      ).includes("is a place"),
-      "and named bare outside a coordinate it says it is a place and which coordinates it has",
-    );
-  }
-
-  // ---- one expression for all three coordinates ----
-  cg = run(cg, { type: "addSheetRow", sheet: "pl", id: "cg", after: -1 });
-  cg = run(cg, { type: "renameSheetRow", sheet: "pl", row: "cg", name: "CG" });
-  cg = run(cg, {
-    type: "setSheetFormula",
-    sheet: "pl",
-    row: "cg",
-    field: "from",
-    formula:
-      "(Weights.engine * engine + Weights.tank * tank + Weights.rig * rig) / Weights.total",
-  });
-  const centre = evaluateBook(cg, null);
-  const coord = (axis: "x" | "y" | "z") => resultAt(centre, "pl", "cg", axis)!;
-  const masses = { e: 180, t: 140, r: 95 };
-  const sum = masses.e + masses.t + masses.r;
-  ok(
-    near(
-      coord("x").reading!.v,
-      (masses.e * 2.4 + masses.t * 1.2 + masses.r * 3.1) / sum,
-      1e-12,
-    ) &&
-      near(
-        coord("z").reading!.v,
-        (masses.e * 0.42 + masses.t * 0.25 + masses.r * 2.8) / sum,
-        1e-12,
-      ),
-    "one expression read once per axis is a centre of gravity, and it lands where the arithmetic says",
-  );
-  ok(
-    coord("x").unit?.label === "m" && coord("z").unit?.label === "m",
-    "kg·m over kg is a length, so the row checks its own arithmetic",
-  );
-  ok(
-    coord("x").reading!.terms[0]?.label === "Weights.engine" &&
-      coord("z").reading!.terms[0]?.label === "Weights.engine",
-    "and the mass that is guessed at drives the spread in every coordinate it reaches",
-  );
-
-  // The payoff of carrying gradients: one mass moving two coordinates ties them together, so the region is
-  // a line rather than a box — a CG that can be anywhere in a rectangle is a claim nothing supports.
-  const tied = worstRegion(
-    coord("x").quantity!,
-    coord("z").quantity!,
-    centre.sources,
-  );
-  ok(
-    tied.length === 2,
-    "a CG whose coordinates lean on one mass is uncertain along a line, not over an area",
-  );
-
-  ok(
-    resultAt(centre, "pl", "cg", "y")!.reading!.v === 0,
-    "and a derivation still produces three cells, so the y everything downstream reads is there",
-  );
-
-  // The three coordinates remain three cells in the dependency graph, which is what keeps a failure local.
-  const halfBroken = run(cg, {
-    type: "setPointPosition",
-    sheet: "pl",
-    row: "pr",
-    z: "nonsense * 2",
-  });
-  const partial = evaluateBook(halfBroken, null);
-  ok(
-    !resultAt(partial, "pl", "cg", "x")!.error &&
-      !!resultAt(partial, "pl", "cg", "z")!.error,
-    "a derivation that fails on one axis still answers on the other two",
-  );
-
-  const looped = run(cg, {
-    type: "setSheetFormula",
-    sheet: "pl",
-    row: "cg",
-    field: "from",
-    formula: "CG + 1",
-  });
-  ok(
-    (
-      resultAt(evaluateBook(looped, null), "pl", "cg", "z")!.error ?? ""
-    ).includes("refers back to itself"),
-    "and a derivation that reaches back to its own row is caught as the loop it is",
-  );
-
-  const engineRow = cg.sheets
-    .find((page) => page.id === "pl")!
-    .rows.find((r) => r.name === "engine") as { x: string; z: string };
-  ok(
-    engineRow.x === "2.4" && engineRow.z === "0.42",
-    "turning a derivation on leaves the coordinates alone, so turning it off gives them back",
-  );
-
-  // ---- what may be dragged is read off the cell ----
-  //
-  // A drag moves ONE literal inside the expression, and adds one where the expression has none. Which
-  // literal that is comes off the parse, never off a mode the user picked.
-  // The panel hands over the parse the EVALUATOR already made, and a cell that would not parse has none —
-  // so the helper mirrors that rather than throwing where the panel would simply see null.
-  const place = (
-    text: string,
-    value = 0,
-    canAppend = true,
-    symbols = ["HULL"],
-  ) => {
+  const place = (text: string, v = 0, canAppend = true, symbols = ["HULL"]) => {
     let tree = null;
     try {
       if (text.trim()) tree = parseFormula(text, symbols);
     } catch {
       tree = null;
     }
-    return readPlacement(text, tree, value, canAppend);
+    return readPlacement(text, tree, v, canAppend);
   };
-  const move = (text: string, value: number, target: number) =>
-    withNominal(place(text, value)!, target, 0.001);
+  const move = (text: string, v: number, target: number) =>
+    withNominal(place(text, v)!, target, 0.001);
 
   ok(
     place("")?.handle === null && place("")?.bare === true,
@@ -2063,7 +1463,6 @@ const problem = (
     "with its spread, in any of the three forms, kept verbatim",
   );
 
-  // The point of the whole thing: a literal added to a reference.
   const offset = place("HULL.LCB + 2", 4.05)!;
   ok(
     offset.handle?.contributes === 2 && !offset.bare,
@@ -2082,8 +1481,6 @@ const problem = (
     move("HULL.LCB + 2 ± 0.15", 4.05, 4.35) === "HULL.LCB + 2.3 ± 0.15",
     "the ± rides along: moving a position does not make it better or worse known",
   );
-
-  // Nothing to move: the drag writes one.
   ok(
     place("HULL.LCB", 2.05)?.handle === null &&
       move("HULL.LCB", 2.05, 2.35) === "HULL.LCB + 0.3" &&
@@ -2092,7 +1489,7 @@ const problem = (
   );
   ok(
     place("HULL.LCB", 2.05, false) === null,
-    "but only where the row's unit would give that number a dimension — otherwise the drag would break the cell",
+    "but only where the field's unit would give that number a dimension — otherwise the drag breaks the cell",
   );
   ok(
     move("HULL.LOA * 0.4", 2, 2.3) === "HULL.LOA * 0.4 + 0.3",
@@ -2110,24 +1507,18 @@ const problem = (
     move("50%", 0.5, 0.8) === "50% + 0.3",
     "a percentage is an expression like any other: the offset goes beside it, never into it",
   );
-
-  // A drag writes on every frame, so what each frame computes FROM decides whether crossing a snap is
-  // survivable. From the cell as it stood when the gesture started, a frame past the snap writes a plain
-  // number again; from the cell as it stands now, it would have found a reference there and appended to it —
-  // which is how brushing past a slice used to weld it into the coordinate for the rest of the drag.
   ok(
     move("1.2", 1.2, 2.4) === "2.4" && move("1.2", 1.2, 3.2) === "3.2",
     "every frame of a drag is computed from where the coordinate started, so the last one lands on the pointer",
   );
   ok(
     withNominal(
-      place("Slices.frame 4.pos", 2.4, true, ["Slices", "frame 4"])!,
+      place("frame 4.section.pos", 2.4, true, ["frame 4", "section"])!,
       3.2,
       0.001,
-    ) === "Slices.frame 4.pos + 0.8",
-    "re-reading a snapped cell instead would offset from the reference — correct for a NEW gesture, wrong mid-drag",
+    ) === "frame 4.section.pos + 0.8",
+    "re-reading a snapped cell instead would offset from the reference — right for a NEW gesture, wrong mid-drag",
   );
-
   ok(
     move("-2 + HULL.LCB", 0.05, 0.35) === "-1.7 + HULL.LCB",
     "a leading literal keeps its place at the front of the sum, sign and all",
@@ -2150,37 +1541,29 @@ const problem = (
       withTolerance(place("2.1 ± 0.25", 2.1)!, 0.0001, 0.001) === "2.1",
     "dragging a tolerance out states one; dragging it back onto the point removes it",
   );
+}
 
-  // ---- a bare term of the outermost sum is read in the row's unit ----
-  //
-  // Which is what lets `HULL.LCB + 2` evaluate at all. The test is what a term WORKS OUT to, not what it
-  // looks like, so nothing that evaluated before this rule existed evaluates differently now.
+// ---------- a bare term of the outermost sum is read in the field's unit ----------
+//
+// Which is what lets `HULL.LCB + 2` evaluate at all. The test is what a term WORKS OUT to, not what it looks
+// like, so nothing that evaluated before this rule existed evaluates differently now.
+{
+  const model = assemble(defaultHull());
+  const sampling = computeHullSampling(model, 240, 10);
+  const metrics = hullMetrics(model, sampling)!;
+
   const inUnits = (formula: string, unit: string): number | string => {
-    let one = run(emptyBook(), {
-      type: "addSheet",
-      id: "u",
-      name: "U",
-      kind: "scalars",
-    });
-    one = run(one, { type: "addSheetRow", sheet: "u", id: "r", after: -1 });
-    one = run(one, { type: "setSheetUnit", sheet: "u", row: "r", unit });
-    one = run(one, {
-      type: "setSheetFormula",
-      sheet: "u",
-      row: "r",
-      field: "formula",
-      formula,
-    });
-    const result = resultAt(evaluateBook(one, metrics), "u", "r")!;
+    const book = build([{ name: "r", formula, unit }]);
+    const result = cellAt(book, "r", "value", "formula", metrics)!;
     return result.error ?? result.reading!.v;
   };
   ok(
     near(inUnits("HULL.LCB + 2", "m") as number, metrics.lcb + 2, 1e-9),
-    "a plain number added to a length is read in the row's own unit",
+    "a plain number added to a length is read in the field's own unit",
   );
   ok(
     near(inUnits("HULL.LCB + 200", "mm") as number, metrics.lcb + 0.2, 1e-9),
-    "in the row's unit, not in metres — 200 mm is 0.2 m",
+    "in the field's unit, not in metres — 200 mm is 0.2 m",
   );
   ok(
     inUnits("HULL.LOA * 0.4", "m") === metrics.loa * 0.4,
@@ -2197,50 +1580,24 @@ const problem = (
     "and a formula that was already a plain number lands exactly where it always did",
   );
   ok(
-    typeof inUnits("HULL.LCB + 2", "") === "string" &&
-      (inUnits("HULL.LCB + 2", "") as string).includes("Give this row a unit"),
-    "with no unit declared there is nothing to read it in — and the refusal says where the fix is",
+    typeof inUnits("HULL.LCB + 2", "") === "string",
+    "with no unit declared there is nothing to read it in, and the refusal says where the fix is",
   );
   ok(
     typeof inUnits("HULL.SHELL_AREA + 2", "m") === "string",
     "a unit that disagrees with the formula is still a refusal, not a silent conversion",
   );
+}
 
-  // ---- a guess is ranked by the CELL it was typed in, not by the row ----
-  const guessed = run(
-    run(book, {
-      type: "setPointPosition",
-      sheet: "pts",
-      row: "engine",
-      x: "2.1 ± 0.3",
-    }),
-    {
-      type: "setSheetFormula",
-      sheet: "p0",
-      row: rowOf(book, "engine arm").rowId,
-      field: "formula",
-      formula: "Places.engine.x + Places.engine.z",
-    },
-  );
-  const ranked = evaluateBook(guessed, null);
-  const terms = resultAt(
-    ranked,
-    "p0",
-    rowOf(guessed, "engine arm").rowId,
-  )!.reading!.terms.map((term) => term.label);
-  ok(
-    terms.includes("Places.engine.x") && terms.includes("Places.engine.z"),
-    "a point's two guesses are ranked apart — which is the whole reason its coordinates are separate cells",
-  );
-
-  // ---- the uncertainty region: a box only when the coordinates are independent ----
+// ---------- the uncertainty region: a box only when the coordinates are independent ----------
+{
   const independent = build([
     { name: "a", formula: "2 ± 0.5" },
     { name: "b", formula: "1 ± 0.25" },
   ]);
   const ind = evaluateBook(independent, null);
-  const qa = resultAt(ind, "p0", "p0r0")!.quantity!;
-  const qb = resultAt(ind, "p0", "p0r1")!.quantity!;
+  const qa = resultAt(ind, "i0", "value")!.quantity!;
+  const qb = resultAt(ind, "i1", "value")!.quantity!;
   const box = worstRegion(qa, qb, ind.sources);
   const spanOf = (poly: [number, number][], axis: 0 | 1) => {
     const values = poly.map((p) => p[axis]);
@@ -2258,13 +1615,13 @@ const problem = (
   // would claim a whole area of positions the inputs cannot reach.
   const shared = build([
     { name: "frame", formula: "1 ± 0.1" },
-    { name: "a", formula: "frame * 2" },
-    { name: "b", formula: "frame * 1" },
+    { name: "a", formula: "frame.value * 2" },
+    { name: "b", formula: "frame.value * 1" },
   ]);
   const sh = evaluateBook(shared, null);
   const line = worstRegion(
-    resultAt(sh, "p0", "p0r1")!.quantity!,
-    resultAt(sh, "p0", "p0r2")!.quantity!,
+    resultAt(sh, "i1", "value")!.quantity!,
+    resultAt(sh, "i2", "value")!.quantity!,
     sh.sources,
   );
   ok(
@@ -2275,18 +1632,17 @@ const problem = (
     "one shared guess collapses the region to the line the pair actually moves along",
   );
 
-  // The opposite sign is the other diagonal — which an interval box could never tell apart from the first.
   const opposed = run(shared, {
-    type: "setSheetFormula",
-    sheet: "p0",
-    row: rowOf(shared, "b").rowId,
-    field: "formula",
-    formula: "0 - frame",
+    type: "setFieldFormula",
+    item: "i2",
+    field: "value",
+    leaf: "formula",
+    formula: "0 - frame.value",
   });
   const op = evaluateBook(opposed, null);
   const anti = worstRegion(
-    resultAt(op, "p0", "p0r1")!.quantity!,
-    resultAt(op, "p0", "p0r2")!.quantity!,
+    resultAt(op, "i1", "value")!.quantity!,
+    resultAt(op, "i2", "value")!.quantity!,
     op.sources,
   );
   ok(
@@ -2294,95 +1650,34 @@ const problem = (
     "and a guess two coordinates lean on in opposite directions tilts the other way",
   );
 
-  // The likely ellipse reaches exactly as far along each axis as the panel's own quadrature figure.
   const ellipse = likelyRegion(qa, qb, ind.sources);
-  const likelyA = resultAt(ind, "p0", "p0r0")!.reading!.likely.hi;
-  const likelyB = resultAt(ind, "p0", "p0r1")!.reading!.likely.hi;
   ok(
-    near(spanOf(ellipse, 0)[1], likelyA, 1e-9) &&
-      near(spanOf(ellipse, 1)[1], likelyB, 1e-9),
+    near(
+      spanOf(ellipse, 0)[1],
+      resultAt(ind, "i0", "value")!.reading!.likely.hi,
+      1e-9,
+    ) &&
+      near(
+        spanOf(ellipse, 1)[1],
+        resultAt(ind, "i1", "value")!.reading!.likely.hi,
+        1e-9,
+      ),
     "the likely region is the quadrature the panel quotes, drawn",
   );
+
   const certain = build([
     { name: "a", formula: "2 ± 0.5" },
     { name: "b", formula: "1" },
   ]);
   const ce = evaluateBook(certain, null);
   const flat = worstRegion(
-    resultAt(ce, "p0", "p0r0")!.quantity!,
-    resultAt(ce, "p0", "p0r1")!.quantity!,
+    resultAt(ce, "i0", "value")!.quantity!,
+    resultAt(ce, "i1", "value")!.quantity!,
     ce.sources,
   );
   ok(
     flat.length === 2 && flat.every(([, y]) => y === 0),
     "a coordinate nothing can move leaves the region a line along the other one",
-  );
-
-  // ---- the frame, and the two outlines ----
-  const outlines = hullOutlines(model, sampling)!;
-  ok(
-    outlines !== null && outlines.profile.upper.length > 4,
-    "a swept hull yields a side-view silhouette to place a point against",
-  );
-  const metres = unitScale(model.unit, "m");
-  ok(
-    near(outlines.frame.xSpan[0], 0, 1e-9) &&
-      near(outlines.frame.zSpan[0], 0, 1e-9),
-    "stated in the sheet's frame: x from the transom, z above the keel baseline",
-  );
-  const lowest = Math.min(...outlines.profile.lower.map(([, z]) => z));
-  ok(
-    near(lowest, 0, 1e-6),
-    "so the lowest point of the silhouette sits on the datum it is measured from",
-  );
-  ok(
-    near(outlines.frame.xSpan[1], metrics.loa, 1e-6),
-    "and the silhouette spans the LOA the sheet reads from HULL.LOA",
-  );
-
-  // A round trip through model coordinates, which is what the 3D overlay would draw with.
-  const there: [number, number, number] = [1.2, 0.3, 0.8];
-  const back = toSheet(outlines.frame, toModel(outlines.frame, there));
-  ok(
-    near(back[0], there[0], 1e-9) &&
-      near(back[1], there[1], 1e-9) &&
-      near(back[2], there[2], 1e-9),
-    "the sheet frame and the model frame convert back and forth exactly",
-  );
-
-  const amidships = sectionOutline(
-    model,
-    outlines.frame,
-    outlines.frame.xSpan[1] / 2,
-  )!;
-  ok(
-    amidships.starboard.length > 2 &&
-      !amidships.clamped &&
-      amidships.starboard.every(([, z]) => z >= -1e-6),
-    "the section at a point's x is a real cut, above the keel datum",
-  );
-  ok(
-    amidships.port.every(([y], i) =>
-      near(y, -amidships.starboard[i][0], 1e-12),
-    ),
-    "and carries both halves, because a point may sit on either side",
-  );
-  const beyond = sectionOutline(
-    model,
-    outlines.frame,
-    outlines.frame.xSpan[1] * 2,
-  )!;
-  ok(
-    beyond !== null && beyond.clamped,
-    "an x past the bow is clamped to the nearest real section rather than refused — a point outside the hull is still a point",
-  );
-  ok(
-    near(
-      (outlines.frame.x1 - outlines.frame.x0) * metres,
-      outlines.frame.xSpan[1],
-      1e-9,
-    ),
-    "and the frame's model span and its sheet span are the same length",
   );
 }
 
@@ -2400,7 +1695,6 @@ const problem = (
     missing.length === 0,
     `every HULL.* name produces a finite number${missing.length ? ` (bad: ${missing.join(", ")})` : ""}`,
   );
-
   ok(near(metrics!.loa, 5, 1e-9), "LOA comes out in metres, not model units");
   ok(
     metrics!.dispVol > 0 && metrics!.dispVol < 5,
@@ -2410,14 +1704,9 @@ const problem = (
   const book = build([
     { name: "area", formula: "HULL.SHELL_AREA" },
     { name: "density", formula: "4.2 ± 0.3", unit: "kg/m2" },
-    { name: "hull shell", formula: "area * density" },
+    { name: "hull shell", formula: "area.value * density.value" },
   ]);
-  const results = evaluateBook(book, metrics);
-  const shell = resultAt(
-    results,
-    book.sheets[0].id,
-    rowOf(book, "hull shell").rowId,
-  )!;
+  const shell = cellAt(book, "hull shell", "value", "formula", metrics)!;
   ok(shell.error === null, "a formula reads the hull without complaint");
   ok(
     near(shell.reading!.v, metrics!.shellArea * 4.2, 1e-6),
@@ -2429,30 +1718,21 @@ const problem = (
   );
   ok(
     shell.reading!.terms.length === 1 &&
-      shell.reading!.terms[0].label === "density",
+      shell.reading!.terms[0].label === "density.value",
     "the hull contributes no uncertainty of its own — it is drawn, not guessed",
   );
 
-  const noHull = evaluateBook(book, null);
   ok(
-    (
-      resultAt(noHull, book.sheets[0].id, rowOf(book, "area").rowId)!.error ??
-      ""
-    ).includes("not been measured"),
-    "with no hull measured, only the rows that touch it fail",
+    (problem(book, "area") ?? "").includes("not been measured"),
+    "with no hull measured, only the cells that touch it fail",
   );
-  ok(
-    resultAt(noHull, book.sheets[0].id, rowOf(book, "density").rowId)!.error ===
-      null,
-    "and the rest of the book still evaluates",
-  );
-
+  ok(problem(book, "density") === null, "and the rest of the book evaluates");
   ok(
     (
       problem(
         build([{ name: "a", formula: "HULL.NOSUCH" }]),
         "a",
-        "Weights",
+        "value",
         metrics,
       ) ?? ""
     ).includes("no measurement called"),
@@ -2463,7 +1743,7 @@ const problem = (
       problem(
         build([{ name: "a", formula: "HULL.lwl" }]),
         "a",
-        "Weights",
+        "value",
         metrics,
       ) ?? ""
     ).includes("did you mean HULL.LWL"),
@@ -2597,93 +1877,281 @@ const problem = (
   );
 }
 
-// ---------- reordering ----------
-// Order is presentation — formulas resolve by name — so a move must not disturb a single value. It is also
-// the ONLY way an item changes group, since a heading is a row and an item belongs to the one above it.
+// ---------- reordering, and what a move no longer means ----------
+//
+// Order is presentation — formulas resolve by name — so a move must not disturb a single value. And a move is
+// no longer how an item changes group: filing is a property, set by one command, so dragging past a header
+// re-orders and nothing else. That separation is the whole point of facets.
 {
   const book = build([
-    { name: "a", group: "One", formula: "1" },
-    { name: "b", group: "One", formula: "2" },
-    { name: "c", group: "Two", formula: "a + b" },
+    { name: "a", system: "one", formula: "1" },
+    { name: "b", system: "one", formula: "2" },
+    { name: "c", system: "two", formula: "a.value + b.value" },
   ]);
-  const sheetId = book.sheets[0].id;
-  const items = (b: WeightBook) =>
-    b.sheets[0].rows.filter((r) => r.kind === "item").map((r) => r.name);
-  const rowId = (name: string) =>
-    book.sheets[0].rows.find((r) => r.name === name)!.id;
-  const indexOf = (b: WeightBook, name: string) =>
-    b.sheets[0].rows.findIndex((r) => r.name === name);
+  const names = (b: WeightBook) => b.items.map((item) => item.name).join();
 
-  const moved = run(book, {
-    type: "moveSheetRow",
-    sheet: sheetId,
-    row: rowId("c"),
-    to: 0,
-  });
-  ok(items(moved).join() === "c,a,b", "an item moves to where it was put");
+  const moved = run(book, { type: "moveItem", item: idOf(book, "c"), to: 0 });
+  ok(names(moved) === "c,a,b", "an item moves to where it was put");
   ok(
     value(moved, "c") === 3,
-    "and the formula that depended on the two below it still works",
+    "and the formula that named the two below it still works",
   );
   ok(
-    groupAt(moved.sheets[0], indexOf(moved, "c")) === "",
-    "moving it above every heading takes it out of any group",
-  );
-
-  const intoOne = run(book, {
-    type: "moveSheetRow",
-    sheet: sheetId,
-    row: rowId("c"),
-    to: indexOf(book, "b"),
-  });
-  ok(
-    groupAt(intoOne.sheets[0], indexOf(intoOne, "c")) === "One",
-    "and moving it into another heading's block joins that group — the move is the whole of it",
+    moved.items[0].facets.system === "two",
+    "moving it does NOT refile it — a heading could only ever imply what a facet states",
   );
 
-  const past = run(book, {
-    type: "moveSheetRow",
-    sheet: sheetId,
-    row: rowId("a"),
-    to: 99,
+  const refiled = run(book, {
+    type: "setFacet",
+    item: idOf(book, "c"),
+    key: "system",
+    value: "one",
   });
   ok(
-    items(past).join() === "b,c,a",
+    names(refiled) === "a,b,c" && refiled.items[2].facets.system === "one",
+    "and refiling it does not move it — the two gestures are finally separate",
+  );
+  ok(value(refiled, "c") === 3, "neither disturbs a value");
+
+  const past = run(book, { type: "moveItem", item: idOf(book, "a"), to: 99 });
+  ok(
+    names(past) === "b,c,a",
     "a move past the end lands at the end rather than being refused",
   );
   ok(
     "rejected" in
-      interpretSheetCommand(book, {
-        type: "moveSheetRow",
-        sheet: sheetId,
-        row: "nope",
-        to: 0,
-      }),
+      interpretSheetCommand(book, { type: "moveItem", item: "nope", to: 0 }),
     "moving something that is not there is refused",
   );
 
-  // A heading drags like any other row, and re-groups whatever falls between it and the next one. Dropped
-  // just under "One" it now covers a and b, and "One" covers nothing.
-  const headMoved = run(book, {
-    type: "moveSheetRow",
-    sheet: sheetId,
-    row: rowId("Two"),
-    to: 1,
+  const withFields = run(
+    run(book, {
+      type: "addField",
+      item: idOf(book, "a"),
+      key: "position",
+      kind: "point",
+    }),
+    {
+      type: "addField",
+      item: idOf(book, "a"),
+      key: "cost",
+      kind: "scalar",
+    },
+  );
+  const fieldsMoved = run(withFields, {
+    type: "moveField",
+    item: idOf(book, "a"),
+    key: "cost",
+    to: 0,
   });
-  const h = headMoved.sheets[0];
   ok(
-    groupAt(h, indexOf(headMoved, "a")) === "Two" &&
-      groupAt(h, indexOf(headMoved, "b")) === "Two",
-    "dragging a heading upward takes the rows it passes into it",
+    Object.keys(fieldsMoved.items[0].fields).join() === "cost,value,position",
+    "fields move within an item without changing their keys",
   );
   ok(
-    rowsUnder(
-      h,
-      h.rows.findIndex((r) => r.name === "One"),
-    ).length === 0,
-    "leaving the heading it passed with nothing under it — still a heading, just empty",
+    value(fieldsMoved, "a") === 1,
+    "and field order is presentation, so its values stay put",
   );
-  ok(value(headMoved, "c") === 3, "and still disturbs no value");
+}
+
+// ---------- what is worth going back to ----------
+{
+  const book = run(
+    build([
+      { name: "good", formula: "2" },
+      { name: "bad", formula: "1 +" },
+      { name: "blank" },
+    ]),
+    {
+      type: "setFieldFormula",
+      item: "i2",
+      field: "value",
+      leaf: "formula",
+      formula: "",
+    },
+  );
+  const problems = problemsOf(
+    book,
+    evaluateBook(book, null),
+    (i, f, l) => `${i} ${f} ${l}`,
+  );
+  const named = problems.map((entry) => entry.item.name);
+  ok(
+    named.includes("bad") && named.includes("blank") && !named.includes("good"),
+    "a broken cell and an empty one are both worth going back to; a working one is not",
+  );
+  ok(
+    problems.find((entry) => entry.item.name === "blank")!.message ===
+      "nothing written yet",
+    "and an empty cell says so rather than pretending to be an error",
+  );
+}
+
+// ---------- the frame, and the two outlines a point is placed against ----------
+{
+  const model = assemble(defaultHull());
+  const sampling = computeHullSampling(model, 240, 10);
+  const metrics = hullMetrics(model, sampling)!;
+  const outlines = hullOutlines(model, sampling)!;
+  ok(
+    outlines !== null && outlines.profile.upper.length > 4,
+    "a swept hull yields a side-view silhouette to place a point against",
+  );
+  const metres = unitScale(model.unit, "m");
+  ok(
+    near(outlines.frame.xSpan[0], 0, 1e-9) &&
+      near(outlines.frame.zSpan[0], 0, 1e-9),
+    "stated in the sheet's frame: x from the transom, z above the keel baseline",
+  );
+  ok(
+    near(Math.min(...outlines.profile.lower.map(([, z]) => z)), 0, 1e-6),
+    "so the lowest point of the silhouette sits on the datum it is measured from",
+  );
+  ok(
+    near(outlines.frame.xSpan[1], metrics.loa, 1e-6),
+    "and the silhouette spans the LOA the sheet reads from HULL.LOA",
+  );
+
+  const there: [number, number, number] = [1.2, 0.3, 0.8];
+  const back = toSheet(outlines.frame, toModel(outlines.frame, there));
+  ok(
+    near(back[0], there[0], 1e-9) &&
+      near(back[1], there[1], 1e-9) &&
+      near(back[2], there[2], 1e-9),
+    "the sheet frame and the model frame convert back and forth exactly",
+  );
+
+  const amidships = sectionOutline(model, outlines.frame, {
+    k: "at",
+    x: outlines.frame.xSpan[1] / 2,
+  })!;
+  ok(
+    amidships.starboard.length > 2 &&
+      !amidships.clamped &&
+      amidships.starboard.every(([, z]) => z >= -1e-6),
+    "the section at a point's x is a real cut, above the keel datum",
+  );
+  ok(
+    amidships.port.every(([y], i) =>
+      near(y, -amidships.starboard[i][0], 1e-12),
+    ),
+    "and carries both halves, because a point may sit on either side",
+  );
+  const beyond = sectionOutline(model, outlines.frame, {
+    k: "at",
+    x: outlines.frame.xSpan[1] * 2,
+  })!;
+  ok(
+    beyond !== null && beyond.clamped,
+    "an x past the bow is clamped to the nearest real section rather than refused",
+  );
+
+  // A station is normal to the plan heading, and the plan is the sheer — a metre off the centreline — so the
+  // plane AT a place's x is not the plane THROUGH it. A point has to be judged against the one it is in.
+  {
+    const at = outlines.frame.xSpan[1] * 0.75;
+    const through = sectionOutline(model, outlines.frame, {
+      k: "through",
+      x: at,
+      y: 0,
+    })!;
+    const byX = sectionOutline(model, outlines.frame, { k: "at", x: at })!;
+    ok(
+      through.starboard.length > 2 && byX.starboard.length > 2,
+      "both ways of naming a station produce a real cut",
+    );
+    ok(
+      Math.abs(through.x - byX.x) > 1e-3,
+      `and they are different stations (${through.x.toFixed(3)} vs ${byX.x.toFixed(3)} m)`,
+    );
+    // The plane through a place contains it: at the centreline the trace's own keel end is that place's x.
+    const keel = through.trace[through.trace.length - 1];
+    ok(
+      near(keel[0], at, 5e-3),
+      "the plane THROUGH a centreline place meets the centreline at that place's own x",
+    );
+    ok(
+      through.trace.some(([x]) => Math.abs(x - at) > 1e-3),
+      "and still leans, because the plane is normal to the plan heading rather than square across",
+    );
+  }
+
+  // The vertical slice: the plane x = const, which is the one a POINT is in. It is what the section pane
+  // shows for a point, because only this plane lets "outside the outline" mean "outside the boat".
+  {
+    const at = outlines.frame.xSpan[1] * 0.5;
+    const slice = verticalSection(sampling, outlines.frame, at)!;
+    ok(
+      slice !== null && slice.kind === "vertical" && slice.starboard.length > 2,
+      "a vertical slice through the hull is a real outline",
+    );
+    ok(
+      slice.trace.every(([x]) => near(x, at, 1e-9)),
+      "every point of it is at exactly the x asked for — so the profile marks it with a plain rule",
+    );
+    ok(
+      slice.port.every(([y], i) => near(y, -slice.starboard[i][0], 1e-12)),
+      "and it carries both halves, as a station does",
+    );
+    // Close to the station where the plan runs straight, and further from it where the plan turns — the
+    // difference IS the fan-out, so a slice identical to the station everywhere would mean one of them wrong.
+    const beamOf = (o: { starboard: readonly (readonly number[])[] }) =>
+      Math.max(...o.starboard.map(([y]) => y));
+    const station = sectionOutline(model, outlines.frame, { k: "at", x: at })!;
+    ok(
+      Math.abs(beamOf(slice) - beamOf(station)) < 0.02,
+      "amidships it is close to the station, where the plan is nearly straight",
+    );
+    const bow = outlines.frame.xSpan[1] * 0.92;
+    const bowSlice = verticalSection(sampling, outlines.frame, bow);
+    const bowStation = sectionOutline(model, outlines.frame, {
+      k: "at",
+      x: bow,
+    });
+    ok(
+      !!bowSlice &&
+        !!bowStation &&
+        Math.abs(beamOf(bowSlice) - beamOf(bowStation)) >
+          Math.abs(beamOf(slice) - beamOf(station)),
+      "and departs from it toward the bow, where the plan turns and the stations fan out",
+    );
+    ok(
+      verticalSection(sampling, outlines.frame, outlines.frame.xSpan[1] * 3) ===
+        null,
+      "a plane past the bow cuts nothing, and says so rather than drawing a stray outline",
+    );
+
+    // Both ENDS come off the hull's own trims, which are longitudinal curves like any row but land on
+    // fractional ones — so they have to be crossed explicitly. Without them the slice stopped a whole row
+    // short of the sheer and never reached the centreline, leaving the two halves apart at the keel.
+    for (const x of [1, 2, 3].map((f) => outlines.frame.xSpan[1] * (f / 5))) {
+      const cut = verticalSection(sampling, outlines.frame, x)!;
+      const station = sectionOutline(model, outlines.frame, { k: "at", x })!;
+      ok(
+        near(cut.starboard[0][1], station.starboard[0][1], 0.02),
+        `the slice at x=${x.toFixed(2)} reaches the sheer, as its station does`,
+      );
+      ok(
+        near(cut.starboard[cut.starboard.length - 1][0], 0, 1e-9),
+        `and closes on the centreline at x=${x.toFixed(2)}, so the two halves meet`,
+      );
+    }
+    // Except where the TRANSOM ends the section rather than the keel. There the bottom is a transom edge
+    // well off the centreline, and a slice that closed anyway would be drawing hull that is not there.
+    const aft = verticalSection(sampling, outlines.frame, 0.5)!;
+    ok(
+      aft.starboard[aft.starboard.length - 1][0] > 0.1,
+      "a slice through the transom ends on it, off the centreline, rather than closing",
+    );
+  }
+  ok(
+    near(
+      (outlines.frame.x1 - outlines.frame.x0) * metres,
+      outlines.frame.xSpan[1],
+      1e-9,
+    ),
+    "and the frame's model span and its sheet span are the same length",
+  );
 }
 
 if (failures) process.exitCode = 1;

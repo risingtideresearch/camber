@@ -1,22 +1,31 @@
-// ---------- the weight book: pages of named rows, authored, plain and serializable ----------
+// ---------- the weight book: items carrying fields, authored, plain and serializable ----------
 //
-// A weight estimate is a SCHEDULE, not a grid: named line items, grouped under headings, each carrying one
-// expression. So a cell is addressed by (sheet, row) — never by (row number, column letter). References in a
-// formula are the names themselves, which is what makes an estimate readable a month later, and what lets the
-// sensitivity readout name the input that drives the spread rather than pointing at a coordinate.
+// A weight estimate is a SCHEDULE, not a grid: named things, each carrying what is known about it. So a cell
+// is addressed by (item, field) — never by (row number, column letter), and never by (page, row) either.
+// References in a formula are the names themselves, which is what makes an estimate readable a month later,
+// and what lets the sensitivity readout name the input that drives the spread rather than pointing at a
+// coordinate.
 //
-// Rows carry a stable `id` that nothing renames. A formula names a row by its `name`, resolved to an id when
-// the book is evaluated, so renaming a row rewrites nothing and reordering means nothing at all. That is also
-// what keeps an edit small: `setSheetFormula` names one row, whereas positional addressing would make an
-// insert rewrite every formula below it — a terrible history entry and a worse two-window merge.
+// Items carry a stable `id` that nothing renames. A formula names an item by its `name`, resolved when the
+// book is evaluated, so renaming rewrites nothing and reordering means nothing at all.
 //
-// ---------- pages, not columns ----------
+// ---------- items, not pages ----------
 //
-// The second axis is a PAGE, not a column. A weight estimate, a VCG schedule and an LCG schedule are three
-// lists of the same items answering three different questions, and they are not the same shape: a VCG page
-// has rows a weight page does not (a reference datum), and skips rows it has (a density). Columns forced them
-// to share a row set and a row order; pages let each be what it is, and a formula reaches across with
-// `Weights.hull shell`.
+// One physical thing is ONE item. An engine has a mass, a position and perhaps a cost, and those are three
+// fields of one record rather than three rows on three pages kept in name-sync by hand. That is the whole
+// change from the page model this replaces: a page was a namespace, a type constraint, an organisational
+// container and a tab all at once, so reorganising an estimate — the thing you do most as one grows — meant
+// rewriting every formula that crossed a page boundary.
+//
+// Organisation now lives in FACETS (`system: structure/hull/shell`, `status: weighed`), which no formula
+// mentions, so an item can be reclassified freely and nothing breaks. That is the rule the whole design turns
+// on: an address names a thing, never where the thing is filed.
+//
+// ---------- fields are local, and ad-hoc ----------
+//
+// A field key is unique only within its item and means nothing outside it: `shell.area` and `sail.area` are
+// unrelated numbers that happen to share a key. Nothing declares a field before it is used — typing a key
+// creates it — which keeps the scratch calculation as cheap as it is in a grid with a spare column.
 //
 // ---------- names with spaces ----------
 //
@@ -27,53 +36,32 @@
 //
 // This module is the authored shape and its reducer only. Evaluation — the formula language, the uncertainty
 // algebra and the hull's own numbers — lives in `formula.ts`, `quantity.ts` and `../hullMetrics.ts`, none of
-// which this file knows about. A `WeightBook` survives `structuredClone` and `JSON.stringify` unchanged.
+// which this file knows about. Views live in `views.ts` and are derived, not authored. A `WeightBook`
+// survives `structuredClone` and `JSON.stringify` unchanged.
 
 // ---------- the authored shape ----------
 
+/** What a slice cuts with. A plane is horizontal; a station is normal to the sheer plan's heading. */
+export type SliceShape = "plane" | "station";
+
+export const SLICE_SHAPES: readonly SliceShape[] = ["plane", "station"];
+
+export const isSliceShape = (shape: string): shape is SliceShape =>
+  (SLICE_SHAPES as readonly string[]).includes(shape);
+
 /**
- * One line: an item, or a heading over the items below it.
+ * One scalar: a mass, an areal density, a fraction, a length.
  *
- * A heading is a ROW rather than a label attached to rows, and that is the whole design of grouping here.
- * There is one ordered list, and an item belongs to whichever heading it sits under — so dragging it under a
- * heading IS putting it there, and no command has to say so separately. It also means a heading can exist
- * with nothing under it yet, which is how you make one: add it, then move items in.
+ * `unit` is what the number is written in: `kg`, `t`, `kg/m2`, `m`, or blank. Blank does NOT mean
+ * dimensionless — it means "say it in whatever the formula works out to", and the panel fills the natural
+ * unit in for you. Typing one over that converts the display where the dimension agrees, and is flagged
+ * where it does not. On a formula with no dimension of its own it is a declaration: `1.4` in a cell marked
+ * `t` is 1400 kg. See `units.ts`.
  */
-export interface RowBase {
-  readonly id: string;
-  /**
-   * For an item, what formulas call it: may contain spaces, and may be empty — an unnamed item still
-   * evaluates and still displays, it just cannot be referred to. That is the scratch-calculation escape hatch
-   * a grid would spend a spare column on.
-   *
-   * For a heading, the heading itself. Free text, under no naming rules at all: a heading is not a value and
-   * nothing can refer to one.
-   */
-  readonly name: string;
-  readonly note: string;
-}
-
-/** A heading. Legal on a page of any kind — grouping is not a property of what is being grouped. */
-export interface HeadingRow extends RowBase {
-  readonly kind: "heading";
-}
-
-/**
- * One scalar: a mass, an areal density, a fraction, a length. What a `scalars` page — and an `outputs` page —
- * is made of.
- */
-export interface ItemRow extends RowBase {
-  readonly kind: "item";
+export interface ScalarField {
+  readonly k: "scalar";
   /** The expression, as the user typed it. Never stored pre-parsed — see `json.ts`. */
   readonly formula: string;
-  /**
-   * What the number is written in: `kg`, `t`, `kg/m2`, `m`, or blank.
-   *
-   * Blank does NOT mean dimensionless — it means "say it in whatever the formula works out to", and the panel
-   * fills the natural unit in for you. Typing one over that converts the display where the dimension agrees,
-   * and is flagged where it does not. On a formula with no dimension of its own it is a declaration: `1.4` in
-   * a cell marked `t` is 1400 kg. See `units.ts`.
-   */
   readonly unit: string;
 }
 
@@ -83,14 +71,14 @@ export interface ItemRow extends RowBase {
  * Each coordinate takes the whole language, `±` included, and that is the point of splitting them — a tank's
  * longitudinal position is usually known well and its height badly, and per-coordinate uncertainty is what
  * lets the sensitivity ranking say which of the two is costing you. All three are lengths, so one unit covers
- * the row.
+ * the field.
  *
  * The frame is the SHEET's, not the drawing's: x from the transom, y from the centreline (starboard
  * positive), z above the keel baseline — the same frame `hullMetrics.ts` reports `shellLcg` and `shellVcg`
  * in, so a formula never has to know the hull is authored deck-flat with rake applied as a rotation.
  */
-export interface PointRow extends RowBase {
-  readonly kind: "point";
+export interface PointField {
+  readonly k: "point";
   readonly unit: string;
   readonly x: string;
   readonly y: string;
@@ -104,8 +92,8 @@ export interface PointRow extends RowBase {
    * so. Held once, that cannot happen.
    *
    * It is read once per coordinate, and a point named in it without a coordinate means the matching one —
-   * so `(Weights.engine * engine + Weights.tank * tank) / Weights.total` is the whole of a CG. See
-   * `evaluate.ts`, which turns this one source into the row's three cells.
+   * so `(engine.mass * engine.cg + tank.mass * tank.cg) / total.mass` is the whole of a CG. See
+   * `evaluate.ts`, which turns this one source into the field's three cells.
    *
    * `x`, `y` and `z` are kept while it is set rather than cleared, so turning a derivation off gives back the
    * coordinates that were there before it.
@@ -113,83 +101,76 @@ export interface PointRow extends RowBase {
   readonly from: string;
 }
 
-/** What a slice cuts with. A plane is horizontal; a station is normal to the sheer plan's heading. */
-export type SliceShape = "plane" | "station";
-
-export const SLICE_SHAPES: readonly SliceShape[] = ["plane", "station"];
-
-export const isSliceShape = (shape: string): shape is SliceShape =>
-  (SLICE_SHAPES as readonly string[]).includes(shape);
-
 /**
  * One cut through the hull, which reports its area, open and closed perimeters, and its centroid.
  *
  * `pos` is in the sheet's frame, as a point's coordinates are: a height above the keel baseline for a plane,
  * x from the transom for a station.
  */
-export interface SliceRow extends RowBase {
-  readonly kind: "slice";
+export interface CutField {
+  readonly k: "cut";
   readonly shape: SliceShape;
   /** Unit used to author and display `pos`; blank derives metres from a dimensioned formula. */
   readonly unit: string;
   readonly pos: string;
 }
 
-export type SheetRow = HeadingRow | ItemRow | PointRow | SliceRow;
+export type Field = ScalarField | PointField | CutField;
+
+export type FieldKind = Field["k"];
+
+export const FIELD_KINDS: readonly FieldKind[] = ["scalar", "point", "cut"];
+
+export const isFieldKind = (kind: string): kind is FieldKind =>
+  (FIELD_KINDS as readonly string[]).includes(kind);
 
 /**
- * The addressable formula cells of a row. A scalar has one; a point has three, and a derivation besides.
+ * One thing the estimate accounts for.
  *
- * `from` is an address a command can write to, but it is NOT one of the cells a row evaluates to — see the
- * note on `fieldsOf`, which is the list of those and deliberately does not include it.
- */
-export type RowField = "formula" | "x" | "y" | "z" | "pos" | "from";
-
-/**
- * What a page holds. One kind of object per page, and the page says which.
+ * `fields` is a plain object rather than an array because a key is how a field is addressed, and the object
+ * IS the index. Insertion order is the authored order and survives `JSON.stringify` — guaranteed here rather
+ * than assumed, because a key that looked like an array index would be hoisted, and `NAME_PATTERN` forbids a
+ * leading digit.
  *
- * `outputs` is the one kind that shares a payload with another: its rows are `item` rows, identical in every
- * field. What it carries is a CONSTRAINT — the row's name comes from the `OUTPUTS` table rather than being
- * typed, and a book holds at most one such page. So the rule that a page holds one kind of object still reads
- * true (an outputs page holds scalars), while the kind gives the editor something to dispatch on and gives
- * `OUT.` something stable to resolve against.
+ * `facets` is how the item is filed: `system: structure/hull/shell`, `status: weighed`. A value may be a
+ * path, and that is what makes a facet tree. Nothing in a formula may mention one.
  */
-export type PageKind = "scalars" | "outputs" | "points" | "slices";
-
-export const PAGE_KINDS: readonly PageKind[] = [
-  "scalars",
-  "outputs",
-  "points",
-  "slices",
-];
-
-export const isPageKind = (kind: string): kind is PageKind =>
-  (PAGE_KINDS as readonly string[]).includes(kind);
-
-/** The row kind a page of each kind holds, headings aside. */
-export const ROW_KIND_OF: Record<PageKind, SheetRow["kind"]> = {
-  scalars: "item",
-  outputs: "item",
-  points: "point",
-  slices: "slice",
-};
-
-/** One page. */
-export interface Sheet {
+export interface Item {
   readonly id: string;
+  /** What formulas call it. Globally unique among items — see the note on `symbolsOf`. */
   readonly name: string;
-  readonly kind: PageKind;
-  readonly rows: readonly SheetRow[];
+  readonly note: string;
+  readonly facets: Readonly<Record<string, string>>;
+  readonly fields: Readonly<Record<string, Field>>;
 }
 
-/** Where a value lives: a row, on a page. */
-export interface SheetRef {
-  readonly sheet: string;
-  readonly row: string;
+/**
+ * The addressable cells of a field. A scalar has one; a point has three, and a derivation besides.
+ *
+ * `from` is an address a command can write to, but it is NOT one of the cells a field evaluates to — see the
+ * note on `leavesOf`, which is the list of those and deliberately does not include it.
+ */
+export type FieldLeaf = "formula" | "x" | "y" | "z" | "pos" | "from";
+
+/** Where a value lives: a field, on an item. */
+export interface CellRef {
+  readonly item: string;
+  readonly field: string;
 }
 
 export interface WeightBook {
-  readonly sheets: readonly Sheet[];
+  readonly items: readonly Item[];
+  /**
+   * Saved views. The four standard ones are DERIVED from what the book contains (see `views.ts`) and are not
+   * in here — a stored copy of a generated thing is a thing that can go stale.
+   */
+  readonly views: readonly View[];
+  /**
+   * What the book answers, by `OUTPUTS` name: `DISPLACEMENT`, `VCG`, `LCG`. An ordinary formula in the same
+   * language as everything else, so deleting one deletes the answer and renaming what it refers to rewrites
+   * nothing. See `outputs.ts` for why this is a formula rather than a reference to a row.
+   */
+  readonly outputs: Readonly<Record<string, string>>;
   /**
    * Water density in t/m³, turning an estimated mass into the displaced volume the stability panel wants.
    * 1.025 is seawater, and is what the stability plane's own axis is drawn in.
@@ -197,31 +178,62 @@ export interface WeightBook {
   readonly density: number;
 }
 
+/** A view: a scope, a grouping and a layout. Defined here so `WeightBook` can hold one; see `views.ts`. */
+export type ViewScope =
+  | { readonly k: "all" }
+  | { readonly k: "item"; readonly item: string }
+  | { readonly k: "fieldType"; readonly type: FieldKind }
+  | { readonly k: "facet"; readonly key: string; readonly value: string };
+
+/**
+ * What renders a view.
+ *
+ * `table` and `split` are the two the typed pages had — a table alone, and a table beside a full-size editor
+ * for what it holds. `detail` is one item and every field it carries. `summary` and `problems` are the two
+ * that read the book rather than list it, and they are layouts rather than scopes because what they select
+ * depends on EVALUATION, which the authored shape knows nothing about.
+ */
+export type ViewLayout = "table" | "split" | "detail" | "summary" | "problems";
+
+export interface View {
+  readonly id: string;
+  readonly name: string;
+  readonly scope: ViewScope;
+  /** Facet keys, outermost first. Empty means a flat list. */
+  readonly groupBy: readonly string[];
+  readonly layout: ViewLayout;
+}
+
 export const SEAWATER_DENSITY = 1.025;
 
-/** The page a fresh book opens on. Named for what it holds rather than for being first. */
-export const FIRST_SHEET_NAME = "Weights";
-
 export const emptyBook = (): WeightBook => ({
-  sheets: [],
+  items: [],
+  views: [],
+  outputs: {},
   density: SEAWATER_DENSITY,
 });
 
 export const cloneBook = (book: WeightBook): WeightBook => ({
-  sheets: book.sheets.map((sheet) => ({
-    ...sheet,
-    rows: sheet.rows.map((row) => ({ ...row })),
+  items: book.items.map((item) => ({
+    ...item,
+    facets: { ...item.facets },
+    fields: Object.fromEntries(
+      Object.entries(item.fields).map(([key, field]) => [key, { ...field }]),
+    ),
   })),
+  views: book.views.map((view) => ({ ...view, groupBy: [...view.groupBy] })),
+  outputs: { ...book.outputs },
   density: book.density,
 });
 
 // ---------- names ----------
 
 /**
- * What a formula may call a row, a page or a group.
+ * What a formula may call an item or a field.
  *
  * Letters, digits, underscores and single interior spaces, starting with a letter. Everything the language
- * uses as punctuation is excluded, and so is the leading digit that would make a name look like a number.
+ * uses as punctuation is excluded, and so is the leading digit that would make a name look like a number —
+ * or, for a field key, like an array index.
  */
 export const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*(?: [A-Za-z0-9_]+)*$/;
 
@@ -232,11 +244,11 @@ export const tidyName = (name: string): string =>
   name.trim().replace(/\s+/g, " ");
 
 /**
- * The namespaces a formula reserves. A row may not take one of these for its own.
+ * The namespaces a formula reserves. An item may not take one of these for its own.
  *
  * They point in opposite directions. `HULL` is what the sheet READS — the geometry's own numbers, supplied to
- * it. `OUT` is what the sheet PROVIDES — the answers the rest of the app asks it for, which live as rows on
- * the outputs page (see `outputs.ts`). Both are reserved against being taken as a row name; only `OUT`
+ * it. `OUT` is what the sheet PROVIDES — the answers the rest of the app asks it for, which live in
+ * `book.outputs` (see `outputs.ts`). Both are reserved against being taken as an item name; only `OUT`
  * resolves to something the book itself authored.
  */
 export const RESERVED = ["HULL", "OUT"] as const;
@@ -244,78 +256,152 @@ export const RESERVED = ["HULL", "OUT"] as const;
 export const isReserved = (name: string): boolean =>
   (RESERVED as readonly string[]).includes(name);
 
-export const findSheet = (book: WeightBook, id: string): Sheet | undefined =>
-  book.sheets.find((sheet) => sheet.id === id);
-
-export const findRow = (sheet: Sheet, id: string): SheetRow | undefined =>
-  sheet.rows.find((row) => row.id === id);
-
-export function refValue(
-  book: WeightBook,
-  ref: SheetRef | null,
-): SheetRow | null {
-  if (!ref) return null;
-  const sheet = findSheet(book, ref.sheet);
-  return sheet ? (findRow(sheet, ref.row) ?? null) : null;
-}
-
-export const sameRef = (a: SheetRef | null, b: SheetRef | null): boolean =>
-  a === b || (!!a && !!b && a.sheet === b.sheet && a.row === b.row);
-
-export const isHeading = (row: SheetRow): row is HeadingRow =>
-  row.kind === "heading";
-
-/** Every heading on a page, in order. */
-export const sheetHeadings = (sheet: Sheet): SheetRow[] =>
-  sheet.rows.filter(isHeading);
-
-/** The heading an item sits under, or "" above the first one. Derived from POSITION — never stored. */
-export function groupAt(sheet: Sheet, index: number): string {
-  for (let i = index - 1; i >= 0; i--)
-    if (isHeading(sheet.rows[i])) return sheet.rows[i].name;
-  return "";
-}
-
-/** The rows a heading covers: everything after it up to the next heading. */
-export function rowsUnder(sheet: Sheet, headingIndex: number): SheetRow[] {
-  const out: SheetRow[] = [];
-  for (let i = headingIndex + 1; i < sheet.rows.length; i++) {
-    if (isHeading(sheet.rows[i])) break;
-    out.push(sheet.rows[i]);
-  }
-  return out;
-}
+// ---------- facets ----------
 
 /**
- * Every name a formula on `sheet` could mention, longest first.
+ * A facet value: one or more path segments, `structure/hull/shell`.
  *
- * This is the lexer's symbol table: it is what lets `hull shell * 2` read as one name and an operator rather
+ * Looser than a name, because nothing addresses a facet: no formula mentions one, so a value only has to be
+ * something a person can read and a tree can split on.
+ */
+const FACET_SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9_]*(?: [A-Za-z0-9_]+)*$/;
+
+export const isValidFacetValue = (value: string): boolean =>
+  value.length > 0 &&
+  value.split("/").every((part) => FACET_SEGMENT.test(part));
+
+/** Trim each segment and drop empty ones, so `structure / hull /` commits as `structure/hull`. */
+export const tidyFacetValue = (value: string): string =>
+  value
+    .split("/")
+    .map((part) => tidyName(part))
+    .filter((part) => part.length > 0)
+    .join("/");
+
+export const facetSegments = (value: string): string[] => value.split("/");
+
+/** True where `value` is `ancestor` or sits beneath it. What a `facet` scope matches with. */
+export const facetContains = (ancestor: string, value: string): boolean =>
+  value === ancestor || value.startsWith(`${ancestor}/`);
+
+/**
+ * The facet a tree is built on by default.
+ *
+ * `system` by convention, because that is what a weight schedule is filed under; failing that, whichever key
+ * the book actually uses most, so a book that files by `zone` or by `trade` still opens on something useful.
+ * A convention rather than a stored setting: there is nothing here a user would want to change that renaming
+ * a facet would not already do.
+ */
+export const SYSTEM_FACET = "system";
+
+export function primaryFacet(book: WeightBook): string | null {
+  const counts = new Map<string, number>();
+  for (const item of book.items)
+    for (const key of Object.keys(item.facets))
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+  if (counts.has(SYSTEM_FACET)) return SYSTEM_FACET;
+  let best: string | null = null;
+  let bestCount = 0;
+  for (const [key, count] of counts)
+    if (count > bestCount || (count === bestCount && best && key < best)) {
+      best = key;
+      bestCount = count;
+    }
+  return best;
+}
+
+/** Every facet key any item carries, in a stable order. */
+export function facetKeys(book: WeightBook): string[] {
+  const keys = new Set<string>();
+  for (const item of book.items)
+    for (const key of Object.keys(item.facets)) keys.add(key);
+  return [...keys].sort();
+}
+
+/** Every value in use under one facet key, in a stable order. */
+export function facetValues(book: WeightBook, key: string): string[] {
+  const values = new Set<string>();
+  for (const item of book.items) {
+    const value = item.facets[key];
+    if (value) values.add(value);
+  }
+  return [...values].sort();
+}
+
+// ---------- lookup ----------
+
+export const findItem = (book: WeightBook, id: string): Item | undefined =>
+  book.items.find((item) => item.id === id);
+
+export const itemNamed = (book: WeightBook, name: string): Item | undefined =>
+  book.items.find((item) => item.name === name);
+
+export const findView = (book: WeightBook, id: string): View | undefined =>
+  book.views.find((view) => view.id === id);
+
+export function cellValue(book: WeightBook, ref: CellRef | null): Field | null {
+  if (!ref) return null;
+  const item = findItem(book, ref.item);
+  return item ? (item.fields[ref.field] ?? null) : null;
+}
+
+export const sameRef = (a: CellRef | null, b: CellRef | null): boolean =>
+  a === b || (!!a && !!b && a.item === b.item && a.field === b.field);
+
+/** Rebuild one item's field map in a new authored order. Invalid and no-op moves return the original book. */
+export function fieldMoved(
+  book: WeightBook,
+  itemId: string,
+  key: string,
+  to: number,
+): WeightBook {
+  const itemIndex = book.items.findIndex((item) => item.id === itemId);
+  if (itemIndex < 0) return book;
+  const item = book.items[itemIndex];
+  const entries = Object.entries(item.fields);
+  const from = entries.findIndex(([candidate]) => candidate === key);
+  if (from < 0) return book;
+  const target = Math.max(0, Math.min(entries.length - 1, to));
+  if (target === from) return book;
+  const [moved] = entries.splice(from, 1);
+  entries.splice(target, 0, moved);
+  const items = [...book.items];
+  items[itemIndex] = { ...item, fields: Object.fromEntries(entries) };
+  return { ...book, items };
+}
+
+/** Every item carrying a field of `kind`. What a `fieldType` view is scoped to. */
+export const itemsWithKind = (book: WeightBook, kind: FieldKind): Item[] =>
+  book.items.filter((item) =>
+    Object.values(item.fields).some((field) => field.k === kind),
+  );
+
+/**
+ * Every name a formula could mention, longest first.
+ *
+ * This is the lexer's symbol table: it is what lets `hull shell.mass` read as a name, a dot and a name rather
  * than as a syntax error. Longest-first is the whole trick — with `shell` and `shell area` both defined, the
  * longer one has to be tried first or the shorter would always win and leave `area` dangling.
+ *
+ * ONE table for the whole book, where the page model needed one per page: item names are globally unique and
+ * field keys are only ever read after a dot or as a sibling, so there is nothing left for a page to
+ * disambiguate.
  */
-export function symbolsOf(book: WeightBook, sheetId: string): string[] {
+export function symbolsOf(book: WeightBook): string[] {
   const names = new Set<string>(RESERVED);
-  for (const sheet of book.sheets) {
-    if (sheet.name) names.add(sheet.name);
-    if (sheet.id !== sheetId) continue;
-    for (const row of sheet.rows)
-      if (row.name && !isHeading(row)) names.add(row.name);
+  for (const item of book.items) {
+    if (item.name) names.add(item.name);
+    for (const key of Object.keys(item.fields)) names.add(key);
   }
-  // Rows of OTHER pages are reachable only as `Page.row`, so their names go in too: the lexer has to be able
-  // to take `Weights.hull shell` as three tokens rather than stopping after `hull`.
-  for (const sheet of book.sheets)
-    if (sheet.id !== sheetId)
-      for (const row of sheet.rows)
-        if (row.name && !isHeading(row)) names.add(row.name);
   return [...names].sort((a, b) => b.length - a.length || a.localeCompare(b));
 }
 
 /**
- * A fresh id. Generated by the WINDOW rather than the server, because the window that asked for the row needs
- * to know which row it got in order to put the caret in it, and because two windows adding one at once must
- * not collide.
+ * A fresh id. Generated by the WINDOW rather than the server, because the window that asked for the item
+ * needs to know which one it got in order to put the caret in it, and because two windows adding one at once
+ * must not collide.
  */
-export function newId(prefix = "r"): string {
+export function newId(prefix = "i"): string {
   const rand =
     typeof crypto !== "undefined" && crypto.randomUUID
       ? crypto.randomUUID().slice(0, 8)
@@ -323,119 +409,102 @@ export function newId(prefix = "r"): string {
   return `${prefix}${rand}`;
 }
 
-/** A page name nothing else on the book is using. */
-export function freeSheetName(book: WeightBook, wanted: string): string {
-  const taken = new Set(book.sheets.map((sheet) => sheet.name));
+/** An item name nothing else in the book is using. */
+export function freeItemName(book: WeightBook, wanted: string): string {
+  const taken = new Set(book.items.map((item) => item.name));
   if (!taken.has(wanted)) return wanted;
   for (let n = 2; ; n++)
     if (!taken.has(`${wanted} ${n}`)) return `${wanted} ${n}`;
 }
 
-/**
- * The kinds a command may actually create, as against the kinds the types can describe.
- *
- * Every kind is reachable now: points and slices each have a specialised editor and geometry resolver, so
- * they are ordinary user-creatable pages alongside scalar calculations.
- */
-export const CREATABLE_KINDS: readonly PageKind[] = [
-  "scalars",
-  "outputs",
-  "points",
-  "slices",
-];
-
-/** The book's outputs page, if it has one. At most one exists — see `invariants.ts`. */
-export const outputsSheet = (book: WeightBook): Sheet | undefined =>
-  book.sheets.find((sheet) => sheet.kind === "outputs");
-
-/** The row on a page answering to `name`, ignoring headings. */
-export const rowNamed = (sheet: Sheet, name: string): SheetRow | undefined =>
-  sheet.rows.find((row) => !isHeading(row) && row.name === name);
-
-/** A fresh row of the kind a page holds. Every field the kind carries, empty. */
-export function blankRow(
-  kind: SheetRow["kind"],
-  id: string,
-  name: string,
-): SheetRow {
-  switch (kind) {
-    case "heading":
-      return { id, kind, name, note: "" };
-    case "item":
-      return { id, kind, name, note: "", formula: "", unit: "" };
-    case "point":
-      // A point is the one row whose dimension is known before anything is typed: three lengths. Declaring
-      // the unit up front is what makes `3.2` in a fresh cell mean 3.2 m rather than a bare number — which
-      // matters because the editor AUTHORS these cells by dragging, and a dragged coordinate that came out
-      // dimensionless would fail the first moment arm it was multiplied into.
-      return {
-        id,
-        kind,
-        name,
-        note: "",
-        unit: "m",
-        x: "",
-        y: "",
-        z: "",
-        from: "",
-      };
-    case "slice":
-      return {
-        id,
-        kind,
-        name,
-        note: "",
-        shape: "station",
-        unit: "",
-        pos: "",
-      };
-  }
+/** A field key the item is not already using. */
+export function freeFieldKey(item: Item, wanted: string): string {
+  if (!(wanted in item.fields)) return wanted;
+  for (let n = 2; ; n++)
+    if (!(`${wanted} ${n}` in item.fields)) return `${wanted} ${n}`;
 }
 
 /**
- * Read the text at one address on a row, or null where the row has no such field.
+ * The conventional key a converted page lands on, and what a fresh field of each kind is offered as.
  *
- * The ADDRESSES of a row, which for a point is one more than the cells it evaluates to: `from` is written by
- * a command like any other formula, and is then the source of all three coordinates rather than a fourth
- * one. `fieldsOf` is the other list, and the two stopped mirroring each other for exactly that reason.
+ * There is no primary-field shorthand — `ply density.value`, never a bare `ply density` — so these are
+ * defaults for a name field, nothing more. A user renaming `value` to `mass` breaks nothing but the formulas
+ * that named it, and `renameField` rewrites none of them: they are resolved by name at evaluation.
  */
-export function fieldOf(row: SheetRow, field: RowField): string | null {
-  switch (row.kind) {
-    case "heading":
-      return null;
-    case "item":
-      return field === "formula" ? row.formula : null;
+export const DEFAULT_FIELD_KEY: Record<FieldKind, string> = {
+  scalar: "value",
+  point: "position",
+  cut: "section",
+};
+
+/** The unit a field actually authors in, including the intrinsic default for positions. */
+export const fieldUnit = (field: Field): string =>
+  field.k === "scalar" ? field.unit : field.unit.trim() || "m";
+
+/** A fresh field of one kind. Every cell it carries, empty. */
+export function blankField(kind: FieldKind): Field {
+  switch (kind) {
+    case "scalar":
+      return { k: "scalar", formula: "", unit: "" };
     case "point":
-      if (field === "from") return row.from;
-      return field === "x" || field === "y" || field === "z"
-        ? row[field]
-        : null;
-    case "slice":
-      return field === "pos" ? row.pos : null;
+      // A point is the one field whose dimension is known before anything is typed: three lengths. Declaring
+      // the unit up front is what makes `3.2` in a fresh cell mean 3.2 m rather than a bare number — which
+      // matters because the editor AUTHORS these cells by dragging, and a dragged coordinate that came out
+      // dimensionless would fail the first moment arm it was multiplied into.
+      return { k: "point", unit: "m", x: "", y: "", z: "", from: "" };
+    case "cut":
+      // A cut's authored position is a length just like a point's coordinates. Starting in metres makes a
+      // freshly typed or dragged `0.4` a location on the hull rather than a dimensionless number.
+      return { k: "cut", shape: "station", unit: "m", pos: "" };
+  }
+}
+
+export const blankItem = (id: string, name: string): Item => ({
+  id,
+  name,
+  note: "",
+  facets: {},
+  fields: {},
+});
+
+/**
+ * Read the text at one address on a field, or null where the field has no such cell.
+ *
+ * The ADDRESSES of a field, which for a point is one more than the cells it evaluates to: `from` is written
+ * by a command like any other formula, and is then the source of all three coordinates rather than a fourth
+ * one. `leavesOf` is the other list, and the two stopped mirroring each other for exactly that reason.
+ */
+export function leafOf(field: Field, leaf: FieldLeaf): string | null {
+  switch (field.k) {
+    case "scalar":
+      return leaf === "formula" ? field.formula : null;
+    case "point":
+      if (leaf === "from") return field.from;
+      return leaf === "x" || leaf === "y" || leaf === "z" ? field[leaf] : null;
+    case "cut":
+      return leaf === "pos" ? field.pos : null;
   }
 }
 
 /** True when a point states its coordinates as one expression rather than three. */
-export const isDerived = (row: SheetRow): boolean =>
-  row.kind === "point" && row.from.trim() !== "";
+export const isDerived = (field: Field): boolean =>
+  field.k === "point" && field.from.trim() !== "";
 
 /**
- * Every formula cell a row EVALUATES TO, in the order the editor shows them.
+ * Every cell a field EVALUATES TO, in the order the editor shows them.
  *
  * A point has three whether or not it derives them: a derivation changes where their text comes from, never
- * how many there are, which is what lets `Places.CG.z`, the views and the sensitivity ranking go on working
- * without knowing the difference. So `from` is absent here and present in `fieldOf`, and that asymmetry is
- * the whole distinction between the two.
+ * how many there are, which is what lets `engine.cg.z`, the views and the sensitivity ranking go on working
+ * without knowing the difference. So `from` is absent here and present in `leafOf`, and that asymmetry is the
+ * whole distinction between the two.
  */
-export function fieldsOf(row: SheetRow): RowField[] {
-  switch (row.kind) {
-    case "heading":
-      return [];
-    case "item":
+export function leavesOf(field: Field): FieldLeaf[] {
+  switch (field.k) {
+    case "scalar":
       return ["formula"];
     case "point":
       return ["x", "y", "z"];
-    case "slice":
+    case "cut":
       return ["pos"];
   }
 }
@@ -446,36 +515,37 @@ export function fieldsOf(row: SheetRow): RowField[] {
 // `WeightBook` rather than a `Model`.
 
 export type SheetCommand =
-  | { type: "addSheet"; id: string; name: string; kind: PageKind }
-  | { type: "removeSheet"; sheet: string }
-  | { type: "renameSheet"; sheet: string; name: string }
-  | { type: "moveSheet"; sheet: string; to: number }
+  | { type: "addItem"; id: string; name: string; after: number }
+  | { type: "removeItem"; item: string }
+  | { type: "renameItem"; item: string; name: string }
+  | { type: "moveItem"; item: string; to: number }
+  | { type: "setItemNote"; item: string; note: string }
+  /**
+   * File an item, or unfile it. An empty `value` removes the facet outright rather than storing a blank,
+   * so "no system" is the absence of a key and never a key whose value is "".
+   *
+   * This is what dragging an item onto a node in the explorer sends. Grouping is a PROPERTY now, not a
+   * consequence of where a row landed, which is the whole reason a drag can record what was meant.
+   */
+  | { type: "setFacet"; item: string; key: string; value: string }
+  | { type: "addField"; item: string; key: string; kind: FieldKind }
+  | { type: "removeField"; item: string; key: string }
+  | { type: "moveField"; item: string; key: string; to: number }
+  | { type: "renameField"; item: string; key: string; name: string }
   | {
-      type: "addSheetRow";
-      sheet: string;
-      id: string;
-      after: number;
-      /** Omitted means "whatever this page holds". Only `heading` is ever worth saying. */
-      kind?: SheetRow["kind"];
-      name?: string;
-    }
-  | { type: "removeSheetRow"; sheet: string; row: string }
-  | { type: "moveSheetRow"; sheet: string; row: string; to: number }
-  | { type: "renameSheetRow"; sheet: string; row: string; name: string }
-  | {
-      type: "setSheetFormula";
-      sheet: string;
-      row: string;
-      field: RowField;
+      type: "setFieldFormula";
+      item: string;
+      field: string;
+      leaf: FieldLeaf;
       formula: string;
     }
-  | { type: "setSheetUnit"; sheet: string; row: string; unit: string }
-  | { type: "setSliceShape"; sheet: string; row: string; shape: SliceShape }
+  | { type: "setFieldUnit"; item: string; field: string; unit: string }
+  | { type: "setCutShape"; item: string; field: string; shape: SliceShape }
   /**
    * A point moved, as ONE edit.
    *
-   * Three `setSheetFormula`s would say the same thing, and they are what this replaces. A drag in the point
-   * editor writes two coordinates per frame, and `sameGesture` tells two gestures apart by their FIELD — so
+   * Three `setFieldFormula`s would say the same thing, and they are what this replaces. A drag in the point
+   * editor writes two coordinates per frame, and `sameGesture` tells two gestures apart by their LEAF — so
    * alternating x and z would coalesce into nothing and leave one undo step per pointer move. It also keeps
    * the three coordinates atomic: a point half-moved is not a position anyone authored.
    *
@@ -483,13 +553,14 @@ export type SheetCommand =
    */
   | {
       type: "setPointPosition";
-      sheet: string;
-      row: string;
+      item: string;
+      field: string;
       x?: string;
       y?: string;
       z?: string;
     }
-  | { type: "setSheetRowNote"; sheet: string; row: string; note: string }
+  /** One of the book's answers. An empty formula clears it — the book then answers nothing for that name. */
+  | { type: "setOutput"; name: string; formula: string }
   | { type: "setSheetDensity"; density: number }
   | { type: "installSheet"; book: WeightBook };
 
@@ -499,19 +570,21 @@ export type SheetCommand =
  * `SheetCommand` without listing it here stops compiling.
  */
 export const SHEET_COMMAND_TYPES = {
-  addSheet: 1,
-  removeSheet: 1,
-  renameSheet: 1,
-  moveSheet: 1,
-  addSheetRow: 1,
-  removeSheetRow: 1,
-  moveSheetRow: 1,
-  renameSheetRow: 1,
-  setSheetFormula: 1,
-  setSheetUnit: 1,
-  setSliceShape: 1,
+  addItem: 1,
+  removeItem: 1,
+  renameItem: 1,
+  moveItem: 1,
+  setItemNote: 1,
+  setFacet: 1,
+  addField: 1,
+  removeField: 1,
+  moveField: 1,
+  renameField: 1,
+  setFieldFormula: 1,
+  setFieldUnit: 1,
+  setCutShape: 1,
   setPointPosition: 1,
-  setSheetRowNote: 1,
+  setOutput: 1,
   setSheetDensity: 1,
   installSheet: 1,
 } as const satisfies Record<SheetCommand["type"], 1>;
@@ -524,39 +597,38 @@ export const isSheetCommand = (command: {
 export type SheetOutcome =
   { book: WeightBook; result?: number | boolean } | { rejected: string };
 
-const withSheets = (
-  book: WeightBook,
-  sheets: readonly Sheet[],
-): WeightBook => ({ ...book, sheets });
+const withItems = (book: WeightBook, items: readonly Item[]): WeightBook => ({
+  ...book,
+  items,
+});
 
-const editSheet = (
+const editItem = (
   book: WeightBook,
   id: string,
-  change: (sheet: Sheet) => Sheet | { rejected: string },
+  change: (item: Item) => Item | { rejected: string },
 ): SheetOutcome => {
-  const idx = book.sheets.findIndex((sheet) => sheet.id === id);
-  if (idx < 0) return { rejected: `no such page: ${id}` };
-  const next = change(book.sheets[idx]);
+  const idx = book.items.findIndex((item) => item.id === id);
+  if (idx < 0) return { rejected: `no such item: ${id}` };
+  const next = change(book.items[idx]);
   if ("rejected" in next) return next;
-  const sheets = [...book.sheets];
-  sheets[idx] = next;
-  return { book: withSheets(book, sheets) };
+  const items = [...book.items];
+  items[idx] = next;
+  return { book: withItems(book, items) };
 };
 
-const editRow = (
+const editField = (
   book: WeightBook,
-  sheetId: string,
-  rowId: string,
-  change: (row: SheetRow, sheet: Sheet) => SheetRow | { rejected: string },
+  itemId: string,
+  key: string,
+  change: (field: Field, item: Item) => Field | { rejected: string },
 ): SheetOutcome =>
-  editSheet(book, sheetId, (sheet) => {
-    const idx = sheet.rows.findIndex((row) => row.id === rowId);
-    if (idx < 0) return { rejected: `no such item: ${rowId}` };
-    const next = change(sheet.rows[idx], sheet);
+  editItem(book, itemId, (item) => {
+    const field = item.fields[key];
+    if (!field)
+      return { rejected: `${item.name || "this item"} has no ${key}` };
+    const next = change(field, item);
     if ("rejected" in next) return next;
-    const rows = [...sheet.rows];
-    rows[idx] = next;
-    return { ...sheet, rows };
+    return { ...item, fields: { ...item.fields, [key]: next } };
   });
 
 /**
@@ -569,161 +641,194 @@ export function interpretSheetCommand(
   command: SheetCommand,
 ): SheetOutcome {
   switch (command.type) {
-    case "addSheet": {
-      if (book.sheets.some((sheet) => sheet.id === command.id))
-        return { rejected: `page ${command.id} already exists` };
-      if (!CREATABLE_KINDS.includes(command.kind))
-        return { rejected: `a ${command.kind} page cannot be made yet` };
-      // One outputs page, because `OUT.` resolves by kind and two would make it ambiguous.
-      if (command.kind === "outputs" && outputsSheet(book))
-        return { rejected: "this book already has an outputs page" };
+    case "addItem": {
+      if (book.items.some((item) => item.id === command.id))
+        return { rejected: `item ${command.id} already exists` };
       const name = tidyName(command.name);
-      if (!isValidName(name))
+      // An unnamed item is legal — it is the scratch line a grid would spend a spare column on — but a named
+      // one has to be resolvable and has to be the only one answering to that name.
+      if (name && !isValidName(name))
         return {
           rejected: `"${command.name}" is not a name a formula can use`,
         };
-      if (book.sheets.some((sheet) => sheet.name === name))
-        return { rejected: `there is already a page called ${name}` };
-      return {
-        book: withSheets(book, [
-          ...book.sheets,
-          { id: command.id, name, kind: command.kind, rows: [] },
-        ]),
-        result: book.sheets.length,
-      };
+      if (name && isReserved(name))
+        return { rejected: `${name} is a name the formula language reserves` };
+      if (name && book.items.some((item) => item.name === name))
+        return { rejected: `there is already an item called ${name}` };
+      const at = Math.max(0, Math.min(book.items.length, command.after + 1));
+      const items = [...book.items];
+      items.splice(at, 0, blankItem(command.id, name));
+      return { book: withItems(book, items), result: at };
     }
 
-    case "removeSheet": {
-      const idx = book.sheets.findIndex((sheet) => sheet.id === command.sheet);
-      if (idx < 0) return { rejected: `no such page: ${command.sheet}` };
-      const sheets = [...book.sheets];
-      sheets.splice(idx, 1);
-      return { book: withSheets(book, sheets), result: idx };
+    case "removeItem": {
+      const idx = book.items.findIndex((item) => item.id === command.item);
+      if (idx < 0) return { rejected: `no such item: ${command.item}` };
+      const items = [...book.items];
+      items.splice(idx, 1);
+      return { book: withItems(book, items), result: idx };
     }
 
-    case "renameSheet": {
+    case "renameItem": {
       const name = tidyName(command.name);
-      if (!isValidName(name))
+      if (name && !isValidName(name))
         return {
-          rejected: `"${command.name}" is not a name a formula can use`,
+          rejected: `"${command.name}" is not a name a formula can use — letters, digits, _ and spaces, starting with a letter`,
         };
+      if (name && isReserved(name))
+        return { rejected: `${name} is a name the formula language reserves` };
       if (
-        book.sheets.some(
-          (sheet) => sheet.name === name && sheet.id !== command.sheet,
+        name &&
+        book.items.some(
+          (item) => item.name === name && item.id !== command.item,
         )
       )
-        return { rejected: `there is already a page called ${name}` };
-      return editSheet(book, command.sheet, (sheet) => ({ ...sheet, name }));
+        return { rejected: `there is already an item called ${name}` };
+      return editItem(book, command.item, (item) => ({ ...item, name }));
     }
 
-    case "moveSheet": {
-      const from = book.sheets.findIndex((sheet) => sheet.id === command.sheet);
-      if (from < 0) return { rejected: `no such page: ${command.sheet}` };
-      const to = Math.max(0, Math.min(book.sheets.length - 1, command.to));
+    case "moveItem": {
+      const from = book.items.findIndex((item) => item.id === command.item);
+      if (from < 0) return { rejected: `no such item: ${command.item}` };
+      const to = Math.max(0, Math.min(book.items.length - 1, command.to));
       if (to === from) return { book, result: false };
-      const sheets = [...book.sheets];
-      const [moved] = sheets.splice(from, 1);
-      sheets.splice(to, 0, moved);
-      return { book: withSheets(book, sheets), result: to };
+      const items = [...book.items];
+      const [moved] = items.splice(from, 1);
+      items.splice(to, 0, moved);
+      return { book: withItems(book, items), result: to };
     }
 
-    case "addSheetRow":
-      return editSheet(book, command.sheet, (sheet) => {
-        if (sheet.rows.some((row) => row.id === command.id))
-          return { rejected: `item ${command.id} already exists` };
-        // A heading is legal on any page; anything else is the page's own kind, whether or not it was named.
-        const kind =
-          command.kind === "heading" ? "heading" : ROW_KIND_OF[sheet.kind];
-        if (command.kind && command.kind !== kind)
+    case "setItemNote":
+      return editItem(book, command.item, (item) => ({
+        ...item,
+        note: command.note,
+      }));
+
+    case "setFacet": {
+      const key = tidyName(command.key);
+      if (!isValidName(key))
+        return { rejected: `"${command.key}" is not a usable facet name` };
+      const value = tidyFacetValue(command.value);
+      if (value && !isValidFacetValue(value))
+        return { rejected: `"${command.value}" is not a usable facet value` };
+      return editItem(book, command.item, (item) => {
+        const facets = { ...item.facets };
+        // Unfiling is the ABSENCE of a key, never a key holding "". Otherwise the explorer would have to know
+        // that two different shapes both mean "not filed", and one of them would eventually be missed.
+        if (value) facets[key] = value;
+        else delete facets[key];
+        return { ...item, facets };
+      });
+    }
+
+    case "addField": {
+      const key = tidyName(command.key);
+      if (!isValidName(key))
+        return { rejected: `"${command.key}" is not a name a formula can use` };
+      if (!isFieldKind(command.kind))
+        return { rejected: `there is no ${command.kind} field` };
+      return editItem(book, command.item, (item) => {
+        if (key in item.fields)
           return {
-            rejected: `a ${sheet.kind} page does not hold ${command.kind} rows`,
+            rejected: `${item.name || "this item"} already has a ${key}`,
           };
-        const at = Math.max(0, Math.min(sheet.rows.length, command.after + 1));
-        const rows = [...sheet.rows];
-        // Nothing to say about grouping: an item belongs to the heading it lands under, and it just landed.
-        rows.splice(at, 0, blankRow(kind, command.id, command.name ?? ""));
-        return { ...sheet, rows };
+        return {
+          ...item,
+          fields: { ...item.fields, [key]: blankField(command.kind) },
+        };
+      });
+    }
+
+    case "removeField":
+      return editItem(book, command.item, (item) => {
+        if (!(command.key in item.fields))
+          return {
+            rejected: `${item.name || "this item"} has no ${command.key}`,
+          };
+        const fields = { ...item.fields };
+        delete fields[command.key];
+        return { ...item, fields };
       });
 
-    case "removeSheetRow":
-      return editSheet(book, command.sheet, (sheet) => {
-        const idx = sheet.rows.findIndex((row) => row.id === command.row);
-        if (idx < 0) return { rejected: `no such item: ${command.row}` };
-        const rows = [...sheet.rows];
-        rows.splice(idx, 1);
-        return { ...sheet, rows };
-      });
+    case "moveField": {
+      const item = findItem(book, command.item);
+      if (!item) return { rejected: `no such item: ${command.item}` };
+      if (!(command.key in item.fields))
+        return {
+          rejected: `${item.name || "this item"} has no ${command.key}`,
+        };
+      return { book: fieldMoved(book, command.item, command.key, command.to) };
+    }
 
-    case "moveSheetRow":
-      return editSheet(book, command.sheet, (sheet) => {
-        const from = sheet.rows.findIndex((row) => row.id === command.row);
-        if (from < 0) return { rejected: `no such item: ${command.row}` };
-        const to = Math.max(0, Math.min(sheet.rows.length - 1, command.to));
-        const rows = [...sheet.rows];
-        const [moved] = rows.splice(from, 1);
-        rows.splice(to, 0, moved);
-        return { ...sheet, rows };
-      });
-
-    case "renameSheetRow": {
+    case "renameField": {
       const name = tidyName(command.name);
-      return editRow(book, command.sheet, command.row, (row) => {
-        // A heading is not a value and nothing can refer to one, so its text is under no naming rules.
-        if (isHeading(row)) return { ...row, name };
-        if (name && !isValidName(name))
+      if (!isValidName(name))
+        return {
+          rejected: `"${command.name}" is not a name a formula can use`,
+        };
+      return editItem(book, command.item, (item) => {
+        const field = item.fields[command.key];
+        if (!field)
           return {
-            rejected: `"${command.name}" is not a name a formula can use — letters, digits, _ and spaces, starting with a letter`,
+            rejected: `${item.name || "this item"} has no ${command.key}`,
           };
-        if (name && isReserved(name))
+        if (name === command.key) return item;
+        if (name in item.fields)
           return {
-            rejected: `${name} is a name the formula language reserves`,
+            rejected: `${item.name || "this item"} already has a ${name}`,
           };
-        return { ...row, name };
+        // Rebuilt in order rather than deleted-and-appended, so renaming a field does not move its column.
+        const fields: Record<string, Field> = {};
+        for (const [key, value] of Object.entries(item.fields))
+          fields[key === command.key ? name : key] = value;
+        return { ...item, fields };
       });
     }
 
-    case "setSheetFormula":
-      return editRow(book, command.sheet, command.row, (row) => {
-        // The field has to be one the row actually carries: a point has no `formula` and an item has no `z`.
-        // Writing it anyway would put a property on the row that nothing reads and the JSON would carry.
-        if (fieldOf(row, command.field) === null)
+    case "setFieldFormula":
+      return editField(book, command.item, command.field, (field) => {
+        // The leaf has to be one the field actually carries: a point has no `formula` and a scalar has no
+        // `z`. Writing it anyway would put a property on the field that nothing reads and the JSON would
+        // carry.
+        if (leafOf(field, command.leaf) === null)
           return {
-            rejected: `a ${row.kind} row has no ${command.field} to set`,
+            rejected: `a ${field.k} field has no ${command.leaf} to set`,
           };
-        return { ...row, [command.field]: command.formula };
+        return { ...field, [command.leaf]: command.formula };
       });
 
-    case "setSheetUnit":
-      return editRow(book, command.sheet, command.row, (row) => {
-        if (row.kind !== "item" && row.kind !== "point" && row.kind !== "slice")
-          return { rejected: `a ${row.kind} row carries no unit` };
-        return { ...row, unit: command.unit.trim() };
-      });
+    case "setFieldUnit":
+      return editField(book, command.item, command.field, (field) => ({
+        ...field,
+        // Point coordinates and cut positions are intrinsically lengths. Clearing either display unit
+        // restores metres instead of turning the next bare coordinate into a dimensionless number.
+        unit: command.unit.trim() || (field.k === "scalar" ? "" : "m"),
+      }));
 
-    case "setSliceShape":
-      return editRow(book, command.sheet, command.row, (row) => {
-        if (row.kind !== "slice")
-          return { rejected: "only a slice has a shape" };
-        return { ...row, shape: command.shape };
+    case "setCutShape":
+      return editField(book, command.item, command.field, (field) => {
+        if (field.k !== "cut") return { rejected: "only a cut has a shape" };
+        return { ...field, shape: command.shape };
       });
 
     case "setPointPosition":
-      return editRow(book, command.sheet, command.row, (row) => {
-        if (row.kind !== "point")
+      return editField(book, command.item, command.field, (field) => {
+        if (field.k !== "point")
           return { rejected: "only a point has a position" };
         return {
-          ...row,
-          x: command.x ?? row.x,
-          y: command.y ?? row.y,
-          z: command.z ?? row.z,
+          ...field,
+          x: command.x ?? field.x,
+          y: command.y ?? field.y,
+          z: command.z ?? field.z,
         };
       });
 
-    case "setSheetRowNote":
-      return editRow(book, command.sheet, command.row, (row) => ({
-        ...row,
-        note: command.note,
-      }));
+    case "setOutput": {
+      const outputs = { ...book.outputs };
+      if (command.formula.trim()) outputs[command.name] = command.formula;
+      else delete outputs[command.name];
+      return { book: { ...book, outputs } };
+    }
 
     case "setSheetDensity":
       if (!isFinite(command.density) || command.density <= 0)

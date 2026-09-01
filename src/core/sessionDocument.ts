@@ -26,7 +26,7 @@ import { cloneBook, emptyBook, type WeightBook } from "./sheet/book";
 
 export interface SessionDocument {
   readonly hull: HullState;
-  /** The weight estimate: pages of named rows. See `sheet/book.ts`. */
+  /** The weight estimate: named items carrying fields, filed by facets. See `sheet/book.ts`. */
   readonly weights: WeightBook;
 }
 

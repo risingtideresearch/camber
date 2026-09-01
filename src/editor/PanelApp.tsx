@@ -12,7 +12,7 @@ import { SelectionInfo } from "./SelectionInfo";
 import { StationsGrid } from "./StationsGrid";
 import { StabilityPanel } from "./StabilityPanel";
 import { Toolbar } from "./Toolbar";
-import { WeightPanel } from "./WeightPanel";
+import { WeightPanel } from "./weight/WeightPanel";
 import "./EditorApp.css";
 import "./PanelApp.css";
 

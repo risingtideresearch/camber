@@ -1,16 +1,19 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Vec2 } from "../core/math";
-import type { Model } from "../core/model";
+import type { Vec2 } from "../../core/math";
+import type { HullSampling } from "../../core/mesh";
+import type { Model } from "../../core/model";
 import {
   readTolerance,
   sectionOutline,
+  verticalSection,
   withNominal,
   withoutHandle,
   withTolerance,
   type HullOutlines,
   type Placement,
+  type SectionKind,
   type SectionOutline,
-} from "../core/sheet/points";
+} from "../../core/sheet/points";
 import "./PointViews.css";
 
 // ---------- placing a point in two projections ----------
@@ -47,12 +50,46 @@ export interface PointAxis {
 }
 
 export interface PlottedPoint {
+  /** `${itemId} ${fieldKey}` — one opaque handle, so a drag can name the cell it lands in. */
   readonly id: string;
+  readonly itemId: string;
+  readonly fieldKey: string;
   readonly name: string;
   readonly axes: Readonly<Record<Axis, PointAxis>>;
   /** The uncertainty region around the nominal, in each view's plane. See `points.ts`. */
   readonly xz: readonly Vec2[];
   readonly yz: readonly Vec2[];
+}
+
+/**
+ * One cut field, as it appears in the projections.
+ *
+ * A HORIZONTAL cut is a plane of constant world height, and the sheet's z is a world height, so it really is
+ * a level line in both views: `axis` says so and `at` says where.
+ *
+ * A STATION is not the vertical line it looks like it ought to be. It is cut normal to the plan heading, an
+ * authored plan curves, and the two halves are mirrored — so it leans, and closes as a shallow V. `trace` is
+ * its own measured outline projected into the profile, and `band` is that swept over the range its position
+ * could fall in. Both are empty where there is no measurement to draw from, and the straight line at `at` is
+ * then all there is to say. See `plotCuts`.
+ */
+export interface PlottedCut {
+  /** `${itemId} ${fieldKey}`, the same handle a point carries, so one `activeId` serves both. */
+  readonly id: string;
+  readonly itemId: string;
+  readonly fieldKey: string;
+  readonly name: string;
+  readonly axis: "x" | "z";
+  /** Sheet-frame metres. NaN where the cell errored or is empty, which is drawn nowhere. */
+  readonly at: number;
+  /** How far the position could fall below and above the nominal, both non-negative, in sheet metres. */
+  readonly lo: number;
+  readonly hi: number;
+  /** The cut's own outline in the profile's (x, z), sheet-frame metres. Empty where it is a level line. */
+  readonly trace: readonly Vec2[];
+  /** `trace` swept over the position's spread. Empty where the position is exact, or there is no trace. */
+  readonly band: readonly Vec2[];
+  readonly empty: boolean;
 }
 
 /**
@@ -69,6 +106,13 @@ export interface SnapTarget {
   /** What the cell becomes — a reference, not the number it currently works out to. */
   readonly formula: string;
   readonly label: string;
+  /**
+   * The `PlottedCut` this target is, where it is one.
+   *
+   * A view that already draws that cut names it instead of ruling a second line through it: the plane is on
+   * screen either way, and a straight red rule through a leaning station would be drawing it wrong twice.
+   */
+  readonly cut?: string;
 }
 
 /** A cell's new text, per axis. Only the axes a gesture actually moved appear. */
@@ -146,8 +190,10 @@ function useSize(
 
 export function PointViews({
   model,
+  sampling,
   outlines,
   points,
+  cuts,
   snaps,
   activeId,
   reading,
@@ -155,8 +201,11 @@ export function PointViews({
   onMove,
 }: {
   readonly model: Model;
+  /** The same sweep the outlines came from — a vertical slice is read off its rows. */
+  readonly sampling: HullSampling;
   readonly outlines: HullOutlines;
   readonly points: readonly PlottedPoint[];
+  readonly cuts: readonly PlottedCut[];
   readonly snaps: readonly SnapTarget[];
   readonly activeId: string | null;
   readonly reading: "worst" | "likely";
@@ -164,19 +213,40 @@ export function PointViews({
   readonly onMove: (id: string, move: Move) => void;
 }) {
   const active = points.find((point) => point.id === activeId) ?? null;
+  const activeCut = cuts.find((cut) => cut.id === activeId) ?? null;
 
-  // Where the section is cut: the active point's own x, or midships when nothing is focused. This is the
-  // whole coupling between the two views — the profile shows where the cut is, and moving a point along the
-  // profile moves the cut with it.
-  const atX =
+  // Which station to cut: whatever is selected says where to look, and says it in its own terms.
+  //
+  // A POINT asks for the plane THROUGH it. Asking for the plane at its x would be a different station —
+  // stations are normal to the plan heading, and the plan is the sheer running a metre off the centreline,
+  // so the plane at a point's x misses the point itself by up to 300 mm near the ends. The section is the
+  // one thing here that answers "is this inside the boat", and it can only answer it about a plane the point
+  // is actually in.
+  //
+  // A STATION CUT asks for the plane AT its `pos`, because that is what `pos` means and what `slices.ts`
+  // measured it as — so the preview is the same cut the schedule reports, not a near neighbour of it.
+  //
+  // Midships when nothing is selected.
+  const askX =
     active && isFinite(active.axes.x.value)
       ? active.axes.x.value
-      : (outlines.frame.xSpan[0] + outlines.frame.xSpan[1]) / 2;
-  // One cut, taken where the point is. Memoized on the x it was asked for, so a drag along the profile
-  // re-cuts once per position rather than once per render — and a formula edit elsewhere re-cuts not at all.
+      : activeCut && activeCut.axis === "x" && isFinite(activeCut.at)
+        ? activeCut.at
+        : (outlines.frame.xSpan[0] + outlines.frame.xSpan[1]) / 2;
+  // A selected STATION CUT is previewed as the station it is — the shape whose area the inspector is
+  // reporting has to be the shape on screen. Everything else is previewed as a VERTICAL slice, because the
+  // pane's question is whether a point is inside the boat and only the plane x = const contains the point to
+  // ask it of. Carried as a boolean rather than as the cut, so the memo below is keyed on primitives.
+  const asStation = !active && !!activeCut && activeCut.axis === "x";
+
+  // One cut, taken where the selection is. Memoized on what was asked for, so a drag re-cuts once per
+  // position rather than once per render — and a formula edit elsewhere re-cuts not at all.
   const section = useMemo(
-    () => sectionOutline(model, outlines.frame, atX),
-    [model, outlines.frame, atX],
+    () =>
+      asStation
+        ? sectionOutline(model, outlines.frame, { k: "at", x: askX })
+        : verticalSection(sampling, outlines.frame, askX),
+    [model, sampling, outlines.frame, askX, asStation],
   );
 
   return (
@@ -187,8 +257,11 @@ export function PointViews({
         hint="The hull in side view. Its silhouette, not a cut — context for x and z, never a boundary."
         outlines={outlines}
         section={null}
-        cutAt={atX}
+        cutKind={section?.kind ?? null}
+        cutAt={section?.x ?? null}
+        cutTrace={section?.trace ?? null}
         points={points}
+        cuts={cuts}
         snaps={snaps}
         activeId={activeId}
         reading={reading}
@@ -198,15 +271,25 @@ export function PointViews({
       <PointPlot
         plane={SECTION}
         label={
-          section
-            ? `Section at x = ${atX.toFixed(2)} m${section.clamped ? " (clamped to the hull)" : ""}`
-            : "Section"
+          !section
+            ? "Section"
+            : section.kind === "station"
+              ? // The station's OWN x, which is the `pos` that names this cut.
+                `Station x = ${section.x.toFixed(2)} m${section.clamped ? " (clamped to the hull)" : ""}`
+              : `Vertical slice at x = ${section.x.toFixed(2)} m`
         }
-        hint="The hull's own cut at this point's x, looking forward. A point outside the outline is outside the boat."
+        hint={
+          section?.kind === "station"
+            ? "The hull's own station — normal to the plan, and the cut whose area the schedule reports."
+            : "The hull cut straight across at this x, looking forward. A point outside the outline is outside the boat."
+        }
         outlines={outlines}
         section={section}
+        cutKind={null}
         cutAt={null}
+        cutTrace={null}
         points={points}
+        cuts={cuts}
         snaps={snaps}
         activeId={activeId}
         reading={reading}
@@ -249,8 +332,11 @@ function PointPlot({
   hint,
   outlines,
   section,
+  cutKind,
   cutAt,
+  cutTrace,
   points,
+  cuts,
   snaps,
   activeId,
   reading,
@@ -262,8 +348,14 @@ function PointPlot({
   readonly hint: string;
   readonly outlines: HullOutlines;
   readonly section: SectionOutline | null;
+  /** Which kind of cut is being previewed, or null in the pane that IS the preview. */
+  readonly cutKind: SectionKind | null;
+  /** Its x — the rule a vertical slice is drawn as. */
   readonly cutAt: number | null;
+  /** Its own outline seen from the side, which a station needs and a vertical slice does not. */
+  readonly cutTrace: readonly Vec2[] | null;
   readonly points: readonly PlottedPoint[];
+  readonly cuts: readonly PlottedCut[];
   readonly snaps: readonly SnapTarget[];
   readonly activeId: string | null;
   readonly reading: "worst" | "likely";
@@ -323,6 +415,18 @@ function PointPlot({
   );
   const axisSnaps = snaps.filter(
     (snap) => snap.axis === plane.across || snap.axis === plane.up,
+  );
+  // Which cuts this view actually has on screen. A cut belonging to an item the view is not scoped to is not
+  // among them, and its snap is still worth ruling a line for.
+  const shownCuts = new Set(
+    cuts
+      .filter(
+        (cut) =>
+          (profile && cut.trace.length > 1) ||
+          cut.axis === plane.across ||
+          cut.axis === plane.up,
+      )
+      .map((cut) => cut.id),
   );
 
   /**
@@ -486,7 +590,12 @@ function PointPlot({
                 true,
               )}
             />
-            {cutAt !== null && (
+            {/* The cut shown beside this, seen from the side.
+                A VERTICAL slice is a rule, drawn the full height: the plane is x = const, so a point at that
+                x is on it wherever it sits, and the plane really does go on past the hull.
+                A STATION is a curve, because its plane is normal to the plan heading and its x runs with the
+                athwartships offset — a vertical line there would mark a plane the hull was never cut on. */}
+            {cutKind === "vertical" && cutAt !== null && (
               <line
                 className="pcut"
                 x1={fit.px(cutAt, 0)[0]}
@@ -494,6 +603,9 @@ function PointPlot({
                 y1={0}
                 y2={h}
               />
+            )}
+            {cutKind === "station" && cutTrace && cutTrace.length > 1 && (
+              <path className="pcut" d={path(cutTrace, fit)} />
             )}
           </>
         ) : section ? (
@@ -513,15 +625,20 @@ function PointPlot({
           axisSnaps.map((snap, i) => {
             const along = snap.axis === plane.up;
             const [sx, sy] = fit.px(snap.at, snap.at);
+            // A cut this view is already drawing keeps its own line and gets only its name: ruling a second
+            // line over the first says nothing, and for a station it would say it straight over a curve.
+            const drawn = !!snap.cut && shownCuts.has(snap.cut);
             return (
               <g key={i}>
-                <line
-                  className="psnap"
-                  x1={along ? 0 : sx}
-                  x2={along ? w : sx}
-                  y1={along ? sy : 0}
-                  y2={along ? sy : h}
-                />
+                {!drawn && (
+                  <line
+                    className="psnap"
+                    x1={along ? 0 : sx}
+                    x2={along ? w : sx}
+                    y1={along ? sy : 0}
+                    y2={along ? sy : h}
+                  />
+                )}
                 {/* Named, because what a snap WRITES is a reference and not the number under the pointer —
                     the label is the only thing that says which. */}
                 <text
@@ -535,6 +652,97 @@ function PointPlot({
               </g>
             );
           })}
+
+        {/* The cuts, under the points: a plane seen edge-on is a line, and a point sitting ON one is the
+            thing being read off the drawing — so the line must never cover the marker. A cut this view has
+            no line for is simply absent: a station has no edge in a section, being the plane you are looking
+            along, and the caption above already says which one that is. */}
+        {cuts.map((cut) => {
+          const on = cut.id === activeId;
+          const press = (event: { stopPropagation: () => void }) => {
+            event.stopPropagation();
+            onFocus(cut.id);
+          };
+
+          // A station, drawn as the leaning lens it is. Only in the profile: in a section it is the plane
+          // being looked along, and the caption above already says which one that is.
+          if (profile && cut.trace.length) {
+            const top = cut.trace.reduce((a, b) => (a[1] > b[1] ? a : b));
+            const [tx, ty] = fit.px(top[0], top[1]);
+            return (
+              <g
+                key={cut.id}
+                className={`pcutline${on ? " on" : ""}`}
+                onPointerDown={press}
+              >
+                {cut.band.length > 2 && (
+                  <path className="pcutband" d={path(cut.band, fit, true)} />
+                )}
+                {/* Open, not closed. The trace runs sheer to keel and stops there — closing it would stroke
+                    a straight line back up to the sheer across the middle of the section, which is not a
+                    piece of hull. Only the swept band above is a region. */}
+                <path className="pcutedge" d={path(cut.trace, fit)} />
+                {/* The grab target: the same curve under a fat invisible stroke, because a leaning line a
+                    pixel or two wide is not something a pointer can hit. */}
+                <path className="pcuthit" d={path(cut.trace, fit)} />
+                <text className="pcutlabel" x={tx + 4} y={ty - 4}>
+                  {cut.name}
+                </text>
+              </g>
+            );
+          }
+
+          // A level line: a horizontal cut in either view, and a station the hull has not been cut at, where
+          // the position is the only thing there is to say.
+          if (cut.axis !== plane.across && cut.axis !== plane.up) return null;
+          if (!isFinite(cut.at)) return null;
+          const along = cut.axis === plane.up;
+          const line = (v: number): [number, number] =>
+            along ? fit.px(0, v) : fit.px(v, 0);
+          const [nx, ny] = line(cut.at);
+          const [lx, ly] = line(cut.at - cut.lo);
+          const [hx, hy] = line(cut.at + cut.hi);
+          return (
+            <g
+              key={cut.id}
+              className={`pcutline${on ? " on" : ""}${cut.trace.length ? "" : " flat"}`}
+              onPointerDown={press}
+            >
+              {/* Where the position could actually be. A cut known to ±5 cm is a band, and a bare line would
+                  claim a precision the cell does not have. */}
+              {cut.lo + cut.hi > 0 && (
+                <rect
+                  className="pcutband"
+                  x={along ? 0 : Math.min(lx, hx)}
+                  y={along ? Math.min(ly, hy) : 0}
+                  width={along ? w : Math.max(1, Math.abs(hx - lx))}
+                  height={along ? Math.max(1, Math.abs(hy - ly)) : h}
+                />
+              )}
+              <line
+                className="pcutedge"
+                x1={along ? 0 : nx}
+                x2={along ? w : nx}
+                y1={along ? ny : 0}
+                y2={along ? ny : h}
+              />
+              <line
+                className="pcuthit"
+                x1={along ? 0 : nx}
+                x2={along ? w : nx}
+                y1={along ? ny : 0}
+                y2={along ? ny : h}
+              />
+              <text
+                className="pcutlabel"
+                x={along ? 5 : nx + 4}
+                y={along ? ny - 4 : h - 5}
+              >
+                {cut.name}
+              </text>
+            </g>
+          );
+        })}
 
         {points.map((point) => {
           if (!plotted(point)) return null;
@@ -552,13 +760,22 @@ function PointPlot({
           const faded = Math.max(0.12, Math.min(1, 1 - away * 6));
           const region = regionOf(point);
           const ghost = point.axes[plane.across].empty || point.axes.z.empty;
-          const free =
-            point.axes[plane.across].placement !== null ||
-            point.axes.z.placement !== null;
+          const acrossFree = point.axes[plane.across].placement !== null;
+          const upFree = point.axes.z.placement !== null;
+          // The cursor says which motion this projection can actually write. A point with y locked but z
+          // free, for example, is a vertical handle in the section rather than a two-dimensional grab.
+          const motion =
+            acrossFree && upFree
+              ? " free-both"
+              : acrossFree
+                ? " free-across"
+                : upFree
+                  ? " free-up"
+                  : " locked";
           return (
             <g
               key={point.id}
-              className={`ppoint${on ? " on" : ""}${ghost ? " ghost" : ""}${free ? "" : " locked"}`}
+              className={`ppoint${on ? " on" : ""}${ghost ? " ghost" : ""}${motion}`}
               style={faded < 1 ? { opacity: faded } : undefined}
               onPointerDown={(event) => start(point, event, null)}
             >
@@ -607,7 +824,7 @@ function PointPlot({
               return (
                 <rect
                   key={axis}
-                  className="phandle"
+                  className={`phandle ${axis === "z" ? "vertical" : "horizontal"}`}
                   x={hx - 3.5}
                   y={hy - 3.5}
                   width={7}
