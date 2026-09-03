@@ -1,7 +1,13 @@
 import { FUNCTIONS } from "../../core/sheet/formula";
 import { HULL_METRICS, HULL_POINTS } from "../../core/hullMetrics";
-import type { FieldLeaf, Item, WeightBook } from "../../core/sheet/book";
+import {
+  lookupRole,
+  type FieldLeaf,
+  type Item,
+  type WeightBook,
+} from "../../core/sheet/book";
 import { OUTPUTS } from "../../core/sheet/outputs";
+import { ROLES } from "../../core/sheet/roles";
 import { SLICE_VALUE_FIELDS } from "../../core/sheet/slices";
 
 // ---------- what a formula can mention, offered as you type ----------
@@ -102,6 +108,19 @@ export function globalCompletions(
     const where = other.facets.system ? `in ${other.facets.system}` : "";
     for (const [key, field] of Object.entries(other.fields))
       offer(`${other.name}.`, key, "item", field.k, where);
+    // A role is offered only where it RESOLVES — one field tagged, not none and not two — which is the rule
+    // this whole module keeps: what is offered exists, and what exists is offered.
+    for (const spec of ROLES) {
+      const found = lookupRole(other, spec.name);
+      if (found.k !== "one") continue;
+      offer(
+        `${other.name}.`,
+        spec.name,
+        "item",
+        found.field.k,
+        `its ${spec.label}, ${found.key}`,
+      );
+    }
   }
 
   for (const spec of OUTPUTS)
@@ -147,6 +166,32 @@ export function siblingCompletions(
 ): Completion[] {
   const out: Completion[] = [];
   if (!item) return out;
+  // The item's own roles come first of all: `MASS` is the shortest true thing this cell can say, and it goes
+  // on being true when the field it reads gets renamed.
+  for (const spec of ROLES) {
+    const found = lookupRole(item, spec.name);
+    if (found.k !== "one") continue;
+    if (found.field.k === "point") {
+      if (coordinate)
+        out.push({
+          insert: spec.name,
+          kind: "sibling",
+          hint: `this item's ${spec.label} (${found.key}), in this cell's coordinate`,
+        });
+      for (const axis of ["x", "y", "z"] as const)
+        out.push({
+          insert: `${spec.name}.${axis}`,
+          kind: "sibling",
+          hint: `${axis} of this item's ${spec.label} (${found.key})`,
+        });
+      continue;
+    }
+    out.push({
+      insert: spec.name,
+      kind: "sibling",
+      hint: `this item's ${spec.label} (${found.key})`,
+    });
+  }
   for (const [key, field] of Object.entries(item.fields)) {
     if (field.k === "scalar") {
       out.push({ insert: key, kind: "sibling", hint: "on this item" });

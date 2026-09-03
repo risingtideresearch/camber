@@ -45,6 +45,7 @@ import {
   isSheetCommand,
   type SheetCommand,
 } from "./sheet/book";
+import { roleSpec } from "./sheet/roles";
 
 // ---------- the command set ----------
 // Coordinates are MODEL-space: the views map a pointer through their inverse transform before dispatching,
@@ -819,6 +820,10 @@ export function describeCommand(cmd: DocumentCommand): string {
       return cmd.unit ? `Write ${cmd.field} in ${cmd.unit}` : "Clear a unit";
     case "setCutShape":
       return `Cut with a ${cmd.shape}`;
+    case "setFieldRole":
+      return cmd.role
+        ? `Make ${cmd.field} the item's ${roleSpec(cmd.role)?.label ?? cmd.role}`
+        : `Untag ${cmd.field}`;
     case "setOutput":
       return cmd.formula.trim()
         ? `Answer ${cmd.name}`

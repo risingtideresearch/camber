@@ -1714,10 +1714,11 @@ button.wtermgo:focus-visible {
 }
 .wfieldblock header {
   display: grid;
-  /* Name, unit, mode and remove keep their affordance; the live summary owns only what remains and ellipsizes
-     there. In particular, changing a point in the geometry inspector cannot push Coordinates onto a new row. */
+  /* Name, unit, role, mode and remove keep their affordance; the live summary owns only what remains and
+     ellipsizes there. In particular, changing a point in the geometry inspector cannot push Coordinates onto
+     a new row. The role track collapses to nothing on a cut, which carries none. */
   grid-template-columns:
-    14px 18px minmax(90px, 160px) auto auto minmax(0, 1fr)
+    14px 18px minmax(90px, 160px) auto auto auto minmax(0, 1fr)
     28px;
   align-items: center;
   gap: 8px;
@@ -1795,6 +1796,7 @@ button.wtermgo:focus-visible {
   background: var(--bg);
 }
 .wfieldblock header select,
+.wfieldblock header .wrole,
 .wfieldblock header .wderive {
   font: inherit;
   font-size: 11px;
@@ -1806,12 +1808,37 @@ button.wtermgo:focus-visible {
   cursor: pointer;
   white-space: nowrap;
 }
-.wfieldblock header .wderive.on {
+.wfieldblock header .wderive.on,
+.wfieldblock header .wrole.on {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
 }
+/* A role names the language's own word for this field, so it is set in the same face a formula would use.
+   Quiet until it says something: every scalar can be a mass and only one of them is, so a card of six fields
+   would otherwise wear six identical pills. Dimmed and not hidden, for the reason the drag handle above is
+   drawn before the pointer arrives — a control nobody can see is a control nobody uses, and a reader who does
+   not know a field can be tagged will never hover it to find out. */
+.wfieldblock header .wrole {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  opacity: 0.4;
+}
+/* Full strength the moment it is worth reading: the one field that IS the mass, or one the pointer is on. */
+.wfieldblock header:hover .wrole,
+.wfieldblock header .wrole:focus-visible,
+.wfieldblock header .wrole.on,
+.wfieldblock header .wrole.clash {
+  opacity: 1;
+}
+/* Two fields of one item claiming a role. Only a file can say it, and only a click can settle it. */
+.wfieldblock header .wrole.clash {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
 .wfieldsummary {
-  grid-column: 6;
+  grid-column: 7;
   min-width: 0;
   max-width: 100%;
   justify-self: stretch;
@@ -1867,13 +1894,13 @@ button.wtermgo:focus-visible {
   text-overflow: ellipsis;
 }
 .wfieldblock header > .wremovefield {
-  grid-column: 7;
+  grid-column: 8;
 }
 /* Asking before removing a field that other formulas name. It takes the summary's column as well as the
    remove button's, because there is no room for a question in 28px and the value it replaces is the one
    thing on the header that does not matter while the question is open. */
 .wremoveconfirm {
-  grid-column: 6 / 8;
+  grid-column: 7 / 9;
   display: flex;
   align-items: center;
   justify-content: flex-end;

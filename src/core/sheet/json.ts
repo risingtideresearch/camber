@@ -27,6 +27,7 @@ import {
   type WeightBook,
 } from "./book";
 import { isOutputName } from "./outputs";
+import { canCarryRole, isRoleName } from "./roles";
 
 /**
  * The one weight-sheet format this build writes and reads.
@@ -47,6 +48,8 @@ interface StoredField {
   from?: string;
   shape?: string;
   pos?: string;
+  /** A `ROLES` name, on the kinds that may carry one. Absent where the field is just a field. */
+  role?: string;
 }
 
 interface StoredItem {
@@ -65,20 +68,33 @@ export interface SheetDocument {
   density: number;
 }
 
-/** Only the cells the field's kind actually carries, so the file says nothing a reader would have to ignore. */
+/**
+ * Only the cells the field's kind actually carries, so the file says nothing a reader would have to ignore.
+ *
+ * A role is written only when there is one, which keeps the common field as quiet on disk as it was before
+ * roles existed — and means an absent key reads as "untagged" rather than as a value someone chose.
+ */
 function storeField(field: Field): StoredField {
+  const tagged = (stored: StoredField, role: string | null): StoredField =>
+    role ? { ...stored, role } : stored;
   switch (field.k) {
     case "scalar":
-      return { k: field.k, formula: field.formula, unit: field.unit };
+      return tagged(
+        { k: field.k, formula: field.formula, unit: field.unit },
+        field.role,
+      );
     case "point":
-      return {
-        k: field.k,
-        unit: fieldUnit(field),
-        x: field.x,
-        y: field.y,
-        z: field.z,
-        from: field.from,
-      };
+      return tagged(
+        {
+          k: field.k,
+          unit: fieldUnit(field),
+          x: field.x,
+          y: field.y,
+          z: field.z,
+          from: field.from,
+        },
+        field.role,
+      );
     case "cut":
       return {
         k: field.k,
@@ -125,15 +141,28 @@ const dict = (v: unknown): Record<string, unknown> =>
  * Starts from `blankField` so that every cell the kind carries is present and empty, then fills in whatever
  * the file actually had. A field missing half its cells therefore reads as a half-written field rather than
  * as an object with holes in it — the same forgiveness the rest of this reader extends, applied per cell.
+ *
+ * A role that this build does not know, or that this kind cannot carry, is dropped rather than refused — the
+ * same forgiveness again. What is NOT repaired here is two fields of one item claiming the same role: that is
+ * a statement someone made, and losing one silently would be worse than saying so. `problemsOf` reports it
+ * and the detail card fixes it in a click.
  */
 function readField(raw: Record<string, unknown>, kind: FieldKind): Field {
   const field = blankField(kind);
+  const role = str(raw.role);
+  const tag = isRoleName(role) && canCarryRole(kind, role) ? role : null;
   switch (field.k) {
     case "scalar":
-      return { ...field, formula: str(raw.formula), unit: str(raw.unit) };
+      return {
+        ...field,
+        formula: str(raw.formula),
+        unit: str(raw.unit),
+        role: tag,
+      };
     case "point":
       return {
         ...field,
+        role: tag,
         // Point coordinates are always lengths, so empty and omitted units both take the metre default.
         unit: str(raw.unit, field.unit) || field.unit,
         x: str(raw.x),

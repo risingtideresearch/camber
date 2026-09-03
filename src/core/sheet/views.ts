@@ -28,6 +28,7 @@ import {
   facetKeys,
   facetSegments,
   primaryFacet,
+  roleKeys,
   type Field,
   type FieldKind,
   type FieldLeaf,
@@ -37,6 +38,7 @@ import {
   type WeightBook,
 } from "./book";
 import { SLICE_VALUE_FIELDS, type SliceValueField } from "./slices";
+import { ROLES } from "./roles";
 
 // ---------- scope ----------
 
@@ -448,7 +450,7 @@ export function problemsOf(
   cellKey: (item: string, field: string, leaf: FieldLeaf) => string,
 ): Problem[] {
   const out: Problem[] = [];
-  for (const item of book.items)
+  for (const item of book.items) {
     for (const [fieldKey, field] of Object.entries(item.fields))
       for (const leaf of leavesOf(field)) {
         const cell = results.cells.get(cellKey(item.id, fieldKey, leaf));
@@ -459,6 +461,23 @@ export function problemsOf(
         else if (cell.unitWarning)
           out.push({ item, fieldKey, leaf, message: cell.unitWarning });
       }
+
+    // Two fields of one item claiming the same role. Not authorable — `setFieldRole` moves the tag rather
+    // than copying it — so this is a book that arrived saying it, and the reader deliberately does not repair
+    // it. Reported on EVERY field involved, because the fix is to pick one and there is no telling from here
+    // which was meant.
+    for (const spec of ROLES) {
+      const keys = roleKeys(item, spec.name);
+      if (keys.length < 2) continue;
+      for (const fieldKey of keys)
+        out.push({
+          item,
+          fieldKey,
+          leaf: leavesOf(item.fields[fieldKey])[0],
+          message: `this and ${keys.filter((key) => key !== fieldKey).join(", ")} are both tagged as the ${spec.label} — only one of them can be`,
+        });
+    }
+  }
   return out;
 }
 

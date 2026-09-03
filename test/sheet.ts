@@ -31,6 +31,7 @@ import {
   interpretSheetCommand,
   isValidFacetValue,
   primaryFacet,
+  roleKeys,
   symbolsOf,
   tidyFacetValue,
   type FieldLeaf,
@@ -67,6 +68,7 @@ import {
 } from "../src/core/sheet/points";
 import { sameGesture, type DocumentCommand } from "../src/core/commands";
 import { bookViolations } from "../src/core/invariants";
+import { ROLES } from "../src/core/sheet/roles";
 import {
   completionsFor,
   suggestAt,
@@ -1017,10 +1019,11 @@ const problem = (
     "and naming the point in a scalar cell says which coordinate to ask for",
   );
 
+  // Not named "CG": that is a role name now, and the language reserves it the way it reserves HULL.
   let cg = run(book, {
     type: "addItem",
     id: "cg",
-    name: "CG",
+    name: "centre",
     after: book.items.length - 1,
   });
   cg = run(cg, { type: "addField", item: "cg", key: "place", kind: "point" });
@@ -1984,6 +1987,335 @@ const problem = (
     problems.find((entry) => entry.item.name === "blank")!.message ===
       "nothing written yet",
     "and an empty cell says so rather than pretending to be an error",
+  );
+}
+
+// ---------- a role says which field is the item's own, and the key stays free ----------
+//
+// The point of the tag is that it addresses a THING and not a name — the same rule item names follow one
+// level up. So the interesting questions are all about what survives: renaming the field it reads, moving it
+// to another field, and two items that do not agree on what to call it.
+{
+  let book = build([
+    { name: "engine", key: "dry mass", formula: "420", unit: "kg" },
+    { name: "tank", key: "weight", formula: "180", unit: "kg" },
+    { name: "total", formula: "engine.MASS + tank.MASS" },
+  ]);
+  const engine = idOf(book, "engine");
+  const tank = idOf(book, "tank");
+  book = run(book, {
+    type: "setFieldRole",
+    item: engine,
+    field: "dry mass",
+    role: "MASS",
+  });
+  book = run(book, {
+    type: "setFieldRole",
+    item: tank,
+    field: "weight",
+    role: "MASS",
+  });
+  ok(
+    value(book, "total") === 600,
+    "two items keying their mass differently are added by role, not by name",
+  );
+
+  const renamed = run(book, {
+    type: "renameField",
+    item: engine,
+    key: "dry mass",
+    name: "all up",
+  });
+  ok(
+    value(renamed, "total") === 600,
+    "and renaming the field the role reads rewrites nothing — the tag went with it",
+  );
+
+  // The whole reason a role is not a naming convention: an item may carry several masses.
+  let several = run(book, {
+    type: "addField",
+    item: engine,
+    key: "wet mass",
+    kind: "scalar",
+  });
+  several = run(several, {
+    type: "setFieldFormula",
+    item: engine,
+    field: "wet mass",
+    leaf: "formula",
+    formula: "470",
+  });
+  several = run(several, {
+    type: "setFieldUnit",
+    item: engine,
+    field: "wet mass",
+    unit: "kg",
+  });
+  ok(
+    value(several, "total") === 600,
+    "an item may carry a second mass without either of them becoming the one that counts",
+  );
+
+  // Tagging MOVES the role. This is what makes "one mass per item" a property of the write path.
+  const moved = run(several, {
+    type: "setFieldRole",
+    item: engine,
+    field: "wet mass",
+    role: "MASS",
+  });
+  ok(
+    roleKeys(moved.items[0], "MASS").join() === "wet mass",
+    "tagging a second field takes the role off the first rather than adding to it",
+  );
+  ok(value(moved, "total") === 650, "and the answer follows it across");
+
+  const cleared = run(moved, {
+    type: "setFieldRole",
+    item: engine,
+    field: "wet mass",
+    role: null,
+  });
+  ok(
+    problem(cleared, "total")!.includes("does not say which of its fields"),
+    "an item with no mass says so, rather than resolving to nothing in particular",
+  );
+}
+
+// ---------- a role is the language's own name, so nothing may take it ----------
+{
+  const book = build([{ name: "engine" }]);
+  const engine = idOf(book, "engine");
+  ok(
+    "rejected" in
+      interpretSheetCommand(book, {
+        type: "addField",
+        item: engine,
+        key: "MASS",
+        kind: "scalar",
+      }),
+    "a field may not be keyed MASS — resolve would reach the role and the field would be unnameable",
+  );
+  ok(
+    "rejected" in
+      interpretSheetCommand(book, {
+        type: "addItem",
+        id: "x",
+        name: "CG",
+        after: 0,
+      }),
+    "and an item may not be named CG, for the same reason HULL and OUT are refused",
+  );
+  ok(
+    symbolsOf(book).includes("MASS") && symbolsOf(book).includes("CG"),
+    "the lexer knows the role names, so a formula may mention one in a book that carries none",
+  );
+  ok(
+    "rejected" in
+      interpretSheetCommand(book, {
+        type: "setFieldRole",
+        item: engine,
+        field: "value",
+        role: "CG",
+      }),
+    "a scalar cannot be a centre of gravity — the catalogue says which kinds carry which role",
+  );
+}
+
+// ---------- a CG is one statement, read three times ----------
+{
+  let book = build([
+    { name: "engine", key: "mass", formula: "400", unit: "kg" },
+    { name: "tank", key: "mass", formula: "600", unit: "kg" },
+    { name: "boat", key: "mass", formula: "engine.MASS + tank.MASS" },
+  ]);
+  book = point(book, "engine", { x: "2", y: "0", z: "0.4" }, "cg");
+  book = point(book, "tank", { x: "5", y: "0", z: "1.0" }, "cg");
+  for (const name of ["engine", "tank"]) {
+    const id = idOf(book, name);
+    book = run(book, {
+      type: "setFieldRole",
+      item: id,
+      field: "mass",
+      role: "MASS",
+    });
+    book = run(book, {
+      type: "setFieldRole",
+      item: id,
+      field: "cg",
+      role: "CG",
+    });
+  }
+  // One expression over the two places, standing for all three coordinates — which is the whole reason a
+  // bare role binds to the cell's own axis, exactly as a bare point field does.
+  book = point(
+    book,
+    "boat",
+    { from: "(engine.MASS * engine.CG + tank.MASS * tank.CG) / mass" },
+    "cg",
+  );
+  const at = (leaf: FieldLeaf) => cellAt(book, "boat", "cg", leaf)!.reading!.v;
+  ok(near(at("x"), 3.8, 1e-9), "the derived x is the mass-weighted one");
+  ok(near(at("z"), 0.76, 1e-9), "and z comes off the same single statement");
+}
+
+// ---------- two fields claiming one role: reported, never repaired ----------
+//
+// Unauthorable, because `setFieldRole` moves the tag. It can only arrive in a file, and the answer there is
+// to say so: quietly keeping the first would produce a displacement that looks right and is not.
+{
+  const authored = build([
+    { name: "engine", key: "dry mass", formula: "420", unit: "kg" },
+    { name: "total", formula: "engine.MASS" },
+  ]);
+  const engine = idOf(authored, "engine");
+  let book = run(authored, {
+    type: "addField",
+    item: engine,
+    key: "wet mass",
+    kind: "scalar",
+  });
+  book = run(book, {
+    type: "setFieldRole",
+    item: engine,
+    field: "dry mass",
+    role: "MASS",
+  });
+  // Forged the way a file would say it, since no command will.
+  const forged: WeightBook = {
+    ...book,
+    items: book.items.map((item) =>
+      item.id !== engine
+        ? item
+        : {
+            ...item,
+            fields: {
+              ...item.fields,
+              "wet mass": {
+                k: "scalar",
+                formula: "470",
+                unit: "kg",
+                role: "MASS",
+              },
+            },
+          },
+    ),
+  };
+  ok(
+    problem(forged, "total")!.includes("only one of them can be"),
+    "a formula naming an ambiguous role refuses rather than picking one",
+  );
+  const problems = problemsOf(
+    forged,
+    evaluateBook(forged, null),
+    (i, f, l) => `${i} ${f} ${l}`,
+  );
+  const clashes = problems.filter((entry) =>
+    entry.message.includes("both tagged as the mass"),
+  );
+  ok(
+    clashes.length === 2 &&
+      clashes.map((entry) => entry.fieldKey).join() === "dry mass,wet mass",
+    "and both fields are reported, because there is no telling from here which was meant",
+  );
+  const settled = run(forged, {
+    type: "setFieldRole",
+    item: engine,
+    field: "wet mass",
+    role: "MASS",
+  });
+  ok(
+    value(settled, "total") === 470,
+    "clicking one of them settles it in a single edit",
+  );
+}
+
+// ---------- a role rides through the file, and an unknown one is dropped ----------
+{
+  let book = build([{ name: "engine", key: "dry mass", formula: "420" }]);
+  const engine = idOf(book, "engine");
+  book = point(book, "engine", { x: "2", y: "0", z: "0.4" }, "cg");
+  book = run(book, {
+    type: "setFieldRole",
+    item: engine,
+    field: "dry mass",
+    role: "MASS",
+  });
+  book = run(book, {
+    type: "setFieldRole",
+    item: engine,
+    field: "cg",
+    role: "CG",
+  });
+  const back = parseSheet(buildSheetJson(book))!;
+  ok(
+    roleKeys(back.items[0], "MASS").join() === "dry mass" &&
+      roleKeys(back.items[0], "CG").join() === "cg",
+    "a role survives the round trip",
+  );
+  ok(
+    !buildSheetJson(build([{ name: "plain" }])).includes('"role"'),
+    "and an untagged field writes no role at all, so the common line is as quiet as it was",
+  );
+  const foreign = parseSheet(
+    buildSheetJson(book).replace('"role": "MASS"', '"role": "COST"'),
+  )!;
+  ok(
+    roleKeys(foreign.items[0], "MASS").length === 0 &&
+      bookViolations(foreign).length === 0,
+    "a role this build does not know is dropped rather than refused",
+  );
+  const misplaced = parseSheet(
+    buildSheetJson(book).replace('"role": "MASS"', '"role": "CG"'),
+  )!;
+  ok(
+    roleKeys(misplaced.items[0], "CG").join() === "cg",
+    "and a role the field's kind cannot carry is dropped too",
+  );
+}
+
+// ---------- a tagged field is warned about when it is not the kind of thing it claims ----------
+{
+  let book = build([{ name: "engine", key: "mass", formula: "2", unit: "m" }]);
+  book = run(book, {
+    type: "setFieldRole",
+    item: idOf(book, "engine"),
+    field: "mass",
+    role: "MASS",
+  });
+  ok(
+    cellAt(book, "engine", "mass")!.unitWarning?.includes("should be kg"),
+    "a mass that works out to a length is flagged, exactly as a mistyped unit is",
+  );
+  ok(
+    cellAt(book, "engine", "mass")!.error === null,
+    "and flagged is all — the number is reported as written, never refused",
+  );
+}
+
+// ---------- what is offered is what resolves ----------
+{
+  let book = build([{ name: "engine", key: "dry mass", formula: "420" }]);
+  const engine = idOf(book, "engine");
+  const before = completionsFor(book, book.items[0]).map((c) => c.insert);
+  ok(
+    !before.includes("MASS"),
+    "an item with nothing tagged is not offered a role it would refuse",
+  );
+  book = run(book, {
+    type: "setFieldRole",
+    item: engine,
+    field: "dry mass",
+    role: "MASS",
+  });
+  const after = completionsFor(book, book.items[0]).map((c) => c.insert);
+  ok(after.includes("MASS"), "and one with a mass is offered it bare");
+  ok(
+    completionsFor(book, null).some((c) => c.insert === "engine.MASS"),
+    "while every other cell in the book is offered engine.MASS",
+  );
+  ok(
+    ROLES.every((spec) => spec.kinds.length > 0),
+    "and every role in the catalogue names a kind that can carry it",
   );
 }
 

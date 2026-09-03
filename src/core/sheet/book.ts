@@ -39,6 +39,8 @@
 // which this file knows about. Views live in `views.ts` and are derived, not authored. A `WeightBook`
 // survives `structuredClone` and `JSON.stringify` unchanged.
 
+import { canCarryRole, isRoleName, ROLE_NAMES, roleSpec } from "./roles";
+
 // ---------- the authored shape ----------
 
 /** What a slice cuts with. A plane is horizontal; a station is normal to the sheer plan's heading. */
@@ -63,6 +65,8 @@ export interface ScalarField {
   /** The expression, as the user typed it. Never stored pre-parsed — see `json.ts`. */
   readonly formula: string;
   readonly unit: string;
+  /** Which of the item's values this one IS, by `ROLES` name, or null where it is just a field. */
+  readonly role: string | null;
 }
 
 /**
@@ -99,6 +103,8 @@ export interface PointField {
    * coordinates that were there before it.
    */
   readonly from: string;
+  /** Which of the item's places this one IS, by `ROLES` name, or null where it is just a field. */
+  readonly role: string | null;
 }
 
 /**
@@ -106,6 +112,10 @@ export interface PointField {
  *
  * `pos` is in the sheet's frame, as a point's coordinates are: a height above the keel baseline for a plane,
  * x from the transom for a station.
+ */
+/*
+ * A cut carries no role. See the note on `RoleSpec.kinds`: a role names one value, and a cut is a position
+ * plus whatever is measured off it, so tagging one would have to name a leaf as well.
  */
 export interface CutField {
   readonly k: "cut";
@@ -246,15 +256,18 @@ export const tidyName = (name: string): string =>
 /**
  * The namespaces a formula reserves. An item may not take one of these for its own.
  *
- * They point in opposite directions. `HULL` is what the sheet READS — the geometry's own numbers, supplied to
+ * They point in three directions. `HULL` is what the sheet READS — the geometry's own numbers, supplied to
  * it. `OUT` is what the sheet PROVIDES — the answers the rest of the app asks it for, which live in
- * `book.outputs` (see `outputs.ts`). Both are reserved against being taken as an item name; only `OUT`
- * resolves to something the book itself authored.
+ * `book.outputs` (see `outputs.ts`). A ROLE name is what the sheet asks one ITEM for, resolving to whichever
+ * of its fields is tagged with it (see `roles.ts`).
+ *
+ * All of them are reserved against being taken as an item name or a field key, because all of them win over
+ * a user name in `resolve` — a field keyed `MASS` would simply be unreachable, and a name nothing can address
+ * is worse than a name refused.
  */
-export const RESERVED = ["HULL", "OUT"] as const;
+export const RESERVED: readonly string[] = ["HULL", "OUT", ...ROLE_NAMES];
 
-export const isReserved = (name: string): boolean =>
-  (RESERVED as readonly string[]).includes(name);
+export const isReserved = (name: string): boolean => RESERVED.includes(name);
 
 // ---------- facets ----------
 
@@ -441,17 +454,61 @@ export const DEFAULT_FIELD_KEY: Record<FieldKind, string> = {
 export const fieldUnit = (field: Field): string =>
   field.k === "scalar" ? field.unit : field.unit.trim() || "m";
 
+// ---------- roles ----------
+
+/** Which of the item's values this field is, or null. A cut is never one — see `roles.ts`. */
+export const roleOf = (field: Field): string | null =>
+  field.k === "cut" ? null : field.role;
+
+/** The same field, tagged or untagged. A cut is returned as it was, because it cannot carry one. */
+export const withRole = (field: Field, role: string | null): Field =>
+  field.k === "cut" ? field : { ...field, role };
+
+/** Every field of the item carrying a role, in authored order. More than one is a book to complain about. */
+export const roleKeys = (item: Item, role: string): string[] =>
+  Object.entries(item.fields)
+    .filter(([, field]) => roleOf(field) === role)
+    .map(([key]) => key);
+
+/**
+ * What an item answers for a role: nothing, one field, or an ambiguity.
+ *
+ * Three-way rather than `Field | null`, because "none" and "two" need different messages and a caller that
+ * collapsed them would have to guess which it was looking at. `setFieldRole` makes "many" impossible to
+ * author; it survives only in a book read off disk, where the answer is to say so rather than to pick one —
+ * a silently chosen mass produces a displacement that looks right and is not.
+ */
+export type RoleLookup =
+  | { readonly k: "none" }
+  | { readonly k: "one"; readonly key: string; readonly field: Field }
+  | { readonly k: "many"; readonly keys: readonly string[] };
+
+export function lookupRole(item: Item, role: string): RoleLookup {
+  const keys = roleKeys(item, role);
+  if (keys.length === 0) return { k: "none" };
+  if (keys.length > 1) return { k: "many", keys };
+  return { k: "one", key: keys[0], field: item.fields[keys[0]] };
+}
+
 /** A fresh field of one kind. Every cell it carries, empty. */
 export function blankField(kind: FieldKind): Field {
   switch (kind) {
     case "scalar":
-      return { k: "scalar", formula: "", unit: "" };
+      return { k: "scalar", formula: "", unit: "", role: null };
     case "point":
       // A point is the one field whose dimension is known before anything is typed: three lengths. Declaring
       // the unit up front is what makes `3.2` in a fresh cell mean 3.2 m rather than a bare number — which
       // matters because the editor AUTHORS these cells by dragging, and a dragged coordinate that came out
       // dimensionless would fail the first moment arm it was multiplied into.
-      return { k: "point", unit: "m", x: "", y: "", z: "", from: "" };
+      return {
+        k: "point",
+        unit: "m",
+        x: "",
+        y: "",
+        z: "",
+        from: "",
+        role: null,
+      };
     case "cut":
       // A cut's authored position is a length just like a point's coordinates. Starting in metres makes a
       // freshly typed or dragged `0.4` a location on the hull rather than a dimensionless number.
@@ -540,6 +597,14 @@ export type SheetCommand =
       formula: string;
     }
   | { type: "setFieldUnit"; item: string; field: string; unit: string }
+  /**
+   * Say which of the item's fields is its mass, or its centre of gravity. A null role clears the tag.
+   *
+   * Setting one MOVES it: whichever sibling held it gives it up in the same edit. That is what makes "an item
+   * has one mass" an invariant of the write path rather than a rule to check afterwards, and it is why the
+   * chip in the detail card needs no dialogue — clicking the field you meant is the whole gesture.
+   */
+  | { type: "setFieldRole"; item: string; field: string; role: string | null }
   | { type: "setCutShape"; item: string; field: string; shape: SliceShape }
   /**
    * A point moved, as ONE edit.
@@ -582,6 +647,7 @@ export const SHEET_COMMAND_TYPES = {
   renameField: 1,
   setFieldFormula: 1,
   setFieldUnit: 1,
+  setFieldRole: 1,
   setCutShape: 1,
   setPointPosition: 1,
   setOutput: 1,
@@ -725,6 +791,8 @@ export function interpretSheetCommand(
       const key = tidyName(command.key);
       if (!isValidName(key))
         return { rejected: `"${command.key}" is not a name a formula can use` };
+      // A reserved word wins over a field key in `resolve`, so a field taking one could never be named.
+      if (isReserved(key)) return { rejected: `${key} is a reserved name` };
       if (!isFieldKind(command.kind))
         return { rejected: `there is no ${command.kind} field` };
       return editItem(book, command.item, (item) => {
@@ -766,6 +834,7 @@ export function interpretSheetCommand(
         return {
           rejected: `"${command.name}" is not a name a formula can use`,
         };
+      if (isReserved(name)) return { rejected: `${name} is a reserved name` };
       return editItem(book, command.item, (item) => {
         const field = item.fields[command.key];
         if (!field)
@@ -804,6 +873,37 @@ export function interpretSheetCommand(
         // restores metres instead of turning the next bare coordinate into a dimensionless number.
         unit: command.unit.trim() || (field.k === "scalar" ? "" : "m"),
       }));
+
+    case "setFieldRole": {
+      const role = command.role;
+      if (role !== null && !isRoleName(role))
+        return { rejected: `there is no role called ${role}` };
+      return editItem(book, command.item, (item) => {
+        const field = item.fields[command.field];
+        if (!field)
+          return {
+            rejected: `${item.name || "this item"} has no ${command.field}`,
+          };
+        if (role !== null && !canCarryRole(field.k, role))
+          return {
+            rejected: `a ${field.k} cannot be an item's ${roleSpec(role)!.label}`,
+          };
+        // Rebuilt in order, and only where something actually changes, so tagging a field neither reorders
+        // the card nor gives every untouched field a new identity.
+        const fields: Record<string, Field> = {};
+        for (const [key, value] of Object.entries(item.fields)) {
+          const held = roleOf(value);
+          const next =
+            key === command.field
+              ? role
+              : role !== null && held === role
+                ? null
+                : held;
+          fields[key] = next === held ? value : withRole(value, next);
+        }
+        return { ...item, fields };
+      });
+    }
 
     case "setCutShape":
       return editField(book, command.item, command.field, (field) => {

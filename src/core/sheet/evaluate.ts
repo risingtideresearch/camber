@@ -14,6 +14,8 @@
 //   engine.cg.z           a leaf of a field of another item
 //   HULL.LWL              the geometry, exact, in metres and kilograms (`../hullMetrics.ts`)
 //   OUT.DISPLACEMENT      what the book itself answers (`outputs.ts`)
+//   MASS                  whichever field of THIS item is tagged as its mass (`roles.ts`)
+//   engine.CG.z           and of another item, whatever that item happens to key it
 //
 // Two segments are ambiguous in principle — `cg.z` could be a sibling's leaf or another item's field — and
 // the sibling wins, for the same reason a local variable shadows a global. It is the scope you are standing
@@ -64,6 +66,8 @@ import {
   isDerived,
   leafOf,
   leavesOf,
+  lookupRole,
+  roleOf,
   symbolsOf,
   type Field,
   type FieldLeaf,
@@ -72,6 +76,7 @@ import {
   type WeightBook,
 } from "./book";
 import { isOutputName, OUTPUTS, outputSpec } from "./outputs";
+import { isRoleName, roleSpec } from "./roles";
 import { naturalUnit, parseUnit, UnitError, type UnitSpec } from "./units";
 import {
   SLICE_VALUE_FIELDS,
@@ -574,6 +579,39 @@ export function evaluateBook(
     return valueAt(item.id, key, at, leaf as FieldLeaf);
   };
 
+  /**
+   * A role, on one item: `MASS`, `engine.CG`, `engine.CG.z`.
+   *
+   * It resolves to the tagged FIELD and then hands off to the ordinary field paths, so everything a field
+   * does a role does too. In particular a bare `CG` in a coordinate cell means that coordinate of it — which
+   * is what lets a centre of gravity be one expression rather than three, over items that need not agree on
+   * what they call the position it reads.
+   */
+  const roleValue = (
+    item: Item,
+    role: string,
+    after: readonly string[],
+    at: number,
+  ): Quantity => {
+    const spec = roleSpec(role)!;
+    const who = item.name || "this item";
+    const found = lookupRole(item, role);
+    if (found.k === "none")
+      fail(`${who} does not say which of its fields is its ${spec.label}`, at);
+    // Two fields claiming one role cannot be authored — `setFieldRole` moves the tag rather than copying it —
+    // so this is a book that arrived saying it. Picking one would answer with a number that looks right.
+    if (found.k === "many")
+      fail(
+        `${who} tags ${found.keys.join(" and ")} as its ${spec.label} — only one of them can be`,
+        at,
+      );
+    const { key, field } = found as { key: string; field: Field };
+    if (after.length === 0) return bareFieldValue(item, key, field, at);
+    if (after.length === 1) return leafValue(item, key, field, after[0], at);
+    fail(`${role}.${after.join(".")} is one dot too deep`, at);
+    return null!;
+  };
+
   /** `item.field`, `item.field.leaf` — the two shapes that start from a named item. */
   const fromItem = (
     item: Item,
@@ -582,6 +620,9 @@ export function evaluateBook(
     at: number,
   ): Quantity => {
     const key = rest[0];
+    // `engine.MASS` asks the item which of its fields that is. Ahead of the key lookup because a role name is
+    // reserved, so no field can be answering to it.
+    if (isRoleName(key)) return roleValue(item, key, rest.slice(1), at);
     const field = item.fields[key];
     if (!field) {
       const near = Object.keys(item.fields).find(
@@ -653,6 +694,17 @@ export function evaluateBook(
       if (!cells.has(cellKey(OUTPUT_ITEM, rest[0])))
         fail(`nothing answers ${rest[0]} yet`, at);
       return valueAt(OUTPUT_ITEM, rest[0], at);
+    }
+
+    // A bare ROLE means this item's. Alongside HULL and OUT rather than after the siblings, because these are
+    // the language's own names and `isReserved` keeps a field from taking one — so there is nothing to shadow.
+    if (isRoleName(head)) {
+      if (!currentItem)
+        fail(
+          `${head} means "this item's ${roleSpec(head)!.label}", and an answer belongs to no item — name the item, as in engine.${head}`,
+          at,
+        );
+      return roleValue(currentItem!, head, rest, at);
     }
 
     // A SIBLING field is tried first, at both lengths it could have: `area`, and `cg.z`. The scope you are
@@ -815,6 +867,13 @@ export function evaluateBook(
       spec && cell.value && !sameDim(cell.value.dim, spec.dim)
         ? `${spec.name} should be ${naturalUnit(spec.dim).label || "a plain number"}, and this works out to ${naturalUnit(cell.value.dim).label || "a plain number"}`
         : null;
+    // The same test, for a field that has been tagged as one of the item's own values. A point's coordinates
+    // are already refused unless they are lengths, so in practice this is what catches a mass that is not one.
+    const role = cell.field ? roleSpec(roleOf(cell.field) ?? "") : undefined;
+    const roleWarning =
+      role && cell.value && !sameDim(cell.value.dim, role.dim)
+        ? `an item's ${role.label} should be ${naturalUnit(role.dim).label || "a plain number"}, and this works out to ${naturalUnit(cell.value.dim).label || "a plain number"}`
+        : null;
     results.set(key, {
       itemId: cell.item?.id ?? OUTPUT_ITEM,
       fieldKey: cell.fieldKey,
@@ -827,7 +886,7 @@ export function evaluateBook(
       errorAt: cell.error?.at ?? -1,
       unit,
       unitIsDerived: !cell.declared && !!unit,
-      unitWarning: cell.unitWarning ?? outputWarning,
+      unitWarning: cell.unitWarning ?? outputWarning ?? roleWarning,
     });
   }
 
