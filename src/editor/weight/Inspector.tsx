@@ -77,6 +77,48 @@ export interface InspectorProps {
   readonly onGo: Go;
 }
 
+/** The full spread of a computed report value which has no authored cell of its own. */
+export function ComputedInspector({
+  address,
+  kind,
+  value,
+  factor,
+  unit,
+  reading,
+  results,
+  onGo,
+  note,
+}: {
+  readonly address: string;
+  readonly kind: string;
+  readonly value: Reading | null;
+  readonly factor: number;
+  readonly unit: string;
+  readonly reading: "worst" | "likely";
+  readonly results: BookResults;
+  readonly onGo: Go;
+  readonly note?: string;
+}) {
+  return (
+    <div className="winspector">
+      <Head address={address} kind={kind} />
+      {note && <p className="whint">{note}</p>}
+      {value ? (
+        <Detail
+          reading={value}
+          factor={factor}
+          unit={unit}
+          which={reading}
+          results={results}
+          onGo={onGo}
+        />
+      ) : (
+        <p className="whint">There is no value to inspect.</p>
+      )}
+    </div>
+  );
+}
+
 /** The same full spread reading for one of the book-level answers shown in the summary table. */
 export function OutputInspector({
   book,

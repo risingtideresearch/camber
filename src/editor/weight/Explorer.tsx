@@ -1,7 +1,7 @@
 // ---------- the item explorer ----------
 //
 // NOT a view. It shows the whole book whatever the active view is scoped to, because its job is orientation:
-// what is here, where it is filed, and what is broken. A view answers "what am I editing"; this answers
+// what is here, where it is filed, and what is broken. A view answers "what am I working in"; this answers
 // "what is there".
 //
 // ---------- one tree, all the way down ----------

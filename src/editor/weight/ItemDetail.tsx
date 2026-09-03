@@ -35,7 +35,6 @@ import type { DocumentCommand } from "../../core/commands";
 import {
   blankField,
   DEFAULT_FIELD_KEY,
-  facetKeys,
   fieldUnit,
   freeFieldKey,
   isDerived,
@@ -75,6 +74,7 @@ import {
   type Completion,
 } from "./weightCompletions";
 import type { Focus } from "./ItemTable";
+import { ItemFacets } from "./ItemFacets";
 
 export interface ItemDetailProps {
   readonly book: WeightBook;
@@ -294,7 +294,7 @@ export function ItemDetail(props: ItemDetailProps) {
         />
       </header>
 
-      <Facets book={book} item={item} send={send} />
+      <ItemFacets book={book} item={item} send={send} />
 
       <div className="wdetailfields" {...reorder.listProps}>
         {reorder.fields.length === 0 && (
@@ -371,74 +371,6 @@ export function ItemDetail(props: ItemDetailProps) {
           </button>
         )}
       </div>
-    </div>
-  );
-}
-
-// ---------- how it is filed ----------
-
-/**
- * The item's facets, as an editable list.
- *
- * Facets are the only thing here no formula can mention, and that is deliberate: filing is what a user must
- * stay free to change, so it must never appear in an address. Editing one here does the same thing dragging
- * the item onto a node in the explorer does — one `setFacet` — because they are the same statement.
- */
-function Facets({
-  book,
-  item,
-  send,
-}: {
-  readonly book: WeightBook;
-  readonly item: Item;
-  readonly send: (command: DocumentCommand) => void;
-}) {
-  const [key, setKey] = useState("");
-  const known = facetKeys(book);
-  const entries = Object.entries(item.facets);
-  return (
-    <div className="wfacets">
-      {entries.map(([facet, value]) => (
-        <label key={facet} className="wfacet">
-          <span className="wfacetkey">{facet}</span>
-          <TextField
-            value={value}
-            placeholder="unfiled"
-            className="wfacetvalue"
-            title="A path nests: structure/hull/shell. Empty unfiles it."
-            onCommit={(next) =>
-              send({ type: "setFacet", item: item.id, key: facet, value: next })
-            }
-          />
-        </label>
-      ))}
-      <span className="wfacetadd">
-        <input
-          list="wfacetkeys"
-          value={key}
-          placeholder="+ file under…"
-          spellCheck={false}
-          aria-label="A facet to file this item under"
-          onChange={(event) => setKey(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" || !key.trim()) return;
-            send({
-              type: "setFacet",
-              item: item.id,
-              key: key.trim(),
-              // A fresh facet starts unfiled rather than guessing a value; the field beside it is where the
-              // value gets typed, and an empty one would simply be removed again.
-              value: "unfiled",
-            });
-            setKey("");
-          }}
-        />
-        <datalist id="wfacetkeys">
-          {known.map((candidate) => (
-            <option key={candidate} value={candidate} />
-          ))}
-        </datalist>
-      </span>
     </div>
   );
 }

@@ -1638,6 +1638,9 @@ button.wtermgo:focus-visible {
   font-size: 12px;
   color: var(--mut);
 }
+/* A facet reads as its path: the key, then a cell per level with the separator drawn between them, then the
+   two acts that are not typing — `+` for a level below, `×` for not filed here at all. The cells size to
+   what they hold, so the chip stays the width of the path rather than the width of the widest box. */
 .wfacets {
   display: flex;
   flex-wrap: wrap;
@@ -1647,7 +1650,7 @@ button.wtermgo:focus-visible {
 .wfacet {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 2px 4px 2px 8px;
@@ -1656,10 +1659,44 @@ button.wtermgo:focus-visible {
 .wfacetkey {
   color: var(--mut);
 }
+.wfacetkey::after {
+  content: ":";
+}
+.wfacetsep {
+  color: var(--mut);
+}
 .wdetail input.wfacetvalue {
   font-size: 11px;
-  width: 140px;
+  /* `size` already fits the cell to the segment it holds; this grows it as it is TYPED, where the browser
+     has it, and is ignored where it does not. */
+  field-sizing: content;
+  min-width: 5ch;
   padding: 1px 4px;
+}
+/* Quiet until wanted: a path being read should not look like a row of buttons. */
+.wfacetdeeper,
+.wfacetdrop {
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--mut);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 5px;
+  cursor: pointer;
+}
+.wfacetdeeper:hover,
+.wfacetdeeper:focus-visible {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  outline: none;
+}
+.wfacetdrop:hover,
+.wfacetdrop:focus-visible {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  outline: none;
 }
 .wfacetadd input {
   font: inherit;
@@ -2571,4 +2608,137 @@ button.wtermgo:focus-visible {
   color: var(--sheer);
   font-size: 11.5px;
   margin: 6px 0 0;
+}
+
+/* ---------- read-only facet roll-ups ---------- */
+.wrollup {
+  min-width: 620px;
+  font-variant-numeric: tabular-nums;
+}
+.wrollup table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.wrollup th,
+.wrollup td {
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--line);
+}
+.wrollup thead th {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  background: var(--bg);
+  color: var(--mut);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+.wrollup thead tr:nth-child(2) th {
+  top: 29px;
+}
+.wrollup thead th:first-child {
+  text-align: left;
+}
+.wrollup tbody th,
+.wrollup tfoot th {
+  text-align: left;
+  white-space: nowrap;
+}
+.wrollup tbody td,
+.wrollup tfoot td {
+  text-align: right;
+  white-space: nowrap;
+}
+.wrollgroup {
+  background: color-mix(in srgb, var(--panel) 75%, transparent);
+}
+.wrollgroup th {
+  font-size: 12px;
+  font-weight: 700;
+}
+.wrollgroup th small,
+.wrollup tfoot th small {
+  margin-left: 7px;
+  color: var(--mut);
+  font-size: 10px;
+  font-weight: 400;
+}
+.wrollitem:hover {
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.wrollitem th button {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 500;
+  padding: 0;
+  cursor: pointer;
+}
+.wrollitem th button:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.wrollvalue {
+  min-width: 105px;
+  color: var(--ink);
+  font-size: 12px;
+}
+.wrollvalue.empty {
+  color: var(--line);
+}
+.wrollvalue.bad,
+.wrollvalue.warning {
+  color: var(--danger);
+}
+.wrollspread {
+  color: var(--mut);
+  font-size: 10px;
+}
+.wrollwarn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--sheer);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+}
+.wrollup tfoot {
+  background: var(--panel);
+  font-weight: 700;
+}
+.wrollup tfoot th,
+.wrollup tfoot td {
+  border-top: 2px solid var(--line);
+}
+.wrollnote {
+  margin: 10px 12px;
+  color: var(--mut);
+  font-size: 11px;
+}
+.wrollvalue button {
+  width: 100%;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: right;
+  padding: 3px 4px;
+  cursor: pointer;
+}
+.wrollvalue button:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.wrollvalue button:focus-visible,
+.wrollvalue.selected button {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }

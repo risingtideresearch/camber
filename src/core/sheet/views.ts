@@ -1,13 +1,16 @@
 // ---------- views: a scope, a grouping and a layout ----------
 //
-// A view selects and groups ITEMS, and then states what to ask each of them. It is an editing surface with a
-// scope on it, not a report that happens to be editable — which is why the standard views below are the ones
-// that replace the typed pages one-for-one, and why the cleverer ones are absent.
+// A view selects and groups ITEMS, and then states what to ask each of them. Field-oriented views are editing
+// surfaces; facet-oriented views are read-only roll-ups whose columns and totals come from roles. Keeping that
+// distinction explicit prevents a classification report from turning field names into an accidental schema.
 //
 // ---------- the standard views are DERIVED ----------
 //
-// Nothing stores them. The bar keeps only whole-book reports and useful alternate facet groupings; item and
-// facet editing views are opened from the explorer instead of generating a row of overlapping tabs.
+// Nothing stores them, and there are only ever two: the bar keeps whole-book reports and nothing else.
+// Everything that is a CUT of the book — one item, one facet value, a different grouping — is opened from
+// the explorer, which is where the cut is chosen in the first place. A tab per facet key looked like a
+// convenience and was really a bar that grew whenever someone invented a way of filing; facets exist to be
+// cheap to change, so nothing about creating one should feel permanent.
 //
 // ---------- columns are not classified ----------
 //
@@ -25,7 +28,6 @@
 import {
   facetContains,
   leavesOf,
-  facetKeys,
   facetSegments,
   primaryFacet,
   roleKeys,
@@ -327,43 +329,31 @@ export const SUMMARY_VIEW = "std-summary";
 export const PROBLEMS_VIEW = "std-problems";
 
 /**
- * Every view the book offers without anyone authoring one.
+ * Every view the book offers without anyone authoring one: what the estimate answers, and what is wrong with
+ * it. Both are the WHOLE book, which is the one thing the explorer cannot select.
  *
- * Summary and Problems bookend any alternate facet groupings. Values, positions, sections and the catch-all
- * table are reached through the explorer, where their scope is explicit, rather than appearing as automatic
- * tabs that duplicate it.
+ * The list does not depend on how the book is filed — only the summary's grouping does — so the bar is the
+ * same two tabs on the first item as on the thousandth. A roll-up of one facet is reached by clicking its
+ * node in the explorer (`facetView`), where the tree already shows what is being asked about.
  */
 export function standardViews(book: WeightBook): View[] {
   const primary = primaryFacet(book);
-  const groupBy = primary ? [primary] : [];
-  const views: View[] = [
+  return [
     {
       id: SUMMARY_VIEW,
       name: "Summary",
       scope: { k: "all" },
-      groupBy,
+      groupBy: primary ? [primary] : [],
       layout: "summary",
     },
+    {
+      id: PROBLEMS_VIEW,
+      name: "Problems",
+      scope: { k: "all" },
+      groupBy: [],
+      layout: "problems",
+    },
   ];
-
-  for (const key of facetKeys(book))
-    if (key !== primary)
-      views.push({
-        id: `std-facet-${key}`,
-        name: `By ${key}`,
-        scope: { k: "all" },
-        groupBy: [key],
-        layout: "table",
-      });
-
-  views.push({
-    id: PROBLEMS_VIEW,
-    name: "Problems",
-    scope: { k: "all" },
-    groupBy: [],
-    layout: "problems",
-  });
-  return views;
 }
 
 /**
@@ -378,7 +368,7 @@ export const facetView = (key: string, value: string): View => ({
   name: `${key}: ${value}`,
   scope: { k: "facet", key, value },
   groupBy: [key],
-  layout: "table",
+  layout: "rollup",
 });
 
 const parseFacetView = (id: string): View | null => {

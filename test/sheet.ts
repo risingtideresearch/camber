@@ -27,6 +27,7 @@ import {
 import { buildSheetJson, parseSheet } from "../src/core/sheet/json";
 import {
   emptyBook,
+  facetChildren,
   facetContains,
   interpretSheetCommand,
   isValidFacetValue,
@@ -69,6 +70,7 @@ import {
 import { sameGesture, type DocumentCommand } from "../src/core/commands";
 import { bookViolations } from "../src/core/invariants";
 import { ROLES } from "../src/core/sheet/roles";
+import { roleTotals } from "../src/core/sheet/rollups";
 import {
   completionsFor,
   suggestAt,
@@ -605,6 +607,26 @@ const problem = (
       }),
     "a value the tree could not split on is refused",
   );
+
+  const deep = build([
+    { name: "a", system: "structure/hull/shell" },
+    { name: "b", system: "structure/deck" },
+    { name: "c", system: "machinery" },
+    { name: "d" },
+  ]);
+  ok(
+    facetChildren(deep, "system", "").join() === "machinery,structure",
+    "the top level of a facet is what the book already files at the top level",
+  );
+  ok(
+    facetChildren(deep, "system", "structure").join() === "deck,hull",
+    "and a level below one offers only what is filed under THAT parent",
+  );
+  ok(
+    facetChildren(deep, "system", "structure/hull/shell").length === 0 &&
+      facetChildren(deep, "system", "machiner").length === 0,
+    "a leaf has nothing under it, and a half-typed parent is not a parent",
+  );
 }
 
 // ---------- grouping ----------
@@ -698,6 +720,21 @@ const problem = (
     ),
     "editing scopes are opened from the explorer rather than added as automatic tabs",
   );
+  ok(
+    names.length === 2,
+    "and so is every cut of the book — the bar is the whole-book reports, whatever is filed how",
+  );
+  ok(
+    standardViews(
+      run(book, {
+        type: "setFacet",
+        item: idOf(book, "ply"),
+        key: "status",
+        value: "weighed",
+      }),
+    ).length === 2,
+    "inventing a way of filing does not grow the bar, because filing is meant to be cheap to change",
+  );
 
   // Column derivation remains available to explorer-opened and saved views even though field-kind views are
   // no longer automatically listed in the bar.
@@ -774,8 +811,9 @@ const problem = (
   ok(
     resolveView(book, fv.id).scope.k === "facet" &&
       (resolveView(book, fv.id).scope as { value: string }).value ===
-        "structure/hull",
-    "and a facet view round-trips through its id, path and all",
+        "structure/hull" &&
+      resolveView(book, fv.id).layout === "rollup",
+    "and a facet view round-trips through its id as a read-only role roll-up",
   );
 }
 
@@ -2156,6 +2194,35 @@ const problem = (
   const at = (leaf: FieldLeaf) => cellAt(book, "boat", "cg", leaf)!.reading!.v;
   ok(near(at("x"), 3.8, 1e-9), "the derived x is the mass-weighted one");
   ok(near(at("z"), 0.76, 1e-9), "and z comes off the same single statement");
+
+  const totals = roleTotals(book.items, evaluateBook(book, null));
+  ok(
+    totals.get("MASS")!.readings.value!.v === 1000,
+    "a role roll-up sums the fields tagged as mass",
+  );
+  ok(
+    near(totals.get("CG")!.readings.x!.v, 3.8, 1e-9) &&
+      near(totals.get("CG")!.readings.z!.v, 0.76, 1e-9),
+    "and it mass-weights the fields tagged as centres of gravity",
+  );
+  ok(
+    totals.get("CG")!.coverage!.included.v === 1000 &&
+      totals.get("CG")!.coverage!.total.v === 1000,
+    "the CG total reports how much of the mass has a location",
+  );
+
+  const unlocated = run(book, {
+    type: "setFieldRole",
+    item: idOf(book, "tank"),
+    field: "cg",
+    role: null,
+  });
+  const partial = roleTotals(unlocated.items, evaluateBook(unlocated, null));
+  ok(
+    partial.get("CG")!.coverage!.included.v === 400 &&
+      partial.get("CG")!.coverage!.total.v === 1000,
+    "and exposes a mass with no CG instead of silently presenting a complete centre",
+  );
 }
 
 // ---------- two fields claiming one role: reported, never repaired ----------

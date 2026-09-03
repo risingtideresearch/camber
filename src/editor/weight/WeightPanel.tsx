@@ -7,15 +7,15 @@
 //
 // ---------- the panel is an editor first ----------
 //
-// Everything here serves authoring. A view is an editing surface with a scope on it, not a report that
-// happens to be editable — which is why the standard views are the ones that replace what the typed pages
-// did, at the same size and with the same chrome, and why the cleverer ones are absent. A `split` view puts
-// the profile or the hull INSIDE it at full width, exactly as the points and slices pages did.
+// Everything here serves authoring, but not every surface edits in place. An item view edits the fields of
+// one thing; a facet view is a read-only roll-up, because roles now provide stable columns and meaningful
+// totals without turning local field names into a schema. Opening an item from that report is the way back to
+// its formulas. A `split` view puts the profile or the hull inside an editable saved view at full width.
 //
 // ---------- three panes ----------
 //
 //   the explorer   every item, filed by a facet, whatever the view is scoped to
-//   the view       what is being edited
+//   the view       what is being edited or reviewed
 //   the inspector  what the selection IS — its spread, and the geometry editor where there is geometry
 //
 // The inspector follows the SELECTION rather than the view, which is what lets a table of plain values have a
@@ -40,6 +40,7 @@ import {
   findItem,
   newId,
   primaryFacet,
+  roleOf,
   type Item,
   type View,
   type WeightBook,
@@ -56,6 +57,9 @@ import {
 import { cellKey, outputResult, OUTPUT_ITEM } from "../../core/sheet/evaluate";
 import { hullOutlines, spreadRegion } from "../../core/sheet/points";
 import { EMPTY_GRADIENT, LENGTH } from "../../core/sheet/quantity";
+import { naturalUnit } from "../../core/sheet/units";
+import { roleTotals } from "../../core/sheet/rollups";
+import { roleSpec } from "../../core/sheet/roles";
 import { PointViews, type Move, type PlottedPoint } from "./PointViews";
 import { plotCuts, plotPoints, snapTargets } from "./pointPlots";
 import { Button } from "../../components/Button";
@@ -69,6 +73,7 @@ import { useStabilityAnalysis } from "../useStabilityAnalysis";
 import { useWeightBookResults } from "../useWeightBookResults";
 import { Explorer, type NewItemFiling } from "./Explorer";
 import {
+  ComputedInspector,
   Inspector,
   OutputInspector,
   UsesInspector,
@@ -76,6 +81,7 @@ import {
 } from "./Inspector";
 import { ItemTable, type Focus } from "./ItemTable";
 import { ItemDetail } from "./ItemDetail";
+import { FacetRollup, type RollupSelection } from "./FacetRollup";
 import { Problems, Summary } from "./Summary";
 import { problemItems, problemsOf } from "../../core/sheet/views";
 import "./WeightPanel.css";
@@ -96,6 +102,8 @@ export function WeightPanel() {
   const [sidePanel, setSidePanel] = useState<SidePanel>("auto");
   const [selectedOutput, setSelectedOutput] = useState("DISPLACEMENT");
   const [showReference, setShowReference] = useState(false);
+  const [rollupSelection, setRollupSelection] =
+    useState<RollupSelection | null>(null);
   /** The fresh item whose detail-name field should take the caret when it opens. */
   const [newItemName, setNewItemName] = useState<string | null>(null);
 
@@ -128,6 +136,7 @@ export function WeightPanel() {
     setFocus({ item: itemId, field: null, leaf: "formula" });
     setNewItemName(focusName ? itemId : null);
     setSidePanel("auto");
+    setRollupSelection(null);
   };
 
   /**
@@ -138,6 +147,7 @@ export function WeightPanel() {
    * focus on a row that is not on screen.
    */
   const go: Go = (itemId, fieldKey, leaf) => {
+    setRollupSelection(null);
     if (itemId === OUTPUT_ITEM) {
       setViewId(SUMMARY_VIEW);
       setSelectedOutput(fieldKey);
@@ -200,6 +210,8 @@ export function WeightPanel() {
               // The explorer's funnel: a node you were looking at becomes the view you are editing in, with
               // the same scope it drew. No view-builder to learn, because there is nothing to build.
               setViewId(facetView(key, value).id);
+              setFocus(null);
+              setRollupSelection(null);
             }}
             onAddItem={createItem}
             send={send}
@@ -211,7 +223,11 @@ export function WeightPanel() {
             views={views}
             active={view}
             book={book}
-            onPick={setViewId}
+            onPick={(id) => {
+              setViewId(id);
+              setFocus(null);
+              setRollupSelection(null);
+            }}
             onAddItem={addItem}
             inspectorShown={sidePanel !== "none"}
             onToggleInspector={() =>
@@ -247,6 +263,8 @@ export function WeightPanel() {
               selectedOutput,
               setSelectedOutput,
               newItemName,
+              rollupSelection,
+              setRollupSelection,
               go,
               send,
               groupFacet,
@@ -379,6 +397,8 @@ interface BodyProps {
   readonly selectedOutput: string;
   readonly setSelectedOutput: (name: string) => void;
   readonly newItemName: string | null;
+  readonly rollupSelection: RollupSelection | null;
+  readonly setRollupSelection: (selection: RollupSelection | null) => void;
   readonly go: Go;
   readonly send: (command: DocumentCommand) => void;
   readonly groupFacet: string | null;
@@ -570,6 +590,170 @@ function ViewBody(props: BodyProps) {
         <Problems problems={problems} onOpenItem={openItem} />
       </div>
     );
+
+  if (view.layout === "rollup") {
+    const selectedTotal =
+      props.rollupSelection?.viewId === view.id ? props.rollupSelection : null;
+    const totalItems = selectedTotal
+      ? selectedTotal.itemIds.flatMap((id) => {
+          const item = findItem(book, id);
+          return item ? [item] : [];
+        })
+      : [];
+    const total = selectedTotal
+      ? roleTotals(totalItems, results).get(selectedTotal.role)
+      : undefined;
+    const spec = selectedTotal ? roleSpec(selectedTotal.role) : undefined;
+    const unit = spec ? naturalUnit(spec.dim) : null;
+    const focusedItem = props.focus
+      ? items.find((item) => item.id === props.focus!.item)
+      : undefined;
+    const focusedField =
+      focusedItem && props.focus?.field
+        ? focusedItem.fields[props.focus.field]
+        : undefined;
+    const geometrySource = selectedTotal ? totalItems : items;
+    // A role roll-up draws the semantic positions it reports, not every incidental point an item carries.
+    const geometryItems = geometrySource.flatMap((item) => {
+      const fields = Object.fromEntries(
+        Object.entries(item.fields).filter(
+          ([, field]) => roleOf(field) === "CG",
+        ),
+      );
+      return Object.keys(fields).length ? [{ ...item, fields }] : [];
+    });
+    const geometryCg = roleTotals(geometrySource, results).get("CG");
+    const gx = geometryCg?.values.x;
+    const gy = geometryCg?.values.y;
+    const gz = geometryCg?.values.z;
+    const geometryTotal: PlottedPoint | null =
+      gx && gy && gz
+        ? {
+            id: "rollup-total-cg",
+            itemId: "ROLLUP",
+            fieldKey: "CG",
+            name: selectedTotal?.label ?? `${view.name} total`,
+            axes: {
+              x: { value: gx.v, placement: null, factor: 1, empty: false },
+              y: { value: gy.v, placement: null, factor: 1, empty: false },
+              z: { value: gz.v, placement: null, factor: 1, empty: false },
+            },
+            xz: spreadRegion(gx, gz, results.sources, props.reading),
+            yz: spreadRegion(gy, gz, results.sources, props.reading),
+          }
+        : null;
+    const hasGeometry = geometryItems.length > 0 || !!geometryTotal;
+    const offers: Shown[] = [
+      "spread",
+      ...(!selectedTotal && focusedField ? (["uses"] as const) : []),
+      ...(hasGeometry ? (["geometry"] as const) : []),
+    ];
+    const auto: Shown =
+      !selectedTotal && focusedField?.k === "point" && hasGeometry
+        ? "geometry"
+        : "spread";
+    const shown: Shown | null =
+      props.sidePanel === "none"
+        ? null
+        : offers.includes(props.sidePanel as Shown)
+          ? (props.sidePanel as Shown)
+          : auto;
+    const coverageIncomplete =
+      total?.coverage && total.coverage.included.v !== total.coverage.total.v;
+    const notes = [
+      ...(total?.issues ?? []),
+      ...(coverageIncomplete
+        ? ["This weighted value does not cover all of the mass in the group."]
+        : []),
+    ];
+
+    return (
+      <ResizableBody
+        main={
+          <FacetRollup
+            view={view}
+            items={items}
+            results={results}
+            reading={props.reading}
+            focus={selectedTotal ? null : props.focus}
+            selectedTotal={selectedTotal}
+            onSelectItem={(itemId, fieldKey, leaf) => {
+              props.setRollupSelection(null);
+              props.setFocus({ item: itemId, field: fieldKey, leaf });
+            }}
+            onSelectTotal={(selection) => {
+              props.setRollupSelection(selection);
+              props.setFocus(null);
+            }}
+            onOpenItem={openItem}
+          />
+        }
+        shown={shown}
+        side={
+          shown ? (
+            <>
+              <SideTabs
+                offers={offers}
+                shown={shown}
+                onPick={props.setSidePanel}
+              />
+              <div className="wsidebody">
+                {shown === "geometry" ? (
+                  <GeometryEditor
+                    {...props}
+                    items={geometryItems}
+                    readOnly
+                    extraPoints={geometryTotal ? [geometryTotal] : []}
+                    activeId={
+                      selectedTotal && geometryTotal
+                        ? geometryTotal.id
+                        : undefined
+                    }
+                    setFocus={(next) => {
+                      props.setRollupSelection(null);
+                      props.setFocus(next);
+                    }}
+                  />
+                ) : selectedTotal && spec && unit ? (
+                  <ComputedInspector
+                    address={`${selectedTotal.label}.${selectedTotal.role}${
+                      selectedTotal.leaf === "value"
+                        ? ""
+                        : `.${selectedTotal.leaf}`
+                    }`}
+                    kind="roll-up"
+                    value={total?.readings[selectedTotal.leaf] ?? null}
+                    factor={unit.factor}
+                    unit={unit.label}
+                    reading={props.reading}
+                    results={results}
+                    onGo={props.go}
+                    note={notes.join(" ") || undefined}
+                  />
+                ) : shown === "uses" ? (
+                  <UsesInspector
+                    book={book}
+                    results={results}
+                    focus={props.focus}
+                    onGo={props.go}
+                  />
+                ) : (
+                  <Inspector
+                    book={book}
+                    results={results}
+                    measurements={props.measurements}
+                    focus={props.focus}
+                    reading={props.reading}
+                    onGo={props.go}
+                  />
+                )}
+              </div>
+            </>
+          ) : null
+        }
+      />
+    );
+  }
 
   const detail = view.layout === "detail" ? (items[0] ?? null) : null;
   if (view.layout === "detail" && !detail)
@@ -816,7 +1000,14 @@ function GeometryEditor({
   send,
   model,
   hullSampling,
-}: BodyProps) {
+  readOnly = false,
+  extraPoints = [],
+  activeId,
+}: BodyProps & {
+  readonly readOnly?: boolean;
+  readonly extraPoints?: readonly PlottedPoint[];
+  readonly activeId?: string;
+}) {
   const outlines = useMemo(
     () => (hullSampling ? hullOutlines(model, hullSampling) : null),
     [model, hullSampling],
@@ -825,6 +1016,21 @@ function GeometryEditor({
     () => plotPoints(items, results, reading),
     [items, results, reading],
   );
+  // A report may select a point but must not turn its drawing into a second editing surface.
+  const shownPlots = useMemo(() => {
+    const all = [...plots, ...extraPoints];
+    return readOnly
+      ? all.map((point) => ({
+          ...point,
+          axes: Object.fromEntries(
+            Object.entries(point.axes).map(([axis, value]) => [
+              axis,
+              { ...value, placement: null },
+            ]),
+          ) as PlottedPoint["axes"],
+        }))
+      : all;
+  }, [plots, extraPoints, readOnly]);
   // The cuts need the hull as well as the book: a station's attitude is the outline the hull produced, not
   // anything the schedule knows. Without a sweep they fall back to the line their position names.
   const cuts = useMemo(
@@ -864,10 +1070,12 @@ function GeometryEditor({
       model={model}
       sampling={hullSampling}
       outlines={outlines}
-      points={plots}
+      points={shownPlots}
       cuts={cuts}
-      snaps={snaps}
-      activeId={focus?.field ? `${focus.item} ${focus.field}` : null}
+      snaps={readOnly ? [] : snaps}
+      activeId={
+        activeId ?? (focus?.field ? `${focus.item} ${focus.field}` : null)
+      }
       reading={reading}
       onFocus={(id) => {
         // One id space over both, since a field key is unique within its item — so a press lands in whichever
@@ -940,7 +1148,7 @@ function Reference({ book }: { readonly book: WeightBook }) {
           />
           <Entry
             term="status: weighed"
-            hint="a second facet cuts across the first — an item is in both"
+            hint="a second facet cuts across the first — the explorer's by: draws either"
           />
           <Entry
             term="(no formula names one)"

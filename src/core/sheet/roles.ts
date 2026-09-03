@@ -35,6 +35,11 @@
 import { LENGTH, MASS, type Dim } from "./quantity";
 import type { FieldKind } from "./book";
 
+export type RoleAggregation =
+  | { readonly k: "sum" }
+  | { readonly k: "weightedMean"; readonly weight: string }
+  | { readonly k: "none" };
+
 export interface RoleSpec {
   /** The reserved word a formula writes, and what the file stores. */
   readonly name: string;
@@ -49,6 +54,8 @@ export interface RoleSpec {
   readonly kinds: readonly FieldKind[];
   /** What it has to work out to. A field that disagrees is warned about, never refused. */
   readonly dim: Dim;
+  /** How values carrying this role combine in a facet roll-up. */
+  readonly aggregation: RoleAggregation;
   /** How the chip and the tooltips name it, in prose. */
   readonly label: string;
   readonly hint: string;
@@ -60,6 +67,7 @@ export const ROLES: readonly RoleSpec[] = [
     name: "MASS",
     kinds: ["scalar"],
     dim: MASS,
+    aggregation: { k: "sum" },
     label: "mass",
     hint: "What this item weighs, whichever of its fields says so",
   },
@@ -67,6 +75,7 @@ export const ROLES: readonly RoleSpec[] = [
     name: "CG",
     kinds: ["point"],
     dim: LENGTH,
+    aggregation: { k: "weightedMean", weight: "MASS" },
     label: "centre of gravity",
     hint: "Where this item's weight acts, whichever of its positions says so",
   },

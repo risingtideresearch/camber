@@ -199,11 +199,13 @@ export type ViewScope =
  * What renders a view.
  *
  * `table` and `split` are the two the typed pages had — a table alone, and a table beside a full-size editor
- * for what it holds. `detail` is one item and every field it carries. `summary` and `problems` are the two
- * that read the book rather than list it, and they are layouts rather than scopes because what they select
- * depends on EVALUATION, which the authored shape knows nothing about.
+ * for what it holds. `rollup` is the read-only role report used by facets. `detail` is one item and every
+ * field it carries. `summary` and `problems` are the two that read the book rather than list it, and they are
+ * layouts rather than scopes because what they select depends on EVALUATION, which the authored shape knows
+ * nothing about.
  */
-export type ViewLayout = "table" | "split" | "detail" | "summary" | "problems";
+export type ViewLayout =
+  "table" | "split" | "rollup" | "detail" | "summary" | "problems";
 
 export interface View {
   readonly id: string;
@@ -339,6 +341,30 @@ export function facetValues(book: WeightBook, key: string): string[] {
     if (value) values.add(value);
   }
   return [...values].sort();
+}
+
+/**
+ * The segments already in use one level below `prefix`, under one facet key. `""` asks for the top level.
+ *
+ * What a path is EXTENDED with. The level below `structure` is whatever the rest of the book already says it
+ * is, so offering that list is what keeps `structure/hull` and `structure/hulls` from becoming two branches
+ * of the same tree because one of them was typed twice.
+ */
+export function facetChildren(
+  book: WeightBook,
+  key: string,
+  prefix: string,
+): string[] {
+  const depth = prefix ? facetSegments(prefix).length : 0;
+  const children = new Set<string>();
+  for (const item of book.items) {
+    const value = item.facets[key];
+    if (!value) continue;
+    if (prefix && !facetContains(prefix, value)) continue;
+    const segments = facetSegments(value);
+    if (segments.length > depth) children.add(segments[depth]);
+  }
+  return [...children].sort();
 }
 
 // ---------- lookup ----------
