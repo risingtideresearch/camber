@@ -2742,3 +2742,73 @@ button.wtermgo:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+.wrollnames {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 11px;
+}
+.wrollnamelabel {
+  color: var(--mut);
+  font-weight: 600;
+}
+.wrollbinding {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 25px;
+}
+.wrollbinding code,
+.wrolladdresses {
+  color: var(--mut);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.wrollbinding input {
+  width: 150px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 3px 5px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.wrollbinding input:focus {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+}
+.wrollbinding input.bad {
+  border-color: var(--danger);
+}
+.wrollbinding button {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 3px 7px;
+  background: var(--bg);
+  color: var(--mut);
+  font: inherit;
+  cursor: pointer;
+}
+.wrollbinding button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.wrollbinding button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.wrollbinding button.wrollforget {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  font-size: 15px;
+}
+.wrollbinding button.wrollforget:hover {
+  color: var(--danger);
+}
+.wrollnameissue {
+  color: var(--danger);
+}

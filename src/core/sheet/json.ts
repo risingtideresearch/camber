@@ -14,13 +14,17 @@ import {
   emptyBook,
   fieldUnit,
   isFieldKind,
+  isReserved,
   isSliceShape,
   isValidFacetValue,
+  isValidName,
+  rollupsOf,
   SEAWATER_DENSITY,
   tidyFacetValue,
   type Field,
   type FieldKind,
   type Item,
+  type Rollup,
   type View,
   type ViewLayout,
   type ViewScope,
@@ -63,6 +67,7 @@ interface StoredItem {
 export interface SheetDocument {
   version: typeof SHEET_VERSION;
   items: StoredItem[];
+  rollups?: Rollup[];
   views: View[];
   outputs: Record<string, string>;
   density: number;
@@ -108,6 +113,7 @@ function storeField(field: Field): StoredField {
 export function buildSheetJson(book: WeightBook): string {
   const doc: SheetDocument = {
     version: SHEET_VERSION,
+    rollups: [...rollupsOf(book)],
     items: book.items.map((item) => ({
       id: item.id,
       name: item.name,
@@ -253,6 +259,29 @@ export function readDocument(raw: Record<string, unknown>): WeightBook {
       items.push({ id, name: str(s.name), note: str(s.note), facets, fields });
     }
 
+  const rollups: Rollup[] = [];
+  const rollupNames = new Set<string>();
+  if (Array.isArray(raw.rollups))
+    for (const entry of raw.rollups) {
+      const s = dict(entry);
+      const id = str(s.id);
+      const name = str(s.name);
+      const facetKey = str(s.facetKey);
+      const facetValue = tidyFacetValue(str(s.facetValue));
+      if (
+        id &&
+        isValidName(name) &&
+        !isReserved(name) &&
+        !rollupNames.has(name) &&
+        !items.some((item) => item.name === name) &&
+        isValidName(facetKey) &&
+        isValidFacetValue(facetValue)
+      ) {
+        rollupNames.add(name);
+        rollups.push({ id, name, facetKey, facetValue });
+      }
+    }
+
   const views: View[] = [];
   if (Array.isArray(raw.views))
     for (const entry of raw.views) {
@@ -270,7 +299,7 @@ export function readDocument(raw: Record<string, unknown>): WeightBook {
       ? raw.density
       : SEAWATER_DENSITY;
 
-  return { items, views, outputs, density };
+  return { items, rollups, views, outputs, density };
 }
 
 /**
@@ -299,6 +328,7 @@ export function parseSheet(text: string | null | undefined): WeightBook {
 /** Whether a book is worth persisting at all — an untouched one is stored as `null`, not as `{}`. */
 export const sheetIsEmpty = (book: WeightBook): boolean =>
   book.items.length === 0 &&
+  rollupsOf(book).length === 0 &&
   book.views.length === 0 &&
   Object.keys(book.outputs).length === 0 &&
   book.density === SEAWATER_DENSITY;

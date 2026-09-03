@@ -2,6 +2,7 @@ import { FUNCTIONS } from "../../core/sheet/formula";
 import { HULL_METRICS, HULL_POINTS } from "../../core/hullMetrics";
 import {
   lookupRole,
+  rollupsOf,
   type FieldLeaf,
   type Item,
   type WeightBook,
@@ -122,6 +123,26 @@ export function globalCompletions(
       );
     }
   }
+
+  for (const rollup of rollupsOf(book))
+    for (const spec of ROLES) {
+      const base = `ROLLUP.${rollup.name}.${spec.name}`;
+      const where = `${spec.label} of ${rollup.facetKey}: ${rollup.facetValue}`;
+      if (spec.kinds.includes("point")) {
+        if (coordinate)
+          out.push({
+            insert: base,
+            kind: "item",
+            hint: `${where}, in this coordinate`,
+          });
+        for (const axis of ["x", "y", "z"] as const)
+          out.push({
+            insert: `${base}.${axis}`,
+            kind: "item",
+            hint: `${axis} of ${where}`,
+          });
+      } else out.push({ insert: base, kind: "item", hint: where });
+    }
 
   for (const spec of OUTPUTS)
     if ((book.outputs[spec.name] ?? "").trim())

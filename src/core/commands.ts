@@ -793,6 +793,12 @@ export function describeCommand(cmd: DocumentCommand): string {
       return cmd.value
         ? `File under ${cmd.key}: ${cmd.value}`
         : `Unfile from ${cmd.key}`;
+    case "addRollup":
+      return `Add roll-up "${cmd.name}"`;
+    case "renameRollup":
+      return `Rename a roll-up to "${cmd.name}"`;
+    case "removeRollup":
+      return "Remove a roll-up";
     case "addField":
       return `Add a ${cmd.kind === "cut" ? "section" : cmd.kind} called "${cmd.key}"`;
     case "removeField":

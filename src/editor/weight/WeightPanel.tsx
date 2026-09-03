@@ -41,6 +41,7 @@ import {
   newId,
   primaryFacet,
   roleOf,
+  rollupsOf,
   type Item,
   type View,
   type WeightBook,
@@ -671,6 +672,7 @@ function ViewBody(props: BodyProps) {
       <ResizableBody
         main={
           <FacetRollup
+            book={book}
             view={view}
             items={items}
             results={results}
@@ -686,6 +688,7 @@ function ViewBody(props: BodyProps) {
               props.setFocus(null);
             }}
             onOpenItem={openItem}
+            send={send}
           />
         }
         shown={shown}
@@ -1156,6 +1159,24 @@ function Reference({ book }: { readonly book: WeightBook }) {
           />
         </dl>
       </Section>
+      {rollupsOf(book).length > 0 && (
+        <Section title="Named roll-ups">
+          <dl>
+            {rollupsOf(book).flatMap((rollup) => [
+              <Entry
+                key={`${rollup.id}-mass`}
+                term={`ROLLUP.${rollup.name}.MASS`}
+                hint={`sum of MASS under ${rollup.facetKey}: ${rollup.facetValue}`}
+              />,
+              <Entry
+                key={`${rollup.id}-cg`}
+                term={`ROLLUP.${rollup.name}.CG.z`}
+                hint="mass-weighted CG; use .x, .y or .z"
+              />,
+            ])}
+          </dl>
+        </Section>
+      )}
       <Section title="Positions and sections">
         <dl>
           <Entry

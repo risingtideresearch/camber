@@ -1,8 +1,8 @@
 // ---------- role-based facet roll-ups ----------
 //
-// A facet says WHICH items belong in a report; roles say WHAT comparable value each item contributes. The
-// resulting totals deliberately remain a report rather than a formula namespace, so refiling an item still
-// cannot change any calculation in the book.
+// A facet says WHICH items belong in a report; roles say WHAT comparable value each item contributes. A
+// transient report remains presentation only. When its facet subtree is explicitly given a roll-up name, the
+// evaluator exposes the same semantics under `ROLLUP.name`.
 
 import { leavesOf, lookupRole, type FieldLeaf, type Item } from "./book";
 import { resultAt, type BookResults, type CellResult } from "./evaluate";

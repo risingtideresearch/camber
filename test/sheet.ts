@@ -2195,6 +2195,95 @@ const problem = (
   ok(near(at("x"), 3.8, 1e-9), "the derived x is the mass-weighted one");
   ok(near(at("z"), 0.76, 1e-9), "and z comes off the same single statement");
 
+  book = run(book, {
+    type: "setFacet",
+    item: idOf(book, "engine"),
+    key: "system",
+    value: "structure/hull",
+  });
+  book = run(book, {
+    type: "setFacet",
+    item: idOf(book, "tank"),
+    key: "system",
+    value: "structure/hull/tank",
+  });
+  book = run(book, {
+    type: "addRollup",
+    id: "r1",
+    name: "hull",
+    facetKey: "system",
+    facetValue: "structure/hull",
+  });
+  book = run(book, {
+    type: "setOutput",
+    name: "VCG",
+    formula: "ROLLUP.hull.CG.z",
+  });
+  ok(
+    near(outputResult(evaluateBook(book, null), "VCG")!.reading!.v, 0.76, 1e-9),
+    "a named roll-up can be used as a formula value",
+  );
+  const renamedRollup = run(book, {
+    type: "renameRollup",
+    id: "r1",
+    name: "hull weights",
+  });
+  const renamedFormula = run(renamedRollup, {
+    type: "setOutput",
+    name: "VCG",
+    formula: "ROLLUP.hull weights.CG.z",
+  });
+  ok(
+    near(
+      outputResult(evaluateBook(renamedFormula, null), "VCG")!.reading!.v,
+      0.76,
+      1e-9,
+    ),
+    "a roll-up can be renamed inline and its new formula name resolves",
+  );
+  ok(
+    parseSheet(buildSheetJson(renamedRollup)).rollups?.[0].name ===
+      "hull weights",
+    "named roll-ups survive the file round trip",
+  );
+  const rollupCompletions = completionsFor(renamedRollup, null).map(
+    (completion) => completion.insert,
+  );
+  ok(
+    rollupCompletions.includes("ROLLUP.hull weights.MASS") &&
+      rollupCompletions.includes("ROLLUP.hull weights.CG.z") &&
+      !rollupCompletions.includes("ROLLUP.hull weights.CG"),
+    "autocomplete offers scalar roll-ups and explicit point coordinates",
+  );
+
+  const cyclic = run(
+    run(
+      run(book, {
+        type: "setFacet",
+        item: idOf(book, "boat"),
+        key: "system",
+        value: "structure/hull",
+      }),
+      {
+        type: "setFieldRole",
+        item: idOf(book, "boat"),
+        field: "mass",
+        role: "MASS",
+      },
+    ),
+    {
+      type: "setFieldFormula",
+      item: idOf(book, "boat"),
+      field: "mass",
+      leaf: "formula",
+      formula: "ROLLUP.hull.MASS * 0.1",
+    },
+  );
+  ok(
+    cellAt(cyclic, "boat", "mass")!.error?.includes("refers back to itself"),
+    "a roll-up containing the formula that reads it reports a cycle",
+  );
+
   const totals = roleTotals(book.items, evaluateBook(book, null));
   ok(
     totals.get("MASS")!.readings.value!.v === 1000,

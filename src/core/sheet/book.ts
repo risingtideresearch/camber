@@ -17,9 +17,10 @@
 // container and a tab all at once, so reorganising an estimate — the thing you do most as one grows — meant
 // rewriting every formula that crossed a page boundary.
 //
-// Organisation now lives in FACETS (`system: structure/hull/shell`, `status: weighed`), which no formula
-// mentions, so an item can be reclassified freely and nothing breaks. That is the rule the whole design turns
-// on: an address names a thing, never where the thing is filed.
+// Organisation now lives in FACETS (`system: structure/hull/shell`, `status: weighed`). Ordinary formulas
+// name items, never their filing. A user may explicitly give one facet subtree a stable roll-up name when a
+// calculation is intended to depend on membership; that exceptional dependency then reads `ROLLUP.hull.MASS`
+// rather than smuggling a facet path into an item address.
 //
 // ---------- fields are local, and ad-hoc ----------
 //
@@ -143,7 +144,7 @@ export const isFieldKind = (kind: string): kind is FieldKind =>
  * leading digit.
  *
  * `facets` is how the item is filed: `system: structure/hull/shell`, `status: weighed`. A value may be a
- * path, and that is what makes a facet tree. Nothing in a formula may mention one.
+ * path, and that is what makes a facet tree. Only an explicitly named roll-up exposes membership to formulas.
  */
 export interface Item {
   readonly id: string;
@@ -168,8 +169,17 @@ export interface CellRef {
   readonly field: string;
 }
 
+export interface Rollup {
+  readonly id: string;
+  readonly name: string;
+  readonly facetKey: string;
+  readonly facetValue: string;
+}
+
 export interface WeightBook {
   readonly items: readonly Item[];
+  /** Named facet aggregates exposed to formulas as ROLLUP.name.ROLE. */
+  readonly rollups: readonly Rollup[];
   /**
    * Saved views. The four standard ones are DERIVED from what the book contains (see `views.ts`) and are not
    * in here — a stored copy of a generated thing is a thing that can go stale.
@@ -216,10 +226,15 @@ export interface View {
   readonly layout: ViewLayout;
 }
 
+/** Roll-ups from the current shape, tolerating a live pre-roll-up snapshot during an upgrade. */
+export const rollupsOf = (book: WeightBook): readonly Rollup[] =>
+  Array.isArray(book.rollups) ? book.rollups : [];
+
 export const SEAWATER_DENSITY = 1.025;
 
 export const emptyBook = (): WeightBook => ({
   items: [],
+  rollups: [],
   views: [],
   outputs: {},
   density: SEAWATER_DENSITY,
@@ -233,6 +248,7 @@ export const cloneBook = (book: WeightBook): WeightBook => ({
       Object.entries(item.fields).map(([key, field]) => [key, { ...field }]),
     ),
   })),
+  rollups: rollupsOf(book).map((rollup) => ({ ...rollup })),
   views: book.views.map((view) => ({ ...view, groupBy: [...view.groupBy] })),
   outputs: { ...book.outputs },
   density: book.density,
@@ -267,7 +283,12 @@ export const tidyName = (name: string): string =>
  * a user name in `resolve` — a field keyed `MASS` would simply be unreachable, and a name nothing can address
  * is worse than a name refused.
  */
-export const RESERVED: readonly string[] = ["HULL", "OUT", ...ROLE_NAMES];
+export const RESERVED: readonly string[] = [
+  "HULL",
+  "OUT",
+  "ROLLUP",
+  ...ROLE_NAMES,
+];
 
 export const isReserved = (name: string): boolean => RESERVED.includes(name);
 
@@ -428,6 +449,8 @@ export const itemsWithKind = (book: WeightBook, kind: FieldKind): Item[] =>
  */
 export function symbolsOf(book: WeightBook): string[] {
   const names = new Set<string>(RESERVED);
+  names.add("ROLLUP");
+  for (const rollup of rollupsOf(book)) names.add(rollup.name);
   for (const item of book.items) {
     if (item.name) names.add(item.name);
     for (const key of Object.keys(item.fields)) names.add(key);
@@ -611,6 +634,15 @@ export type SheetCommand =
    * consequence of where a row landed, which is the whole reason a drag can record what was meant.
    */
   | { type: "setFacet"; item: string; key: string; value: string }
+  | {
+      type: "addRollup";
+      id: string;
+      name: string;
+      facetKey: string;
+      facetValue: string;
+    }
+  | { type: "renameRollup"; id: string; name: string }
+  | { type: "removeRollup"; id: string }
   | { type: "addField"; item: string; key: string; kind: FieldKind }
   | { type: "removeField"; item: string; key: string }
   | { type: "moveField"; item: string; key: string; to: number }
@@ -667,6 +699,9 @@ export const SHEET_COMMAND_TYPES = {
   moveItem: 1,
   setItemNote: 1,
   setFacet: 1,
+  addRollup: 1,
+  renameRollup: 1,
+  removeRollup: 1,
   addField: 1,
   removeField: 1,
   moveField: 1,
@@ -747,6 +782,8 @@ export function interpretSheetCommand(
         return { rejected: `${name} is a name the formula language reserves` };
       if (name && book.items.some((item) => item.name === name))
         return { rejected: `there is already an item called ${name}` };
+      if (name && rollupsOf(book).some((rollup) => rollup.name === name))
+        return { rejected: `there is already a roll-up called ${name}` };
       const at = Math.max(0, Math.min(book.items.length, command.after + 1));
       const items = [...book.items];
       items.splice(at, 0, blankItem(command.id, name));
@@ -776,6 +813,8 @@ export function interpretSheetCommand(
         )
       )
         return { rejected: `there is already an item called ${name}` };
+      if (name && rollupsOf(book).some((rollup) => rollup.name === name))
+        return { rejected: `there is already a roll-up called ${name}` };
       return editItem(book, command.item, (item) => ({ ...item, name }));
     }
 
@@ -811,6 +850,65 @@ export function interpretSheetCommand(
         else delete facets[key];
         return { ...item, facets };
       });
+    }
+
+    case "addRollup": {
+      const name = tidyName(command.name);
+      const key = tidyName(command.facetKey);
+      const value = tidyFacetValue(command.facetValue);
+      if (!isValidName(name) || isReserved(name))
+        return { rejected: `${command.name} is not a usable roll-up name` };
+      if (book.items.some((item) => item.name === name))
+        return { rejected: `there is already an item called ${name}` };
+      if (!isValidName(key) || !value || !isValidFacetValue(value))
+        return { rejected: "a roll-up needs a usable facet and value" };
+      if (rollupsOf(book).some((rollup) => rollup.id === command.id))
+        return { rejected: `roll-up ${command.id} already exists` };
+      if (rollupsOf(book).some((rollup) => rollup.name === name))
+        return { rejected: `there is already a roll-up called ${name}` };
+      return {
+        book: {
+          ...book,
+          rollups: [
+            ...rollupsOf(book),
+            { id: command.id, name, facetKey: key, facetValue: value },
+          ],
+        },
+      };
+    }
+
+    case "renameRollup": {
+      const name = tidyName(command.name);
+      if (!isValidName(name) || isReserved(name))
+        return { rejected: `${command.name} is not a usable roll-up name` };
+      if (book.items.some((item) => item.name === name))
+        return { rejected: `there is already an item called ${name}` };
+      if (
+        rollupsOf(book).some(
+          (rollup) => rollup.name === name && rollup.id !== command.id,
+        )
+      )
+        return { rejected: `there is already a roll-up called ${name}` };
+      let found = false;
+      const rollups = rollupsOf(book).map((rollup) => {
+        if (rollup.id !== command.id) return rollup;
+        found = true;
+        return { ...rollup, name };
+      });
+      return found
+        ? { book: { ...book, rollups } }
+        : { rejected: `no such roll-up: ${command.id}` };
+    }
+
+    case "removeRollup": {
+      if (!rollupsOf(book).some((rollup) => rollup.id === command.id))
+        return { rejected: `no such roll-up: ${command.id}` };
+      return {
+        book: {
+          ...book,
+          rollups: rollupsOf(book).filter((rollup) => rollup.id !== command.id),
+        },
+      };
     }
 
     case "addField": {

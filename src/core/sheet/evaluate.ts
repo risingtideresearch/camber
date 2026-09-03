@@ -21,9 +21,9 @@
 // the sibling wins, for the same reason a local variable shadows a global. It is the scope you are standing
 // in, and the alternative is reachable by writing the item's name.
 //
-// Note what is NOT in that list: nothing addresses a facet. An item's `system` or `status` is how it is
-// FILED, and filing is exactly the thing a user must be free to change without rewriting formulas. That is
-// the rule the whole model turns on, and this module is where it is enforced by omission.
+// A facet path itself is not an address. The deliberate exception is a named aggregate such as
+// `ROLLUP.hull.MASS`: creating that name explicitly says this calculation is intended to change when items
+// enter or leave that facet subtree.
 //
 // ---------- names may contain spaces ----------
 //
@@ -52,8 +52,12 @@ import {
 } from "../hullMetrics";
 import {
   AREA,
+  add,
+  div,
+  exact,
   isDimless,
   LENGTH,
+  mul,
   read,
   sameDim,
   type Dim,
@@ -62,17 +66,20 @@ import {
   type Source,
 } from "./quantity";
 import {
+  facetContains,
   fieldUnit,
   isDerived,
   leafOf,
   leavesOf,
   lookupRole,
   roleOf,
+  rollupsOf,
   symbolsOf,
   type Field,
   type FieldLeaf,
   type Item,
   type CellRef,
+  type Rollup,
   type WeightBook,
 } from "./book";
 import { isOutputName, OUTPUTS, outputSpec } from "./outputs";
@@ -612,6 +619,81 @@ export function evaluateBook(
     return null!;
   };
 
+  /** Resolve a named facet aggregate inside the ordinary cell dependency graph. */
+  const rollupValue = (
+    rollup: Rollup,
+    role: string,
+    leaf: string | undefined,
+    at: number,
+  ): Quantity => {
+    const spec = roleSpec(role);
+    if (!spec) fail(`there is no role called ${role}`, at);
+    const members = book.items.filter((item) =>
+      facetContains(rollup.facetValue, item.facets[rollup.facetKey] ?? ""),
+    );
+    const claimed = (item: Item, name: string) => {
+      const found = lookupRole(item, name);
+      if (found.k === "many")
+        fail(
+          `${item.name || "an unnamed item"} tags ${found.keys.join(" and ")} as ${name}`,
+          at,
+        );
+      return found.k === "one" ? found : null;
+    };
+
+    const aggregation = spec!.aggregation;
+    if (aggregation.k === "sum") {
+      if (leaf) fail(`${rollup.name}.${role} is a single value`, at);
+      const values = members.flatMap((item) => {
+        const found = claimed(item, role);
+        if (!found) return [];
+        if (found.field.k !== "scalar")
+          fail(`${item.name}.${found.key} cannot be summed as ${role}`, at);
+        return [valueAt(item.id, found.key, at)];
+      });
+      if (!values.length)
+        fail(`${rollup.name}.${role} has no contributors`, at);
+      return values.reduce(add, exact(0, spec!.dim));
+    }
+
+    if (aggregation.k !== "weightedMean")
+      return fail(`${role} has no roll-up aggregation`, at);
+    const axis =
+      leaf === "x" || leaf === "y" || leaf === "z" ? leaf : currentCell?.leaf;
+    if (axis !== "x" && axis !== "y" && axis !== "z")
+      fail(`${rollup.name}.${role} is a place — write .x, .y, or .z`, at);
+    const weightName = aggregation.weight;
+    const weightSpec = roleSpec(weightName)!;
+    const entries = members.flatMap((item) => {
+      const weight = claimed(item, weightName);
+      if (!weight) return [];
+      if (weight.field.k !== "scalar")
+        fail(`${item.name}.${weight.key} cannot weight ${role}`, at);
+      const target = claimed(item, role);
+      if (!target)
+        return fail(
+          `${rollup.name}.${role} is incomplete: ${item.name || "an unnamed item"} has ${weightName} but no ${role}`,
+          at,
+        );
+      if (target.field.k !== "point")
+        fail(`${item.name}.${target.key} is not a point`, at);
+      return [
+        {
+          weight: valueAt(item.id, weight.key, at),
+          value: valueAt(item.id, target.key, at, axis),
+        },
+      ];
+    });
+    if (!entries.length) fail(`${rollup.name}.${role} has no contributors`, at);
+    const totalWeight = entries
+      .map((entry) => entry.weight)
+      .reduce(add, exact(0, weightSpec.dim));
+    if (totalWeight.v === 0)
+      fail(`${rollup.name}.${role} has zero total ${weightName}`, at);
+    const moments = entries.map((entry) => mul(entry.weight, entry.value));
+    return div(moments.slice(1).reduce(add, moments[0]), totalWeight);
+  };
+
   /** `item.field`, `item.field.leaf` — the two shapes that start from a named item. */
   const fromItem = (
     item: Item,
@@ -646,6 +728,16 @@ export function evaluateBook(
 
   const resolve = (path: readonly string[], at: number): Quantity => {
     const [head, ...rest] = path;
+
+    if (head === "ROLLUP") {
+      if (rest.length < 2 || rest.length > 3)
+        fail(`ROLLUP.${rest.join(".") || "?"} is not a roll-up value`, at);
+      const rollup = rollupsOf(book).find(
+        (candidate) => candidate.name === rest[0],
+      );
+      if (!rollup) fail(`there is no roll-up called ${rest[0]}`, at);
+      return rollupValue(rollup!, rest[1], rest[2], at);
+    }
 
     if (head === "HULL") {
       // One segment for a measurement, and optionally a second for a coordinate of one that is a PLACE:

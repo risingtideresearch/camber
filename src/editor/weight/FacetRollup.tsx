@@ -1,9 +1,16 @@
 import { Fragment, useState } from "react";
+import type { DocumentCommand } from "../../core/commands";
 import {
+  isReserved,
+  isValidName,
   leavesOf,
+  newId,
+  rollupsOf,
   type FieldLeaf,
   type Item,
+  type Rollup,
   type View,
+  type WeightBook,
 } from "../../core/sheet/book";
 import type { BookResults, CellResult } from "../../core/sheet/evaluate";
 import { groupItems, type Group } from "../../core/sheet/views";
@@ -28,6 +35,7 @@ export interface RollupSelection {
 }
 
 interface FacetRollupProps {
+  readonly book: WeightBook;
   readonly view: View;
   readonly items: readonly Item[];
   readonly results: BookResults;
@@ -45,6 +53,7 @@ interface FacetRollupProps {
   ) => void;
   readonly onSelectTotal: (selection: RollupSelection) => void;
   readonly onOpenItem: (itemId: string) => void;
+  readonly send: (command: DocumentCommand) => void;
 }
 
 const itemsIn = (group: Group): Item[] => [
@@ -396,8 +405,133 @@ function GroupRows({
   );
 }
 
+const rollupNameIssue = (
+  book: WeightBook,
+  name: string,
+  except: string | null,
+): string | null => {
+  const tidied = name.trim().replace(/\s+/g, " ");
+  if (!isValidName(tidied))
+    return "Use letters, digits, spaces and _, starting with a letter.";
+  if (isReserved(tidied))
+    return `${tidied} is reserved by the formula language.`;
+  if (book.items.some((item) => item.name === tidied))
+    return `An item is already called ${tidied}.`;
+  if (
+    rollupsOf(book).some(
+      (rollup) => rollup.id !== except && rollup.name === tidied,
+    )
+  )
+    return `A roll-up is already called ${tidied}.`;
+  return null;
+};
+
+function SavedRollupName({
+  book,
+  rollup,
+  send,
+}: {
+  readonly book: WeightBook;
+  readonly rollup: Rollup;
+  readonly send: FacetRollupProps["send"];
+}) {
+  const [name, setName] = useState(rollup.name);
+  const issue = rollupNameIssue(book, name, rollup.id);
+  const commit = () => {
+    if (!issue && name.trim() !== rollup.name)
+      send({ type: "renameRollup", id: rollup.id, name });
+  };
+  return (
+    <div className="wrollbinding">
+      <code>ROLLUP.</code>
+      <input
+        value={name}
+        aria-label="Roll-up formula name"
+        spellCheck={false}
+        className={issue ? "bad" : ""}
+        onChange={(event) => setName(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+          if (event.key === "Escape") {
+            setName(rollup.name);
+            event.currentTarget.blur();
+          }
+        }}
+      />
+      <span className="wrolladdresses">.MASS · .CG.x · .CG.y · .CG.z</span>
+      {issue && <span className="wrollnameissue">{issue}</span>}
+      <button
+        className="wrollforget"
+        title="Remove this formula name; formulas using it will stop resolving"
+        onClick={() => send({ type: "removeRollup", id: rollup.id })}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function RollupNames({
+  book,
+  view,
+  send,
+}: Pick<FacetRollupProps, "book" | "view" | "send">) {
+  const [draft, setDraft] = useState("");
+  if (view.scope.k !== "facet") return null;
+  const scope = view.scope;
+  const saved = rollupsOf(book).filter(
+    (rollup) =>
+      rollup.facetKey === scope.key && rollup.facetValue === scope.value,
+  );
+  const issue = draft ? rollupNameIssue(book, draft, null) : null;
+  const add = () => {
+    if (!draft.trim() || issue) return;
+    send({
+      type: "addRollup",
+      id: newId("r"),
+      name: draft,
+      facetKey: scope.key,
+      facetValue: scope.value,
+    });
+    setDraft("");
+  };
+  return (
+    <section className="wrollnames">
+      <span className="wrollnamelabel">Use in formulas</span>
+      {saved.map((rollup) => (
+        <SavedRollupName
+          key={`${rollup.id}:${rollup.name}`}
+          book={book}
+          rollup={rollup}
+          send={send}
+        />
+      ))}
+      {saved.length === 0 && (
+        <div className="wrollbinding new">
+          <code>ROLLUP.</code>
+          <input
+            value={draft}
+            placeholder="name this roll-up"
+            aria-label="New roll-up formula name"
+            spellCheck={false}
+            className={issue ? "bad" : ""}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && add()}
+          />
+          <button disabled={!draft.trim() || !!issue} onClick={add}>
+            Save
+          </button>
+          {issue && <span className="wrollnameissue">{issue}</span>}
+        </div>
+      )}
+    </section>
+  );
+}
+
 /** A facet is a report: filing chooses the rows, and roles provide stable, meaningful columns and totals. */
 export function FacetRollup({
+  book,
   view,
   items,
   results,
@@ -407,6 +541,7 @@ export function FacetRollup({
   onSelectItem,
   onSelectTotal,
   onOpenItem,
+  send,
 }: FacetRollupProps) {
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
   const toggle = (id: string) =>
@@ -430,6 +565,7 @@ export function FacetRollup({
 
   return (
     <div className="wrollup">
+      <RollupNames key={view.id} book={book} view={view} send={send} />
       <table>
         <thead>
           <tr>
