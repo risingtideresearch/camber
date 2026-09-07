@@ -65,6 +65,8 @@ const ATOMS: Record<string, { dim: Dim; factor: number }> = {
   mm: { dim: { m: 0, l: 1 }, factor: 0.001 },
   in: { dim: { m: 0, l: 1 }, factor: 0.0254 },
   ft: { dim: { m: 0, l: 1 }, factor: 0.3048 },
+  yd: { dim: { m: 0, l: 1 }, factor: 0.9144 },
+  yard: { dim: { m: 0, l: 1 }, factor: 0.9144 },
 };
 
 export const UNIT_ATOMS = Object.keys(ATOMS);
