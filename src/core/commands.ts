@@ -45,6 +45,7 @@ import {
   isSheetCommand,
   type SheetCommand,
 } from "./sheet/book";
+import { roleSpec } from "./sheet/roles";
 
 // ---------- the command set ----------
 // Coordinates are MODEL-space: the views map a pointer through their inverse transform before dispatching,
@@ -792,6 +793,12 @@ export function describeCommand(cmd: DocumentCommand): string {
       return cmd.value
         ? `File under ${cmd.key}: ${cmd.value}`
         : `Unfile from ${cmd.key}`;
+    case "addRollup":
+      return `Add roll-up "${cmd.name}"`;
+    case "renameRollup":
+      return `Rename a roll-up to "${cmd.name}"`;
+    case "removeRollup":
+      return "Remove a roll-up";
     case "addField":
       return `Add a ${cmd.kind === "cut" ? "section" : cmd.kind} called "${cmd.key}"`;
     case "removeField":
@@ -819,6 +826,10 @@ export function describeCommand(cmd: DocumentCommand): string {
       return cmd.unit ? `Write ${cmd.field} in ${cmd.unit}` : "Clear a unit";
     case "setCutShape":
       return `Cut with a ${cmd.shape}`;
+    case "setFieldRole":
+      return cmd.role
+        ? `Make ${cmd.field} the item's ${roleSpec(cmd.role)?.label ?? cmd.role}`
+        : `Untag ${cmd.field}`;
     case "setOutput":
       return cmd.formula.trim()
         ? `Answer ${cmd.name}`

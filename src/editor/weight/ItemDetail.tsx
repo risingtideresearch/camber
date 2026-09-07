@@ -35,11 +35,12 @@ import type { DocumentCommand } from "../../core/commands";
 import {
   blankField,
   DEFAULT_FIELD_KEY,
-  facetKeys,
   fieldUnit,
   freeFieldKey,
   isDerived,
   leavesOf,
+  roleKeys,
+  roleOf,
   type Field,
   type FieldKind,
   type FieldLeaf,
@@ -58,6 +59,7 @@ import {
   type SliceMeasurements,
   type SliceValueField,
 } from "../../core/sheet/slices";
+import { rolesForKind } from "../../core/sheet/roles";
 import { placementFor } from "./pointPlots";
 import {
   Field as TextField,
@@ -72,6 +74,7 @@ import {
   type Completion,
 } from "./weightCompletions";
 import type { Focus } from "./ItemTable";
+import { ItemFacets } from "./ItemFacets";
 
 export interface ItemDetailProps {
   readonly book: WeightBook;
@@ -291,7 +294,7 @@ export function ItemDetail(props: ItemDetailProps) {
         />
       </header>
 
-      <Facets book={book} item={item} send={send} />
+      <ItemFacets book={book} item={item} send={send} />
 
       <div className="wdetailfields" {...reorder.listProps}>
         {reorder.fields.length === 0 && (
@@ -368,74 +371,6 @@ export function ItemDetail(props: ItemDetailProps) {
           </button>
         )}
       </div>
-    </div>
-  );
-}
-
-// ---------- how it is filed ----------
-
-/**
- * The item's facets, as an editable list.
- *
- * Facets are the only thing here no formula can mention, and that is deliberate: filing is what a user must
- * stay free to change, so it must never appear in an address. Editing one here does the same thing dragging
- * the item onto a node in the explorer does — one `setFacet` — because they are the same statement.
- */
-function Facets({
-  book,
-  item,
-  send,
-}: {
-  readonly book: WeightBook;
-  readonly item: Item;
-  readonly send: (command: DocumentCommand) => void;
-}) {
-  const [key, setKey] = useState("");
-  const known = facetKeys(book);
-  const entries = Object.entries(item.facets);
-  return (
-    <div className="wfacets">
-      {entries.map(([facet, value]) => (
-        <label key={facet} className="wfacet">
-          <span className="wfacetkey">{facet}</span>
-          <TextField
-            value={value}
-            placeholder="unfiled"
-            className="wfacetvalue"
-            title="A path nests: structure/hull/shell. Empty unfiles it."
-            onCommit={(next) =>
-              send({ type: "setFacet", item: item.id, key: facet, value: next })
-            }
-          />
-        </label>
-      ))}
-      <span className="wfacetadd">
-        <input
-          list="wfacetkeys"
-          value={key}
-          placeholder="+ file under…"
-          spellCheck={false}
-          aria-label="A facet to file this item under"
-          onChange={(event) => setKey(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" || !key.trim()) return;
-            send({
-              type: "setFacet",
-              item: item.id,
-              key: key.trim(),
-              // A fresh facet starts unfiled rather than guessing a value; the field beside it is where the
-              // value gets typed, and an empty one would simply be removed again.
-              value: "unfiled",
-            });
-            setKey("");
-          }}
-        />
-        <datalist id="wfacetkeys">
-          {known.map((candidate) => (
-            <option key={candidate} value={candidate} />
-          ))}
-        </datalist>
-      </span>
     </div>
   );
 }
@@ -594,6 +529,7 @@ function FieldHeader({
           send({ type: "setFieldUnit", item: item.id, field: fieldKey, unit })
         }
       />
+      <RoleChips item={item} fieldKey={fieldKey} field={field} send={send} />
       {field.k === "point" && (
         <button
           className={`wderive${derived ? " on" : ""}`}
@@ -688,6 +624,69 @@ function FieldHeader({
         </>
       )}
     </header>
+  );
+}
+
+/**
+ * Which of the item's values this field IS — its mass, its centre of gravity — or none.
+ *
+ * A chip and not a menu, because a field kind carries at most one role and the answer is therefore yes or no.
+ * Tagging MOVES the role: whichever sibling held it gives it up in the same edit, so the whole gesture is
+ * clicking the field you meant, with no dialogue asking about the one you did not. The tooltip says which
+ * field is losing it, since that is the part of the edit that happens off screen.
+ */
+function RoleChips({
+  item,
+  fieldKey,
+  field,
+  send,
+}: {
+  readonly item: Item;
+  readonly fieldKey: string;
+  readonly field: Field;
+  readonly send: (command: DocumentCommand) => void;
+}) {
+  return (
+    <>
+      {rolesForKind(field.k).map((spec) => {
+        const held = roleKeys(item, spec.name);
+        const on = roleOf(field) === spec.name;
+        const others = held.filter((key) => key !== fieldKey);
+        // Only ever true of a book read off disk: the command moves the tag rather than copying it.
+        const clash = on && others.length > 0;
+        return (
+          <button
+            key={spec.name}
+            type="button"
+            className={`wrole${on ? " on" : ""}${clash ? " clash" : ""}`}
+            aria-pressed={on}
+            title={
+              clash
+                ? `${others.join(", ")} claims this too, and only one field can. Click to make ${fieldKey} the one.`
+                : on
+                  ? `${fieldKey} is this item's ${spec.label}, and formulas reach it as ${item.name || "this item"}.${spec.name}. Click to untag it.`
+                  : others.length
+                    ? `Make ${fieldKey} this item's ${spec.label}, taking it from ${others.join(", ")}`
+                    : `Make ${fieldKey} this item's ${spec.label}, so formulas can ask for it by role rather than by name`
+            }
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              send({
+                type: "setFieldRole",
+                item: item.id,
+                field: fieldKey,
+                // A clash is resolved by claiming it here, not by clearing it — clicking a chip that is
+                // already lit would otherwise leave the item with no mass at all.
+                role: on && !clash ? null : spec.name,
+              });
+            }}
+          >
+            {spec.name}
+          </button>
+        );
+      })}
+    </>
   );
 }
 

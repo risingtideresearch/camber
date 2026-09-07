@@ -1,13 +1,16 @@
 // ---------- views: a scope, a grouping and a layout ----------
 //
-// A view selects and groups ITEMS, and then states what to ask each of them. It is an editing surface with a
-// scope on it, not a report that happens to be editable — which is why the standard views below are the ones
-// that replace the typed pages one-for-one, and why the cleverer ones are absent.
+// A view selects and groups ITEMS, and then states what to ask each of them. Field-oriented views are editing
+// surfaces; facet-oriented views are read-only roll-ups whose columns and totals come from roles. Keeping that
+// distinction explicit prevents a classification report from turning field names into an accidental schema.
 //
 // ---------- the standard views are DERIVED ----------
 //
-// Nothing stores them. The bar keeps only whole-book reports and useful alternate facet groupings; item and
-// facet editing views are opened from the explorer instead of generating a row of overlapping tabs.
+// Nothing stores them, and there are only ever two: the bar keeps whole-book reports and nothing else.
+// Everything that is a CUT of the book — one item, one facet value, a different grouping — is opened from
+// the explorer, which is where the cut is chosen in the first place. A tab per facet key looked like a
+// convenience and was really a bar that grew whenever someone invented a way of filing; facets exist to be
+// cheap to change, so nothing about creating one should feel permanent.
 //
 // ---------- columns are not classified ----------
 //
@@ -25,9 +28,9 @@
 import {
   facetContains,
   leavesOf,
-  facetKeys,
   facetSegments,
   primaryFacet,
+  roleKeys,
   type Field,
   type FieldKind,
   type FieldLeaf,
@@ -37,6 +40,7 @@ import {
   type WeightBook,
 } from "./book";
 import { SLICE_VALUE_FIELDS, type SliceValueField } from "./slices";
+import { ROLES } from "./roles";
 
 // ---------- scope ----------
 
@@ -202,6 +206,39 @@ export interface Group {
   readonly children: readonly Group[];
 }
 
+/** Stable identity for a currently-derived group, used by selections without snapshotting its membership. */
+export const groupIdentity = (group: Group): string =>
+  `${group.key}:${group.value}:${group.depth}`;
+
+/** Every item currently under a group, including descendants. */
+export const groupMembers = (group: Group): Item[] => [
+  ...group.items,
+  ...group.children.flatMap(groupMembers),
+];
+
+/** Find a derived group again after the book changes. */
+export function groupByIdentity(
+  groups: readonly Group[],
+  identity: string,
+): Group | null {
+  for (const group of groups) {
+    if (groupIdentity(group) === identity) return group;
+    const child = groupByIdentity(group.children, identity);
+    if (child) return child;
+  }
+  return null;
+}
+
+/** Resolve a group selection against the current item set rather than a snapshot taken when it was clicked. */
+export function currentGroupMembers(
+  items: readonly Item[],
+  keys: readonly string[],
+  identity: string,
+): readonly Item[] | null {
+  const group = groupByIdentity(groupItems(items, keys), identity);
+  return group ? groupMembers(group) : null;
+}
+
 export const UNFILED = "— unfiled —";
 
 /**
@@ -325,43 +362,31 @@ export const SUMMARY_VIEW = "std-summary";
 export const PROBLEMS_VIEW = "std-problems";
 
 /**
- * Every view the book offers without anyone authoring one.
+ * Every view the book offers without anyone authoring one: what the estimate answers, and what is wrong with
+ * it. Both are the WHOLE book, which is the one thing the explorer cannot select.
  *
- * Summary and Problems bookend any alternate facet groupings. Values, positions, sections and the catch-all
- * table are reached through the explorer, where their scope is explicit, rather than appearing as automatic
- * tabs that duplicate it.
+ * The list does not depend on how the book is filed — only the summary's grouping does — so the bar is the
+ * same two tabs on the first item as on the thousandth. A roll-up of one facet is reached by clicking its
+ * node in the explorer (`facetView`), where the tree already shows what is being asked about.
  */
 export function standardViews(book: WeightBook): View[] {
   const primary = primaryFacet(book);
-  const groupBy = primary ? [primary] : [];
-  const views: View[] = [
+  return [
     {
       id: SUMMARY_VIEW,
       name: "Summary",
       scope: { k: "all" },
-      groupBy,
+      groupBy: primary ? [primary] : [],
       layout: "summary",
     },
+    {
+      id: PROBLEMS_VIEW,
+      name: "Problems",
+      scope: { k: "all" },
+      groupBy: [],
+      layout: "problems",
+    },
   ];
-
-  for (const key of facetKeys(book))
-    if (key !== primary)
-      views.push({
-        id: `std-facet-${key}`,
-        name: `By ${key}`,
-        scope: { k: "all" },
-        groupBy: [key],
-        layout: "table",
-      });
-
-  views.push({
-    id: PROBLEMS_VIEW,
-    name: "Problems",
-    scope: { k: "all" },
-    groupBy: [],
-    layout: "problems",
-  });
-  return views;
 }
 
 /**
@@ -376,7 +401,7 @@ export const facetView = (key: string, value: string): View => ({
   name: `${key}: ${value}`,
   scope: { k: "facet", key, value },
   groupBy: [key],
-  layout: "table",
+  layout: "rollup",
 });
 
 const parseFacetView = (id: string): View | null => {
@@ -448,7 +473,7 @@ export function problemsOf(
   cellKey: (item: string, field: string, leaf: FieldLeaf) => string,
 ): Problem[] {
   const out: Problem[] = [];
-  for (const item of book.items)
+  for (const item of book.items) {
     for (const [fieldKey, field] of Object.entries(item.fields))
       for (const leaf of leavesOf(field)) {
         const cell = results.cells.get(cellKey(item.id, fieldKey, leaf));
@@ -459,6 +484,23 @@ export function problemsOf(
         else if (cell.unitWarning)
           out.push({ item, fieldKey, leaf, message: cell.unitWarning });
       }
+
+    // Two fields of one item claiming the same role. Not authorable — `setFieldRole` moves the tag rather
+    // than copying it — so this is a book that arrived saying it, and the reader deliberately does not repair
+    // it. Reported on EVERY field involved, because the fix is to pick one and there is no telling from here
+    // which was meant.
+    for (const spec of ROLES) {
+      const keys = roleKeys(item, spec.name);
+      if (keys.length < 2) continue;
+      for (const fieldKey of keys)
+        out.push({
+          item,
+          fieldKey,
+          leaf: leavesOf(item.fields[fieldKey])[0],
+          message: `this and ${keys.filter((key) => key !== fieldKey).join(", ")} are both tagged as the ${spec.label} — only one of them can be`,
+        });
+    }
+  }
   return out;
 }
 

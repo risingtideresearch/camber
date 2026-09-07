@@ -45,8 +45,11 @@ export function Field({
   title,
   ariaLabel,
   autoFocus = false,
+  list,
+  size,
   onCommit,
   onFocus,
+  onDone,
 }: {
   readonly value: string;
   readonly placeholder: string;
@@ -61,8 +64,19 @@ export function Field({
    * whenever a prop happened to change would fight the person typing in the next one along.
    */
   readonly autoFocus?: boolean;
+  /** The id of a `<datalist>` to offer, for a cell whose useful values are already in the book. */
+  readonly list?: string;
+  /** Width in characters, where the cell should be as wide as what it holds rather than as wide as a column. */
+  readonly size?: number;
   readonly onCommit: (value: string) => void;
   readonly onFocus?: () => void;
+  /**
+   * The caret left, whether or not anything was committed.
+   *
+   * For a cell that only exists while it is being typed in — an empty box opened to hold the next thing —
+   * which has to be taken away again when it is abandoned, and `onCommit` never fires for a blank one.
+   */
+  readonly onDone?: () => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -80,12 +94,15 @@ export function Field({
       placeholder={placeholder}
       title={title}
       aria-label={ariaLabel}
+      list={list}
+      size={size}
       spellCheck={false}
       onChange={(event) => setDraft(event.target.value)}
       onFocus={onFocus}
       onBlur={() => {
         if (draft !== null && draft !== value) onCommit(draft);
         setDraft(null);
+        onDone?.();
       }}
       onKeyDown={(event) => {
         if (event.key === "Enter") input.current?.blur();

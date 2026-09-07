@@ -14,14 +14,16 @@
 //   engine.cg.z           a leaf of a field of another item
 //   HULL.LWL              the geometry, exact, in metres and kilograms (`../hullMetrics.ts`)
 //   OUT.DISPLACEMENT      what the book itself answers (`outputs.ts`)
+//   MASS                  whichever field of THIS item is tagged as its mass (`roles.ts`)
+//   engine.CG.z           and of another item, whatever that item happens to key it
 //
 // Two segments are ambiguous in principle — `cg.z` could be a sibling's leaf or another item's field — and
 // the sibling wins, for the same reason a local variable shadows a global. It is the scope you are standing
 // in, and the alternative is reachable by writing the item's name.
 //
-// Note what is NOT in that list: nothing addresses a facet. An item's `system` or `status` is how it is
-// FILED, and filing is exactly the thing a user must be free to change without rewriting formulas. That is
-// the rule the whole model turns on, and this module is where it is enforced by omission.
+// A facet path itself is not an address. The deliberate exception is a named aggregate such as
+// `ROLLUP.hull.MASS`: creating that name explicitly says this calculation is intended to change when items
+// enter or leave that facet subtree.
 //
 // ---------- names may contain spaces ----------
 //
@@ -50,8 +52,12 @@ import {
 } from "../hullMetrics";
 import {
   AREA,
+  add,
+  div,
+  exact,
   isDimless,
   LENGTH,
+  mul,
   read,
   sameDim,
   type Dim,
@@ -60,18 +66,24 @@ import {
   type Source,
 } from "./quantity";
 import {
+  facetContains,
   fieldUnit,
   isDerived,
   leafOf,
   leavesOf,
+  lookupRole,
+  roleOf,
+  rollupsOf,
   symbolsOf,
   type Field,
   type FieldLeaf,
   type Item,
   type CellRef,
+  type Rollup,
   type WeightBook,
 } from "./book";
 import { isOutputName, OUTPUTS, outputSpec } from "./outputs";
+import { isRoleName, roleSpec } from "./roles";
 import { naturalUnit, parseUnit, UnitError, type UnitSpec } from "./units";
 import {
   SLICE_VALUE_FIELDS,
@@ -574,6 +586,119 @@ export function evaluateBook(
     return valueAt(item.id, key, at, leaf as FieldLeaf);
   };
 
+  /**
+   * A role, on one item: `MASS`, `engine.CG`, `engine.CG.z`.
+   *
+   * It resolves to the tagged FIELD and then hands off to the ordinary field paths, so everything a field
+   * does a role does too. In particular a bare `CG` in a coordinate cell means that coordinate of it — which
+   * is what lets a centre of gravity be one expression rather than three, over items that need not agree on
+   * what they call the position it reads.
+   */
+  const roleValue = (
+    item: Item,
+    role: string,
+    after: readonly string[],
+    at: number,
+  ): Quantity => {
+    const spec = roleSpec(role)!;
+    const who = item.name || "this item";
+    const found = lookupRole(item, role);
+    if (found.k === "none")
+      fail(`${who} does not say which of its fields is its ${spec.label}`, at);
+    // Two fields claiming one role cannot be authored — `setFieldRole` moves the tag rather than copying it —
+    // so this is a book that arrived saying it. Picking one would answer with a number that looks right.
+    if (found.k === "many")
+      fail(
+        `${who} tags ${found.keys.join(" and ")} as its ${spec.label} — only one of them can be`,
+        at,
+      );
+    const { key, field } = found as { key: string; field: Field };
+    if (after.length === 0) return bareFieldValue(item, key, field, at);
+    if (after.length === 1) return leafValue(item, key, field, after[0], at);
+    fail(`${role}.${after.join(".")} is one dot too deep`, at);
+    return null!;
+  };
+
+  /** Resolve a named facet aggregate inside the ordinary cell dependency graph. */
+  const rollupValue = (
+    rollup: Rollup,
+    role: string,
+    leaf: string | undefined,
+    at: number,
+  ): Quantity => {
+    const spec = roleSpec(role);
+    if (!spec) fail(`there is no role called ${role}`, at);
+    const members = book.items.filter((item) =>
+      facetContains(rollup.facetValue, item.facets[rollup.facetKey] ?? ""),
+    );
+    const claimed = (item: Item, name: string) => {
+      const found = lookupRole(item, name);
+      if (found.k === "many")
+        fail(
+          `${item.name || "an unnamed item"} tags ${found.keys.join(" and ")} as ${name}`,
+          at,
+        );
+      return found.k === "one" ? found : null;
+    };
+
+    const aggregation = spec!.aggregation;
+    if (aggregation.k === "sum") {
+      if (leaf) fail(`${rollup.name}.${role} is a single value`, at);
+      const values = members.flatMap((item) => {
+        const found = claimed(item, role);
+        if (!found) return [];
+        if (found.field.k !== "scalar")
+          fail(`${item.name}.${found.key} cannot be summed as ${role}`, at);
+        return [valueAt(item.id, found.key, at)];
+      });
+      if (!values.length)
+        fail(`${rollup.name}.${role} has no contributors`, at);
+      return values.reduce(add, exact(0, spec!.dim));
+    }
+
+    if (aggregation.k !== "weightedMean")
+      return fail(`${role} has no roll-up aggregation`, at);
+    const explicitAxis =
+      leaf === "x" || leaf === "y" || leaf === "z" ? leaf : undefined;
+    if (leaf !== undefined && explicitAxis === undefined)
+      fail(`${rollup.name}.${role} has no ${leaf} — write .x, .y, or .z`, at);
+    // Only a BARE point binds to the coordinate being evaluated. An explicit leaf must be honoured or
+    // refused; silently treating `.MASS` as `.x` would turn a typo into a plausible position.
+    const axis = explicitAxis ?? currentCell?.leaf;
+    if (axis !== "x" && axis !== "y" && axis !== "z")
+      fail(`${rollup.name}.${role} is a place — write .x, .y, or .z`, at);
+    const weightName = aggregation.weight;
+    const weightSpec = roleSpec(weightName)!;
+    const entries = members.flatMap((item) => {
+      const weight = claimed(item, weightName);
+      if (!weight) return [];
+      if (weight.field.k !== "scalar")
+        fail(`${item.name}.${weight.key} cannot weight ${role}`, at);
+      const target = claimed(item, role);
+      if (!target)
+        return fail(
+          `${rollup.name}.${role} is incomplete: ${item.name || "an unnamed item"} has ${weightName} but no ${role}`,
+          at,
+        );
+      if (target.field.k !== "point")
+        fail(`${item.name}.${target.key} is not a point`, at);
+      return [
+        {
+          weight: valueAt(item.id, weight.key, at),
+          value: valueAt(item.id, target.key, at, axis),
+        },
+      ];
+    });
+    if (!entries.length) fail(`${rollup.name}.${role} has no contributors`, at);
+    const totalWeight = entries
+      .map((entry) => entry.weight)
+      .reduce(add, exact(0, weightSpec.dim));
+    if (totalWeight.v === 0)
+      fail(`${rollup.name}.${role} has zero total ${weightName}`, at);
+    const moments = entries.map((entry) => mul(entry.weight, entry.value));
+    return div(moments.slice(1).reduce(add, moments[0]), totalWeight);
+  };
+
   /** `item.field`, `item.field.leaf` — the two shapes that start from a named item. */
   const fromItem = (
     item: Item,
@@ -582,6 +707,9 @@ export function evaluateBook(
     at: number,
   ): Quantity => {
     const key = rest[0];
+    // `engine.MASS` asks the item which of its fields that is. Ahead of the key lookup because a role name is
+    // reserved, so no field can be answering to it.
+    if (isRoleName(key)) return roleValue(item, key, rest.slice(1), at);
     const field = item.fields[key];
     if (!field) {
       const near = Object.keys(item.fields).find(
@@ -605,6 +733,16 @@ export function evaluateBook(
 
   const resolve = (path: readonly string[], at: number): Quantity => {
     const [head, ...rest] = path;
+
+    if (head === "ROLLUP") {
+      if (rest.length < 2 || rest.length > 3)
+        fail(`ROLLUP.${rest.join(".") || "?"} is not a roll-up value`, at);
+      const rollup = rollupsOf(book).find(
+        (candidate) => candidate.name === rest[0],
+      );
+      if (!rollup) fail(`there is no roll-up called ${rest[0]}`, at);
+      return rollupValue(rollup!, rest[1], rest[2], at);
+    }
 
     if (head === "HULL") {
       // One segment for a measurement, and optionally a second for a coordinate of one that is a PLACE:
@@ -653,6 +791,17 @@ export function evaluateBook(
       if (!cells.has(cellKey(OUTPUT_ITEM, rest[0])))
         fail(`nothing answers ${rest[0]} yet`, at);
       return valueAt(OUTPUT_ITEM, rest[0], at);
+    }
+
+    // A bare ROLE means this item's. Alongside HULL and OUT rather than after the siblings, because these are
+    // the language's own names and `isReserved` keeps a field from taking one — so there is nothing to shadow.
+    if (isRoleName(head)) {
+      if (!currentItem)
+        fail(
+          `${head} means "this item's ${roleSpec(head)!.label}", and an answer belongs to no item — name the item, as in engine.${head}`,
+          at,
+        );
+      return roleValue(currentItem!, head, rest, at);
     }
 
     // A SIBLING field is tried first, at both lengths it could have: `area`, and `cg.z`. The scope you are
@@ -815,6 +964,13 @@ export function evaluateBook(
       spec && cell.value && !sameDim(cell.value.dim, spec.dim)
         ? `${spec.name} should be ${naturalUnit(spec.dim).label || "a plain number"}, and this works out to ${naturalUnit(cell.value.dim).label || "a plain number"}`
         : null;
+    // The same test, for a field that has been tagged as one of the item's own values. A point's coordinates
+    // are already refused unless they are lengths, so in practice this is what catches a mass that is not one.
+    const role = cell.field ? roleSpec(roleOf(cell.field) ?? "") : undefined;
+    const roleWarning =
+      role && cell.value && !sameDim(cell.value.dim, role.dim)
+        ? `an item's ${role.label} should be ${naturalUnit(role.dim).label || "a plain number"}, and this works out to ${naturalUnit(cell.value.dim).label || "a plain number"}`
+        : null;
     results.set(key, {
       itemId: cell.item?.id ?? OUTPUT_ITEM,
       fieldKey: cell.fieldKey,
@@ -827,7 +983,7 @@ export function evaluateBook(
       errorAt: cell.error?.at ?? -1,
       unit,
       unitIsDerived: !cell.declared && !!unit,
-      unitWarning: cell.unitWarning ?? outputWarning,
+      unitWarning: cell.unitWarning ?? outputWarning ?? roleWarning,
     });
   }
 
