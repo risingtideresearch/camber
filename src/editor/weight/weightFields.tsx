@@ -10,6 +10,7 @@
 
 import { Fragment, useEffect, useRef, useState } from "react";
 import { AutocompleteList } from "./WeightAutocomplete";
+import { useFormulaInsertion } from "./FormulaInsertion";
 import { useAutocomplete } from "./useAutocomplete";
 import type { Completion } from "./weightCompletions";
 
@@ -122,11 +123,20 @@ export function Field({
 }
 
 /**
- * The formula field: the same edit-on-blur contract, plus the two things a formula wants.
+ * The formula field: the same edit-on-blur contract, plus the three things a formula wants.
  *
  * `+-` becomes `±` as it is typed, because the real character is a nuisance on most keyboards and the
  * substitution is exact — the lexer already treats them as the same token, so nothing changes meaning; it
  * just stops looking like a workaround.
+ *
+ * It is a TEXTAREA rather than an input, because an expression that outgrows its cell has to go somewhere,
+ * and the column cannot widen for one row without widening for every row. An input scrolls it out of sight a
+ * character at a time; a textarea wraps it, and `field-sizing` in the stylesheet grows the box to hold what
+ * it wrapped.
+ *
+ * A line break is the author's, not the browser's: SHIFT+ENTER writes one, so a long sum can be read a term
+ * to a line with its `±` under the number it qualifies, while plain ENTER goes on meaning "done". The lexer
+ * has always skipped newlines as whitespace, so nothing downstream can tell the difference.
  */
 export function FormulaField({
   value,
@@ -144,17 +154,47 @@ export function FormulaField({
   readonly onFocus?: () => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
-  const input = useRef<HTMLInputElement>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const shownRef = useRef(value);
+  const releaseInsertion = useRef<(() => void) | null>(null);
+  const formulaInsertion = useFormulaInsertion();
   const { suggest, active, setActive, refresh, close } =
     useAutocomplete(completions);
   const shown = draft ?? value;
+  useEffect(() => {
+    shownRef.current = shown;
+  }, [shown]);
+  useEffect(
+    () => () => {
+      releaseInsertion.current?.();
+    },
+    [],
+  );
 
   const setAll = (text: string, caret: number) => {
+    shownRef.current = text;
     setDraft(text);
     refresh(text, caret);
     // The caret has to be restored after React writes the value back, or typing `+-` would jump it to the end.
     requestAnimationFrame(() => {
       input.current?.setSelectionRange(caret, caret);
+    });
+  };
+
+  const activateInsertion = () => {
+    releaseInsertion.current?.();
+    releaseInsertion.current = formulaInsertion.activate((text, caretBack) => {
+      const source = shownRef.current;
+      const start = input.current?.selectionStart ?? source.length;
+      const end = input.current?.selectionEnd ?? start;
+      const next = source.slice(0, start) + text + source.slice(end);
+      const caret = start + text.length - caretBack;
+      setAll(next, caret);
+      close();
+      requestAnimationFrame(() => {
+        input.current?.focus();
+        input.current?.setSelectionRange(caret, caret);
+      });
     });
   };
 
@@ -174,8 +214,9 @@ export function FormulaField({
 
   return (
     <span className="wformulawrap">
-      <input
+      <textarea
         ref={input}
+        rows={1}
         className={`wformula${error ? " bad" : ""}`}
         value={shown}
         placeholder={placeholder}
@@ -194,6 +235,7 @@ export function FormulaField({
         }}
         onFocus={(event) => {
           onFocus?.();
+          activateInsertion();
           refresh(event.target.value, event.target.selectionStart ?? 0);
         }}
         onClick={(event) =>
@@ -223,14 +265,22 @@ export function FormulaField({
               );
               return;
             }
-            if (event.key === "Tab" || event.key === "Enter") {
+            // Shift+Enter is a line break even with the list open — it is the one key here that is about
+            // the text rather than about the choice, and falls through to the textarea's own handling.
+            if (
+              event.key === "Tab" ||
+              (event.key === "Enter" && !event.shiftKey)
+            ) {
               event.preventDefault();
               pick(suggest.items[active]);
               return;
             }
           }
-          if (event.key === "Enter") input.current?.blur();
-          else if (event.key === "Escape") {
+          if (event.key === "Enter" && !event.shiftKey) {
+            // Plain Enter commits; Shift+Enter is left alone, and the browser writes the newline itself.
+            event.preventDefault();
+            input.current?.blur();
+          } else if (event.key === "Escape") {
             if (suggest) close();
             else {
               setDraft(null);

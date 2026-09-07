@@ -31,7 +31,14 @@
 // costs microseconds. The expensive half is the HULL, and that arrives already measured on the stability
 // worker's payload — the same sweep that panel needs, plus one extra cut.
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { Area, AreaGroup, AreaSeparator } from "polymorph-ui";
 import type { DocumentCommand } from "../../core/commands";
 import { FUNCTIONS } from "../../core/sheet/formula";
@@ -90,10 +97,22 @@ import { ItemDetail } from "./ItemDetail";
 import { FacetRollup, type RollupSelection } from "./FacetRollup";
 import { RenamePrompt } from "./RenamePrompt";
 import { Problems, Summary } from "./Summary";
+import {
+  FormulaInsertionProvider,
+  useFormulaInsertion,
+} from "./FormulaInsertion";
 import { problemItems, problemsOf } from "../../core/sheet/views";
 import "./WeightPanel.css";
 
 export function WeightPanel() {
+  return (
+    <FormulaInsertionProvider>
+      <WeightPanelContents />
+    </FormulaInsertionProvider>
+  );
+}
+
+function WeightPanelContents() {
   const snapshot = useDocumentSnapshot();
   const model = useDocumentRuntime();
   const dispatch = useDocumentDispatch();
@@ -108,7 +127,6 @@ export function WeightPanel() {
   const [focus, setFocus] = useState<Focus | null>(null);
   const [sidePanel, setSidePanel] = useState<SidePanel>("auto");
   const [selectedOutput, setSelectedOutput] = useState("DISPLACEMENT");
-  const [showReference, setShowReference] = useState(false);
   const [rollupSelection, setRollupSelection] =
     useState<RollupSelection | null>(null);
   /** The fresh item whose detail-name field should take the caret when it opens. */
@@ -281,12 +299,12 @@ export function WeightPanel() {
             onToggleInspector={() =>
               setSidePanel(sidePanel === "none" ? "auto" : "none")
             }
-            referenceShown={showReference}
-            onToggleReference={() => setShowReference((shown) => !shown)}
+            referenceShown={sidePanel === "reference"}
+            onToggleReference={() =>
+              setSidePanel(sidePanel === "reference" ? "auto" : "reference")
+            }
             problemCount={problems.length}
           />
-
-          {showReference && <Reference book={book} />}
 
           <ViewBody
             {...{
@@ -463,14 +481,16 @@ interface BodyProps {
  * because the useful pane is nearly always the one the selection implies. Choosing explicitly pins it until
  * the pane is no longer on offer at all.
  */
-export type SidePanel = "auto" | "spread" | "uses" | "geometry" | "none";
+export type SidePanel =
+  "auto" | "spread" | "uses" | "geometry" | "reference" | "none";
 
-type Shown = "spread" | "uses" | "geometry";
+type Shown = "spread" | "uses" | "geometry" | "reference";
 
 const PANEL_LABEL: Record<Shown, string> = {
   spread: "Spread",
   uses: "Uses",
   geometry: "Geometry",
+  reference: "Reference",
 };
 
 /** Keep the existing narrow-window stacking while handing both arrangements to the resizable layout. */
@@ -632,12 +652,29 @@ function ViewBody(props: BodyProps) {
 
   if (view.layout === "summary") return <SummaryBody {...props} />;
 
-  if (view.layout === "problems")
+  if (view.layout === "problems") {
+    const shown = props.sidePanel === "reference" ? "reference" : null;
     return (
-      <div className="wscroll">
-        <Problems problems={problems} onOpenItem={openItem} />
-      </div>
+      <ResizableBody
+        main={<Problems problems={problems} onOpenItem={openItem} />}
+        shown={shown}
+        side={
+          shown ? (
+            <>
+              <SideTabs
+                offers={["reference"]}
+                shown={shown}
+                onPick={props.setSidePanel}
+              />
+              <div className="wsidebody">
+                <Reference book={book} />
+              </div>
+            </>
+          ) : null
+        }
+      />
     );
+  }
 
   if (view.layout === "rollup") {
     const selection =
@@ -698,6 +735,7 @@ function ViewBody(props: BodyProps) {
       "spread",
       ...(!selectedTotal && focusedField ? (["uses"] as const) : []),
       ...(hasGeometry ? (["geometry"] as const) : []),
+      "reference",
     ];
     const auto: Shown =
       !selectedTotal && focusedField?.k === "point" && hasGeometry
@@ -751,7 +789,9 @@ function ViewBody(props: BodyProps) {
                 onPick={props.setSidePanel}
               />
               <div className="wsidebody">
-                {shown === "geometry" ? (
+                {shown === "reference" ? (
+                  <Reference book={book} />
+                ) : shown === "geometry" ? (
                   <GeometryEditor
                     {...props}
                     items={geometryItems}
@@ -834,8 +874,13 @@ function ViewBody(props: BodyProps) {
   // Uses is a question about a particular field, not an item or a blank selection. Keep geometry in its
   // familiar position while adding the reverse-dependency view beside Spread.
   const offers: Shown[] = focusedField
-    ? ["spread", "uses", ...baseOffers.filter((offer) => offer !== "spread")]
-    : baseOffers;
+    ? [
+        "spread",
+        "uses",
+        ...baseOffers.filter((offer) => offer !== "spread"),
+        "reference",
+      ]
+    : [...baseOffers, "reference"];
 
   // The caret wins where it is in a cell: editing a coordinate or a station wants the drawing beside it,
   // editing a mass wants to know what the mass rests on. With no cell selected the view's own kind decides,
@@ -900,7 +945,9 @@ function ViewBody(props: BodyProps) {
               onPick={props.setSidePanel}
             />
             <div className="wsidebody">
-              {shown === "spread" ? (
+              {shown === "reference" ? (
+                <Reference book={book} />
+              ) : shown === "spread" ? (
                 <Inspector
                   book={book}
                   results={results}
@@ -931,7 +978,7 @@ function ViewBody(props: BodyProps) {
 function SummaryBody(props: BodyProps) {
   // Geometry remains available even before both coordinates work out, so the pane can explain what is
   // missing instead of making the capability itself appear and disappear while formulas are edited.
-  const offers: Shown[] = ["spread", "geometry"];
+  const offers: Shown[] = ["spread", "geometry", "reference"];
   const shown: Shown | null =
     props.sidePanel === "none"
       ? null
@@ -961,7 +1008,9 @@ function SummaryBody(props: BodyProps) {
               onPick={props.setSidePanel}
             />
             <div className="wsidebody">
-              {shown === "spread" ? (
+              {shown === "reference" ? (
+                <Reference book={props.book} />
+              ) : shown === "spread" ? (
                 <OutputInspector
                   book={props.book}
                   results={props.results}
@@ -1150,150 +1199,205 @@ function GeometryEditor({
 // ---------- the reference ----------
 // Built from the same tables the evaluator resolves against, so it cannot drift out of date.
 
+const ReferenceSearch = createContext("");
+
 function Reference({ book }: { readonly book: WeightBook }) {
   const example = book.items.find((item) => item.name) ?? null;
   const exampleKey = example ? Object.keys(example.fields)[0] : null;
   const facet = primaryFacet(book);
+  const [query, setQuery] = useState("");
+  const { available } = useFormulaInsertion();
   return (
     <div className="wreference">
-      <Section title="Uncertainty">
-        <dl>
-          <Entry term="4.2 ± 0.3" hint="give or take 0.3 — type +- for the ±" />
-          <Entry term="160 ± 10%" hint="give or take a tenth of 160" />
-          <Entry
-            term="900 ± [50, 200]"
-            hint="50 below, 200 above — a one-sided guess"
-          />
-          <Entry term="[4.0, 4.5]" hint="somewhere in that range" />
-        </dl>
-      </Section>
-      <Section title="Names">
-        <dl>
-          <Entry
-            term="area"
-            hint="another field of THIS item — the scope you are in wins"
-          />
-          <Entry
-            term={
-              example && exampleKey
-                ? `${example.name}.${exampleKey}`
-                : "hull shell.mass"
-            }
-            hint="a field of another item — spaces in names are fine"
-          />
-          <Entry
-            term="engine.cg.z"
-            hint="one coordinate of another item's position"
-          />
-          <Entry
-            term="a.mass + b.mass + c.mass"
-            hint="a total is written out — groups do not add up yet"
-          />
-          <Entry term="OUT.DISPLACEMENT" hint="what this estimate answers" />
-          <Entry term="total.mass * 7%" hint="a percentage is just ÷100" />
-        </dl>
-      </Section>
-      <Section title="Filing">
-        <dl>
-          <Entry
-            term={facet ? `${facet}: structure/hull` : "system: structure/hull"}
-            hint="how an item is filed — a path nests, and the explorer draws the tree"
-          />
-          <Entry
-            term="status: weighed"
-            hint="a second facet cuts across the first — the explorer's by: draws either"
-          />
-          <Entry
-            term="(no formula names one)"
-            hint="filing never appears in an address, so reorganising rewrites nothing"
-          />
-        </dl>
-      </Section>
-      {rollupsOf(book).length > 0 && (
-        <Section title="Named roll-ups">
+      <div className="wrefcontrols">
+        <input
+          type="search"
+          value={query}
+          placeholder="Find syntax, names, or units…"
+          aria-label="Search formula reference"
+          onChange={(event) => setQuery(event.target.value)}
+        />
+        <span className={available ? "ready" : undefined}>
+          {available
+            ? "Pick a blue term to insert it at the last formula caret."
+            : "Select a formula field to enable insertion."}
+        </span>
+      </div>
+      <ReferenceSearch.Provider value={query}>
+        <Section title="Uncertainty">
           <dl>
-            {rollupsOf(book).flatMap((rollup) => [
-              <Entry
-                key={`${rollup.id}-mass`}
-                term={`ROLLUP.${rollup.name}.MASS`}
-                hint={`sum of MASS under ${rollup.facetKey}: ${rollup.facetValue}`}
-              />,
-              <Entry
-                key={`${rollup.id}-cg`}
-                term={`ROLLUP.${rollup.name}.CG.z`}
-                hint="mass-weighted CG; use .x, .y or .z"
-              />,
-            ])}
+            <Entry
+              term="4.2 ± 0.3"
+              hint="give or take 0.3 — type +- for the ±"
+            />
+            <Entry term="160 ± 10%" hint="give or take a tenth of 160" />
+            <Entry
+              term="900 ± [50, 200]"
+              hint="50 below, 200 above — a one-sided guess"
+            />
+            <Entry term="[4.0, 4.5]" hint="somewhere in that range" />
           </dl>
         </Section>
-      )}
-      <Section title="Positions and sections">
-        <dl>
-          <Entry
-            term="engine.cg"
-            hint="a point named bare means whichever coordinate the cell is"
-          />
-          <Entry
-            term="2.1 ± 0.05"
-            hint="a plain number can be dragged in the views; the ± rides along"
-          />
-          <Entry
-            term="HULL.LCB + 2"
-            hint="dragging moves the 2 and leaves the reference alone"
-          />
-          <Entry
-            term="tank flat.section.pos"
-            hint="sit on a cut, and follow it when the hull changes"
-          />
-          <Entry
-            term="midship.section"
-            hint="a cut bare is its centroid — weight by area for a centre of area"
-          />
-          <Entry
-            term="midship.section.area"
-            hint="also .openPerimeter, .closedPerimeter, .x, .y, .z"
-          />
-          <Entry
-            term="HULL.SHELL_CG"
-            hint="the shell's own centroid, to weigh in beside the points"
-          />
-          <Entry
-            term="(m1 * a.cg + m2 * b.cg) / (m1 + m2)"
-            hint="press ƒ on a point to state all three coordinates at once"
-          />
-        </dl>
-      </Section>
-      <Section title="The hull">
-        <dl>
-          {HULL_METRICS.map((spec) => (
+        <Section title="Names">
+          <dl>
             <Entry
-              key={spec.name}
-              term={`HULL.${spec.name}`}
-              hint={spec.hint}
+              term="area"
+              hint="another field of THIS item — the scope you are in wins"
+              insert="area"
             />
-          ))}
-          {/* The measurements that are a place rather than a number. In a coordinate cell they name that
+            <Entry
+              term={
+                example && exampleKey
+                  ? `${example.name}.${exampleKey}`
+                  : "hull shell.mass"
+              }
+              hint="a field of another item — spaces in names are fine"
+              insert={
+                example && exampleKey
+                  ? `${example.name}.${exampleKey}`
+                  : "hull shell.mass"
+              }
+            />
+            <Entry
+              term="engine.cg.z"
+              hint="one coordinate of another item's position"
+              insert="engine.cg.z"
+            />
+            <Entry
+              term="a.mass + b.mass + c.mass"
+              hint="a total is written out — groups do not add up yet"
+            />
+            <Entry
+              term="OUT.DISPLACEMENT"
+              hint="what this estimate answers"
+              insert="OUT.DISPLACEMENT"
+            />
+            <Entry term="total.mass * 7%" hint="a percentage is just ÷100" />
+          </dl>
+        </Section>
+        <Section title="Filing">
+          <dl>
+            <Entry
+              term={
+                facet ? `${facet}: structure/hull` : "system: structure/hull"
+              }
+              hint="how an item is filed — a path nests, and the explorer draws the tree"
+            />
+            <Entry
+              term="status: weighed"
+              hint="a second facet cuts across the first — the explorer's by: draws either"
+            />
+            <Entry
+              term="(no formula names one)"
+              hint="filing never appears in an address, so reorganising rewrites nothing"
+            />
+          </dl>
+        </Section>
+        {rollupsOf(book).length > 0 && (
+          <Section title="Named roll-ups">
+            <dl>
+              {rollupsOf(book).flatMap((rollup) => [
+                <Entry
+                  key={`${rollup.id}-mass`}
+                  term={`ROLLUP.${rollup.name}.MASS`}
+                  hint={`sum of MASS under ${rollup.facetKey}: ${rollup.facetValue}`}
+                  insert={`ROLLUP.${rollup.name}.MASS`}
+                />,
+                <Entry
+                  key={`${rollup.id}-cg`}
+                  term={`ROLLUP.${rollup.name}.CG.z`}
+                  hint="mass-weighted CG; use .x, .y or .z"
+                  insert={`ROLLUP.${rollup.name}.CG.z`}
+                />,
+              ])}
+            </dl>
+          </Section>
+        )}
+        <Section title="Positions and sections">
+          <dl>
+            <Entry
+              term="engine.cg"
+              hint="a point named bare means whichever coordinate the cell is"
+              insert="engine.cg"
+            />
+            <Entry
+              term="2.1 ± 0.05"
+              hint="a plain number can be dragged in the views; the ± rides along"
+            />
+            <Entry
+              term="HULL.LCB + 2"
+              hint="dragging moves the 2 and leaves the reference alone"
+              insert="HULL.LCB + 2"
+            />
+            <Entry
+              term="tank flat.section.pos"
+              hint="sit on a cut, and follow it when the hull changes"
+              insert="tank flat.section.pos"
+            />
+            <Entry
+              term="midship.section"
+              hint="a cut bare is its centroid — weight by area for a centre of area"
+              insert="midship.section"
+            />
+            <Entry
+              term="midship.section.area"
+              hint="also .openPerimeter, .closedPerimeter, .x, .y, .z"
+              insert="midship.section.area"
+            />
+            <Entry
+              term="HULL.SHELL_CG"
+              hint="the shell's own centroid, to weigh in beside the points"
+              insert="HULL.SHELL_CG"
+            />
+            <Entry
+              term="(m1 * a.cg + m2 * b.cg) / (m1 + m2)"
+              hint="press ƒ on a point to state all three coordinates at once"
+            />
+          </dl>
+        </Section>
+        <Section title="The hull">
+          <dl>
+            {HULL_METRICS.map((spec) => (
+              <Entry
+                key={spec.name}
+                term={`HULL.${spec.name}`}
+                hint={spec.hint}
+                insert={`HULL.${spec.name}`}
+              />
+            ))}
+            {/* The measurements that are a place rather than a number. In a coordinate cell they name that
               coordinate, so the hull's own shell weighs into a centre of gravity beside the points. */}
-          {HULL_POINTS.map((spec) => (
+            {HULL_POINTS.map((spec) => (
+              <Entry
+                key={spec.name}
+                term={`HULL.${spec.name}`}
+                hint={spec.hint}
+                insert={`HULL.${spec.name}`}
+              />
+            ))}
+          </dl>
+        </Section>
+        <Section title="Functions and units">
+          <dl>
+            {Object.entries(FUNCTIONS).map(([name, spec]) => {
+              const [signature, description] = spec.hint.split(" — ");
+              return (
+                <Entry
+                  key={name}
+                  term={signature}
+                  hint={description ?? spec.hint}
+                  insert={`${name}()`}
+                  caretBack={1}
+                />
+              );
+            })}
             <Entry
-              key={spec.name}
-              term={`HULL.${spec.name}`}
-              hint={spec.hint}
+              term="kg · t · m · m2 · kg/m2"
+              hint="units go in the unit box beside a cell, not in the formula"
             />
-          ))}
-        </dl>
-      </Section>
-      <Section title="Functions and units">
-        <dl>
-          {Object.entries(FUNCTIONS).map(([name, spec]) => (
-            <Entry key={name} term={name} hint={spec.hint} />
-          ))}
-          <Entry
-            term="kg · t · m · m2 · kg/m2"
-            hint="units go in the unit box beside a cell, not in the formula"
-          />
-        </dl>
-      </Section>
+          </dl>
+        </Section>
+      </ReferenceSearch.Provider>
     </div>
   );
 }
@@ -1314,12 +1418,42 @@ const Section = ({
 const Entry = ({
   term,
   hint,
+  insert,
+  caretBack = 0,
 }: {
   readonly term: string;
   readonly hint: string;
-}) => (
-  <>
-    <dt>{term}</dt>
-    <dd>{hint}</dd>
-  </>
-);
+  /** Text to insert; omitted for explanatory entries that are not formula syntax. */
+  readonly insert?: string;
+  readonly caretBack?: number;
+}) => {
+  const query = useContext(ReferenceSearch).trim().toLocaleLowerCase();
+  const formulaInsertion = useFormulaInsertion();
+  if (query && !`${term} ${hint}`.toLocaleLowerCase().includes(query))
+    return null;
+  return (
+    <>
+      <dt>
+        {insert ? (
+          <button
+            type="button"
+            disabled={!formulaInsertion.available}
+            title={
+              formulaInsertion.available
+                ? `Insert ${insert}`
+                : "Select a formula field first"
+            }
+            // A pointer press must not blur the formula before its current selection has been read.
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => formulaInsertion.insert(insert, caretBack)}
+          >
+            {term}
+          </button>
+        ) : (
+          term
+        )}
+      </dt>
+      <dd>{hint}</dd>
+    </>
+  );
+};
