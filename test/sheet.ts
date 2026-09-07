@@ -40,6 +40,7 @@ import {
   type WeightBook,
 } from "../src/core/sheet/book";
 import {
+  currentGroupMembers,
   facetView,
   fieldKeyOrder,
   groupItems,
@@ -814,6 +815,36 @@ const problem = (
         "structure/hull" &&
       resolveView(book, fv.id).layout === "rollup",
     "and a facet view round-trips through its id as a read-only role roll-up",
+  );
+
+  const nested = run(book, {
+    type: "setFacet",
+    item: idOf(book, "shell"),
+    key: "system",
+    value: "structure/hull",
+  });
+  const report = facetView("system", "structure");
+  const reportItems = scopeItems(nested, report.scope);
+  const hullGroup = groupItems(reportItems, report.groupBy)[0].children[0];
+  const selectionKey = `${hullGroup.key}:${hullGroup.value}:${hullGroup.depth}`;
+  ok(
+    currentGroupMembers(reportItems, report.groupBy, selectionKey)?.[0].name ===
+      "shell",
+    "a selected group resolves its current members rather than storing a snapshot",
+  );
+  const refiled = run(nested, {
+    type: "setFacet",
+    item: idOf(nested, "shell"),
+    key: "system",
+    value: "machinery",
+  });
+  ok(
+    currentGroupMembers(
+      scopeItems(refiled, report.scope),
+      report.groupBy,
+      selectionKey,
+    ) === null,
+    "and a selected group disappears instead of retaining items filed out of it",
   );
 }
 
@@ -2222,6 +2253,18 @@ const problem = (
   ok(
     near(outputResult(evaluateBook(book, null), "VCG")!.reading!.v, 0.76, 1e-9),
     "a named roll-up can be used as a formula value",
+  );
+  const badLeaf = point(
+    book,
+    "boat",
+    { from: "ROLLUP.hull.CG.MASS" },
+    "bad rollup leaf",
+  );
+  ok(
+    cellAt(badLeaf, "boat", "bad rollup leaf", "x")!.error?.includes(
+      "has no MASS",
+    ),
+    "an explicit invalid roll-up point leaf is refused instead of binding to the current coordinate",
   );
   const renamedRollup = run(book, {
     type: "renameRollup",

@@ -206,6 +206,39 @@ export interface Group {
   readonly children: readonly Group[];
 }
 
+/** Stable identity for a currently-derived group, used by selections without snapshotting its membership. */
+export const groupIdentity = (group: Group): string =>
+  `${group.key}:${group.value}:${group.depth}`;
+
+/** Every item currently under a group, including descendants. */
+export const groupMembers = (group: Group): Item[] => [
+  ...group.items,
+  ...group.children.flatMap(groupMembers),
+];
+
+/** Find a derived group again after the book changes. */
+export function groupByIdentity(
+  groups: readonly Group[],
+  identity: string,
+): Group | null {
+  for (const group of groups) {
+    if (groupIdentity(group) === identity) return group;
+    const child = groupByIdentity(group.children, identity);
+    if (child) return child;
+  }
+  return null;
+}
+
+/** Resolve a group selection against the current item set rather than a snapshot taken when it was clicked. */
+export function currentGroupMembers(
+  items: readonly Item[],
+  keys: readonly string[],
+  identity: string,
+): readonly Item[] | null {
+  const group = groupByIdentity(groupItems(items, keys), identity);
+  return group ? groupMembers(group) : null;
+}
+
 export const UNFILED = "— unfiled —";
 
 /**

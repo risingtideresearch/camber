@@ -13,7 +13,12 @@ import {
   type WeightBook,
 } from "../../core/sheet/book";
 import type { BookResults, CellResult } from "../../core/sheet/evaluate";
-import { groupItems, type Group } from "../../core/sheet/views";
+import {
+  groupIdentity,
+  groupItems,
+  groupMembers,
+  type Group,
+} from "../../core/sheet/views";
 import {
   itemRoleResult,
   roleLeaves,
@@ -27,9 +32,9 @@ import { inUnit, showSpread, sig } from "./weightFormat";
 
 export interface RollupSelection {
   readonly viewId: string;
+  /** Identity of the derived group, or `all` for the view total. Membership is resolved again each render. */
   readonly key: string;
   readonly label: string;
-  readonly itemIds: readonly string[];
   readonly role: string;
   readonly leaf: RollupLeaf;
 }
@@ -56,15 +61,13 @@ interface FacetRollupProps {
   readonly send: (command: DocumentCommand) => void;
 }
 
-const itemsIn = (group: Group): Item[] => [
-  ...group.items,
-  ...group.children.flatMap(itemsIn),
-];
-
-const findGroup = (groups: readonly Group[], value: string): Group | null => {
+const findGroupValue = (
+  groups: readonly Group[],
+  value: string,
+): Group | null => {
   for (const group of groups) {
     if (group.value === value) return group;
-    const child = findGroup(group.children, value);
+    const child = findGroupValue(group.children, value);
     if (child) return child;
   }
   return null;
@@ -338,9 +341,9 @@ function GroupRows({
   readonly onSelectItem: FacetRollupProps["onSelectItem"];
   readonly onSelectTotal: FacetRollupProps["onSelectTotal"];
 }) {
-  const id = `${group.key}:${group.value}:${group.depth}`;
+  const id = groupIdentity(group);
   const folded = closed.has(id);
-  const members = itemsIn(group);
+  const members = groupMembers(group);
   return (
     <>
       <tr className="wrollgroup">
@@ -363,7 +366,6 @@ function GroupRows({
             viewId,
             key: id,
             label: `${group.label} total`,
-            itemIds: members.map((item) => item.id),
           }}
           selected={selectedTotal}
           onSelect={onSelectTotal}
@@ -554,7 +556,7 @@ export function FacetRollup({
   const grouped = groupItems(items, view.groupBy);
   const groups =
     view.scope.k === "facet"
-      ? [findGroup(grouped, view.scope.value)].filter(
+      ? [findGroupValue(grouped, view.scope.value)].filter(
           (group): group is Group => !!group,
         )
       : grouped;
@@ -636,7 +638,6 @@ export function FacetRollup({
                 viewId: view.id,
                 key: "all",
                 label: `${view.name} total`,
-                itemIds: items.map((item) => item.id),
               }}
               selected={selectedTotal}
               onSelect={onSelectTotal}

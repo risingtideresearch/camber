@@ -658,8 +658,13 @@ export function evaluateBook(
 
     if (aggregation.k !== "weightedMean")
       return fail(`${role} has no roll-up aggregation`, at);
-    const axis =
-      leaf === "x" || leaf === "y" || leaf === "z" ? leaf : currentCell?.leaf;
+    const explicitAxis =
+      leaf === "x" || leaf === "y" || leaf === "z" ? leaf : undefined;
+    if (leaf !== undefined && explicitAxis === undefined)
+      fail(`${rollup.name}.${role} has no ${leaf} — write .x, .y, or .z`, at);
+    // Only a BARE point binds to the coordinate being evaluated. An explicit leaf must be honoured or
+    // refused; silently treating `.MASS` as `.x` would turn a typo into a plausible position.
+    const axis = explicitAxis ?? currentCell?.leaf;
     if (axis !== "x" && axis !== "y" && axis !== "z")
       fail(`${rollup.name}.${role} is a place — write .x, .y, or .z`, at);
     const weightName = aggregation.weight;

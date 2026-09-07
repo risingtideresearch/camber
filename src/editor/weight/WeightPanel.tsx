@@ -47,6 +47,7 @@ import {
   type WeightBook,
 } from "../../core/sheet/book";
 import {
+  currentGroupMembers,
   facetView,
   resolveView,
   scopeItems,
@@ -593,14 +594,17 @@ function ViewBody(props: BodyProps) {
     );
 
   if (view.layout === "rollup") {
-    const selectedTotal =
+    const selection =
       props.rollupSelection?.viewId === view.id ? props.rollupSelection : null;
-    const totalItems = selectedTotal
-      ? selectedTotal.itemIds.flatMap((id) => {
-          const item = findItem(book, id);
-          return item ? [item] : [];
-        })
-      : [];
+    const selectedItems = selection
+      ? selection.key === "all"
+        ? items
+        : currentGroupMembers(items, view.groupBy, selection.key)
+      : null;
+    // A group may disappear after a filing edit. In that case the old selection no longer names anything;
+    // otherwise its membership is the CURRENT group rather than the item snapshot from when it was clicked.
+    const selectedTotal = selectedItems ? selection : null;
+    const totalItems = selectedItems ?? [];
     const total = selectedTotal
       ? roleTotals(totalItems, results).get(selectedTotal.role)
       : undefined;
