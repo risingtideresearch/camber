@@ -6,6 +6,12 @@
 // changes.
 
 import { defaultHull } from "../src/core/hull";
+import {
+  hullOutlines,
+  sectionOutline,
+  verticalSection,
+} from "../src/core/pointGeometry";
+import { toModel, toSheet } from "../src/analysis/geometry";
 import { buildHullMesh } from "../src/core/hullGeometry";
 import { hullMetrics, HULL_METRICS } from "../src/core/hullMetrics";
 import { unitScale } from "../src/core/json";
@@ -56,14 +62,9 @@ import {
 import { parseUnit, naturalUnit, UnitError } from "../src/core/sheet/units";
 import { createSliceMeasurer, measureSlice } from "../src/core/sheet/slices";
 import {
-  hullOutlines,
   likelyRegion,
   readPlacement,
   readTolerance,
-  sectionOutline,
-  toModel,
-  verticalSection,
-  toSheet,
   withNominal,
   withoutHandle,
   withTolerance,
@@ -76,7 +77,7 @@ import { roleTotals } from "../src/core/sheet/rollups";
 import {
   completionsFor,
   suggestAt,
-} from "../src/editor/weight/weightCompletions";
+} from "../src/analysis/ui/weight/weightCompletions";
 
 let failures = 0;
 const ok = (condition: unknown, message: string) => {

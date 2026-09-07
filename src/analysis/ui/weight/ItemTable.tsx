@@ -16,7 +16,7 @@
 // schedule fills out sideways as well as downwards.
 
 import { useMemo, useState } from "react";
-import type { DocumentCommand } from "../../core/commands";
+import type { SheetCommand } from "../../../core/sheet/book";
 import {
   fieldUnit,
   newId,
@@ -24,13 +24,10 @@ import {
   type FieldLeaf,
   type Item,
   type WeightBook,
-} from "../../core/sheet/book";
-import { resultAt, type BookResults } from "../../core/sheet/evaluate";
-import {
-  sliceMeasurementKey,
-  type SliceMeasurements,
-} from "../../core/sheet/slices";
-import type { Column, Row } from "../../core/sheet/views";
+} from "../../../core/sheet/book";
+import { resultAt, type BookResults } from "../../../core/sheet/evaluate";
+import { sliceMeasurementKey, type SliceMeasurements } from "../../geometry";
+import type { Column, Row } from "../../../core/sheet/views";
 import { placementFor } from "./pointPlots";
 import {
   Field as TextField,
@@ -62,7 +59,7 @@ export interface ItemTableProps {
   readonly focus: Focus | null;
   readonly setFocus: (focus: Focus | null) => void;
   readonly onOpenItem: (itemId: string) => void;
-  readonly send: (command: DocumentCommand) => void;
+  readonly send: (command: SheetCommand) => void;
   /** The facet a drop between groups would set, when the view is grouped by exactly one. */
   readonly groupFacet: string | null;
 }

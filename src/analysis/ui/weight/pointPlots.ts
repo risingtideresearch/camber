@@ -11,25 +11,20 @@ import {
   type FieldLeaf,
   type Item,
   type WeightBook,
-} from "../../core/sheet/book";
+} from "../../../core/sheet/book";
 import {
   resultAt,
   type BookResults,
   type CellResult,
-} from "../../core/sheet/evaluate";
+} from "../../../core/sheet/evaluate";
 import {
   readPlacement,
   spreadRegion,
-  toSheet,
   type Placement,
-  type PointFrame,
-} from "../../core/sheet/points";
-import {
-  sliceMeasurementKey,
-  type SliceMeasurements,
-} from "../../core/sheet/slices";
-import type { Vec2, Vec3 } from "../../core/math";
-import { isDimless, sameDim } from "../../core/sheet/quantity";
+} from "../../../core/sheet/points";
+import { sliceMeasurementKey, type SliceMeasurements } from "../../geometry";
+import type { Vec2, Vec3 } from "../../../core/math";
+import { isDimless, sameDim } from "../../../core/sheet/quantity";
 import type { PlottedCut, PlottedPoint, SnapTarget } from "./PointViews";
 
 const AXES = ["x", "y", "z"] as const;
@@ -170,7 +165,6 @@ export function plotCuts(
   results: BookResults,
   reading: "worst" | "likely",
   measurements: SliceMeasurements,
-  frame: PointFrame | null,
 ): PlottedCut[] {
   const out: PlottedCut[] = [];
   for (const item of items) {
@@ -187,7 +181,7 @@ export function plotCuts(
       // Only a station has an attitude worth drawing, and only a measured one has it to draw FROM: the curve
       // is the cut the hull actually produced, so nothing here re-derives what the plan is doing.
       const measurement =
-        field.shape === "station" && frame
+        field.shape === "station"
           ? measurements.get(sliceMeasurementKey(item.id, fieldKey))
           : undefined;
       // One half of the curve. The two are mirrored in y and carry the SAME x, so they project onto exactly
@@ -198,8 +192,7 @@ export function plotCuts(
       // last point too and close the curve with a straight line from the sheer to the keel.
       const trace: Vec2[] = measurement
         ? halfCurve(measurement.curve).map((p) => {
-            const sheet = toSheet(frame!, p);
-            return [sheet[0], sheet[2]];
+            return [p[0], p[2]];
           })
         : [];
       out.push({

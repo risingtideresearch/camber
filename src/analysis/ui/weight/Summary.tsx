@@ -9,11 +9,11 @@
 // when the book is evaluated, so deleting the item it names turns the answer into an ordinary visible error
 // rather than a silent nothing.
 
-import type { DocumentCommand } from "../../core/commands";
-import type { WeightBook } from "../../core/sheet/book";
-import { outputResult, type BookResults } from "../../core/sheet/evaluate";
-import { OUTPUTS } from "../../core/sheet/outputs";
-import type { Problem } from "../../core/sheet/views";
+import type { SheetCommand } from "../../../core/sheet/book";
+import type { WeightBook } from "../../../core/sheet/book";
+import { outputResult, type BookResults } from "../../../core/sheet/evaluate";
+import { OUTPUTS } from "../../../core/sheet/outputs";
+import type { Problem } from "../../../core/sheet/views";
 import { FormulaField, ResultIssue } from "./weightFields";
 import { showSpread, sig } from "./weightFormat";
 import { globalCompletions } from "./weightCompletions";
@@ -33,7 +33,7 @@ export function Summary({
   readonly reading: "worst" | "likely";
   readonly selected: string;
   readonly onSelect: (name: string) => void;
-  readonly send: (command: DocumentCommand) => void;
+  readonly send: (command: SheetCommand) => void;
 }) {
   // An output is written against the whole book and belongs to no item, so it gets the global half of the
   // completion list and no siblings — there is no "this item" to have any.

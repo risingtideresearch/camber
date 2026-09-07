@@ -49,7 +49,7 @@ import {
   isHullMetricName,
   isHullPointName,
   type HullMetrics,
-} from "../hullMetrics";
+} from "../../analysis/hullMetrics";
 import {
   AREA,
   add,
@@ -90,7 +90,7 @@ import {
   sliceMeasurementKey,
   type SliceMeasurements,
   type SliceValueField,
-} from "./slices";
+} from "../../analysis/geometry";
 
 /**
  * The pseudo item the book's own answers are evaluated under.
@@ -758,8 +758,12 @@ export function evaluateBook(
         );
       if (isHullPointName(rest[0])) {
         const axis = rest.length === 2 ? rest[1] : currentCell?.leaf;
-        if (axis === "x" || axis === "y" || axis === "z")
-          return hullPoint(metrics!, rest[0], axis)!;
+        if (axis === "x" || axis === "y" || axis === "z") {
+          const point = hullPoint(metrics!, rest[0], axis)!;
+          if (!Number.isFinite(point.v))
+            fail(`HULL.${rest[0]}.${axis} is unavailable`, at);
+          return point;
+        }
         fail(
           `HULL.${rest[0]} is a place — write HULL.${rest[0]}.x (or .y, .z), or name it in a coordinate`,
           at,
@@ -771,6 +775,11 @@ export function evaluateBook(
       if (!value)
         fail(
           `the hull has no measurement called ${rest[0]}${isHullMetricName(rest[0].toUpperCase()) ? ` — did you mean HULL.${rest[0].toUpperCase()}?` : ""}`,
+          at,
+        );
+      if (!Number.isFinite(value!.v))
+        fail(
+          `HULL.${rest[0]} is unavailable: ${metrics!.unavailable?.[rest[0]] ?? "not defined for this hull condition"}`,
           at,
         );
       return value!;

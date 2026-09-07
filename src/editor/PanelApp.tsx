@@ -1,3 +1,4 @@
+import { CamberAnalysisProvider } from "./CamberAnalysisProvider";
 import { useEffect } from "react";
 import { CurvatureControls } from "./CurvatureControls";
 import { useDocumentSnapshot } from "./documentStoreHooks";
@@ -65,7 +66,14 @@ function Panel({ kind }: { readonly kind: PanelKind }) {
         <PanelControls kind={kind} />
       </div>
       <div className="main">
-        {meta.initialized && <PanelBody kind={kind} />}
+        {meta.initialized &&
+          (kind === "weights" || kind === "stability" ? (
+            <CamberAnalysisProvider>
+              <PanelBody kind={kind} />
+            </CamberAnalysisProvider>
+          ) : (
+            <PanelBody kind={kind} />
+          ))}
       </div>
     </div>
   );

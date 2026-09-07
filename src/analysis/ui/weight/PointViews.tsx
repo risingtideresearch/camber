@@ -1,19 +1,15 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Vec2 } from "../../core/math";
-import type { HullSampling } from "../../core/mesh";
-import type { Model } from "../../core/model";
+import type { HullAnalysis, QueryOptions } from "../../api";
+import type { HullOutlines, SectionKind, SectionOutline } from "../../geometry";
+import { useAnalysisQuery } from "../useAnalysisQuery";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import type { Vec2 } from "../../../core/math";
 import {
   readTolerance,
-  sectionOutline,
-  verticalSection,
   withNominal,
   withoutHandle,
   withTolerance,
-  type HullOutlines,
   type Placement,
-  type SectionKind,
-  type SectionOutline,
-} from "../../core/sheet/points";
+} from "../../../core/sheet/points";
 import "./PointViews.css";
 
 // ---------- placing a point in two projections ----------
@@ -189,8 +185,7 @@ function useSize(
 // ---------- the pair ----------
 
 export function PointViews({
-  model,
-  sampling,
+  hull,
   outlines,
   points,
   cuts,
@@ -200,9 +195,7 @@ export function PointViews({
   onFocus,
   onMove,
 }: {
-  readonly model: Model;
-  /** The same sweep the outlines came from — a vertical slice is read off its rows. */
-  readonly sampling: HullSampling;
+  readonly hull: HullAnalysis;
   readonly outlines: HullOutlines;
   readonly points: readonly PlottedPoint[];
   readonly cuts: readonly PlottedCut[];
@@ -239,15 +232,26 @@ export function PointViews({
   // ask it of. Carried as a boolean rather than as the cut, so the memo below is keyed on primitives.
   const asStation = !active && !!activeCut && activeCut.axis === "x";
 
-  // One cut, taken where the selection is. Memoized on what was asked for, so a drag re-cuts once per
-  // position rather than once per render — and a formula edit elsewhere re-cuts not at all.
-  const section = useMemo(
-    () =>
-      asStation
-        ? sectionOutline(model, outlines.frame, { k: "at", x: askX })
-        : verticalSection(sampling, outlines.frame, askX),
-    [model, sampling, outlines.frame, askX, asStation],
+  // One preview query for the selection. The handle caches context/kind/position, so an
+  // unrelated formula edit does not re-cut. While it is pending, never label an old outline
+  // with the new position.
+  const loadSection = useCallback(
+    (options: QueryOptions) =>
+      hull.sectionOutline(
+        {
+          kind: asStation ? "station" : "vertical",
+          x: askX,
+        },
+        options,
+      ),
+    [hull, asStation, askX],
   );
+  const query = useAnalysisQuery(
+    hull.context.id,
+    `section:${asStation}:${askX}`,
+    loadSection,
+  );
+  const section = query.status === "available" ? query.value : null;
 
   return (
     <div className="pviews">
@@ -272,16 +276,20 @@ export function PointViews({
         plane={SECTION}
         label={
           !section
-            ? "Section"
+            ? query.status === "pending"
+              ? "Section — computing…"
+              : "Section"
             : section.kind === "station"
               ? // The station's OWN x, which is the `pos` that names this cut.
                 `Station x = ${section.x.toFixed(2)} m${section.clamped ? " (clamped to the hull)" : ""}`
               : `Vertical slice at x = ${section.x.toFixed(2)} m`
         }
         hint={
-          section?.kind === "station"
-            ? "The hull's own station — normal to the plan, and the cut whose area the schedule reports."
-            : "The hull cut straight across at this x, looking forward. A point outside the outline is outside the boat."
+          query.status === "error" || query.status === "unavailable"
+            ? query.reason
+            : section?.kind === "station"
+              ? "The hull's own station — normal to the plan, and the cut whose area the schedule reports."
+              : "The hull cut straight across at this x, looking forward. A point outside the outline is outside the boat."
         }
         outlines={outlines}
         section={section}

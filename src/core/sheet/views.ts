@@ -39,7 +39,10 @@ import {
   type ViewScope,
   type WeightBook,
 } from "./book";
-import { SLICE_VALUE_FIELDS, type SliceValueField } from "./slices";
+import {
+  SLICE_VALUE_FIELDS,
+  type SliceValueField,
+} from "../../analysis/geometry";
 import { ROLES } from "./roles";
 
 // ---------- scope ----------

@@ -5,7 +5,7 @@
 // components and nothing else.
 
 import type { KeyboardEvent } from "react";
-import type { Reading } from "../../core/sheet/quantity";
+import type { Reading } from "../../../core/sheet/quantity";
 
 // ---------- formatting ----------
 

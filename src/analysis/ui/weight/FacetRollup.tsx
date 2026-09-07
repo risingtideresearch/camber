@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import type { DocumentCommand } from "../../core/commands";
+import type { SheetCommand } from "../../../core/sheet/book";
 import {
   isReserved,
   isValidName,
@@ -11,23 +11,23 @@ import {
   type Rollup,
   type View,
   type WeightBook,
-} from "../../core/sheet/book";
-import type { BookResults, CellResult } from "../../core/sheet/evaluate";
+} from "../../../core/sheet/book";
+import type { BookResults, CellResult } from "../../../core/sheet/evaluate";
 import {
   groupIdentity,
   groupItems,
   groupMembers,
   type Group,
-} from "../../core/sheet/views";
+} from "../../../core/sheet/views";
 import {
   itemRoleResult,
   roleLeaves,
   roleTotals,
   type RoleTotal,
   type RollupLeaf,
-} from "../../core/sheet/rollups";
-import { ROLES, type RoleSpec } from "../../core/sheet/roles";
-import { naturalUnit } from "../../core/sheet/units";
+} from "../../../core/sheet/rollups";
+import { ROLES, type RoleSpec } from "../../../core/sheet/roles";
+import { naturalUnit } from "../../../core/sheet/units";
 import { inUnit, showSpread, sig } from "./weightFormat";
 
 export interface RollupSelection {
@@ -58,7 +58,7 @@ interface FacetRollupProps {
   ) => void;
   readonly onSelectTotal: (selection: RollupSelection) => void;
   readonly onOpenItem: (itemId: string) => void;
-  readonly send: (command: DocumentCommand) => void;
+  readonly send: (command: SheetCommand) => void;
 }
 
 const findGroupValue = (

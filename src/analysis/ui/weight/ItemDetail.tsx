@@ -31,7 +31,7 @@ import {
   useState,
   type DragEvent,
 } from "react";
-import type { DocumentCommand } from "../../core/commands";
+import type { SheetCommand } from "../../../core/sheet/book";
 import {
   blankField,
   DEFAULT_FIELD_KEY,
@@ -46,20 +46,20 @@ import {
   type FieldLeaf,
   type Item,
   type WeightBook,
-} from "../../core/sheet/book";
+} from "../../../core/sheet/book";
 import {
   fieldUsers,
   resultAt,
   type BookResults,
-} from "../../core/sheet/evaluate";
+} from "../../../core/sheet/evaluate";
 import {
   SLICE_VALUE_FIELDS,
   sliceMeasurementKey,
   type SliceMeasurement,
   type SliceMeasurements,
   type SliceValueField,
-} from "../../core/sheet/slices";
-import { rolesForKind } from "../../core/sheet/roles";
+} from "../../geometry";
+import { rolesForKind } from "../../../core/sheet/roles";
 import { placementFor } from "./pointPlots";
 import {
   Field as TextField,
@@ -86,7 +86,7 @@ export interface ItemDetailProps {
   /** This item was just made from outside the detail view, so its name is the next thing to author. */
   readonly autoFocusName?: boolean;
   readonly setFocus: (focus: Focus | null) => void;
-  readonly send: (command: DocumentCommand) => void;
+  readonly send: (command: SheetCommand) => void;
   readonly onDelete: () => void;
 }
 
@@ -130,7 +130,7 @@ interface Reorder {
 
 function useFieldReorder(
   item: Item,
-  send: (command: DocumentCommand) => void,
+  send: (command: SheetCommand) => void,
 ): Reorder {
   const [dragging, setDragging] = useState<string | null>(null);
   const [drop, setDrop] = useState<number | null>(null);
@@ -398,7 +398,7 @@ interface FieldBlockProps {
   readonly onSelect: (leaf: FieldLeaf) => void;
   readonly onToggleExpanded: () => void;
   readonly onNameFocused: () => void;
-  readonly send: (command: DocumentCommand) => void;
+  readonly send: (command: SheetCommand) => void;
 }
 
 /** The cell a field is selected AT when the field itself, rather than one of its cells, is chosen. */
@@ -644,7 +644,7 @@ function RoleChips({
   readonly item: Item;
   readonly fieldKey: string;
   readonly field: Field;
-  readonly send: (command: DocumentCommand) => void;
+  readonly send: (command: SheetCommand) => void;
 }) {
   return (
     <>

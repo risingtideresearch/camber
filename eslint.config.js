@@ -65,6 +65,42 @@ export default tseslint.config(
     },
   },
 
+  // Shared analysis consumers must not acquire Camber/editor dependencies again.
+  // The source-specific implementation is the one deliberate exception.
+  {
+    files: ["src/analysis/**/*.{ts,tsx}"],
+    ignores: ["src/analysis/camber/**"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: [
+                "**/editor/**",
+                "**/document-store/**",
+                "**/worker/**",
+                "**/core/model",
+                "**/core/mesh",
+                "**/core/sweep",
+                "**/core/hydro",
+                "**/core/hull",
+                "**/core/hullMetrics",
+                "**/core/stability",
+                "**/core/pointGeometry",
+                "**/core/commands",
+                "**/core/json",
+                "**/core/sheet/slices",
+              ],
+              message:
+                "Use the shared analysis contracts; hull computation and editor state belong in the Camber adapter.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // Node-side code: tests, tooling, and config files.
   {
     files: [

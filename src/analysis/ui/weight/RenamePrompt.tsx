@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Button } from "../../components/Button";
+import { Button } from "../../../components/Button";
 
 export function RenamePrompt({
   name,

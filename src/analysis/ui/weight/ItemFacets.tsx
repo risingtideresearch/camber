@@ -25,7 +25,7 @@
 // no trace, and the item is never briefly filed under a placeholder that would have shown up in the tree.
 
 import { Fragment, useId, useState } from "react";
-import type { DocumentCommand } from "../../core/commands";
+import type { SheetCommand } from "../../../core/sheet/book";
 import {
   facetChildren,
   facetKeys,
@@ -35,7 +35,7 @@ import {
   tidyName,
   type Item,
   type WeightBook,
-} from "../../core/sheet/book";
+} from "../../../core/sheet/book";
 import { Field } from "./weightFields";
 
 /** The one empty cell that may be open: which facet it belongs to, and which level it would become. */
@@ -51,7 +51,7 @@ export function ItemFacets({
 }: {
   readonly book: WeightBook;
   readonly item: Item;
-  readonly send: (command: DocumentCommand) => void;
+  readonly send: (command: SheetCommand) => void;
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const file = (key: string, segments: readonly string[]) => {

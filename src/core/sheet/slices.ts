@@ -10,34 +10,18 @@ import type { Model } from "../model";
 import { cut, heightSpan, stationGeometry, type StationGeom } from "../sweep";
 import type { SliceShape } from "./book";
 
-export const SLICE_VALUE_FIELDS = [
-  "area",
-  "closedPerimeter",
-  "openPerimeter",
-  "x",
-  "y",
-  "z",
-] as const;
-export type SliceValueField = (typeof SLICE_VALUE_FIELDS)[number];
-
-export interface SliceMeasurement {
-  readonly area: number;
-  /** The complete boundary of the cut, including the straight segments that close it. */
-  readonly closedPerimeter: number;
-  /** The intersection with the hull skin, without deck or other closing segments. */
-  readonly openPerimeter: number;
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-  /** Local derivative of each reported value with respect to `pos`, used for first-order uncertainty. */
-  readonly derivative: Readonly<Record<SliceValueField, number>>;
-  readonly curve: readonly Vec3[];
-  readonly centroid: Vec3;
-}
-
-export type SliceMeasurements = ReadonlyMap<string, SliceMeasurement>;
-export const sliceMeasurementKey = (sheetId: string, rowId: string): string =>
-  `${sheetId} ${rowId}`;
+import {
+  SLICE_VALUE_FIELDS,
+  type SliceMeasurement,
+  type SliceValueField,
+} from "../../analysis/geometry";
+export {
+  SLICE_VALUE_FIELDS,
+  sliceMeasurementKey,
+  type SliceMeasurement,
+  type SliceMeasurements,
+  type SliceValueField,
+} from "../../analysis/geometry";
 
 const distance = (a: Vec3, b: Vec3): number =>
   Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);

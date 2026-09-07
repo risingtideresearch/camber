@@ -23,9 +23,10 @@
     "test:worker": "tsx test/worker.ts",
     "test:v2": "tsx test/v2core.ts",
     "test:stability": "tsx test/stability.ts",
-    "test": "npm run test:quantity && npm run test:sheet && npm run test:hull && npm run test:history && npm run test:store && npm run test:worker && npm run test:v2 && npm run test:smooth && npm run test:centerline && npm run test:io && npm run test:stability",
+    "test": "npm run test:quantity && npm run test:sheet && npm run test:analysis && npm run test:hull && npm run test:history && npm run test:store && npm run test:worker && npm run test:v2 && npm run test:smooth && npm run test:centerline && npm run test:io && npm run test:stability",
     "test:quantity": "tsx test/quantity.ts",
-    "test:sheet": "tsx test/sheet.ts"
+    "test:sheet": "tsx test/sheet.ts",
+    "test:analysis": "tsx test/analysis.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

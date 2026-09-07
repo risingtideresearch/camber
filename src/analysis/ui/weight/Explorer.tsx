@@ -28,19 +28,19 @@
 // the visual hack the heading rows were.
 
 import { useState } from "react";
-import type { DocumentCommand } from "../../core/commands";
+import type { SheetCommand } from "../../../core/sheet/book";
 import {
   facetKeys,
   fieldMoved,
   primaryFacet,
   type Item,
   type WeightBook,
-} from "../../core/sheet/book";
+} from "../../../core/sheet/book";
 import {
   groupHasProblem,
   groupItems,
   type Group,
-} from "../../core/sheet/views";
+} from "../../../core/sheet/views";
 
 export interface NewItemFiling {
   readonly key: string;
@@ -57,7 +57,7 @@ export interface ExplorerProps {
   readonly onOpenFacet: (key: string, value: string) => void;
   /** Make an item, optionally already filed under the group the user chose it from. */
   readonly onAddItem: (filing?: NewItemFiling) => void;
-  readonly send: (command: DocumentCommand) => void;
+  readonly send: (command: SheetCommand) => void;
 }
 
 /** The `by:` option that groups by nothing — every item at the top, in the book's own order. */

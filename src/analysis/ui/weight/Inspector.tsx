@@ -35,14 +35,14 @@ import {
   type FieldLeaf,
   type Item,
   type WeightBook,
-} from "../../core/sheet/book";
+} from "../../../core/sheet/book";
 import {
   fieldUses,
   outputResult,
   resultAt,
   type BookResults,
   type CellResult,
-} from "../../core/sheet/evaluate";
+} from "../../../core/sheet/evaluate";
 import {
   AREA,
   bounds,
@@ -53,14 +53,14 @@ import {
   type Contribution,
   type Reading,
   type SourceTable,
-} from "../../core/sheet/quantity";
+} from "../../../core/sheet/quantity";
 import {
   SLICE_VALUE_FIELDS,
   sliceMeasurementKey,
   type SliceMeasurement,
   type SliceMeasurements,
   type SliceValueField,
-} from "../../core/sheet/slices";
+} from "../../geometry";
 import { inUnit, pct, relative, sig, spreadText } from "./weightFormat";
 import type { Focus } from "./ItemTable";
 

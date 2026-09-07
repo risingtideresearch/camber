@@ -205,8 +205,7 @@ export function convertUnits(d: HullData, to: Unit): void {
   d.unit = to;
 }
 
-export const unitScale = (from: Unit, to: Unit): number =>
-  UNIT_MM[from] / UNIT_MM[to];
+export { unitScale } from "./lengthUnits";
 
 // ---------- import / parse ----------
 // Parse + validate a hull document. A v1 document is converted first, so everything below this line — and

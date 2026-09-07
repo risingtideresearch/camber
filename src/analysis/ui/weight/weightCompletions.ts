@@ -1,15 +1,15 @@
-import { FUNCTIONS } from "../../core/sheet/formula";
-import { HULL_METRICS, HULL_POINTS } from "../../core/hullMetrics";
+import { FUNCTIONS } from "../../../core/sheet/formula";
+import { HULL_METRICS, HULL_POINTS } from "../../hullMetrics";
 import {
   lookupRole,
   rollupsOf,
   type FieldLeaf,
   type Item,
   type WeightBook,
-} from "../../core/sheet/book";
-import { OUTPUTS } from "../../core/sheet/outputs";
-import { ROLES } from "../../core/sheet/roles";
-import { SLICE_VALUE_FIELDS } from "../../core/sheet/slices";
+} from "../../../core/sheet/book";
+import { OUTPUTS } from "../../../core/sheet/outputs";
+import { ROLES } from "../../../core/sheet/roles";
+import { SLICE_VALUE_FIELDS } from "../../geometry";
 
 // ---------- what a formula can mention, offered as you type ----------
 //
