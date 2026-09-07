@@ -25,8 +25,8 @@ import { SLICE_VALUE_FIELDS } from "../../core/sheet/slices";
 //
 // The tricky part is finding the FRAGMENT being completed, because names may contain spaces. Scanning back
 // over "name characters" would stop at the first space and never complete `hull sh|`. So the scan instead
-// runs back to the nearest thing that certainly is not part of a name — an operator, a bracket, a comma —
-// and offers what follows it, trimmed.
+// runs back to the nearest thing that certainly is not part of a name — an operator, a bracket, a comma, a
+// line break — and offers what follows it, trimmed.
 
 export interface Completion {
   readonly insert: string;
@@ -252,8 +252,9 @@ export function fragmentStart(source: string, caret: number): number {
   while (i > 0) {
     const c = source[i - 1];
     // Anything the language uses as punctuation certainly ends a name. A space does not, because names have
-    // them — so a fragment may carry trailing spaces, and the filter below trims.
-    if ("+-*/^(),%±×−–[]".includes(c)) break;
+    // them — so a fragment may carry trailing spaces, and the filter below trims. A NEWLINE does: a name
+    // cannot hold one, and without it a fragment would run back over the line above and match nothing.
+    if ("+-*/^(),%±×−–[]\n\r".includes(c)) break;
     i--;
   }
   return i;

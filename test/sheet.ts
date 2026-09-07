@@ -1008,6 +1008,13 @@ const problem = (
     suggest.items[0].insert.startsWith("hull shell.") && suggest.from === 0,
     "a fragment with a space in it still completes — names have spaces",
   );
+
+  const wrapped = "4.2 +\nhull sh";
+  const across = suggestAt(here, wrapped, wrapped.length)!;
+  ok(
+    across.items[0].insert.startsWith("hull shell.") && across.from === 6,
+    "and one on a later line completes too — a line break ends a name where a space does not",
+  );
 }
 
 // ---------- a point is three cells, and may be one expression ----------

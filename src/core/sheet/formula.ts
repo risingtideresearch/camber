@@ -597,7 +597,7 @@ export const FUNCTIONS: Record<
   max: { arity: "any", hint: "max(a, b, …) — the largest" },
   exp: { arity: 1, hint: "exp(x) — e to the x" },
   ln: { arity: 1, hint: "ln(x) — natural logarithm" },
-  log10: { arity: 1, hint: "log10(x)" },
+  log10: { arity: 1, hint: "log10(x) — base-10 logarithm" },
   sin: { arity: 1, hint: "sin(deg) — degrees, not radians" },
   cos: { arity: 1, hint: "cos(deg) — degrees, not radians" },
   tan: { arity: 1, hint: "tan(deg) — degrees, not radians" },
