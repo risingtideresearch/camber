@@ -440,8 +440,10 @@ function SavedRollupName({
   const [name, setName] = useState(rollup.name);
   const issue = rollupNameIssue(book, name, rollup.id);
   const commit = () => {
-    if (!issue && name.trim() !== rollup.name)
+    if (!issue && name.trim() !== rollup.name) {
       send({ type: "renameRollup", id: rollup.id, name });
+      setName(rollup.name);
+    }
   };
   return (
     <div className="wrollbinding">
@@ -454,10 +456,14 @@ function SavedRollupName({
         onChange={(event) => setName(event.target.value)}
         onBlur={commit}
         onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
+          if (event.key === "Enter") {
+            event.preventDefault();
+            event.currentTarget.blur();
+          }
           if (event.key === "Escape") {
             setName(rollup.name);
-            event.currentTarget.blur();
+            // Do not commit the stale draft through the blur handler.
+            event.preventDefault();
           }
         }}
       />

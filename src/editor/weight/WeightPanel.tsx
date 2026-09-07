@@ -38,11 +38,15 @@ import { FUNCTIONS } from "../../core/sheet/formula";
 import { HULL_METRICS, HULL_POINTS } from "../../core/hullMetrics";
 import {
   findItem,
+  interpretSheetCommand,
   newId,
   primaryFacet,
+  renameImpact,
   roleOf,
   rollupsOf,
+  tidyName,
   type Item,
+  type RenameCommand,
   type View,
   type WeightBook,
 } from "../../core/sheet/book";
@@ -84,6 +88,7 @@ import {
 import { ItemTable, type Focus } from "./ItemTable";
 import { ItemDetail } from "./ItemDetail";
 import { FacetRollup, type RollupSelection } from "./FacetRollup";
+import { RenamePrompt } from "./RenamePrompt";
 import { Problems, Summary } from "./Summary";
 import { problemItems, problemsOf } from "../../core/sheet/views";
 import "./WeightPanel.css";
@@ -108,6 +113,10 @@ export function WeightPanel() {
     useState<RollupSelection | null>(null);
   /** The fresh item whose detail-name field should take the caret when it opens. */
   const [newItemName, setNewItemName] = useState<string | null>(null);
+  const [rename, setRename] = useState<{
+    command: RenameCommand;
+    dependents: readonly string[];
+  } | null>(null);
 
   const hullSampling = sampling();
   const { measurements, results } = useWeightBookResults(
@@ -116,7 +125,33 @@ export function WeightPanel() {
     hullSampling,
     metrics,
   );
-  const send = (command: DocumentCommand) => void dispatch(command);
+  const apply = (command: DocumentCommand) => {
+    void dispatch(command).then((outcome) => {
+      if (command.type !== "renameField" || "rejected" in outcome) return;
+      setFocus((current) =>
+        current?.item === command.item && current.field === command.key
+          ? { ...current, field: tidyName(command.name) }
+          : current,
+      );
+    });
+  };
+  const send = (command: DocumentCommand) => {
+    if (
+      command.type === "renameItem" ||
+      command.type === "renameField" ||
+      command.type === "renameRollup"
+    ) {
+      // Invalid edits still go through the store's normal rejection reporting.
+      if (!("rejected" in interpretSheetCommand(book, command))) {
+        const { dependents } = renameImpact(book, command);
+        if (dependents.length) {
+          setRename({ command, dependents });
+          return;
+        }
+      }
+    }
+    apply(command);
+  };
 
   const views = useMemo(() => standardViews(book), [book]);
   const view = resolveView(book, viewId);
@@ -195,6 +230,17 @@ export function WeightPanel() {
 
   return (
     <div className="weightpanel">
+      {rename && (
+        <RenamePrompt
+          name={tidyName(rename.command.name)}
+          dependents={rename.dependents}
+          onChoose={(update) => {
+            if (update !== null)
+              apply({ ...rename.command, updateReferences: update });
+            setRename(null);
+          }}
+        />
+      )}
       <div className="wpanes">
         <aside className="wsidebar">
           <Explorer

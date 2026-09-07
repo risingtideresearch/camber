@@ -502,8 +502,8 @@ function FieldHeader({
         className="wfieldname"
         autoFocus={autoFocusName}
         onFocus={onNameFocused}
-        title={`What formulas call this field on this item. A formula resolves it by name when the book is evaluated, so renaming this breaks every formula that named the old one${
-          users.length ? `, and ${users.length} does: ${users.join(", ")}` : ""
+        title={`What formulas call this field on this item. When renaming, you can update formulas that use it${
+          users.length ? `: ${users.join(", ")}` : ""
         }.`}
         onCommit={(name) =>
           send({ type: "renameField", item: item.id, key: fieldKey, name })
