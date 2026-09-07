@@ -80,6 +80,7 @@ export function Field({
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const cancelled = useRef(false);
   useEffect(() => {
     if (!autoFocus) return;
     input.current?.focus();
@@ -100,13 +101,18 @@ export function Field({
       onChange={(event) => setDraft(event.target.value)}
       onFocus={onFocus}
       onBlur={() => {
-        if (draft !== null && draft !== value) onCommit(draft);
+        if (!cancelled.current && draft !== null && draft !== value)
+          onCommit(draft);
+        cancelled.current = false;
         setDraft(null);
         onDone?.();
       }}
       onKeyDown={(event) => {
-        if (event.key === "Enter") input.current?.blur();
-        else if (event.key === "Escape") {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          input.current?.blur();
+        } else if (event.key === "Escape") {
+          cancelled.current = true;
           setDraft(null);
           input.current?.blur();
         }

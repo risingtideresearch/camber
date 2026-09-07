@@ -325,6 +325,43 @@ const initializedMeta = (currentId: string | null = null): SessionMeta => {
   );
 }
 
+// A rename and its dependent formulas are one published revision and one undo step.
+{
+  const server = createDocumentStoreServer();
+  const run = (command: Parameters<typeof server.execute>[0]["command"]) =>
+    server.execute({ command, author: "a" });
+  run({ type: "addItem", id: "i1", name: "shell", after: -1 });
+  run({ type: "addField", item: "i1", key: "mass", kind: "scalar" });
+  run({ type: "setOutput", name: "DISPLACEMENT", formula: "shell.mass" });
+  const before = server.snapshot();
+  run({
+    type: "renameItem",
+    item: "i1",
+    name: "hull shell",
+    updateReferences: true,
+  });
+  const after = server.snapshot();
+  check(
+    after.state.weights.items[0].name === "hull shell" &&
+      after.state.weights.outputs.DISPLACEMENT === "hull shell.mass" &&
+      after.sliceRevs.weights === before.sliceRevs.weights + 1,
+    "rename and reference updates publish together in a single revision",
+  );
+  server.undo("a");
+  check(
+    server.snapshot().state.weights.items[0].name === "shell" &&
+      server.snapshot().state.weights.outputs.DISPLACEMENT === "shell.mass",
+    "one undo restores both the old name and its dependent formulas",
+  );
+  server.redo("a");
+  check(
+    server.snapshot().state.weights.items[0].name === "hull shell" &&
+      server.snapshot().state.weights.outputs.DISPLACEMENT ===
+        "hull shell.mass",
+    "one redo reapplies both the rename and the reference updates",
+  );
+}
+
 // ---------- a database that has never heard of the weights column ----------
 //
 // PostgREST refuses the whole request when a column it is asked for is not there, so naming `weights` in a

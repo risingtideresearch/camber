@@ -7,7 +7,7 @@
 // coordinate.
 //
 // Items carry a stable `id` that nothing renames. A formula names an item by its `name`, resolved when the
-// book is evaluated, so renaming rewrites nothing and reordering means nothing at all.
+// book is evaluated. Renaming can optionally update references; reordering means nothing at all.
 //
 // ---------- items, not pages ----------
 //
@@ -37,10 +37,11 @@
 //
 // This module is the authored shape and its reducer only. Evaluation — the formula language, the uncertainty
 // algebra and the hull's own numbers — lives in `formula.ts`, `quantity.ts` and `../hullMetrics.ts`, none of
-// which this file knows about. Views live in `views.ts` and are derived, not authored. A `WeightBook`
+// which are needed here only for optional reference rewriting. Views live in `views.ts` and are derived, not authored. A `WeightBook`
 // survives `structuredClone` and `JSON.stringify` unchanged.
 
 import { canCarryRole, isRoleName, ROLE_NAMES, roleSpec } from "./roles";
+import { renameReferences } from "./rename";
 
 // ---------- the authored shape ----------
 
@@ -187,8 +188,8 @@ export interface WeightBook {
   readonly views: readonly View[];
   /**
    * What the book answers, by `OUTPUTS` name: `DISPLACEMENT`, `VCG`, `LCG`. An ordinary formula in the same
-   * language as everything else, so deleting one deletes the answer and renaming what it refers to rewrites
-   * nothing. See `outputs.ts` for why this is a formula rather than a reference to a row.
+   * language as everything else, so optional rename updates include these formulas too.
+   * See `outputs.ts` for why this is a formula rather than a reference to a row.
    */
   readonly outputs: Readonly<Record<string, string>>;
   /**
@@ -491,7 +492,7 @@ export function freeFieldKey(item: Item, wanted: string): string {
  *
  * There is no primary-field shorthand — `ply density.value`, never a bare `ply density` — so these are
  * defaults for a name field, nothing more. A user renaming `value` to `mass` breaks nothing but the formulas
- * that named it, and `renameField` rewrites none of them: they are resolved by name at evaluation.
+ * that named it, unless `renameField` is asked to update those references too.
  */
 export const DEFAULT_FIELD_KEY: Record<FieldKind, string> = {
   scalar: "value",
@@ -620,10 +621,21 @@ export function leavesOf(field: Field): FieldLeaf[] {
 // unlike a hull command, none of them needs the assembled model, which is why the reducer below takes a
 // `WeightBook` rather than a `Model`.
 
+/** Reference updates are opt-in and share the rename's single undo step. */
+export type RenameCommand = (
+  | { type: "renameItem"; item: string; name: string }
+  | { type: "renameRollup"; id: string; name: string }
+  | { type: "renameField"; item: string; key: string; name: string }
+) & { readonly updateReferences?: boolean };
+
+/** The same reference scan drives the editor prompt and the reducer. */
+export const renameImpact = (book: WeightBook, command: RenameCommand) =>
+  renameReferences(book, command, symbolsOf(book));
+
 export type SheetCommand =
+  | RenameCommand
   | { type: "addItem"; id: string; name: string; after: number }
   | { type: "removeItem"; item: string }
-  | { type: "renameItem"; item: string; name: string }
   | { type: "moveItem"; item: string; to: number }
   | { type: "setItemNote"; item: string; note: string }
   /**
@@ -641,12 +653,10 @@ export type SheetCommand =
       facetKey: string;
       facetValue: string;
     }
-  | { type: "renameRollup"; id: string; name: string }
   | { type: "removeRollup"; id: string }
   | { type: "addField"; item: string; key: string; kind: FieldKind }
   | { type: "removeField"; item: string; key: string }
   | { type: "moveField"; item: string; key: string; to: number }
-  | { type: "renameField"; item: string; key: string; name: string }
   | {
       type: "setFieldFormula";
       item: string;
@@ -767,6 +777,18 @@ export function interpretSheetCommand(
   book: WeightBook,
   command: SheetCommand,
 ): SheetOutcome {
+  if (
+    (command.type === "renameItem" ||
+      command.type === "renameField" ||
+      command.type === "renameRollup") &&
+    command.updateReferences
+  ) {
+    const renameOnly = { ...command, updateReferences: false };
+    const validated = interpretSheetCommand(book, renameOnly);
+    if ("rejected" in validated) return validated;
+    // Resolve references before changing the symbol table or the field's key.
+    return interpretSheetCommand(renameImpact(book, command).book, renameOnly);
+  }
   switch (command.type) {
     case "addItem": {
       if (book.items.some((item) => item.id === command.id))

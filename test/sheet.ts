@@ -32,6 +32,7 @@ import {
   interpretSheetCommand,
   isValidFacetValue,
   primaryFacet,
+  renameImpact,
   roleKeys,
   symbolsOf,
   tidyFacetValue,
@@ -2682,6 +2683,230 @@ const problem = (
       1e-9,
     ),
     "and the frame's model span and its sheet span are the same length",
+  );
+}
+
+// ---------- optional reference updates during a rename ----------
+{
+  let book = build([
+    { name: "hull shell", key: "mass", formula: "12", unit: "kg" },
+    {
+      name: "total",
+      formula: "  hull shell . mass + hull shell.MASS  ",
+    },
+    { name: "similar", formula: "hull shellac.mass" },
+    { name: "unfinished", formula: "hull shell.mass +" },
+  ]);
+  book = run(book, {
+    type: "setFieldRole",
+    item: "i0",
+    field: "mass",
+    role: "MASS",
+  });
+  book = point(book, "total", {
+    x: "hull shell.mass",
+    y: "2 * hull shell.mass",
+    from: "hull shell.mass",
+  });
+  book = cut(book, "total", { pos: "hull shell.mass" });
+  book = run(book, {
+    type: "setOutput",
+    name: "DISPLACEMENT",
+    formula: "hull shell.MASS",
+  });
+  const command = {
+    type: "renameItem",
+    item: "i0",
+    name: "  outer   shell  ",
+    updateReferences: true,
+  } as const;
+  const before = JSON.stringify(book);
+  const impact = renameImpact(book, command);
+  ok(
+    impact.dependents.join("|") ===
+      "total.value|total.position|total.section|OUT.DISPLACEMENT",
+    "rename prompt lists dependent fields once, including point derivations, cuts and outputs",
+  );
+  const renamed = run(book, command);
+  const total = renamed.items[1].fields;
+  ok(
+    total.value.k === "scalar" &&
+      total.value.formula === "  outer shell . mass + outer shell.MASS  ",
+    "item rename updates repeated references and role paths, preserving whitespace",
+  );
+  ok(
+    total.position.k === "point" &&
+      total.position.from === "outer shell.mass" &&
+      total.position.x === "outer shell.mass" &&
+      total.position.y === "2 * outer shell.mass" &&
+      total.section.k === "cut" &&
+      total.section.pos === "outer shell.mass",
+    "renaming updates every authored formula, including saved coordinates of a derived point",
+  );
+  ok(
+    renamed.outputs.DISPLACEMENT === "outer shell.MASS" &&
+      outputResult(evaluateBook(renamed, null), "DISPLACEMENT")?.reading?.v ===
+        12 &&
+      value(renamed, "total") === 24,
+    "dependent fields and outputs still evaluate after an item rename",
+  );
+  ok(
+    JSON.stringify(renamed.items.slice(2)) ===
+      JSON.stringify(book.items.slice(2)),
+    "renaming leaves longer names and unparseable formulas untouched",
+  );
+  ok(
+    JSON.stringify(book) === before,
+    "rename planning and applying never mutate the old book",
+  );
+  const only = run(book, { ...command, updateReferences: false });
+  ok(
+    JSON.stringify(only.items[1]) === JSON.stringify(book.items[1]) &&
+      only.outputs.DISPLACEMENT === "hull shell.MASS",
+    "declining automatic updates changes the name but keeps dependent formulas",
+  );
+  ok(
+    renameImpact(book, { ...command, name: " hull shell " }).dependents
+      .length === 0,
+    "a normalized unchanged name needs no prompt",
+  );
+  ok(
+    "rejected" in interpretSheetCommand(book, { ...command, name: "total" }),
+    "automatic updates do not bypass duplicate-name validation",
+  );
+}
+{
+  let book = build([
+    { name: "engine", key: "mass", formula: "20", unit: "kg" },
+    { name: "total", formula: "engine.mass + engine.MASS" },
+    { name: "shadowed", formula: "engine.x" },
+  ]);
+  book = point(book, "shadowed", { x: "3" }, "engine");
+  book = run(book, {
+    type: "setFieldRole",
+    item: "i0",
+    field: "mass",
+    role: "MASS",
+  });
+  book = run(book, {
+    type: "addField",
+    item: "i0",
+    key: "double",
+    kind: "scalar",
+  });
+  book = run(book, {
+    type: "setFieldFormula",
+    item: "i0",
+    field: "double",
+    leaf: "formula",
+    formula: "mass + MASS + engine.mass",
+  });
+  const renamed = run(book, {
+    type: "renameField",
+    item: "i0",
+    key: "mass",
+    name: "dry mass",
+    updateReferences: true,
+  });
+  const local = renamed.items[0].fields.double;
+  const external = renamed.items[1].fields.value;
+  ok(
+    local.k === "scalar" &&
+      local.formula === "dry mass + MASS + engine.dry mass" &&
+      external.k === "scalar" &&
+      external.formula === "engine.dry mass + engine.MASS",
+    "field rename updates local and qualified references while preserving role aliases",
+  );
+  ok(
+    value(renamed, "total") === 40,
+    "a renamed role-bearing field keeps its dependent value",
+  );
+  const renamedItem = run(book, {
+    type: "renameItem",
+    item: "i0",
+    name: "motor",
+    updateReferences: true,
+  });
+  ok(
+    JSON.stringify(renamedItem.items[2]) === JSON.stringify(book.items[2]),
+    "a local field shadowing the old item name is not rewritten",
+  );
+  const pointRename = run(book, {
+    type: "renameField",
+    item: "i2",
+    key: "engine",
+    name: "mount",
+    updateReferences: true,
+  });
+  const shadowed = pointRename.items[2].fields.value;
+  ok(
+    shadowed.k === "scalar" &&
+      shadowed.formula === "mount.x" &&
+      JSON.stringify(pointRename.items[1]) === JSON.stringify(book.items[1]),
+    "renaming a local point field updates its leaf without rewriting the same-named item",
+  );
+  ok(
+    renameImpact(book, {
+      type: "renameField",
+      item: "i0",
+      key: "double",
+      name: "twice",
+    }).dependents.length === 0,
+    "an unused name has no dependent fields to prompt about",
+  );
+}
+{
+  let book = build([
+    { name: "shell", key: "mass", formula: "10", unit: "kg", system: "hull" },
+    { name: "total", formula: "ROLLUP.hull weights.MASS" },
+    { name: "other", formula: "ROLLUP.hull weights extra.MASS" },
+  ]);
+  book = run(book, {
+    type: "setFieldRole",
+    item: "i0",
+    field: "mass",
+    role: "MASS",
+  });
+  for (const [id, name] of [
+    ["r1", "hull weights"],
+    ["r2", "hull weights extra"],
+  ])
+    book = run(book, {
+      type: "addRollup",
+      id,
+      name,
+      facetKey: "system",
+      facetValue: "hull",
+    });
+  book = run(book, {
+    type: "setOutput",
+    name: "DISPLACEMENT",
+    formula: "ROLLUP.hull weights.MASS",
+  });
+  book = point(book, "total", {
+    from: "ROLLUP.hull weights.CG",
+    z: "ROLLUP.hull weights.CG.z",
+  });
+  const command = {
+    type: "renameRollup",
+    id: "r1",
+    name: "structure",
+    updateReferences: true,
+  } as const;
+  const renamed = run(book, command);
+  const position = renamed.items[1].fields.position;
+  ok(
+    renameImpact(book, command).dependents.length === 3 &&
+      position.k === "point" &&
+      position.from === "ROLLUP.structure.CG" &&
+      position.z === "ROLLUP.structure.CG.z" &&
+      renamed.outputs.DISPLACEMENT === "ROLLUP.structure.MASS",
+    "rollup rename updates aggregate roles and coordinates in fields and outputs",
+  );
+  ok(
+    value(renamed, "total") === 10 &&
+      JSON.stringify(renamed.items[2]) === JSON.stringify(book.items[2]),
+    "renamed rollup still evaluates and similarly named rollups stay untouched",
   );
 }
 
