@@ -63,10 +63,10 @@ export const PANELS: Record<PanelKind, PanelSpec> = {
   },
 };
 
-const KINDS = Object.keys(PANELS) as PanelKind[];
+export const PANEL_KINDS = Object.keys(PANELS) as PanelKind[];
 
 const isPanelKind = (v: string | null): v is PanelKind =>
-  v !== null && (KINDS as string[]).includes(v);
+  v !== null && (PANEL_KINDS as string[]).includes(v);
 
 /** Which panel THIS window was opened as, or null if the URL doesn't name one we know. */
 export function panelKindFromUrl(): PanelKind | null {
@@ -80,11 +80,15 @@ export function panelKindFromUrl(): PanelKind | null {
  * The window is named per kind and session, so a second click on the same button raises the window that is
  * already showing that panel rather than piling up duplicates — while two different sessions each get their
  * own set. Opening it as a popup drops the browser chrome, which is what makes it read as a panel.
+ *
+ * Returns whether a window was actually opened (or raised): `window.open` yields null when a pop-up blocker
+ * eats the call, which the reopen affordance needs to know — blockers typically spend the click's activation
+ * on the first popup, so opening several panels can take a click each (see ReopenPanelsButton).
  */
-export function openPanelWindow(kind: PanelKind): void {
+export function openPanelWindow(kind: PanelKind): boolean {
   const here = new URL(window.location.href);
   const session = here.searchParams.get("session");
-  if (!session) return; // no live session to join — nothing a panel could show
+  if (!session) return false; // no live session to join — nothing a panel could show
   const url = new URL("panel.html", here);
   url.searchParams.set("session", session);
   url.searchParams.set("panel", kind);
@@ -98,4 +102,5 @@ export function openPanelWindow(kind: PanelKind): void {
     `popup=1,width=${spec.width},height=${spec.height}`,
   );
   opened?.focus();
+  return opened !== null;
 }

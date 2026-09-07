@@ -24,6 +24,8 @@ import { StationView } from "./StationView";
 import { CutStationView } from "./CutStationView";
 import { StlControl } from "../components/StlControl";
 import { DetachPanelButton } from "./DetachPanelButton";
+import { ReopenPanelsButton } from "./ReopenPanelsButton";
+import { closeSessionPanels } from "./panelLifecycle";
 import { Area, AreaGroup, AreaSeparator } from "polymorph-ui";
 import "./EditorApp.css";
 
@@ -169,6 +171,9 @@ function Editor() {
       !confirm("Discard unsaved changes and return to the library?")
     )
       return;
+    // Session panels must be closed before navigating to the library, because
+    // this page is the sender of their closing signal (see panelLifecycle).
+    closeSessionPanels(editorSession.sessionId);
     window.location.href = "library.html";
   };
 
@@ -199,6 +204,7 @@ function Editor() {
           onClose={onClose}
         />
         <span className="tabsep" />
+        <ReopenPanelsButton />
         <DetachPanelButton kind="stability" label="Stability" />
         <DetachPanelButton kind="weights" label="Weights" />
         <StlControl />

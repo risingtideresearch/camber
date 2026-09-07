@@ -5,6 +5,7 @@ import { DocumentStoreProvider } from "./DocumentStoreProvider";
 import { EditorUiProvider } from "./editorUi";
 import { joinedSessionFromUrl } from "./editorSession";
 import { PANELS, panelKindFromUrl, type PanelKind } from "./externalPanels";
+import { attachPanelLifecycle } from "./panelLifecycle";
 import { HistoryControls } from "./HistoryControls";
 import { HistoryPanel } from "./HistoryPanel";
 import { HullView3d } from "./HullView3d";
@@ -28,6 +29,12 @@ import "./PanelApp.css";
 
 const panelSession = joinedSessionFromUrl();
 const panelKind = panelKindFromUrl();
+
+// A panel lives exactly as long as its document is open somewhere: it announces itself while it is up, and
+// closes itself when the editor closes the document (see panelLifecycle). Attached at module load like the
+// two reads above — the panel's session and kind are properties of the window, not of a render.
+if (panelSession && panelKind)
+  attachPanelLifecycle(panelSession.sessionId, panelKind);
 
 export function PanelApp() {
   if (!panelSession || !panelKind)
