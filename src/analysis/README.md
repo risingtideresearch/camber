@@ -1,6 +1,8 @@
-# Shared analysis (Phase 1)
+# Shared analysis (Phases 1–2)
 
 This directory is the weight/stability feature boundary, not a second app or a prepared-data file format.
+
+Phase 2 adds a constrained direct-mesh geometry backend and physical plane sections. See [the geometry spike notes](mesh/README.md) for supported inputs, closure semantics, benchmarks and the remaining Camber-versus-mesh parity gate.
 
 ## Composition
 
@@ -37,15 +39,16 @@ An unavailable query has a reason; a preview plane missing the hull returns an a
 
 ## Deliberately deferred
 
-This is Phase 1, not the entire proposed geometry API:
+This is the extracted feature plus a Phase 2 geometry spike, not the entire proposed geometry API:
 
 - `slices()` retains authored `plane`/`station` semantics and derivatives.
 - `sectionOutline()` is a preview operation for existing point placement, not an arbitrary-plane measurement.
 - `outlines()` returns the current profile context, not a general projection query.
-- `capabilities.arbitraryPlanes` is explicitly false. General plane regions, holes, surface provenance, construction/motion authoring, and STL support belong to Phase 2 and later.
+- `section()` now supplies physical plane regions, holes, open paths and boundary provenance. Both geometry adapters declare arbitrary-plane support; invalid/unsupported envelopes return local unavailability reasons. This does not convert legacy cuts or add construction/motion authoring.
+- The STL spike supplies sections and stability, but deliberately leaves whole-hull metrics, projections and legacy weight geometry unavailable until Phase 3.
 - No workspace migration, standalone app, project format, history change, or persistence migration is included.
 
-The detailed target API and rollout remain in `docs/design/standalone-weight-stability.md`.
+The detailed target API and rollout remain in `docs/design/standalone-weight-stability.md`. The Phase 2 developer/browser harness is not the standalone product shell.
 
 ## Verification
 

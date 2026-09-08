@@ -10,7 +10,7 @@ export interface CrossCurves {
   vol: number[][]; // ∇ at each step (model units³)
   kn: number[][]; // KN at each step (model units)
   wl: number[][]; // the waterline's world height at each step
-  deckDown: boolean[][]; // the sheer is submerged somewhere — the watertight cap is carrying load
+  deckDown: (boolean | null)[][]; // null = no known reference; true = reference sheer immersed
   sheerZ: number[]; // lowest heeled sheer height at each heel angle
   knSlope: number[][]; // PCHIP slopes of kn against vol, precomputed so many lookups stay cheap
   wlSlope: number[][]; // PCHIP slopes of waterline height against vol, for sheer-clearance lookup
@@ -30,7 +30,7 @@ export function knAt(cc: CrossCurves, i: number, vol: number): number {
 export interface GzPoint {
   heel: number; // radians
   gz: number; // righting arm, model units (NaN where the displacement is off the table)
-  deckDown: boolean; // the deck edge is under at this condition
+  deckDown: boolean | null; // null = unknown; otherwise reference immersion at this condition
 }
 
 // The GZ curve for one (displacement, VCG) pair. `vol` is ∇ in model units³ — the same quantity `Hydro.vol`
@@ -49,7 +49,7 @@ export function gzCurve(cc: CrossCurves, vol: number, vcg: number): GzPoint[] {
     return {
       heel,
       gz: kn - vcg * Math.sin(heel),
-      deckDown: cc.deckDown[i][k] ?? false,
+      deckDown: cc.deckDown[i][k] === undefined ? false : cc.deckDown[i][k],
     };
   });
 }

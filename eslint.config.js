@@ -69,7 +69,7 @@ export default tseslint.config(
   // The source-specific implementation is the one deliberate exception.
   {
     files: ["src/analysis/**/*.{ts,tsx}"],
-    ignores: ["src/analysis/camber/**"],
+    ignores: ["src/analysis/camber/**", "src/analysis/mesh/**"],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -77,6 +77,8 @@ export default tseslint.config(
           patterns: [
             {
               group: [
+                "**/camber/**",
+                "**/mesh/**",
                 "**/editor/**",
                 "**/document-store/**",
                 "**/worker/**",

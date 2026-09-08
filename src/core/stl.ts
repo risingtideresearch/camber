@@ -49,7 +49,17 @@ export function buildStl(model: Model, name = "camber"): string {
         m.pos[t + o + 1] * s,
         m.pos[t + o + 2] * s,
       ];
-      out += facet(p(0), p(3), p(6));
+      const a = p(0),
+        b = p(3),
+        c = p(6);
+      // The renderer's port half mirrors coordinates and stored normals but not
+      // vertex order. STL readers need outward WINDING, not merely an outward
+      // normal field. Use our authored normal only at export, never on import.
+      const n: Vec3 = [m.nrm[t], m.nrm[t + 1], m.nrm[t + 2]];
+      out +=
+        V.dot(V.cross(V.sub(b, a), V.sub(c, a)), n) < 0
+          ? facet(a, c, b)
+          : facet(a, b, c);
     }
     return out;
   };

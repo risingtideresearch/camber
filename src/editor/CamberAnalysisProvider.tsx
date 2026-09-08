@@ -62,7 +62,7 @@ export function CamberAnalysisProvider({ children }: { children: ReactNode }) {
         measurements: true,
         legacySlices: true,
         pointViews: true,
-        arbitraryPlanes: false,
+        arbitraryPlanes: true,
       },
     );
     // The store's hull slice clocks are authoritative across structured clones. Book edits,

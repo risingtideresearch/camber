@@ -1,3 +1,6 @@
+import { camberPlaneMesh } from "./planeMesh";
+import { meshSection } from "../mesh/section";
+import type { SectionRequest } from "../sections";
 // Camber implementation of the phase-1 queries. The existing numerical routines are
 // unchanged; one prepared sweep serves independently requested answers in the worker.
 import { hydrostatics } from "../../core/hydro";
@@ -53,6 +56,8 @@ export function createCamberComputation() {
         NonNullable<ReturnType<typeof hullOutlines>>
       >;
     };
+    let planeMesh: ReturnType<typeof camberPlaneMesh> | undefined;
+    let planeFailure: string | undefined;
     let measurer: ReturnType<typeof createSliceMeasurer> | null = null;
     const measure = (query: SliceQuery): Available<SliceMeasurement> => {
       const key = JSON.stringify(query);
@@ -80,6 +85,18 @@ export function createCamberComputation() {
       if (input === null && values.has(kind)) return values.get(kind)!;
       let result: Available<unknown>;
       switch (kind) {
+        case "section": {
+          if (planeFailure) return unavailable(planeFailure);
+          if (!planeMesh) {
+            try {
+              planeMesh = camberPlaneMesh(model, sampling);
+            } catch (reason) {
+              planeFailure = `Camber plane envelope unavailable: ${reason instanceof Error ? reason.message : String(reason)}`;
+              return unavailable(planeFailure);
+            }
+          }
+          return meshSection(planeMesh, input as SectionRequest);
+        }
         case "stability": {
           const curves = crossCurves(model, sampling);
           const geom = stationGeometry(model, sampling);

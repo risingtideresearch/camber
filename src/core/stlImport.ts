@@ -47,6 +47,8 @@ let nextStlId = 1;
 // "solid"; a file that does begin with "solid" is still binary if the size relation holds exactly, since
 // some binary files also begin with it.
 export function parseStl(buffer: ArrayBuffer): StlGeometry {
+  if (buffer.byteLength > 64 * 1024 * 1024)
+    throw new Error("STL exceeds the 64 MiB input limit");
   if (buffer.byteLength >= 84) {
     const tri = new DataView(buffer).getUint32(80, true),
       size = 84 + tri * 50;
@@ -59,6 +61,7 @@ export function parseStl(buffer: ArrayBuffer): StlGeometry {
 }
 
 function parseBinary(buffer: ArrayBuffer, tri: number): StlGeometry {
+  if (tri > 200_000) throw new Error("STL exceeds the 200000 triangle limit");
   const dv = new DataView(buffer),
     positions = new Float32Array(tri * 9);
   let o = 84,
@@ -72,13 +75,30 @@ function parseBinary(buffer: ArrayBuffer, tri: number): StlGeometry {
 }
 
 function parseAscii(text: string): StlGeometry {
-  const verts: number[] = [],
-    re = /vertex\s+(\S+)\s+(\S+)\s+(\S+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)))
-    verts.push(Number(m[1]), Number(m[2]), Number(m[3]));
-  if (verts.length < 9 || verts.length % 9 !== 0)
-    throw new Error("Not a valid STL file (no triangles found).");
+  const header = /^\s*solid[^\r\n]*[\r\n]+/.exec(text);
+  const footer = /\s*endsolid[^\r\n]*\s*$/.exec(text);
+  if (!header || !footer || footer.index < header[0].length)
+    throw new Error("Malformed or truncated ASCII STL");
+  const body = text.slice(header[0].length, footer.index);
+  const verts: number[] = [];
+  const facet =
+    /\s*facet\s+normal\s+\S+\s+\S+\s+\S+\s+outer\s+loop\s+vertex\s+(\S+)\s+(\S+)\s+(\S+)\s+vertex\s+(\S+)\s+(\S+)\s+(\S+)\s+vertex\s+(\S+)\s+(\S+)\s+(\S+)\s+endloop\s+endfacet/gy;
+  let end = 0;
+  while (end < body.length && body.slice(end).trim()) {
+    facet.lastIndex = end;
+    const match = facet.exec(body);
+    if (!match) throw new Error("Malformed ASCII STL facet");
+    end = facet.lastIndex;
+    if (verts.length >= 200_000 * 9)
+      throw new Error("STL exceeds the 200000 triangle limit");
+    if (
+      match
+        .slice(1)
+        .some((v) => !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(v))
+    )
+      throw new Error("Invalid ASCII STL coordinate");
+    verts.push(...match.slice(1).map(Number));
+  }
   return finish(new Float32Array(verts));
 }
 
@@ -94,6 +114,8 @@ function finish(positions: Float32Array): StlGeometry {
     const x = positions[i],
       y = positions[i + 1],
       z = positions[i + 2];
+    if (![x, y, z].every(Number.isFinite))
+      throw new Error("STL contains a non-finite vertex");
     if (x < x0) x0 = x;
     if (y < y0) y0 = y;
     if (z < z0) z0 = z;

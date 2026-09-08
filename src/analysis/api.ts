@@ -1,6 +1,7 @@
-// Phase 1's application-facing query boundary. Numerical analysis is SI. The two legacy
-// geometry queries preserve existing sheet semantics; arbitrary-plane regions are phase 2,
-// not a station disguised as a plane or an array of precomputed sections.
+// Application-facing query boundary. Numerical analysis is SI. Physical plane sections
+// are distinct from compatibility queries preserving the existing sheet semantics.
+import type { SectionRequest, SectionResult } from "./sections";
+import type { Vec3 } from "../core/math";
 import type { HullMetrics } from "./hullMetrics";
 import type { CrossCurves, LimitingKgPoint } from "./stability";
 import type {
@@ -32,8 +33,17 @@ export const unavailable = (reason: string): Available<never> => ({
 export interface AnalysisContext {
   readonly id: string;
   readonly fixedTrim: number; // radians
-  readonly referenceWaterline: number; // authored depth, metres; NOT height above K
-  readonly weightFrame: "camber-deck-x-world-z";
+  readonly referenceWaterline: number; // metres; meaning is fixed by referenceWaterlineConvention
+  readonly weightFrame: "camber-deck-x-world-z" | "upright-cartesian";
+  /** Omitted for legacy Camber contexts; mesh contexts name world height explicitly. */
+  readonly referenceWaterlineConvention?: "camber-depth" | "world-z";
+  /** SI body point → weight point: rows × point + offset. Legacy Camber
+   * mappings remain in outlines().frame until its authoring migration. */
+  readonly hullToWeight?: {
+    readonly rows: readonly [Vec3, Vec3, Vec3];
+    readonly offset: Vec3;
+  };
+  readonly kgDatum?: { readonly frame: "upright"; readonly z: number };
 }
 
 /** All lengths in metres, volumes in m³, angles in radians; KG is above the keel datum. */
@@ -42,6 +52,18 @@ export interface StabilityData {
   readonly limit: LimitingKgPoint[];
   readonly hydro: { readonly vol: number; readonly kb: number } | null;
   readonly lowestSheerKg: number;
+  readonly availability?: {
+    readonly sheer: Available<true>;
+    readonly referenceWaterline: Available<true>;
+    readonly downflooding: Available<true>;
+  };
+  readonly assumptions?: readonly string[];
+  readonly numerics?: {
+    method: string;
+    sinkageSteps: number;
+    triangles?: number;
+    errorBound: null;
+  };
 }
 
 export interface SliceQuery {
@@ -63,8 +85,12 @@ export interface HullAnalysis {
     readonly measurements: boolean;
     readonly legacySlices: boolean;
     readonly pointViews: boolean;
-    readonly arbitraryPlanes: false;
+    readonly arbitraryPlanes: boolean;
   };
+  section(
+    query: SectionRequest,
+    options?: QueryOptions,
+  ): Promise<QueryResult<SectionResult>>;
   stability(options?: QueryOptions): Promise<QueryResult<StabilityData>>;
   measurements(options?: QueryOptions): Promise<QueryResult<HullMetrics>>;
   outlines(options?: QueryOptions): Promise<QueryResult<HullOutlines>>;
@@ -82,6 +108,7 @@ export interface HullAnalysis {
 
 /** Serializable request/result map shared by the facade and worker adapter. */
 export interface AnalysisQueries {
+  section: { input: SectionRequest; output: SectionResult };
   stability: { input: null; output: StabilityData };
   measurements: { input: null; output: HullMetrics };
   outlines: { input: null; output: HullOutlines };

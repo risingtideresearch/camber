@@ -476,7 +476,7 @@ console.log(
 // Check the transitive local import graph, not just the panels' immediate imports.
 // A seemingly innocent metric catalogue import used to pull in the entire hull engine.
 const forbidden =
-  /\/src\/(editor|document-store|worker)\/|\/src\/analysis\/camber\/|\/src\/core\/(model|mesh|sweep|hydro|hull|hullMetrics|stability|pointGeometry|commands|json|sheet\/slices)\.ts$/;
+  /\/src\/(editor|document-store|worker)\/|\/src\/analysis\/(camber|mesh)\/|\/src\/core\/(model|mesh|sweep|hydro|hull|hullMetrics|stability|pointGeometry|commands|json|sheet\/slices)\.ts$/;
 const seen = new Set<string>();
 function checkBoundary(url: URL): void {
   assert.ok(

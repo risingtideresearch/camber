@@ -43,15 +43,13 @@
 import { type Model } from "./model";
 import { type HullSampling } from "./mesh";
 import { cut, heightSpan, stationGeometry, type StationGeom } from "./sweep";
-import { pchipSlopes } from "./pchip";
+import {
+  buildCrossCurves,
+  buildInitialStability,
+  type ImmersedBackend,
+} from "../analysis/immersed";
 import type { CrossCurves, LimitingKgPoint } from "../analysis/stability";
 export * from "../analysis/stability";
-
-const STEPS = 32; // sinkage steps per heel angle — the table's resolution in ∇
-const HEEL_STEP = 5; // default heel spacing, degrees
-const HEEL_MAX = 90;
-
-const DEG = Math.PI / 180;
 
 export interface CrossCurveOpts {
   heel?: number[]; // heel angles in DEGREES (default 0…90 by 5); sorted and de-duplicated
@@ -100,58 +98,28 @@ export function crossCurves(
 ): CrossCurves | null {
   const geom = stationGeometry(model, sampling);
   if (!geom) return null;
-  const steps = Math.max(4, Math.round(opts.steps ?? STEPS));
-  const heel = (
-    opts.heel ??
-    Array.from(
-      { length: Math.floor(HEEL_MAX / HEEL_STEP) + 1 },
-      (_, i) => i * HEEL_STEP,
-    )
-  )
-    .map((d) => d * DEG)
-    .sort((a, b) => a - b)
-    .filter((v, i, a) => i === 0 || v > a[i - 1] + 1e-12);
+  return buildCrossCurves(sweepBackend(geom), opts);
+}
 
-  const out: CrossCurves = {
+export function sweepBackend(geom: StationGeom): ImmersedBackend {
+  return {
     keelZ: geom.keelZ,
-    heel,
-    vol: [],
-    kn: [],
-    wl: [],
-    deckDown: [],
-    sheerZ: [],
-    knSlope: [],
-    wlSlope: [],
+    omitImmersedReference: true,
+    heightSpan: (heel) => heightSpan(geom, heel),
+    at: (heel, waterline, moments) => {
+      const c = cut(geom, heel, waterline, moments);
+      const zB = c.zBWorld - geom.keelZ;
+      return {
+        vol: c.vol,
+        yB: c.yB,
+        zB,
+        kn: c.yB * Math.cos(heel) + zB * Math.sin(heel),
+        deckDown: c.deckDown,
+        sheerZ: c.sheerZ,
+        waterplane: c.wp ? { it: c.wp.it } : undefined,
+      };
+    },
   };
-
-  for (const phi of heel) {
-    const [hMin, hMax] = heightSpan(geom, phi);
-    const vol: number[] = [],
-      kn: number[] = [],
-      wl: number[] = [],
-      dd: boolean[] = [];
-    let sheerZ = Infinity;
-    for (let k = 0; k <= steps; k++) {
-      const wlZ = hMin + ((hMax - hMin) * k) / steps,
-        im = immersedAt(geom, phi, wlZ);
-      sheerZ = im.sheerZ;
-      // keep the table strictly increasing in ∇ so it inverts: a fine keel or a flat bottom can hold ∇
-      // still over several steps, and a repeated abscissa has no inverse.
-      if (vol.length && im.vol <= vol[vol.length - 1] + 1e-12) continue;
-      vol.push(im.vol);
-      kn.push(im.kn);
-      wl.push(wlZ);
-      dd.push(im.deckDown);
-    }
-    out.vol.push(vol);
-    out.kn.push(kn);
-    out.wl.push(wl);
-    out.deckDown.push(dd);
-    out.sheerZ.push(sheerZ);
-    out.knSlope.push(vol.length >= 2 ? pchipSlopes(vol, kn) : [0]);
-    out.wlSlope.push(vol.length >= 2 ? pchipSlopes(vol, wl) : [0]);
-  }
-  return out;
 }
 
 /**
@@ -164,17 +132,5 @@ export function limitingKgCurve(
   geom: StationGeom,
   cc: CrossCurves,
 ): LimitingKgPoint[] {
-  const upright = cc.heel.findIndex((heel) => Math.abs(heel) < 1e-12);
-  if (upright < 0) return [];
-  const out: LimitingKgPoint[] = [];
-  for (const wlZ of cc.wl[upright]) {
-    const condition = cut(geom, 0, wlZ, true);
-    if (condition.vol <= 1e-12 || condition.deckDown || !condition.wp) continue;
-    const kb = condition.zBWorld - geom.keelZ;
-    out.push({
-      vol: condition.vol,
-      kg: kb + condition.wp.it / condition.vol,
-    });
-  }
-  return out;
+  return buildInitialStability(sweepBackend(geom), cc);
 }

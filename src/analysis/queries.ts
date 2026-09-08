@@ -36,7 +36,15 @@ export function createHullAnalysis(
   run: QueryRunner,
   capabilities: HullAnalysis["capabilities"],
 ): HullAnalysis {
-  const immutableContext = Object.freeze({ ...context });
+  const immutableContext = Object.freeze(structuredClone(context));
+  if (immutableContext.hullToWeight) {
+    const mapping = immutableContext.hullToWeight;
+    mapping.rows.forEach((row) => Object.freeze(row));
+    Object.freeze(mapping.rows);
+    Object.freeze(mapping.offset);
+    Object.freeze(mapping);
+  }
+  if (immutableContext.kgDatum) Object.freeze(immutableContext.kgDatum);
   const fixed = new Map<string, Promise<QueryResult<unknown>>>();
   const geometry = new Map<string, Promise<QueryResult<unknown>>>();
   const query = <K extends QueryKind>(
@@ -73,6 +81,7 @@ export function createHullAnalysis(
   return {
     context: immutableContext,
     capabilities: Object.freeze({ ...capabilities }),
+    section: (input, options) => query("section", input, options),
     stability: (options) => query("stability", null, options),
     measurements: (options) => query("measurements", null, options),
     outlines: (options) => query("outlines", null, options),

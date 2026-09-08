@@ -13,6 +13,7 @@ export function scaleStability(
     values.map((row) => row.map((v) => v * factor));
   const cc = data.curves;
   return {
+    ...data,
     curves: {
       ...cc,
       keelZ: cc.keelZ * s,

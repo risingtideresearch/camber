@@ -629,8 +629,10 @@ const rangeNote = (
 function OverlayControls({
   value,
   onChange,
+  sheerAvailable,
 }: {
   readonly value: Overlays;
+  readonly sheerAvailable: boolean;
   readonly onChange: (next: Overlays) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -650,7 +652,8 @@ function OverlayControls({
         <label className="dd-row dd-check">
           <input
             type="checkbox"
-            checked={value.sheerReference}
+            disabled={!sheerAvailable}
+            checked={sheerAvailable && value.sheerReference}
             onChange={(e) => set("sheerReference", e.target.checked)}
           />
           <span className="dd-name">Sheer immersion</span>
@@ -660,15 +663,17 @@ function OverlayControls({
           title="Hatch the displacements whose sheer immerses before this heel"
         >
           <span className="dd-name">Immerses before</span>
-          <NumberInput
-            label=""
-            value={value.sheerReferenceDeg}
-            // The field is dragged as well as typed, and a heel is read in whole degrees either way.
-            onChange={(deg) => set("sheerReferenceDeg", Math.round(deg))}
-            min={5}
-            max={90}
-          />
-          <span className="dd-unit">°</span>
+          {sheerAvailable && (
+            <NumberInput
+              label=""
+              value={value.sheerReferenceDeg}
+              // The field is dragged as well as typed, and a heel is read in whole degrees either way.
+              onChange={(deg) => set("sheerReferenceDeg", Math.round(deg))}
+              min={5}
+              max={90}
+            />
+          )}
+          <span className="dd-unit">{sheerAvailable ? "°" : "unknown"}</span>
         </div>
         <label className="dd-row dd-check">
           <input
@@ -681,7 +686,8 @@ function OverlayControls({
         <label className="dd-row dd-check">
           <input
             type="checkbox"
-            checked={value.lowestSheer}
+            disabled={!sheerAvailable}
+            checked={sheerAvailable && value.lowestSheer}
             onChange={(e) => set("lowestSheer", e.target.checked)}
           />
           <span className="dd-name">Lowest sheer-immersing KG</span>
@@ -744,9 +750,10 @@ export function StabilityPanel({
   const [numbersOpen, setNumbersOpen] = useState(false);
   // Named for what each layer below asks. The reference angle keeps its own name because the hatch and its
   // tooltip are stated in it.
-  const showSheerReference = overlays.sheerReference,
+  const sheerAvailable = !!curves?.sheerZ.every(Number.isFinite);
+  const showSheerReference = overlays.sheerReference && sheerAvailable,
     showDesignWaterline = overlays.designWaterline,
-    showLowestSheer = overlays.lowestSheer,
+    showLowestSheer = overlays.lowestSheer && sheerAvailable,
     sheerReferenceDeg = overlays.sheerReferenceDeg;
   // The area criterion being shaded by, or null for the initial-stability and maximum-GZ readings. The area
   // readout falls back to the standard's first one, so switching away from area shading never blanks it.
@@ -1323,7 +1330,9 @@ export function StabilityPanel({
       name: "Sheer immersion",
       value: Number.isFinite(selectedSheerDeg)
         ? `${selectedSheerDeg.toFixed(1)}°`
-        : "> 90°",
+        : sheerAvailable
+          ? "> 90°"
+          : "unknown",
       range: rangeNote(sheerRange, (v) => `${v.toFixed(1)}°`),
       title: "The heel at which the sheer line first touches the water",
       always: true,
@@ -1347,7 +1356,11 @@ export function StabilityPanel({
         <div className="cap">
           <span className="capname">Limiting KG</span>
           <span className="capctls">
-            <OverlayControls value={overlays} onChange={setOverlays} />
+            <OverlayControls
+              value={overlays}
+              onChange={setOverlays}
+              sheerAvailable={sheerAvailable}
+            />
           </span>
         </div>
         {/* What the plane is shaded by. A segmented bar rather than the select it was, because this is not a
@@ -1381,6 +1394,12 @@ export function StabilityPanel({
             Point anywhere to see that condition’s curve, and click to pin it.
           </InfoHint>
         </div>
+        {!sheerAvailable && (
+          <p className="sheetlinknote" role="note">
+            Sheer immersion is unknown: no deck-edge reference is annotated.
+            Downflooding openings are not modelled.
+          </p>
+        )}
         <ChartFrame
           xDomain={xDomain}
           yDomain={[0, yMax]}
