@@ -39,8 +39,17 @@
 // (volume by s³) and multiplies by water density.
 
 import { type Vec2, type Vec3 } from "./math";
-import { loa, type Model, worldZ } from "./model";
-import { type HullSampling } from "./mesh";
+import {
+  bisectRoot,
+  frameAt,
+  sectionAt,
+  sectionWorld,
+  xTransom,
+  loa,
+  type Model,
+  worldZ,
+} from "./model";
+import { type HullSample, type HullSampling } from "./mesh";
 
 // The resolutions the numbers here were tuned at, for a caller that has no sampling of its own to pass in.
 // A host that already sweeps the hull for something else — the 3D view, the editor's sampler — should hand
@@ -87,6 +96,64 @@ export interface StationGeom {
   sinRake: number;
 }
 
+/** Close the skin before transom trimming on the centreline/deck, THEN clip the solid by
+ * the transom plane. Clipping an already-trimmed skin and closing horizontally
+ * omits (or adds) wedges in fanning station planes. No division by transom rake:
+ * vertical, reversed and nearly vertical transoms use the same half-plane test.
+ * The outgoing-edge skin tags survive clipping; every new closing edge is non-skin. */
+export function stationPolygon(
+  frame: Pick<Column, "px" | "py" | "nx" | "ny">,
+  skin: readonly Vec3[],
+  transom: Model["transom"],
+): Vtx[] {
+  if (skin.length < 2 || Math.abs(frame.ny) < 1e-9) return [];
+  const { px, py, nx, ny } = frame,
+    aC = -py / ny;
+  const poly: Vtx[] = skin.map((p) => [
+    (p[0] - px) * nx + (p[1] - py) * ny,
+    p[2],
+    1,
+  ]);
+  poly[poly.length - 1][2] = 0;
+  if (Math.abs(poly[poly.length - 1][0] - aC) > 1e-12)
+    poly.push([aC, skin[skin.length - 1][2], 0]);
+  poly.push([aC, skin[0][2], 0]);
+  const [a, b] = transom,
+    slope = (b.x - a.x) / (b.z - a.z || 1);
+  return clipSubmerged(
+    poly,
+    poly.map((p) => px + p[0] * nx - a.x - slope * (p[1] - a.z)),
+  );
+}
+
+/** The sampling's girth lattice, trimmed on sheer/centreline but NOT transom.
+ * Resolve the two end roots on the actual curve, just as mesh.ts does. Keeping
+ * columns whose skin is behind the transom matters: their interior can still be
+ * ahead of it. Empty solid columns are retained as zero quadrature endpoints. */
+function skinBeforeTransom(model: Model, row: readonly HullSample[]): Vec3[] {
+  const keep = (p: Vec3) => Math.min(model.trimZ(p[0]) - p[2], p[1]);
+  let lo = -1,
+    hi = -1;
+  row.forEach((p, i) => {
+    if (keep(p.pos) >= 0) {
+      if (lo < 0) lo = i;
+      hi = i;
+    }
+  });
+  if (lo < 0) return [];
+  const points: Vec3[] = [];
+  const root = (a: HullSample, b: HullSample): Vec3 => {
+    const frame = frameAt(model, a.u),
+      section = sectionAt(model, a.u);
+    const at = (v: number) => sectionWorld(frame, section, v);
+    return at(bisectRoot((v) => keep(at(v)), a.v, b.v, keep(a.pos)));
+  };
+  if (lo > 0) points.push(root(row[lo - 1], row[lo]));
+  for (let i = lo; i <= hi; i++) points.push(row[i].pos);
+  if (hi + 1 < row.length) points.push(root(row[hi], row[hi + 1]));
+  return points;
+}
+
 // Reduce an already-swept hull to what cutting needs.
 //
 // The sampling is passed IN rather than built here, for two reasons. It is waterline-independent — it trims
@@ -110,7 +177,6 @@ export function stationGeometry(
   };
 
   for (const c of hs.columns) {
-    if (c.pts.length < 2) continue;
     const u = hs.uParams[c.i],
       [px, py] = model.plan.at(u),
       [dx, dy] = model.plan.d(u),
@@ -124,28 +190,20 @@ export function stationGeometry(
       Tm = unitT(u - H),
       kSpeed = (T[0] * (Tp[1] - Tm[1]) - T[1] * (Tp[0] - Tm[0])) / (2 * H);
 
-    const pts = c.pts.map((s) => s.pos),
-      aOf = (p: Vec3): number => (p[0] - px) * nx + (p[1] - py) * ny,
+    const pts = skinBeforeTransom(model, hs.sheet[c.i]),
       aC = -py / ny;
-    // the hull skin, sheer → keel (or wherever the trim ended it)
-    const poly: Vtx[] = pts.map((p): Vtx => [aOf(p), p[2], 1]);
-    // ...then the closures. The last skin vertex starts the bottom closure, so its flag is cleared: on a
-    // keel-closed section that closure is a zero-length no-op, and on a transom-ended one it is the flat
-    // run inboard to the centerline (the same closure hydro's ∫y dz always made implicitly).
-    poly[poly.length - 1][2] = 0;
-    if (!c.keel) poly.push([aC, pts[pts.length - 1][2], 0]);
-    poly.push([aC, pts[0][2], 0]); // up the centerline to deck level, then the deck cap closes on vertex 0
+    const poly = stationPolygon({ px, py, nx, ny }, pts, model.transom);
     for (const v of poly) {
       const z = worldZ(model, px + v[0] * nx, v[1]);
       if (z < keelZ) keelZ = z;
     }
+    const top = pts[0];
     const topIsSheer =
-      Math.abs(model.trimZ(pts[0][0]) - pts[0][2]) < 1e-6 * loa(model);
+      !!top &&
+      top[0] >= xTransom(model, top[2]) &&
+      Math.abs(model.trimZ(top[0]) - top[2]) < 1e-6 * loa(model);
     if (topIsSheer)
-      lowestSheerZ = Math.min(
-        lowestSheerZ,
-        worldZ(model, pts[0][0], pts[0][2]),
-      );
+      lowestSheerZ = Math.min(lowestSheerZ, worldZ(model, top[0], top[2]));
     cols.push({
       u,
       x: px,
@@ -157,14 +215,19 @@ export function stationGeometry(
       kSpeed,
       aC,
       poly,
-      topA: poly[0][0],
-      topZ: poly[0][1],
+      topA: top ? (top[0] - px) * nx + (top[1] - py) * ny : 0,
+      topZ: top?.[2] ?? 0,
       topIsSheer,
       keel: c.keel,
       f: new Array<number>(poly.length).fill(0),
     });
   }
-  if (cols.length < 3 || !Number.isFinite(lowestSheerZ)) return null;
+  if (
+    cols.filter((c) => c.poly.length >= 3).length < 3 ||
+    !Number.isFinite(keelZ) ||
+    !Number.isFinite(lowestSheerZ)
+  )
+    return null;
   return { cols, keelZ, lowestSheerZ, cosRake, sinRake };
 }
 
@@ -308,9 +371,9 @@ export interface Cut {
   // set only when `detail` was asked for
   area: number[]; // full immersed sectional area per column (both halves), aligned with cols
   // The waterplane, integrated in the SAME sweep coordinates as the volume — not shoelaced off the waterline
-  // curve below. Two reasons. It is exact at any column count, where a polygon through the crossings is an
-  // inscribed chord approximation that only converges at first order (0.5% low at 200 columns). And it stays
-  // consistent with `vol` by construction, which is what keeps hydro's KMt agreeing with stability's KN.
+  // curve below. The width integrals are exact in each column and share volume's longitudinal quadrature;
+  // a polygon through sampled crossings is only a drawing approximation. Using the same solid boundary
+  // keeps dV/d(waterline) and area consistent, and hydro's KMt agreeing with stability's KN.
   // Only produced for an UPRIGHT cut (a heeled waterplane meets the station lines at a different angle);
   // null otherwise, and null when `detail` was not asked for.
   wp: {
@@ -320,12 +383,11 @@ export interface Cut {
     it: number; // second moment about the centroidal longitudinal axis → BMt
     il: number; // ...and about the centroidal transverse axis → BMl
   } | null;
-  // The waterline curve on the hull, closed: starboard aft→forward, then port forward→aft. Traced through
-  // the SKIN crossings, so it is only the free surface's true outline while `deckDown` is false — where the
-  // sheer is under, the solid is capped by the deck and has no free surface there at all, and this curve
-  // would enclose area the hull does not have. Callers must check `deckDown` before using it.
+  // A sampled closed waterline, including its transom boundary (not just skin crossings).
+  // Empty when the legacy single-loop drawing cannot represent the section. The capped hull's
+  // numerical section remains distinct from an open boat's free waterplane; callers check deckDown.
   waterline: Vec3[];
-  /** The two skin-only runs before the centreline end caps are joined to make `waterline`. */
+  /** Skin-only crossings on each half, excluding transom/deck/centreline closures. */
   waterlineSkin: readonly [Vec3[], Vec3[]];
   wet: boolean[]; // which columns have any immersed area
 }
@@ -400,12 +462,11 @@ export function cut(
     wet: boolean[] = [],
     wlStbd: Vec3[] = [],
     wlPort: Vec3[] = [];
-  // The waterplane's two ENDS are on the centerline, not on the skin: at the first and last wetted station
-  // the region closes at a = aC, and with fanning planes that point sits at a very different x from the skin
-  // crossing beside it. Joining the two skin runs directly instead — which is what a naive traverse does —
-  // adds or drops the triangle between them, and on a hard-turning plan that is worth ~5% of the waterplane.
-  let capAft: Vec3 | null = null,
-    capFwd: Vec3 | null = null;
+  // The full waterline can meet a closure without meeting the skin in that column.
+  let outlineSupported = true;
+  const outer: [Vec3[], Vec3[]] = [[], []],
+    inner: [Vec3[], Vec3[]] = [[], []],
+    lastOutlineColumn = [-1, -1];
   // waterplane accumulators (upright only) — ∫dA, ∫X dA, ∫Y dA, ∫X² dA, ∫Y² dA, trapezoided over u
   const wantWp =
     detail && Math.abs(sinPhi) < 1e-12 && Math.abs(g.cosRake) > 1e-9;
@@ -416,22 +477,8 @@ export function cut(
     wYY = 0;
   const prevW = [0, 0, 0, 0, 0];
   const curW = [0, 0, 0, 0, 0];
-  const centerlineCap = (c: Column): Vec3 | null => {
-    // the height on the centerline is affine in z, so solve it directly rather than searching
-    const [C0, , C2] = heightCoeffs(g, c, 1, cosPhi, sinPhi);
-    if (Math.abs(C2) < 1e-12) return null;
-    const z = (wlZ - C0 - c.aC * heightCoeffs(g, c, 1, cosPhi, sinPhi)[1]) / C2;
-    let zLo = Infinity,
-      zHi = -Infinity;
-    for (const v of c.poly) {
-      if (v[1] < zLo) zLo = v[1];
-      if (v[1] > zHi) zHi = v[1];
-    }
-    if (z < zLo || z > zHi) return null; // the centerline does not reach the waterline at this station
-    return [c.px + c.aC * c.nx, 0, z];
-  };
 
-  for (const c of cols) {
+  for (const [columnIndex, c] of cols.entries()) {
     let gV = 0,
       gX = 0,
       gY = 0,
@@ -483,43 +530,58 @@ export function cut(
       gSZ += c.speed * gr.Msz + c.kSpeed * gr.Msaz;
 
       if (detail) {
-        // the outermost point where the SKIN crosses the waterline — the waterplane's edge at this station
-        // Take the OUTERMOST crossing — a grows inboard, so that is the smallest a — since a re-entrant
-        // section can cross more than once and only the outer one bounds the waterplane.
-        let bestA = Infinity,
-          bestZ = 0;
+        // Intersect the ENTIRE closed polygon, not just its skin. Sort crossings
+        // along the section's a axis and pair them into interior intervals. This
+        // also subtracts gaps in re-entrant sections rather than filling to aC.
+        const crossings: { a: number; z: number; skin: boolean }[] = [];
         for (let i = 0; i < poly.length; i++) {
           const j = (i + 1) % poly.length;
-          if (!poly[i][2] || f[i] >= 0 === f[j] >= 0) continue;
-          const t = f[i] / (f[i] - f[j]),
-            a = poly[i][0] + (poly[j][0] - poly[i][0]) * t;
-          if (a < bestA) {
-            bestA = a;
-            bestZ = poly[i][1] + (poly[j][1] - poly[i][1]) * t;
-          }
+          if (f[i] >= 0 === f[j] >= 0) continue;
+          const t = f[i] / (f[i] - f[j]);
+          crossings.push({
+            a: poly[i][0] + (poly[j][0] - poly[i][0]) * t,
+            z: poly[i][1] + (poly[j][1] - poly[i][1]) * t,
+            skin: !!poly[i][2],
+          });
         }
-        if (bestA < Infinity) {
-          (side > 0 ? wlStbd : wlPort).push([
-            c.px + bestA * c.nx,
-            side * (c.py + bestA * c.ny),
-            bestZ,
-          ]);
-          if (side > 0) {
-            const cap = centerlineCap(c);
-            if (cap) {
-              if (!capAft) capAft = cap;
-              capFwd = cap;
-            }
-          }
-          if (wantWp && bestA < c.aC) {
-            // the waterplane strip runs from the skin crossing inboard to the centerline. Its area element
-            // is the volume's own |P'|(1 + κa), divided by cos(rake) because the strip is measured in the
-            // tilted station frame while the waterplane is horizontal. Everything on it is affine in a, so
-            // the moments up to second order are exact polynomials — no sampling along the strip.
-            const cr2 = g.cosRake,
-              lo = bestA,
-              hi = c.aC;
-            const mk = (k: number): number =>
+        crossings.sort((a, b) => a.a - b.a);
+        let intervals = 0;
+        for (let i = 0; i + 1 < crossings.length; i += 2)
+          if (crossings[i + 1].a > crossings[i].a) intervals++;
+        if (intervals > 1) outlineSupported = false;
+        const point = (p: { a: number; z: number }): Vec3 => [
+          c.px + p.a * c.nx,
+          side * (c.py + p.a * c.ny),
+          p.z,
+        ];
+        const skin = crossings.find((p) => p.skin);
+        if (skin) (side > 0 ? wlStbd : wlPort).push(point(skin));
+        if (intervals > 0) {
+          const sideIndex = side > 0 ? 0 : 1;
+          // A dry/empty column between two intervals splits the outline into
+          // separate runs. Never draw a chord across the missing waterplane.
+          if (
+            lastOutlineColumn[sideIndex] >= 0 &&
+            lastOutlineColumn[sideIndex] !== columnIndex - 1
+          )
+            outlineSupported = false;
+          lastOutlineColumn[sideIndex] = columnIndex;
+          outer[sideIndex].push(point(crossings[0]));
+          const last = crossings[crossings.length - 1];
+          const p = point(last);
+          if (Math.abs(last.a - c.aC) < 1e-10 * Math.max(1, Math.abs(c.aC)))
+            p[1] = 0;
+          inner[sideIndex].push(p);
+        }
+        if (wantWp)
+          for (let i = 0; i + 1 < crossings.length; i += 2) {
+            // The area element and its moments are the SAME Jacobian as volume,
+            // divided by cos(rake). Interval ends may be skin, transom or deck.
+            const lo = crossings[i].a,
+              hi = crossings[i + 1].a,
+              cr2 = g.cosRake;
+            if (hi <= lo) continue;
+            const mk = (k: number) =>
               (Math.pow(hi, k + 1) - Math.pow(lo, k + 1)) / (k + 1);
             const m0 = mk(0),
               m1 = mk(1),
@@ -528,7 +590,6 @@ export function cut(
             const W0 = (c.speed * m0 + c.kSpeed * m1) / cr2,
               W1 = (c.speed * m1 + c.kSpeed * m2) / cr2,
               W2 = (c.speed * m2 + c.kSpeed * m3) / cr2;
-            // world horizontal x on the waterplane, and athwartships y, both affine in a
             const ax = (c.px - g.sinRake * wlZ) / cr2,
               bx = c.nx / cr2,
               ay = side * c.py,
@@ -539,9 +600,9 @@ export function cut(
             curW[3] += ax * ax * W0 + 2 * ax * bx * W1 + bx * bx * W2;
             curW[4] += ay * ay * W0 + 2 * ay * by * W1 + by * by * W2;
           }
-        }
       }
     }
+
     if (detail) {
       area.push(secArea);
       wet.push(secArea > 0);
@@ -576,6 +637,44 @@ export function cut(
     have = true;
   }
 
+  // Remove only the shared centreline interior when joining the mirrored halves.
+  // Keep non-centreline inner endpoints: those can be the transom boundary too.
+  const boundary = (side: 0 | 1): Vec3[] => {
+    const inside = inner[side],
+      outside = outer[side];
+    const first = inside.findIndex((p) => p[1] === 0);
+    let last = -1;
+    for (let i = inside.length - 1; i >= 0; i--)
+      if (inside[i][1] === 0) {
+        last = i;
+        break;
+      }
+    // The legacy outline DTO cannot represent disconnected port/starboard loops.
+    // Leave its drawing unavailable instead of inventing a connecting segment.
+    if (first < 0) return [];
+    // Only one continuous centreline seam may be removed. Leaving and then
+    // rejoining it creates a hole, which this single-loop DTO cannot represent.
+    for (let i = first; i <= last; i++) if (inside[i][1] !== 0) return [];
+    return [
+      ...inside.slice(0, first + 1).reverse(),
+      ...outside,
+      ...inside.slice(last).reverse(),
+    ];
+  };
+  const stbd = boundary(0),
+    port = boundary(1);
+  const waterline: Vec3[] = [];
+  if (outlineSupported && stbd.length && port.length)
+    for (const p of [...stbd, ...port.reverse()]) {
+      const prev = waterline[waterline.length - 1];
+      if (!prev || p.some((v, i) => v !== prev[i])) waterline.push(p);
+    }
+  if (
+    waterline.length > 1 &&
+    waterline[0].every((v, i) => v === waterline[waterline.length - 1][i])
+  )
+    waterline.pop();
+
   const xB = vol > 0 ? IX / vol : 0,
     yB = vol > 0 ? IY / vol : 0,
     zB = vol > 0 ? IZ / vol : 0,
@@ -595,12 +694,7 @@ export function cut(
     deckDown,
     sheerZ,
     area,
-    // aft centreline cap → starboard skin forward → forward cap → port skin back
-    waterline: ([] as Vec3[])
-      .concat(capAft ? [capAft] : [])
-      .concat(wlStbd)
-      .concat(capFwd ? [capFwd] : [])
-      .concat([...wlPort].reverse()),
+    waterline,
     waterlineSkin: [wlStbd, wlPort],
     wet,
     wp:

@@ -120,17 +120,17 @@ The initially slow dense-mesh sinkage march prompted **exact BVH bulk integratio
 
 Production Chromium worker timings after acceleration: the 12,288-triangle box prepared in 0.73 s, section p95 was 1.8 ms, and KN/KMt took 1.19 s. The 5,176-triangle closed Camber export prepared in 0.49 s, section p95 was 0.7 ms, and KN/KMt took 0.61 s. Repeated cached stability queries were below the displayed timer resolution. The near-200k case has Node coverage, **not equivalent browser performance coverage**.
 
-### Important parity finding / next-phase gate
+### Historical parity finding
 
-At 80 sections / 6 girth steps, reference-volume differences from the existing sweep are approximately **0.37% at zero trim and 0.54% at 0.07 rad trim**. At 160/10 they are **0.55% and 0.72%**, respectively: they do **not** monotonically converge away. At 1.2 rad heel after deck immersion, volume differences improve from up to 3.11% at 40/3 to 0.39% at 160/10; KN differences fall below 0.34 mm in that tested high-resolution pair.
+Before the transom correction, at 80 sections / 6 girth steps, reference-volume differences from the sweep were approximately **0.37% at zero trim and 0.54% at 0.07 rad trim**. At 160/10 they are **0.55% and 0.72%**, respectively: they do **not** monotonically converge away. At 1.2 rad heel after deck immersion, volume differences improve from up to 3.11% at 40/3 to 0.39% at 160/10; KN differences fall below 0.34 mm in that tested high-resolution pair.
 
-Do not infer general Camber-export parity or a universal error bound from these results. The dry residual has since been traced to the sweep's transom closure, as described below. A complete production correction and broader closure comparisons are still required. The existing sweep path and its Phase 1 baselines have not been changed by this investigation.
+The dry residual was traced to the sweep's transom closure and is now corrected in production, as described below. These historical results do not establish general Camber-export parity or a universal error bound; post-deck-immersion closure differences remain a separate question.
 
 ### Dry-volume investigation
 
-Reproduce with `npm run investigate:mesh-volume` (`test/mesh-discrepancy.ts`). It holds girth resolution at 10 and varies only the longitudinal resolution, comparing the sweep with the unchanged independent mesh oracle. The deck is dry, so neither synthetic deck closure nor post-immersion behaviour explains this discrepancy.
+Reproduce the current comparison with `npm run investigate:mesh-volume` (`test/mesh-discrepancy.ts`). It holds girth resolution at 10 and varies only the longitudinal resolution, comparing the production sweep with the unchanged independent mesh oracle and archived pre-fix values. The deck is dry, so neither synthetic deck closure nor post-immersion behaviour explains this discrepancy.
 
-**Cause:** `stationGeometry()` in `src/core/sweep.ts` closes a transom-ended section horizontally from its last skin point to the centreline:
+**Original cause:** `stationGeometry()` in `src/core/sweep.ts` closed a transom-ended section horizontally from its last skin point to the centreline:
 
 ```ts
 if (!c.keel) poly.push([aC, pts[pts.length - 1][2], 0]);
@@ -144,7 +144,7 @@ zCentre = zEnd + (aC − aEnd) × nx × (ΔzTransom / ΔxTransom)
 
 On the tested hull, the horizontal closure leaves out a small aft wedge. For example, at `u=0.06875`, its centreline closure is at −1026.72 mm instead of −1117.75 mm. Increasing section count converges more accurately to the wrong, truncated solid; it cannot remove this geometric error.
 
-The diagnostic adjusts only these lower endpoints in a **copy** of the sweep geometry:
+The initial investigation adjusted only these lower endpoints in a **copy** of the sweep geometry:
 
 | Trim     | Sections / girth |     Original volume gap | Gap after diagnostic adjustment |
 | -------- | ---------------- | ----------------------: | ------------------------------: |
@@ -155,15 +155,27 @@ The diagnostic adjusts only these lower endpoints in a **copy** of the sweep geo
 
 Percentages are `(mesh / sweep − 1) × 100`, substituting the diagnostic sweep in the last column. The remaining difference now converges with refinement, strongly isolating the lower transom closure as the cause of this dry-volume residual.
 
-**Why this is not yet a production patch:** correcting polygon volume alone leaves waterplane area and moments inconsistent. The current waterplane code integrates from a _skin_ crossing to the centreline and misses strips bounded by the transom instead. At zero trim / 160 sections:
+**Why the diagnostic alone was not a production fix:** correcting polygon volume alone leaves waterplane area and moments inconsistent. The old waterplane code integrated from a _skin_ crossing to the centreline and misses strips bounded by the transom instead. At zero trim / 160 sections:
 
-- Current reported waterplane area: 4.882257 m².
+- Old reported waterplane area: 4.882257 m².
 - Derivative of the diagnostically corrected volume: 4.945869 m².
 - Direct mesh waterplane area: 4.944899 m².
 
-The original volume derivative agrees with the original reported area: those two calculations are internally consistent, but represent the same incorrectly closed solid. The production fix should construct/clip the proper transom boundary and derive waterplane spans/moments from it together. It also needs coverage for other transom orientations, top closures and boundary columns—not merely the endpoint substitution used to isolate this case. KN, KMt and affected metric/weight results must then be reviewed as an intentional numerical correction, with regression baselines updated explicitly rather than silently.
+The original volume derivative agreed with the original reported area: those two calculations were internally consistent, but represented the same incorrectly closed solid.
 
-This investigation does not establish general post-deck-immersion closure parity.
+### Production correction
+
+`src/core/sweep.ts` now closes each section **before** transom trimming, then clips that solid by `x >= xTransom(z)`. This handles lower and upper transom cuts, vertical and reversed rake, and interior columns whose skin was entirely trimmed away. Empty columns remain zero quadrature endpoints rather than being skipped. Transom/deck/centreline edges remain excluded from skin area.
+
+Waterplane crossings are taken from the entire clipped polygon and paired into interior intervals. Area, first moments and second moments use those intervals and the same longitudinal quadrature as volume. The sampled waterline includes transom-boundary points, while its skin-only runs remain separate. Unsupported disconnected/multi-interval drawings, longitudinal gaps, and interior holes return no legacy single-loop outline instead of an invented join; numerical moments are still integrated.
+
+At 160 sections / 10 girth steps, the production dry-volume gap is −0.002416% at zero trim and −0.010051% at 0.07 rad trim. At 640/10 these become −0.000122% and +0.000072%. The zero-trim waterplane area is now **4.945869084 m²**, agreeing with `dV/d(waterline)` to numerical precision and with the independently tessellated area to its sampling accuracy.
+
+`npm run test:transom-sweep` is included in the full suite. It covers analytic clipped sections, skin provenance, transom-only waterplanes, re-entrant intervals, closure-only/empty columns, forward/reversed/vertical/nearly vertical transoms, non-zero trim, volume/CB/KN comparisons, both waterplane moments, and fixed-volume small-angle agreement with KMt. Existing stability tests now require 0.1% mesh agreement rather than 1%, with a tighter refinement check.
+
+This is an intentional correction to Camber's derived numbers: hydrostatics, KN/KMt, fixed hull metrics and dependent weight/horizontal-cut results can change. `test/fixtures/analysis/baseline.json` remains the original pre-extraction capture. Only the affected metric/plane/stability/book subtrees are overlaid from the explicitly labelled `transom-correction.json`; unchanged authored-station and point-view fixtures still use their original expectations. Saved hull/book formats and authored point frames are unchanged. The separate legacy authored-station measurement/construction API is not migrated by this sweep correction.
+
+This fix does not establish general post-deck-immersion closure parity.
 
 ## Still deferred
 

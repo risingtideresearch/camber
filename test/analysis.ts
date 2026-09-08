@@ -1,4 +1,5 @@
-// Phase-1 regression fixtures were captured before extraction. No generated expected values here.
+// Keep the pre-extraction fixtures intact. Overlay only the intentional transom
+// solid/waterplane correction, independently verified by transom-sweep.ts.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { defaultHull, type HullState } from "../src/core/hull";
@@ -65,6 +66,27 @@ const fixture = JSON.parse(
   book: WeightBook;
   cases: { hull: HullState; expected: Record<string, unknown> }[];
 };
+
+const correction = JSON.parse(
+  readFileSync(
+    new URL("./fixtures/analysis/transom-correction.json", import.meta.url),
+    "utf8",
+  ),
+) as {
+  numSections: number;
+  girthSteps: number;
+  cases: Record<string, unknown>[];
+};
+assert.equal(correction.numSections, fixture.numSections);
+assert.equal(correction.girthSteps, fixture.girthSteps);
+assert.equal(correction.cases.length, fixture.cases.length);
+for (const [i, test] of fixture.cases.entries()) {
+  assert.deepEqual(
+    Object.keys(correction.cases[i]).sort(),
+    ["metrics", "plane", "limit", "gz", "area", "peak", "outputs"].sort(),
+  );
+  test.expected = { ...test.expected, ...correction.cases[i] };
+}
 
 function close(actual: unknown, expected: unknown, path = "value"): void {
   if (typeof expected === "number") {
@@ -321,7 +343,7 @@ for (const [i, test] of fixture.cases.entries()) {
     gzCurve(si.curves, linked.vol, linked.kg!),
   );
   console.log(
-    `  ok: pre-extraction hull/book fixture ${i}, queries, SI tables and assessment`,
+    `  ok: hull/book fixture ${i} with explicit transom correction, queries, SI tables and assessment`,
   );
 }
 

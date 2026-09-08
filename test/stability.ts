@@ -631,8 +631,8 @@ const sample = (model: Model): HullSampling => {
 {
   const model = assemble(defaultHull());
   const sec = stationGeometry(model, sample(model))!;
-  // two waterlines: the design one, where three transom-ended columns are wetted, and a shallow one where
-  // none are — so the flat transom closure can be told apart from anything the sweep itself is doing
+  // Two waterlines: one wets the transom and one does not, guarding both the
+  // transom-clipped solid and the rest of the sweep against the independent mesh.
   const cases: { wlZ: number; phi: number }[] = [];
   for (const wlZ of [-model.waterline, -model.waterline * 1.45])
     for (const phi of [0, 10 * DEG, 25 * DEG, 40 * DEG])
@@ -663,15 +663,14 @@ const sample = (model: Model): HullSampling => {
   );
 
   ok(
-    worstKn < 0.01,
-    `KN matches the 3D mesh integral to 1% (worst ${(100 * worstKn).toFixed(2)}%)`,
+    worstKn < 0.001,
+    `KN matches the 3D mesh integral to 0.1% (worst ${(100 * worstKn).toFixed(2)}%)`,
   );
-  // With the fanning Jacobian in `sweep.ts` this is now a real agreement, not a pinned gap. What is left is
-  // the flat closure across a transom-ended column — about −0.15% where no transom is wetted, about −0.55%
-  // at the design waterline where three are. That is the next approximation to remove, not this one.
+  // The transom boundary now lies on its actual plane. Only discretisation
+  // error remains here; no permanent flat-closure wedge is allowed.
   ok(
-    minVolGap > -0.01 && maxVolGap < 0.01,
-    `∇ matches the 3D mesh integral to 1% (${(100 * minVolGap).toFixed(2)}% … ${(100 * maxVolGap).toFixed(2)}%)`,
+    minVolGap > -0.001 && maxVolGap < 0.001,
+    `∇ matches the 3D mesh integral to 0.1% (${(100 * minVolGap).toFixed(2)}% … ${(100 * maxVolGap).toFixed(2)}%)`,
   );
 
   // and the agreement is not an accident of one resolution: refining both together keeps it
@@ -685,7 +684,7 @@ const sample = (model: Model): HullSampling => {
       immersedAt(stationGeometry(model, fineHs)!, 0, wlZ).vol /
       meshImmersed(model, fineHs, sec.keelZ, 0, wlZ).vol;
   ok(
-    Math.abs(coarse - fine) < 5e-3 && Math.abs(fine - 1) < 0.01,
+    Math.abs(coarse - fine) < 5e-3 && Math.abs(fine - 1) < 1e-5,
     `both methods converge to the same ∇ under 5x refinement (${((coarse - 1) * 100).toFixed(2)}% → ${((fine - 1) * 100).toFixed(2)}%)`,
   );
 }
