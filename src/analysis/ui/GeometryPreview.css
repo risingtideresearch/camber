@@ -1,0 +1,62 @@
+.geometry-preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.geometry-views {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 16px;
+  flex-wrap: wrap;
+}
+.geometry-views button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--mut);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+.geometry-views button[aria-pressed="true"] {
+  color: #17665e;
+  background: #e2f0ed;
+  border-color: #c1dcd6;
+}
+.geometry-views button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.geometry-views span {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--mut);
+}
+.geometry-stage {
+  position: relative;
+  flex: 1;
+  min-height: 180px;
+  overflow: hidden;
+  background: radial-gradient(ellipse at center, #f7faf9, #edf3f2);
+}
+.geometry-ortho {
+  display: block;
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+}
+.geometry-ortho text {
+  font:
+    12px system-ui,
+    sans-serif;
+}
+.geometry-caption {
+  color: var(--mut);
+  font-size: 11px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+}

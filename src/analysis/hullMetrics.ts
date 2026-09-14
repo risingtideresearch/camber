@@ -18,6 +18,9 @@ import {
  */
 export interface HullMetrics {
   readonly unavailable?: Readonly<Record<string, string>>;
+  readonly provenance?: Readonly<Record<string, string>>;
+  /** Measured transverse shell centroid; absent on legacy symmetric Camber metrics. */
+  readonly shellTcg?: number;
   readonly loa: number;
   readonly lwl: number;
   readonly bwl: number;
@@ -288,7 +291,7 @@ export const HULL_POINTS: readonly MetricPointSpec[] = [
     label: "shell CG",
     hint: "Where the shell's own weight acts, as a place — weigh it into a centre of gravity beside the points",
     x: (m) => m.shellLcg,
-    y: () => 0,
+    y: (m) => m.shellTcg ?? 0,
     z: (m) => m.shellVcg,
   },
 ];

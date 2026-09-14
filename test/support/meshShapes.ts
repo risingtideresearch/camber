@@ -45,3 +45,19 @@ export function subdivide(soup: readonly number[]): number[] {
   }
   return out;
 }
+
+/** A small triangular opening in the bottom of a box, with an optional open sheer. */
+export function boxWithSmallOpening(open = false, fraction = 0.002): number[] {
+  const soup = boxSoup(4, 2, 2, open);
+  const p = [0, 3, 6].map((i) => soup.slice(i, i + 3));
+  const center = p[0].map((_, i) => (p[0][i] + p[1][i] + p[2][i]) / 3);
+  const q = p.map((a) =>
+    a.map((v, i) => center[i] + (v - center[i]) * fraction),
+  );
+  return [
+    ...soup.slice(9),
+    ...p.flatMap((a, i) =>
+      [a, p[(i + 1) % 3], q[(i + 1) % 3], a, q[(i + 1) % 3], q[i]].flat(),
+    ),
+  ];
+}

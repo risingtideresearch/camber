@@ -32,6 +32,7 @@
 // another implementation, and edits only through the host's weight-book command port.
 
 import {
+  useCallback,
   createContext,
   useContext,
   useEffect,
@@ -81,8 +82,11 @@ import { PointViews, type Move, type PlottedPoint } from "./PointViews";
 import { plotCuts, plotPoints, snapTargets } from "./pointPlots";
 import { Button } from "../../../components/Button";
 import { useAnalysis } from "../AnalysisProvider";
+import { pointViewOutlines } from "../../pointViewGeometry";
+import { useAnalysisQuery } from "../useAnalysisQuery";
+import type { QueryOptions } from "../../api";
 import type { HullAnalysis } from "../../api";
-import type { HullOutlines } from "../../geometry";
+import type { PointViewOutlines } from "../../geometry";
 import type { WeightBookResults } from "../../weightBook";
 import { Explorer, type NewItemFiling } from "./Explorer";
 import {
@@ -314,7 +318,18 @@ function WeightPanelContents() {
                   ? `Hull cuts: ${cutQuery.reason}`
                   : null}
           </div>
+          {metricQuery.status === "available" &&
+            metricQuery.value.provenance && (
+              <p className="whint" role="note">
+                {Object.entries(metricQuery.value.provenance).map(
+                  ([key, value]) => (
+                    <span key={key}>{value}. </span>
+                  ),
+                )}
+              </p>
+            )}
           <ViewBody
+            measurementProblems={weight.measurementProblems}
             {...{
               book,
               view,
@@ -458,6 +473,7 @@ interface BodyProps {
   readonly rows: ReturnType<typeof viewRows>;
   readonly results: WeightBookResults["results"];
   readonly measurements: WeightBookResults["measurements"];
+  readonly measurementProblems: WeightBookResults["measurementProblems"];
   readonly reading: "worst" | "likely";
   readonly focus: Focus | null;
   readonly setFocus: (focus: Focus | null) => void;
@@ -475,7 +491,7 @@ interface BodyProps {
   readonly groupFacet: string | null;
   readonly problems: ReturnType<typeof problemsOf>;
   readonly hull: HullAnalysis;
-  readonly outlines: HullOutlines | null;
+  readonly outlines: PointViewOutlines | null;
 }
 
 /**
@@ -836,6 +852,7 @@ function ViewBody(props: BodyProps) {
                   />
                 ) : (
                   <Inspector
+                    measurementProblems={props.measurementProblems}
                     book={book}
                     results={results}
                     measurements={props.measurements}
@@ -912,6 +929,7 @@ function ViewBody(props: BodyProps) {
       main={
         detail ? (
           <ItemDetail
+            measurementProblems={props.measurementProblems}
             book={book}
             item={detail}
             results={results}
@@ -953,6 +971,7 @@ function ViewBody(props: BodyProps) {
                 <Reference book={book} />
               ) : shown === "spread" ? (
                 <Inspector
+                  measurementProblems={props.measurementProblems}
                   book={book}
                   results={results}
                   measurements={props.measurements}
@@ -1034,8 +1053,17 @@ function SummaryBody(props: BodyProps) {
 }
 
 /** Draw the centre reported by LCG and VCG against the hull, including their joint spread. */
+function usePointOutlines(hull: HullAnalysis) {
+  const load = useCallback(
+    (options: QueryOptions) => pointViewOutlines(hull, options),
+    [hull],
+  );
+  const result = useAnalysisQuery(hull.context.id, "point-outlines", load);
+  return result.status === "available" ? result.value : null;
+}
+
 function SummaryGeometry(props: BodyProps) {
-  const outlines = props.outlines;
+  const outlines = usePointOutlines(props.hull);
   const x = outputResult(props.results, "LCG");
   const z = outputResult(props.results, "VCG");
   const point = useMemo<PlottedPoint | null>(() => {
@@ -1100,7 +1128,6 @@ function GeometryEditor({
   setFocus,
   send,
   hull,
-  outlines,
   readOnly = false,
   extraPoints = [],
   activeId,
@@ -1109,6 +1136,7 @@ function GeometryEditor({
   readonly extraPoints?: readonly PlottedPoint[];
   readonly activeId?: string;
 }) {
+  const outlines = usePointOutlines(hull);
   const plots = useMemo(
     () => plotPoints(items, results, reading),
     [items, results, reading],
@@ -1129,12 +1157,22 @@ function GeometryEditor({
       : all;
   }, [plots, extraPoints, readOnly]);
   // The cuts need the hull as well as the book: a station's attitude is the outline the hull produced, not
-  // anything the schedule knows. Without a sweep they fall back to the line their position names.
+  // anything the schedule knows. Unsupported authored stations on STL are not drawn or offered as snap targets.
   const cuts = useMemo(
-    () => plotCuts(items, results, reading, measurements),
-    [items, results, reading, measurements],
+    () =>
+      plotCuts(
+        items,
+        results,
+        reading,
+        measurements,
+        hull.capabilities.authoredStations,
+      ),
+    [items, results, reading, measurements, hull.capabilities.authoredStations],
   );
-  const snaps = useMemo(() => snapTargets(book, results), [book, results]);
+  const snaps = useMemo(
+    () => snapTargets(book, results, hull.capabilities.authoredStations),
+    [book, results, hull.capabilities.authoredStations],
+  );
 
   /**
    * A point moved in one of the views.
@@ -1195,6 +1233,9 @@ function GeometryEditor({
 const ReferenceSearch = createContext("");
 
 function Reference({ book }: { readonly book: WeightBook }) {
+  const { metrics } = useAnalysis();
+  const missing =
+    metrics.status === "available" ? metrics.value.unavailable : undefined;
   const example = book.items.find((item) => item.name) ?? null;
   const exampleKey = example ? Object.keys(example.fields)[0] : null;
   const facet = primaryFacet(book);
@@ -1354,7 +1395,7 @@ function Reference({ book }: { readonly book: WeightBook }) {
               <Entry
                 key={spec.name}
                 term={`HULL.${spec.name}`}
-                hint={spec.hint}
+                hint={missing?.[spec.name] ?? spec.hint}
                 insert={`HULL.${spec.name}`}
               />
             ))}
@@ -1364,7 +1405,7 @@ function Reference({ book }: { readonly book: WeightBook }) {
               <Entry
                 key={spec.name}
                 term={`HULL.${spec.name}`}
-                hint={spec.hint}
+                hint={missing?.[spec.name] ?? spec.hint}
                 insert={`HULL.${spec.name}`}
               />
             ))}

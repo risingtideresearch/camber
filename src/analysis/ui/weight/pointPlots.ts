@@ -165,6 +165,7 @@ export function plotCuts(
   results: BookResults,
   reading: "worst" | "likely",
   measurements: SliceMeasurements,
+  authoredStations = true,
 ): PlottedCut[] {
   const out: PlottedCut[] = [];
   for (const item of items) {
@@ -172,7 +173,8 @@ export function plotCuts(
       ([, field]) => field.k === "cut",
     );
     for (const [fieldKey, field] of cutKeys) {
-      if (field.k !== "cut") continue;
+      if (field.k !== "cut" || (!authoredStations && field.shape === "station"))
+        continue;
       const result = resultAt(results, item.id, fieldKey, "pos");
       const empty = result?.empty ?? true;
       const spread = result?.reading?.[reading];
@@ -205,6 +207,7 @@ export function plotCuts(
             : item.name || "unnamed",
         // Which axis a cut is a plane of is which KIND of cut it is — the same reading `slices.ts` gives the
         // number, and the same one `snapTargets` offers it under.
+        shape: field.shape,
         axis: field.shape === "plane" ? "z" : "x",
         // A position that errored or was never written is drawn NOWHERE, rather than at the transom: a cut
         // at zero because its formula is broken is a lie the drawing would tell convincingly.
@@ -289,6 +292,7 @@ function sweptOutline(trace: readonly Vec2[], lo: number, hi: number): Vec2[] {
 export function snapTargets(
   book: WeightBook,
   results: BookResults,
+  authoredStations = true,
 ): SnapTarget[] {
   const out: SnapTarget[] = [
     { axis: "y", at: 0, formula: "0", label: "the centreline" },
@@ -297,7 +301,8 @@ export function snapTargets(
   for (const item of book.items) {
     if (!item.name) continue;
     for (const [fieldKey, field] of Object.entries(item.fields)) {
-      if (field.k !== "cut") continue;
+      if (field.k !== "cut" || (!authoredStations && field.shape === "station"))
+        continue;
       const position = resultAt(results, item.id, fieldKey, "pos");
       if (!position?.reading || position.error) continue;
       // A cut's `pos` is a height for a horizontal cut and a station for a plane-normal one, so which axis it

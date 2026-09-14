@@ -1,28 +1,30 @@
-import { V, type Vec2 } from "../../core/math";
+import { V, type Vec2, type Vec3 } from "../../core/math";
 import { polygonMoments, type BoundarySource } from "../sections";
 import { METRE_SETUP, prepareMesh, type PreparedMesh } from "./prepare";
 import { buildTree, visit, type Face } from "./spatial";
+import { meshImmersion } from "./immersion";
 
-/** Preview only: triangulate ONE simple boundary that projects to a hull-xy polygon.
- * Heights stay at boundary vertices, yielding a piecewise-planar non-planar deck.
- * This is NOT a planar fan and not asserted equivalent to Camber's swept sheer cap. */
-export function proposeDeckClosure(mesh: PreparedMesh): {
-  triangles: Face[];
-  method: string;
-} {
+/** A single simple XY projection gives the open rim a consistent up side.
+ * This checks the boundary only; it constructs no triangles or spatial tree. */
+type BoundaryGeometry = {
+  vertices: Vec3[];
+  boundary: number[][];
+  report: { tolerance: number };
+};
+function projectedBoundary(mesh: BoundaryGeometry) {
   if (mesh.boundary.length !== 1)
-    throw new Error("Deck closure needs exactly one boundary loop");
+    throw new Error("An open rim needs exactly one boundary loop");
   const loop = mesh.boundary[0],
     points = loop.map((i) => mesh.vertices[i].slice(0, 2) as Vec2),
     tolerance = mesh.report.tolerance;
   if (loop.length > 2000)
     throw new Error(
-      "Deck closure prototype supports at most 2000 boundary vertices",
+      "Opening validation supports at most 2000 boundary vertices",
     );
   const signed = polygonMoments(points).area;
   if (Math.abs(signed) <= tolerance ** 2)
-    throw new Error("Deck boundary must enclose a hull-xy region");
-  // Reject crossings/touches in the projection; it must be a single-valued deck height surface.
+    throw new Error("Opening boundary must enclose a hull-xy region");
+  // Reject crossings and nonadjacent touches in the projected boundary.
   const cross = (a: Vec2, b: Vec2, c: Vec2) =>
     (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
   for (let i = 0; i < points.length; i++)
@@ -43,8 +45,21 @@ export function proposeDeckClosure(mesh: PreparedMesh): {
         cross(a, b, c) * cross(a, b, d) <= 0 &&
         cross(c, d, a) * cross(c, d, b) <= 0
       )
-        throw new Error("Deck boundary projection crosses or touches itself");
+        throw new Error(
+          "Opening boundary projection crosses or touches itself",
+        );
     }
+  return { loop, points, tolerance, signed, cross };
+}
+
+/** Preview only: triangulate ONE simple boundary that projects to a hull-xy polygon.
+ * Heights stay at boundary vertices, yielding a piecewise-planar non-planar deck.
+ * This is NOT a planar fan and not asserted equivalent to Camber's swept sheer cap. */
+export function proposeDeckClosure(mesh: BoundaryGeometry): {
+  triangles: Face[];
+  method: string;
+} {
+  const { loop, points, tolerance, signed, cross } = projectedBoundary(mesh);
   // For a symmetric, x-monotone sheer, pair its shores instead of choosing an
   // asymmetric ear diagonal across many height stations. Each transverse strip
   // is planar (equal x/z on the two shores), even when the whole sheer is not.
@@ -137,6 +152,69 @@ export function proposeDeckClosure(mesh: PreparedMesh): {
   };
 }
 
+/** Validate that the one remaining boundary is a supported top/sheer opening,
+ * but retain the open physical mesh. Immersion may use it only while the whole
+ * rim is dry; unlike closeDeck(), this adds no cap faces. */
+export function validateOpenSheer(
+  mesh: PreparedMesh,
+  enableHydrostatics = true,
+): PreparedMesh {
+  if (mesh.report.validatedOpenSheer)
+    return enableHydrostatics && !mesh.report.openHydrostatics
+      ? {
+          ...mesh,
+          report: { ...mesh.report, openHydrostatics: true },
+        }
+      : mesh;
+  if (mesh.report.closed)
+    throw new Error("Open-sheer validation requires an open mesh");
+  if (mesh.report.envelopeError) throw new Error(mesh.report.envelopeError);
+  const { loop, signed } = projectedBoundary(mesh);
+  let lowestRim = Infinity;
+  for (const id of loop) lowestRim = Math.min(lowestRim, mesh.vertices[id][2]);
+  const bottom = mesh.tree.min[2];
+  if (lowestRim - bottom <= mesh.report.tolerance * 4)
+    throw new Error(
+      "The opening is not a supported top boundary: no usable dry-rim immersion range",
+    );
+
+  // Consistent skin winding induces a clockwise top boundary viewed from +Z.
+  // Reversing every face preserves connectivity, intersections and face bounds:
+  // reuse the existing tree, indices and physical/synthetic provenance unchanged.
+  const reverse = signed > 0;
+  const open: PreparedMesh = {
+    ...mesh,
+    faces: reverse
+      ? mesh.faces.map(([a, b, c]) => [a, c, b] as Face)
+      : mesh.faces,
+    boundary: reverse ? [[...loop].reverse()] : mesh.boundary,
+    report: {
+      ...mesh.report,
+      reorientedFaces: reverse
+        ? mesh.faces.length - mesh.report.reorientedFaces
+        : mesh.report.reorientedFaces,
+      openHydrostatics: true,
+      diagnostics: [...mesh.report.diagnostics],
+    },
+  };
+  // A dry rim closes the submerged skin at the waterplane, which the integrator
+  // handles implicitly. Verify a finite positive submerged volume before granting
+  // open-envelope capability; no hypothetical roof or closed-mesh rebuild needed.
+  const probe = meshImmersion(open, {
+    origin: [0, 0, bottom + (lowestRim - bottom) / 2],
+    u: [1, 0, 0],
+    v: [0, 1, 0],
+  });
+  if (!(probe.vol > 0) || !probe.centroid)
+    throw new Error("The opening does not bound a usable submerged volume");
+  open.report.validatedOpenSheer = true;
+  if (!enableHydrostatics) delete open.report.openHydrostatics;
+  open.report.diagnostics.push(
+    "Validated open rim directly: hydrostatics stop at first rim immersion; no sheer cap constructed",
+  );
+  return open;
+}
+
 /** Confirmation belongs to the import host; a proposal alone never grants a buoyancy envelope. */
 export function closeDeck(
   mesh: PreparedMesh,
@@ -144,11 +222,20 @@ export function closeDeck(
 ): PreparedMesh {
   if (confirmation.accepted !== true || !confirmation.closureId)
     throw new Error("Explicit deck closure confirmation is required");
+  return validateDeckClosure(mesh, confirmation.closureId);
+}
+
+/** Geometry-only candidate validation. This does not author permission to use a cap. */
+export function validateDeckClosure(
+  mesh: PreparedMesh,
+  closureId = "proposed-deck",
+): PreparedMesh {
   const proposal = proposeDeckClosure(mesh),
     faces = [...mesh.faces, ...proposal.triangles];
   // A projected opening is not automatically a DECK opening. The supported cap
-  // must contain the physical vertices beneath its xy footprint. Cap/skin
-  // intersections are separately checked by complete envelope validation below.
+  // must be above the skin beneath its xy footprint; overhanging skin is checked
+  // against its nearest rim below. Cap/skin intersections are separately checked
+  // by complete envelope validation.
   const capTree = buildTree(mesh.vertices, proposal.triangles);
   const boundary = new Set(mesh.boundary.flat());
   mesh.vertices.forEach((p, id) => {
@@ -187,16 +274,44 @@ export function closeDeck(
           throw new Error("The opening is not a supported top/deck boundary");
       },
     );
-    if (!covered)
-      throw new Error(
-        "Deck closure prototype does not support skin outside the boundary's xy footprint",
-      );
+    // Tumblehome / an overhanging stem can lie outside the deck's xy footprint.
+    // Such skin must remain below the nearest rim; complete intersection checks
+    // below still reject caps crossing the hull. XY containment is not required.
+    if (!covered) {
+      let nearest = Infinity,
+        height = -Infinity;
+      const loop = mesh.boundary[0];
+      loop.forEach((id, i) => {
+        const a = mesh.vertices[id],
+          b = mesh.vertices[loop[(i + 1) % loop.length]];
+        const dx = b[0] - a[0],
+          dy = b[1] - a[1];
+        if (dx * dx + dy * dy === 0) return;
+        const t = Math.max(
+          0,
+          Math.min(
+            1,
+            ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy),
+          ),
+        );
+        const distance = Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+        if (distance < nearest) {
+          nearest = distance;
+          height = a[2] + t * (b[2] - a[2]);
+        }
+      });
+      if (p[2] > height + mesh.report.tolerance)
+        throw new Error(
+          "Skin outside the deck footprint extends above the nearest rim",
+        );
+    }
   });
   const sources: BoundarySource[] = [
     ...mesh.sources,
     ...proposal.triangles.map(() => ({
       kind: "synthetic" as const,
-      closure: confirmation.closureId,
+      closure: closureId,
+      purpose: "deck" as const,
     })),
   ];
   const closed = prepareMesh(
@@ -205,8 +320,9 @@ export function closeDeck(
     { tolerance: mesh.report.tolerance, sources },
   );
   // Revalidation above checks winding, topology and intersections with the physical skin.
+  if (mesh.report.repair) closed.report.repair = mesh.report.repair;
   closed.report.diagnostics.push(
-    `Confirmed synthetic deck: ${proposal.method}`,
+    `Synthetic numerical sheer closure: ${proposal.method}`,
   );
   return closed;
 }
@@ -215,7 +331,11 @@ export function closeDeck(
 export function deckReference(mesh: PreparedMesh) {
   const ids = new Set<number>();
   mesh.faces.forEach((f, i) => {
-    if (mesh.sources[i].kind === "synthetic") f.forEach((v) => ids.add(v));
+    if (
+      mesh.sources[i].kind === "synthetic" &&
+      mesh.sources[i].purpose !== "repair"
+    )
+      f.forEach((v) => ids.add(v));
   });
   return [...ids].map((i) => V.scale(mesh.vertices[i], 1));
 }

@@ -11,7 +11,7 @@ export interface PlaneFrame {
 }
 export type BoundarySource =
   | { kind: "physical"; surface: string }
-  | { kind: "synthetic"; closure: string };
+  | { kind: "synthetic"; closure: string; purpose?: "deck" | "repair" };
 export interface SectionRequest {
   plane: PlaneFrame;
   envelope: "buoyancy";

@@ -1,5 +1,10 @@
+import { pointSectionOutline } from "../../pointViewGeometry";
 import type { HullAnalysis, QueryOptions } from "../../api";
-import type { HullOutlines, SectionKind, SectionOutline } from "../../geometry";
+import type {
+  PointViewOutlines,
+  SectionKind,
+  SectionOutline,
+} from "../../geometry";
 import { useAnalysisQuery } from "../useAnalysisQuery";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { Vec2 } from "../../../core/math";
@@ -70,6 +75,7 @@ export interface PlottedPoint {
  * then all there is to say. See `plotCuts`.
  */
 export interface PlottedCut {
+  readonly shape?: "station" | "plane" | "transverse";
   /** `${itemId} ${fieldKey}`, the same handle a point carries, so one `activeId` serves both. */
   readonly id: string;
   readonly itemId: string;
@@ -196,7 +202,7 @@ export function PointViews({
   onMove,
 }: {
   readonly hull: HullAnalysis;
-  readonly outlines: HullOutlines;
+  readonly outlines: PointViewOutlines;
   readonly points: readonly PlottedPoint[];
   readonly cuts: readonly PlottedCut[];
   readonly snaps: readonly SnapTarget[];
@@ -230,14 +236,15 @@ export function PointViews({
   // reporting has to be the shape on screen. Everything else is previewed as a VERTICAL slice, because the
   // pane's question is whether a point is inside the boat and only the plane x = const contains the point to
   // ask it of. Carried as a boolean rather than as the cut, so the memo below is keyed on primitives.
-  const asStation = !active && !!activeCut && activeCut.axis === "x";
+  const asStation = !active && !!activeCut && activeCut.shape === "station";
 
   // One preview query for the selection. The handle caches context/kind/position, so an
   // unrelated formula edit does not re-cut. While it is pending, never label an old outline
   // with the new position.
   const loadSection = useCallback(
     (options: QueryOptions) =>
-      hull.sectionOutline(
+      pointSectionOutline(
+        hull,
         {
           kind: asStation ? "station" : "vertical",
           x: askX,
@@ -354,7 +361,7 @@ function PointPlot({
   readonly plane: Plane;
   readonly label: string;
   readonly hint: string;
-  readonly outlines: HullOutlines;
+  readonly outlines: PointViewOutlines;
   readonly section: SectionOutline | null;
   /** Which kind of cut is being previewed, or null in the pane that IS the preview. */
   readonly cutKind: SectionKind | null;
@@ -396,9 +403,13 @@ function PointPlot({
     hi = [Math.max(hi[0], a), Math.max(hi[1], b)];
   };
   if (profile) {
+    for (const loop of outlines.profile.coverage ?? [])
+      for (const [x, z] of loop) grow(x, z);
     for (const [x, z] of outlines.profile.upper) grow(x, z);
     for (const [x, z] of outlines.profile.lower) grow(x, z);
   } else if (section) {
+    for (const loop of [...(section.loops ?? []), ...(section.openPaths ?? [])])
+      for (const [y, z] of loop) grow(y, z);
     for (const [y, z] of section.starboard) grow(y, z);
     for (const [y, z] of section.port) grow(y, z);
   } else {
@@ -587,17 +598,27 @@ function PointPlot({
           <>
             {/* One closed outline rather than two curves: the silhouette joins at the stem and across the
                 transom, and drawn open it reads as two unrelated lines instead of as a boat. */}
-            <path
-              className="phull"
-              d={path(
-                [
-                  ...outlines.profile.upper,
-                  ...[...outlines.profile.lower].reverse(),
-                ],
-                fit,
-                true,
-              )}
-            />
+            {outlines.profile.coverage ? (
+              <path
+                className="psilhouette"
+                fillRule="nonzero"
+                d={outlines.profile.coverage
+                  .map((loop) => path(loop, fit, true))
+                  .join(" ")}
+              />
+            ) : (
+              <path
+                className="phull"
+                d={path(
+                  [
+                    ...outlines.profile.upper,
+                    ...[...outlines.profile.lower].reverse(),
+                  ],
+                  fit,
+                  true,
+                )}
+              />
+            )}
             {/* The cut shown beside this, seen from the side.
                 A VERTICAL slice is a rule, drawn the full height: the plane is x = const, so a point at that
                 x is on it wherever it sits, and the plane really does go on past the hull.
@@ -618,6 +639,16 @@ function PointPlot({
           </>
         ) : section ? (
           <>
+            {section.loops?.map((loop, i) => (
+              <path
+                key={`loop-${i}`}
+                className="phull"
+                d={path(loop, fit, true)}
+              />
+            ))}
+            {section.openPaths?.map((loop, i) => (
+              <path key={`open-${i}`} className="phull" d={path(loop, fit)} />
+            ))}
             <path className="phull" d={path(section.starboard, fit)} />
             <path className="phull" d={path(section.port, fit)} />
           </>

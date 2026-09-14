@@ -1,0 +1,9 @@
+{
+  "name": "camber-analysis-browser-harness",
+  "private": true,
+  "type": "module",
+  "description": "Optional Playwright smoke harness for the standalone STL workspace",
+  "dependencies": {
+    "playwright": "^1.63.0"
+  }
+}

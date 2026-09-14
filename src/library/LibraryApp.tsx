@@ -287,6 +287,13 @@ export function LibraryApp() {
           Camber <span>design library</span>
         </div>
         <span className="spacer" />
+        <a
+          className="btn"
+          style={{ textDecoration: "none" }}
+          href="analysis.html"
+        >
+          STL analysis
+        </a>
         <Button
           variant="primary"
           title="Start a new hull in the editor"

@@ -23,7 +23,7 @@
     "test:worker": "tsx test/worker.ts",
     "test:v2": "tsx test/v2core.ts",
     "test:stability": "tsx test/stability.ts",
-    "test": "npm run test:quantity && npm run test:sheet && npm run test:analysis && npm run test:mesh-analysis && npm run test:hull && npm run test:history && npm run test:store && npm run test:worker && npm run test:v2 && npm run test:smooth && npm run test:centerline && npm run test:io && npm run test:stability && npm run test:transom-sweep",
+    "test": "npm run test:quantity && npm run test:sheet && npm run test:analysis && npm run test:mesh-analysis && npm run test:hull && npm run test:history && npm run test:store && npm run test:worker && npm run test:v2 && npm run test:smooth && npm run test:centerline && npm run test:io && npm run test:stability && npm run test:transom-sweep && npm run test:stl-features && npm run test:stl-workspace && npm run test:stl-repair && npm run test:stl-progressive",
     "test:quantity": "tsx test/quantity.ts",
     "test:sheet": "tsx test/sheet.ts",
     "test:analysis": "tsx test/analysis.ts",
@@ -31,7 +31,17 @@
     "bench:mesh-analysis": "tsx test/mesh-benchmark.ts",
     "build:mesh-spike": "vite build --config tools/mesh-spike/vite.config.ts",
     "investigate:mesh-volume": "tsx test/mesh-discrepancy.ts",
-    "test:transom-sweep": "tsx test/transom-sweep.ts"
+    "test:transom-sweep": "tsx test/transom-sweep.ts",
+    "test:stl-features": "tsx test/stl-features.ts",
+    "dev:analysis": "vite --config tools/analysis/vite.config.ts",
+    "build:analysis": "vite build --config tools/analysis/vite.config.ts",
+    "test:stl-workspace": "tsx test/stl-workspace.ts",
+    "test:stl-repair": "tsx test/stl-repair.ts",
+    "test:stl-repair:examples": "tsx test/stl-repair.ts --examples",
+    "test:stl-progressive": "tsx test/stl-progressive.ts",
+    "test:examples": "npm run test:stl-repair:examples && npm run test:stl-progressive -- --examples",
+    "test:browser": "npm run build:analysis && tsx tools/analysis/smoke.ts",
+    "test:browser:examples": "npm run build:analysis && tsx tools/analysis/smoke.ts --examples"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

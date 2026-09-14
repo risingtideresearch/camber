@@ -3,6 +3,7 @@ import type { QueryResult, QueryOptions } from "../api";
 
 export type QueryState<T> =
   | { readonly status: "pending" }
+  | { readonly status: "idle" }
   | { readonly status: "available"; readonly value: T }
   | { readonly status: "unavailable"; readonly reason: string }
   | { readonly status: "error"; readonly reason: string };
@@ -14,6 +15,7 @@ export function useAnalysisQuery<T>(
   contextId: string,
   key: string,
   load: (options: QueryOptions) => Promise<QueryResult<T>>,
+  enabled = true,
 ): QueryState<T> {
   const [answer, setAnswer] = useState<{
     contextId: string;
@@ -21,6 +23,7 @@ export function useAnalysisQuery<T>(
     state: QueryState<T>;
   } | null>(null);
   useEffect(() => {
+    if (!enabled) return;
     const controller = new AbortController();
     void Promise.resolve()
       .then(() => load({ signal: controller.signal }))
@@ -42,7 +45,8 @@ export function useAnalysisQuery<T>(
           });
       });
     return () => controller.abort();
-  }, [contextId, key, load]);
+  }, [contextId, key, load, enabled]);
+  if (!enabled) return { status: "idle" };
   return answer?.contextId === contextId && answer.key === key
     ? answer.state
     : PENDING;

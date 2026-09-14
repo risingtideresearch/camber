@@ -1,16 +1,18 @@
-# Phase 2: direct mesh geometry feasibility spike
+# Direct mesh geometry (Phases 2–3)
 
-This is a tested geometry backend and developer harness, **not the standalone import application or full STL weight-book parity**. Camber still uses its sweep for existing hydrostatics, KN, metrics and authored station cuts.
+This is a constrained geometry backend with supported STL weight-book/point/stability features and developer harnesses, **not the standalone import/project application or universal Camber/STL parity**. Camber still uses its sweep for existing hydrostatics, KN, metrics and authored station cuts.
 
 ## Entry points
 
 - `prepare.ts`: physical setup, welding, topology/orientation/intersection validation.
-- `import.ts`: hardened ASCII/binary STL parser → physical preparation → explicitly confirmed closure, if requested.
+- `import.ts`: hardened ASCII/binary STL parser → physical preparation → closed, validated-open-sheer, or surface-only analysis mode.
 - `section.ts`: arbitrary-plane region/path query, accelerated by an AABB tree.
 - `immersion.ts`: clipped signed tetrahedra for volume, centroid and physical wetted area; waterplane moments come from section loops.
+- `measurements.ts`: explicitly scoped shell area/CG, closed-envelope full volume, and supported reference-waterplane measurements.
+- `projection.ts`: visual projection coverage and body-frame display geometry.
 - `compute.ts`: mesh implementation of shared immersed operations, KN/KMt construction, and query dispatch.
 - `client.ts` / `worker/meshAnalysisWorker.ts`: install an asset once; send small subsequent queries. Original asset bytes are retained. Dispose/replace the worker to cancel executing numerical work.
-- `closure.ts`: non-planar top-boundary closure prototype, with provenance and full post-closure validation.
+- `closure.ts`: conservative top-boundary validation, open-sheer winding resolution, and a legacy explicit cap path.
 - `../sections.ts`: geometry-independent plane, region, boundary-source, measurement and accuracy contracts.
 - `../immersed.ts`: shared numerical march above an `ImmersedBackend`. `core/stability.ts` wraps the sweep behind these operations without changing its calculations or default sampling.
 
@@ -28,9 +30,15 @@ const client = createStlAnalysisClient(originalBytes, {
     fixedTrim: 0,
     keelZ: -0.8, // explicit upright KG datum, metres
     referenceWaterlineZ: -0.2, // explicit upright height, NOT Camber waterline depth
+    // Optional: ONLY after deliberate scope confirmation. Bare STL defaults to
+    // physical surface "unclassified", which includes any deck/transom faces.
+    // shellScope: { confirmed: true, surfaces: ["unclassified"], label: "All supplied physical faces (not Camber skin)" },
   },
-  // Omit for closed-envelope mode. Never infer consent to close a hole.
-  // deckClosure: { accepted: true, closureId: "confirmed-sheer" },
+  // Permit one validated open sheer. No cap faces are added; immersed
+  // integration stops when any rim point reaches the waterplane.
+  openSheer: true,
+  // Legacy explicit sealed mode remains available to low-level callers only:
+  // deckClosure: { accepted: true, closureId: "explicit-cap" },
 });
 const report = await client.ready;
 const section = await client.hull.section({
@@ -41,7 +49,7 @@ const tables = await client.hull.stability();
 // client.dispose() when the project/source is replaced or the window closes.
 ```
 
-The host supplies setup/confirmation here; a preview/import wizard is later work. `proposeDeckClosure()` can produce preview triangles without granting a closed integration envelope.
+The host supplies setup policy here. The standalone workspace opens with parsing only, then validates one supported open sheer when a buoyancy calculation is requested, without retaining cap faces. Its asset-owned service reuses physical preparation across analysis-setting changes. Lower-level callers must opt in with `openSheer: true`; explicit `deckClosure` remains a separate legacy/sealed assumption.
 
 ## Frames and datums
 
@@ -51,17 +59,19 @@ Physical setup applies a signed axis permutation, positive scale, optional axis-
 
 Stability rotates body vertices through fixed trim, then measures a heeled waterplane. `keelZ` and `referenceWaterlineZ` are explicit heights in the upright, fixed-trim frame. Mesh contexts supply `hullToWeight` and `kgDatum`; the former maps body points to upright Cartesian weight coordinates, subtracting the KG datum in z. Do not use an affine point mapping directly to transform normals.
 
-Camber's legacy hybrid deck-x/world-z weight mapping remains in `outlines().frame`, unchanged. Its existing `HULL.WATERLINE` still means authored depth. This spike does not convert existing cuts or point formulas into the new physical plane convention.
+Camber's legacy hybrid deck-x/world-z weight mapping remains in `outlines().frame`, unchanged. Its existing `HULL.WATERLINE` still means authored depth. The shared weight feature preserves these legacy cuts and formulas; it resolves new transverse cuts and mesh horizontal cuts explicitly into body-frame physical planes.
 
 ## Supported and rejected inputs
 
-Preparation supports one connected, orientable, edge- and vertex-manifold triangle surface. Geometry-only sections may have multiple regions or holes; neither implies permission to analyse multiple hull components. Stability additionally requires a **surface-area-verified reflection symmetry about body y=0**. Mirrored vertices alone are insufficient; different diagonals on the same planar patch are accepted.
+A buoyancy envelope supports one connected, orientable, edge- and vertex-manifold triangle surface. Geometry-only sections may have multiple regions or holes; neither implies permission to analyse multiple hull components. The standalone workspace may retain a safely parsed and cleaned surface which fails these envelope checks so weight authoring, display, projection and explicitly scoped surface area/CG are not held hostage by hydrostatic topology. Envelope-dependent queries remain unavailable with the validation reason.
+
+Stability prefers surface-area-verified reflection symmetry about body y=0, but practical STL tessellations rarely match at predicate tolerance. When exact coverage fails, a bounded quality check compares centreline placement, a representative transverse buoyancy centroid and immersed volumes at ±30° and ±40°. A maximum discrepancy up to 5% is accepted with a visible approximate-symmetry assumption; larger asymmetry remains unsupported. Geometry is never silently mirrored.
 
 Checks include:
 
 - Bounded STL input (64 MiB / 200,000 triangles), complete ASCII facets and binary size/count checks, finite coordinates, and finite positive physical scale.
 - Scale-aware vertex welding with neighbouring-cell searches.
-- Rejection of degenerate/duplicate faces, non-manifold edges/vertices, disconnected components and non-orientable surfaces.
+- Cleanup of degenerate/duplicate faces for a surface-only workspace; non-manifold edges/vertices, disconnected components and non-orientable surfaces still reject a buoyancy envelope.
 - AABB broad phase and triangle separating-axis tests, including coplanar overlap, for self-intersections/ambiguous non-adjacent contacts.
 - Consistent winding and positive signed volume for closed envelopes. Reorientations and the weld tolerance are reported.
 
@@ -83,11 +93,25 @@ Camber's `section()` uses a lazily constructed, tagged mesh plus the closure bel
 
 Closed mode requires no artificial closure. Unannotated closed meshes have **unknown sheer and downflooding**, not a perpetually dry deck. KN and valid KMt remain available independently. The mesh march excludes the undefined zero-volume KN endpoint rather than interpolating from an invented dry-limit arm. Null deck-immersion entries and explicit availability reasons survive table conversion; the shared panel labels an unknown sheer as unknown and disables its overlays.
 
-The open-deck prototype requires exactly one simple boundary projecting to a hull-xy polygon, at most 2,000 boundary vertices, with the physical vertices below and inside its footprint. Cap/skin intersections are checked separately. Side/bottom openings, projected crossings, vertices outside the supported footprint and ambiguous topology are rejected. This is not general overhang/repair support.
+Open-sheer validation operates directly on an already manifold/intersection-validated
+surface. It requires one boundary projecting to a simple hull-xy polygon (at most
+2,000 vertices), a usable upright immersion interval below the lowest rim, and a
+finite positive submerged-volume probe. Boundary winding determines the outward
+skin orientation; if necessary all face and boundary windings are reversed without
+changing vertex positions, face IDs or the spatial tree. Bottom openings with no
+dry-rim interval, vertical side openings with no XY area, projected crossings and
+multiple boundaries remain unsupported.
 
-For a symmetric, x-monotone boundary, corresponding port/starboard shores form **transverse ruled strips**. Each strip is planar although the whole sheer is not. Otherwise, ear triangulation retains boundary-vertex heights, yielding a piecewise-planar height graph. The latter may be asymmetric and therefore unavailable for stability even when its section geometry is valid. No arbitrary centroid fan is used.
+No temporary sheer cap is triangulated, validated or stripped. The skin is no
+longer required to fit beneath a hypothetical triangulated roof: only the real
+surface must be non-self-intersecting, and the actual rim must stay dry at every
+queried heel/waterplane. The waterplane closure is implicit in the volume integral.
+Legacy explicit `deckClosure` still constructs and validates an actual numerical
+cap, with its separate sealed-deck assumption.
 
-Closing requires explicit confirmation. The complete envelope is revalidated, including winding and intersections between cap and skin. Synthetic faces never become physical shell. Their seam supplies a geometric deck reference, not actual flooding knowledge. This closure is an identified approximation, **not an assertion that it equals Camber's fanning swept cap**.
+Immersion integrates the wetted physical/repair surface against the instantaneous waterplane. No sheer/deck cap faces enter the prepared analysis mesh, display geometry, shell measurements or volume integral. For each heel, the sinkage march ends at the lowest projected rim point; states at and beyond that point are unavailable rather than hypothetical sealed-deck results.
+
+The low-level API opts into this behavior with `openSheer: true`. `deckClosure` remains available only as an explicit sealed-envelope assumption for callers that genuinely need post-rim-immersion calculations.
 
 The spike also found and fixed outward STL winding: the renderer's port mesh mirrored vertices and stored normals but not vertex order. Export now writes outward vertex order on both halves. Import still validates winding independently and never trusts supplied normals.
 
@@ -179,4 +203,40 @@ This fix does not establish general post-deck-immersion closure parity.
 
 ## Still deferred
 
-Full shell classification/`HULL.*` metrics, authored cut construction/motion/derivatives, migrated point views and projections, an import/setup UI, arbitrary mesh repair, regulatory flooding, free trim/asymmetric stability, project persistence, and independent app packaging remain later phases. Geometry validation, a closed numerical solid and a green intact-stability criterion do not certify a boat.
+Interactive face selection, advanced persisted cut constructions/reference dependencies, repair beyond the bounded policy below, regulatory flooding and free trim/materially asymmetric stability remain later work. The progressive workspace includes optional local recovery, not a guaranteed backup. The local STL workspace now provides import/setup, portable project download/reopen and an independent build. The supported Phase 3 API and shared-feature workflow are described in [the shared feature notes](../README.md#phase-3-composition-and-semantics). Geometry validation, a closed numerical solid and a green intact-stability criterion do not certify a boat.
+
+## Phase 3 verification and limits
+
+`npm run test:stl-features` is included in `npm test`. A 4 × 2 × 2 m classified prism has 28 m² of selected skin (excluding the 4 m² aft transom and 8 m² deck), shell CG (16/7, 0, 5/7) m, 16 m³ envelope volume and 18 m² selected wetted area at z=1. Tests also confirm explicit all-physical scope, unconfirmed scope, missing tags, nonzero trim/KG datum, non-differentiable cuts, v1/v2 books and the sheet-linked condition. Generic projections preserve a ring's projected hole and a U-profile's concavity, independently of section topology.
+
+Optional Chromium smoke checks exercise the standalone workspace's progressive import, setup, shared panels, detached editing, repairs, persistence and recovery; they are kept outside the default test suite and CI. WebGL may be unavailable in headless environments, so the 2D preview and calculations remain independently usable.
+
+Missing metadata remains local: `WATERLINE` is unavailable because the imported setup has no Camber depth-below-deck datum; `AM`, `AMAX`, `CP`, `CM`, `DEADRISE` and `HALF_ENTRANCE` have no defined authored-station equivalent here. LOA is the upright longitudinal envelope extent; LCB/LCF and shell positions use the confirmed weight origin and KG datum. Whole-envelope volume and scoped shell properties do not require a valid reference waterplane. This release does not infer skin from normals/names or certify arbitrary hull shapes from prism tests.
+
+## Bounded repair and overhanging hull sides
+
+The STL workspace offers on-demand, explicit, previewed repairs via `repair.ts`: a versioned snap/cleanup policy and tightly bounded small-hole patches, followed by the unchanged strict manifold, intersection and volume checks. Snapping is separate from numerical predicate tolerance. `MeshImport.repair` requires `accepted: true`; permission to close a remaining deck is still separate. Original bytes plus policy are saved, not rewritten STL or cached geometry.
+
+Synthetic faces can carry `purpose: "repair"` or `"deck"`. Repair patches are excluded from shell measurements and deck/sheer references. Legacy synthetic tags without a purpose retain their existing deck-reference semantics. The deck validation also permits skin outside its XY footprint when below the nearest rim (tumblehome/overhang), without bypassing cap/skin intersection checks.
+
+See [the workspace's repair limits and actual-file results](../../stl-workspace/README.md#repairing-real-stl-exports). This is not an arbitrary remesher, a flooding model, or automatic symmetrisation.
+
+### Incremental small-hole preparation
+
+Automatic patches consume the existing validated indexed mesh. Only boundary-loop
+vertices are projected for triangulation. Patch triangles must use existing vertex
+IDs and pass the original degeneracy tolerance. Their source tags remain synthetic
+repair faces, excluded from physical shell measurements.
+
+The append path rechecks full connectivity, vertex/edge manifoldness, boundary
+loops and winding, and builds a combined spatial tree. It checks all new/old and
+new/new triangle pairs that overlap in the broad phase. Only old/old intersection
+checks are reused, since their vertices and tolerance are unchanged. No geometry
+or report of the source mesh is mutated, including when a patch fails validation.
+
+General cleanup/stitching still fully validates its changed skin, but preparation
+continues directly from the weld result without another triangle-soup expansion
+and welding pass. Both paths share the indexed topology validator and the same
+triangle-conflict predicate. `test:stl-repair` compares incremental results with
+full revalidation and tests patch/skin intersections, invalid additions and source
+immutability.

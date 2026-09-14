@@ -1,3 +1,8 @@
+import {
+  measureWeightCuts,
+  weightMapping,
+  toWeight,
+} from "../src/analysis/weightGeometry";
 // Keep the pre-extraction fixtures intact. Overlay only the intentional transom
 // solid/waterplane correction, independently verified by transom-sweep.ts.
 import assert from "node:assert/strict";
@@ -135,11 +140,7 @@ function value<T>(answer: Available<T>): T {
   return (answer as { value: T }).value;
 }
 const caps: HullAnalysis["capabilities"] = {
-  stability: true,
-  measurements: true,
-  legacySlices: true,
-  pointViews: true,
-  arbitraryPlanes: false,
+  authoredStations: true,
 };
 const context = (id: string): AnalysisContext => ({
   id,
@@ -336,11 +337,37 @@ for (const [i, test] of fixture.cases.entries()) {
       );
       return { contextId: `table-${i}`, result: available(si) } as never;
     },
-    { ...caps, measurements: false, legacySlices: false, pointViews: false },
+    { authoredStations: false },
   );
   close(
     gzCurve(unwrap(await tableOnly.stability()).curves, linked.vol, linked.kg!),
     gzCurve(si.curves, linked.vol, linked.kg!),
+  );
+  // New physical transverse cuts leave both legacy slice definitions unchanged,
+  // including Camber's non-orthogonal deck-x/world-z mapping at nonzero trim.
+  const sharedLegacy = unwrap(
+    await measureWeightCuts(hull, [
+      { shape: "station", position: 1.5 },
+      { shape: "plane", position: 0.3 },
+    ]),
+  );
+  close(sharedLegacy, cuts);
+  const physical = value(
+    unwrap(
+      await measureWeightCuts(hull, [{ shape: "transverse", position: 1.5 }]),
+    )[0],
+  );
+  assert.ok(Math.abs(physical.x - 1.5) < 1e-9);
+  assert.ok(
+    physical.loops!.every((loop) =>
+      loop.every((p) => Math.abs(p[0] - 1.5) < 1e-9),
+    ),
+  );
+  const mapping = value(await weightMapping(hull));
+  const p: [number, number, number] = [1800, 200, -500];
+  close(
+    toWeight(mapping, p.map((v) => v * outlines.frame.s) as typeof p),
+    toSheet(outlines.frame, p),
   );
   console.log(
     `  ok: hull/book fixture ${i} with explicit transom correction, queries, SI tables and assessment`,

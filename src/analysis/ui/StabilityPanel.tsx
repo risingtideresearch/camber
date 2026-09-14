@@ -1,3 +1,4 @@
+import { EMPTY_LOADING, type StabilityLoadingState } from "../loading";
 import {
   createImoChecks,
   criterionVerdict,
@@ -8,7 +9,13 @@ import {
   type ImoCheck,
   type ImoVerdict,
 } from "../assessment";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { NumberInput } from "polymorph-ui";
 import { unitScale } from "../../core/lengthUnits";
 import {
@@ -698,6 +705,10 @@ function OverlayControls({
 }
 
 export interface StabilityPanelProps {
+  readonly loading?: StabilityLoadingState;
+  readonly onLoadingChange?: (
+    update: (previous: StabilityLoadingState) => StabilityLoadingState,
+  ) => void;
   readonly stability: QueryState<StabilityData>;
   readonly unit: Unit;
   readonly density: number; // t/m³, as persisted by WeightBook
@@ -709,6 +720,8 @@ export function StabilityPanel({
   unit,
   density,
   sheetResults,
+  loading,
+  onLoadingChange,
 }: StabilityPanelProps) {
   const metres = unitScale(unit, "m");
   // Preserve the existing chart's displayed coordinates and controls; the query boundary is SI.
@@ -725,7 +738,34 @@ export function StabilityPanel({
     limit = analysis?.limit ?? EMPTY_LIMIT,
     hydro = analysis?.hydro ?? null,
     lowestSheerKg = analysis?.lowestSheerKg ?? NaN;
-  const [condition, setCondition] = useState<Condition | null>(null);
+  const [localLoading, setLocalLoading] =
+    useState<StabilityLoadingState>(EMPTY_LOADING);
+  const currentLoading = loading ?? localLoading;
+  const changeLoading = <K extends keyof StabilityLoadingState>(
+    key: K,
+    action: SetStateAction<StabilityLoadingState[K]>,
+  ) => {
+    const update = (previous: StabilityLoadingState) => ({
+      ...previous,
+      [key]:
+        typeof action === "function"
+          ? (
+              action as (
+                v: StabilityLoadingState[K],
+              ) => StabilityLoadingState[K]
+            )(previous[key])
+          : action,
+    });
+    if (onLoadingChange) onLoadingChange(update);
+    else setLocalLoading(update);
+  };
+  const { condition, spread, linkSheet } = currentLoading;
+  const setCondition = (v: SetStateAction<Condition | null>) =>
+    changeLoading("condition", v);
+  const setSpread = (v: SetStateAction<Spread | null>) =>
+    changeLoading("spread", v);
+  const setLinkSheet = (v: SetStateAction<boolean>) =>
+    changeLoading("linkSheet", v);
   /**
    * Whether the pinned condition is FOLLOWING the weight sheet rather than standing where it was clicked.
    *
@@ -734,10 +774,10 @@ export function StabilityPanel({
    * is the question a designer actually has: not "does this displacement pass" but "does my estimate pass,
    * and how much of the margin is the estimate rather than the boat".
    */
-  const [linkSheet, setLinkSheet] = useState(false);
+
   // null until a tolerance is touched; `defaultSpread` stands in until then, so the first ± draws a rectangle
   // immediately without seeding state from a viewport the analysis had not produced yet.
-  const [spread, setSpread] = useState<Spread | null>(null);
+
   // Where the pointer is over the plane, if anywhere. Clicking pins a condition; merely pointing at one is
   // enough to see its curve, so the plane can be read continuously without committing to a selection.
   const [hover, setHover] = useState<Condition | null>(null);
@@ -1394,6 +1434,11 @@ export function StabilityPanel({
             Point anywhere to see that condition’s curve, and click to pin it.
           </InfoHint>
         </div>
+        {data?.assumptions && (
+          <p className="stnotice" role="note">
+            {data.assumptions.join(". ")}
+          </p>
+        )}
         {!sheerAvailable && (
           <p className="sheetlinknote" role="note">
             Sheer immersion is unknown: no deck-edge reference is annotated.

@@ -96,15 +96,24 @@ export function meshImmersion(
   moments = false,
   accelerated = true,
 ): MeshImmersion {
-  if (!mesh.report.closed)
+  if (!mesh.report.closed && !mesh.report.openHydrostatics)
     throw new Error(
-      "Immersed integration requires a validated closed envelope",
+      "Immersed integration requires a closed envelope or validated open sheer",
     );
   const n = planeNormal(plane),
     { center, vertices, integrals } = prepareIntegral(mesh),
     height = V.dot(V.sub(plane.origin, center), n);
   if (!Number.isFinite(height))
     throw new Error("Plane height exceeds the numerical coordinate range");
+  if (mesh.report.openHydrostatics) {
+    const clearance = Math.min(
+      ...mesh.boundary[0].map((id) => V.dot(vertices[id], n) - height),
+    );
+    if (clearance < -mesh.report.tolerance)
+      throw new Error(
+        "Waterplane reaches the open sheer; hydrostatics stop at rim immersion",
+      );
+  }
   const apex = V.scale(n, height),
     first: Vec3 = [0, 0, 0],
     wettedBySurface: Record<string, number> = Object.create(null);

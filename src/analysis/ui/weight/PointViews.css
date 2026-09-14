@@ -261,3 +261,12 @@
 .phandle.vertical {
   cursor: ns-resize;
 }
+
+/* The nonzero compound fill forms the exact visual union of projected triangles.
+   No per-triangle strokes, centreline-cut substitution, or invented convex hull. */
+.psilhouette {
+  fill: var(--ink);
+  fill-opacity: 0.12;
+  stroke: none;
+  pointer-events: none;
+}

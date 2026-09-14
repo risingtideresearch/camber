@@ -74,6 +74,7 @@ function measureSliceAt(
   if (!isFinite(positionMetres)) return null;
   const s = unitScale(model.unit, "m");
 
+  if (shape === "transverse") return null; // shared physical-plane orchestration, never an authored station
   if (shape === "plane") {
     const worldZ = geom.keelZ + positionMetres / s;
     const result = cut(geom, 0, worldZ, true);

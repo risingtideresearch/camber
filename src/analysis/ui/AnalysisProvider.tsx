@@ -1,3 +1,5 @@
+import { measureWeightCuts } from "../weightGeometry";
+import { pointViewOutlines } from "../pointViewGeometry";
 /* eslint-disable react-refresh/only-export-components -- the provider and its hook form one binding */
 import {
   createContext,
@@ -26,7 +28,7 @@ export interface AnalysisHost {
   ) => Promise<{ rejected: string } | { accepted: true }>;
 }
 
-function useAnalysisResults(host: AnalysisHost) {
+function useAnalysisResults(host: AnalysisHost, demand: AnalysisDemand) {
   const { hull, book } = host;
   const id = hull.context.id;
   const loadStability = useCallback(
@@ -38,13 +40,28 @@ function useAnalysisResults(host: AnalysisHost) {
     [hull],
   );
   const loadOutlines = useCallback(
-    (options: QueryOptions) => hull.outlines(options),
+    (options: QueryOptions) => pointViewOutlines(hull, options),
     [hull],
   );
   // One provider owns these queries, even if both panels are mounted in the same window.
-  const metrics = useAnalysisQuery(id, "measurements", loadMetrics);
-  const outlines = useAnalysisQuery(id, "outlines", loadOutlines);
-  const stability = useAnalysisQuery(id, "stability", loadStability);
+  const metrics = useAnalysisQuery(
+    id,
+    "measurements",
+    loadMetrics,
+    demand.metrics,
+  );
+  const outlines = useAnalysisQuery(
+    id,
+    "outlines",
+    loadOutlines,
+    demand.outlines,
+  );
+  const stability = useAnalysisQuery(
+    id,
+    "stability",
+    loadStability,
+    demand.stability,
+  );
   const metricValues = metrics.status === "available" ? metrics.value : null;
   const plan = useMemo(
     () => planWeightBook(book, metricValues),
@@ -59,11 +76,11 @@ function useAnalysisResults(host: AnalysisHost) {
   const loadCuts = useCallback(
     (options: QueryOptions) =>
       queries.length
-        ? hull.slices(queries, options)
+        ? measureWeightCuts(hull, queries, options)
         : Promise.resolve({ contextId: id, result: available([]) }),
     [hull, id, queries],
   );
-  const cuts = useAnalysisQuery(id, signature, loadCuts);
+  const cuts = useAnalysisQuery(id, signature, loadCuts, demand.cuts);
   const weight = useMemo(
     () =>
       finishWeightBook(
@@ -80,14 +97,29 @@ function useAnalysisResults(host: AnalysisHost) {
 type AnalysisView = ReturnType<typeof useAnalysisResults>;
 const Context = createContext<AnalysisView | null>(null);
 
+export interface AnalysisDemand {
+  metrics: boolean;
+  outlines: boolean;
+  stability: boolean;
+  cuts: boolean;
+}
+const EAGER: AnalysisDemand = {
+  metrics: true,
+  outlines: true,
+  stability: true,
+  cuts: true,
+};
+
 export function AnalysisProvider({
   host,
   children,
+  demand = EAGER,
 }: {
+  demand?: AnalysisDemand;
   host: AnalysisHost;
   children: ReactNode;
 }) {
-  const value = useAnalysisResults(host);
+  const value = useAnalysisResults(host, demand);
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
 

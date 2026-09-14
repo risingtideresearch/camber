@@ -57,13 +57,7 @@ export function CamberAnalysisProvider({ children }: { children: ReactNode }) {
         weightFrame: "camber-deck-x-world-z",
       },
       client.runner(source),
-      {
-        stability: true,
-        measurements: true,
-        legacySlices: true,
-        pointViews: true,
-        arbitraryPlanes: true,
-      },
+      { authoredStations: true },
     );
     // The store's hull slice clocks are authoritative across structured clones. Book edits,
     // scrubber movement and fresh snapshot object identities must not replace this handle.

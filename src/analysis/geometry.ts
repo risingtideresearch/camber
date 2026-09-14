@@ -46,6 +46,8 @@ export function toModel(frame: PointFrame, p: Vec3): Vec3 {
 
 /** The hull in side view: its upper and lower envelopes, in sheet (x, z). */
 export interface ProfileOutline {
+  /** Generic projection coverage: one nonzero-filled union, no internal triangle strokes. */
+  readonly coverage?: readonly (readonly Vec2[])[];
   /** Aft to forward along the top of the silhouette — the sheer, in side view. */
   readonly upper: readonly Vec2[];
   /** Aft to forward along the bottom — the keel and stem. */
@@ -67,6 +69,9 @@ export type SectionKind = "vertical" | "station";
 
 /** One cut through the hull, in sheet (y, z). Both halves, because a point may sit on either side. */
 export interface SectionOutline {
+  /** Generic physical boundaries; no implied mirrored halves or invented joins. */
+  readonly loops?: readonly (readonly Vec2[])[];
+  readonly openPaths?: readonly (readonly Vec2[])[];
   readonly kind: SectionKind;
   /** The x the cut was actually taken at, which is the requested one clamped into the hull. */
   readonly x: number;
@@ -99,7 +104,12 @@ export type SectionAt =
   | { readonly k: "at"; readonly x: number }
   | { readonly k: "through"; readonly x: number; readonly y: number };
 
-export interface HullOutlines {
+export interface PointViewOutlines {
+  readonly frame: Pick<PointFrame, "xSpan" | "ySpan" | "zSpan">;
+  readonly profile: ProfileOutline;
+}
+
+export interface HullOutlines extends PointViewOutlines {
   readonly frame: PointFrame;
   readonly profile: ProfileOutline;
 }
@@ -115,6 +125,11 @@ export const SLICE_VALUE_FIELDS = [
 export type SliceValueField = (typeof SLICE_VALUE_FIELDS)[number];
 
 export interface SliceMeasurement {
+  readonly unavailable?: Partial<Readonly<Record<SliceValueField, string>>>;
+  readonly derivativeUnavailable?: string;
+  readonly diagnostics?: readonly string[];
+  /** Complete physical loops, including holes; never concatenated into curve. */
+  readonly loops?: readonly (readonly Vec3[])[];
   readonly area: number;
   /** The complete boundary of the cut, including the straight segments that close it. */
   readonly closedPerimeter: number;

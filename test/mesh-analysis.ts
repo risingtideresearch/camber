@@ -20,9 +20,17 @@ import {
   METRE_SETUP,
   physicalPoints,
 } from "../src/analysis/mesh/prepare";
+import { meshProjection } from "../src/analysis/mesh/projection";
+import { measureWeightCuts } from "../src/analysis/weightGeometry";
+import { pointSectionOutline } from "../src/analysis/pointViewGeometry";
+import { containsPoint } from "../src/analysis/sections";
 import { meshSection } from "../src/analysis/mesh/section";
 import { meshImmersion } from "../src/analysis/mesh/immersion";
-import { closeDeck, proposeDeckClosure } from "../src/analysis/mesh/closure";
+import {
+  closeDeck,
+  proposeDeckClosure,
+  validateOpenSheer,
+} from "../src/analysis/mesh/closure";
 import {
   createMeshAnalysis,
   meshBackend,
@@ -301,6 +309,36 @@ console.log(
   "  ok: holes and disconnected section regions are not concatenated",
 );
 
+// Projection is the union of the ENTIRE visible surface, not a centreline cut.
+const ringProfile = value(
+  meshProjection(ring, {
+    view: { origin: [0, 0, 0], u: [1, 0, 0], v: [0, 0, 1] },
+  }),
+);
+assert.ok(ringProfile.coverage.some((p) => containsPoint(p, [2, 1.13])));
+const ringPlan = value(meshProjection(ring, { view: horizontal(0) }));
+assert.ok(!ringPlan.coverage.some((p) => containsPoint(p, [2, 0]))); // a projected hole stays a hole
+const uProfile = value(
+  meshProjection(u, {
+    view: { origin: [0, 0, 0], u: [1, 0, 0], v: [0, 0, 1] },
+  }),
+);
+assert.ok(!uProfile.coverage.some((p) => containsPoint(p, [2, 1.5]))); // no convex-hull fill
+const ringAnalysis = createMeshAnalysis(ring, { ...setup, id: "ring-weights" });
+const ringMeasurement = value(
+  value(
+    (await measureWeightCuts(ringAnalysis, [{ shape: "plane", position: 1 }]))
+      .result,
+  )[0],
+);
+near(ringMeasurement.area, 6);
+assert.equal(ringMeasurement.loops!.length, 2);
+assert.equal(ringMeasurement.curve.length, 0);
+const ringPreview = value(
+  (await pointSectionOutline(ringAnalysis, { kind: "vertical", x: 2 })).result,
+)!;
+assert.equal(ringPreview.loops!.length, 2); // two disconnected transverse islands, no mirrored fake join
+
 const open = prepareMesh(boxSoup(4, 2, 2, true), METRE_SETUP, {
   allowOpen: true,
 });
@@ -324,13 +362,139 @@ assert.match(proposeDeckClosure(warped).method, /ear/);
 const warpedClosed = closeDeck(warped, { accepted: true, closureId: "warped" });
 assert.ok(meshImmersion(warpedClosed, horizontal(4)).vol > 16);
 assert.equal(symmetricAboutCentreline(warpedClosed), false);
-assert.equal(meshStability(warpedClosed, setup).status, "unavailable");
+assert.ok(
+  value(meshStability(warpedClosed, setup)).assumptions!.some((text) =>
+    text.includes("Approximately symmetric STL accepted"),
+  ),
+);
+const offCentre = prepareMesh(
+  boxSoup(4, 2, 2).map((value, i) => (i % 3 === 1 && value === 1 ? 2 : value)),
+);
+assert.equal(meshStability(offCentre, setup).status, "unavailable");
+const slightlyAsymmetric = boxSoup(4, 2, 2).map((value, i, soup) => {
+  const start = i - (i % 3);
+  return soup[start] === 4 && soup[start + 1] === 1 && soup[start + 2] === 2
+    ? i % 3 === 2
+      ? value + 0.002
+      : value
+    : value;
+});
+const approximate = prepareMesh(slightlyAsymmetric);
+assert.equal(symmetricAboutCentreline(approximate), false);
+const approximateStability = value(meshStability(approximate, setup));
+assert.ok(
+  approximateStability.assumptions!.some((text) =>
+    text.includes("Approximately symmetric STL accepted"),
+  ),
+);
 const bottomOpen = prepareMesh(boxSoup().slice(18), METRE_SETUP, {
   allowOpen: true,
 });
 assert.throws(
   () => closeDeck(bottomOpen, { accepted: true, closureId: "not-a-deck" }),
   /top\/deck/,
+);
+// The open path reuses validated geometry instead of constructing/discarding a cap.
+for (const soup of [
+  boxSoup(4, 2, 2, true),
+  boxSoup(4, 2, 2, true, true),
+  boxSoup(4, 2, 2, true).map((v, i, a) =>
+    i % 3 === 1 && a[i + 1] === 2 ? v * 0.7 : v,
+  ),
+]) {
+  for (const reversed of [false, true]) {
+    const triangles = reversed
+      ? Array.from({ length: soup.length / 9 }, (_, i) => {
+          const t = soup.slice(i * 9, i * 9 + 9);
+          return [...t.slice(0, 3), ...t.slice(6, 9), ...t.slice(3, 6)];
+        }).flat()
+      : soup;
+    const source = prepareMesh(triangles, METRE_SETUP, { allowOpen: true });
+    const before = structuredClone(source);
+    const direct = validateOpenSheer(source);
+    assert.deepEqual(
+      source,
+      before,
+      "Open-rim validation must not mutate its source",
+    );
+    assert.equal(direct.tree, source.tree, "Keep the existing spatial index");
+    assert.equal(direct.vertices, source.vertices);
+    assert.equal(direct.sources, source.sources);
+    assert.equal(direct.faces.length, source.faces.length, "No cap triangles");
+    assert.equal(direct.report.closed, false);
+    if (!reversed) assert.equal(direct.faces, source.faces);
+    const sealed = closeDeck(source, {
+      accepted: true,
+      closureId: "regression-reference",
+    });
+    for (const heel of [0, -0.4, 0.4, 0.8]) {
+      const n: Vec3 = [0, -Math.sin(heel), Math.cos(heel)];
+      const bottom = Math.min(...direct.vertices.map((p) => V.dot(p, n)));
+      const rim = Math.min(
+        ...direct.boundary[0].map((i) => V.dot(direct.vertices[i], n)),
+      );
+      for (const fraction of [0.17, 0.53, 0.89]) {
+        const height = bottom + (rim - bottom) * fraction;
+        const plane = {
+          origin: V.scale(n, height),
+          u: [1, 0, 0] as Vec3,
+          v: [0, Math.cos(heel), Math.sin(heel)] as Vec3,
+        };
+        const actual = meshImmersion(direct, plane, true),
+          expected = meshImmersion(sealed, plane, true);
+        near(actual.vol, expected.vol);
+        actual.centroid!.forEach((value, i) =>
+          near(value, expected.centroid![i]),
+        );
+        const aw = value(actual.waterplane!).measurements,
+          ew = value(expected.waterplane!).measurements;
+        near(value(aw.area), value(ew.area));
+        vec(value(aw.centroid), value(ew.centroid));
+        const am = value(aw.moments),
+          em = value(ew.moments);
+        near(am.uu, em.uu);
+        near(am.vv, em.vv);
+        near(am.uv, em.uv);
+      }
+      assert.throws(
+        () =>
+          meshImmersion(direct, {
+            origin: V.scale(n, rim + 0.01),
+            u: [1, 0, 0],
+            v: [0, Math.cos(heel), Math.sin(heel)],
+          }),
+        /rim immersion/,
+      );
+    }
+    const checked = validateOpenSheer(source, false);
+    assert.equal(checked.report.validatedOpenSheer, true);
+    assert.equal(checked.report.openHydrostatics, undefined);
+    assert.equal(validateOpenSheer(checked).report.openHydrostatics, true);
+    assert.equal(checked.report.openHydrostatics, undefined);
+  }
+}
+assert.throws(() => validateOpenSheer(bottomOpen), /top boundary/);
+const missingSide = prepareMesh(
+  [...boxSoup().slice(0, 18), ...boxSoup().slice(36)],
+  METRE_SETUP,
+  { allowOpen: true },
+);
+assert.throws(() => validateOpenSheer(missingSide), /hull-xy|top boundary/);
+const loop = open.boundary[0];
+assert.throws(
+  () =>
+    validateOpenSheer({
+      ...open,
+      boundary: [[loop[0], loop[2], loop[1], loop[3]]],
+    }),
+  /enclose|cross/,
+);
+assert.throws(
+  () => validateOpenSheer({ ...open, boundary: [loop, loop] }),
+  /exactly one/,
+);
+console.log(
+  "  ok: cap-free open-rim validation, winding, geometry reuse, dry-rim limits and closed-reference agreement",
 );
 console.log(
   "  ok: explicit open results, confirmed nonplanar closures and boundary provenance",
@@ -382,7 +546,10 @@ assert.ok(
   "Undefined dry-limit KN must not be interpolated as zero",
 );
 const meshApi = createMeshAnalysis(box, setup);
-assert.equal((await meshApi.measurements()).result.status, "unavailable");
+const meshMetrics = value((await meshApi.measurements()).result);
+near(meshMetrics.hullVol, 16);
+assert.ok(Number.isNaN(meshMetrics.shellArea)); // no inferred skin scope on bare STL
+assert.match(meshMetrics.unavailable!.SHELL_AREA, /Confirm/);
 near(
   value(
     value(

@@ -209,20 +209,40 @@ export function sheerClearanceAt(
 /** First positive heel at which the lowest sheer reaches the waterline, interpolated between heel rows. */
 export function sheerImmersionAngle(cc: CrossCurves, vol: number): number {
   let previousHeel = NaN,
-    previousClearance = NaN;
+    previousClearance = NaN,
+    previousCapacity = NaN;
   for (let i = 0; i < cc.heel.length; i++) {
     const heel = cc.heel[i];
     if (heel < -1e-12) continue;
-    const clearance = sheerClearanceAt(cc, i, vol);
-    if (!Number.isFinite(clearance)) continue;
-    if (clearance <= 0) {
-      if (!Number.isFinite(previousClearance) || previousClearance <= 0)
-        return heel;
-      const t = previousClearance / (previousClearance - clearance);
+    const xs = cc.vol[i],
+      capacity = xs?.length ? xs[xs.length - 1] : 0,
+      clearance = sheerClearanceAt(cc, i, vol);
+    // Open-rim tables end at the sheer. Once the requested displacement no
+    // longer fits below that endpoint, interpolate the crossing from adjacent
+    // heel-row capacities rather than treating the missing row as unknown.
+    if (
+      !Number.isFinite(clearance) &&
+      Number.isFinite(previousCapacity) &&
+      previousCapacity >= vol &&
+      capacity < vol
+    ) {
+      const t =
+        previousCapacity === capacity
+          ? 1
+          : (previousCapacity - vol) / (previousCapacity - capacity);
       return previousHeel + t * (heel - previousHeel);
     }
+    if (Number.isFinite(clearance)) {
+      if (clearance <= 0) {
+        if (!Number.isFinite(previousClearance) || previousClearance <= 0)
+          return heel;
+        const t = previousClearance / (previousClearance - clearance);
+        return previousHeel + t * (heel - previousHeel);
+      }
+      previousClearance = clearance;
+    }
     previousHeel = heel;
-    previousClearance = clearance;
+    previousCapacity = capacity;
   }
   return NaN;
 }

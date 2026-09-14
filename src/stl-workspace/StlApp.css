@@ -1,0 +1,243 @@
+.stl-app {
+  --stl-line: #d7e1df;
+  --stl-muted: #637673;
+  height: 100dvh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #f7f9f8;
+  color: #213e38;
+  font:
+    14px/1.5 system-ui,
+    sans-serif;
+}
+.stl-app * {
+  box-sizing: border-box;
+}
+.stl-app button,
+.stl-app input,
+.stl-app select {
+  font: inherit;
+}
+.stl-app button {
+  cursor: pointer;
+}
+.stl-app button:disabled {
+  cursor: default;
+}
+.stl-app small {
+  color: var(--stl-muted);
+}
+.stl-file-input {
+  display: none;
+}
+.stl-topbar,
+.stl-navigation,
+.stl-secondary-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--stl-line);
+  background: white;
+  flex-shrink: 0;
+}
+.stl-project-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stl-navigation span {
+  flex: 1;
+}
+.stl-secondary-bar {
+  justify-content: space-between;
+}
+.stl-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.stl-view > .weightpanel,
+.stl-view > .stabilitypanel {
+  flex: 1;
+  min-height: 0;
+}
+.stl-welcome,
+.stl-empty {
+  margin: auto;
+  padding: 48px 24px;
+  max-width: 740px;
+}
+.stl-welcome h1 {
+  font-size: clamp(30px, 4vw, 48px);
+  line-height: 1.15;
+  font-weight: 550;
+  letter-spacing: -0.03em;
+}
+.stl-welcome p,
+.stl-empty p {
+  color: var(--stl-muted);
+  font-size: 17px;
+}
+.stl-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 26px 0;
+}
+.stl-notice,
+.stl-context-bar {
+  padding: 12px 20px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  background: #eef4f1;
+  border-bottom: 1px solid var(--stl-line);
+}
+.stl-context-bar span {
+  flex: 1;
+}
+.stl-hull {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+.stl-hull > .geometry-preview {
+  min-height: 300px;
+  flex: 1 0 350px;
+}
+.stl-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.stl-setup,
+.stl-repair {
+  padding: 16px 24px 32px;
+}
+.stl-calibration-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 400px) minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+.stl-calibration-grid > .geometry-preview {
+  position: sticky;
+  top: 0;
+  min-height: 420px;
+}
+.stl-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.stl-fields label,
+.stl-details > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.stl-fields input:not([type="checkbox"]),
+.stl-fields select,
+.stl-details input:not([type="checkbox"]) {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid #b6c7c2;
+  border-radius: 5px;
+  background: white;
+}
+.stl-fields fieldset {
+  margin: 0;
+  border: 1px solid var(--stl-line);
+  border-radius: 6px;
+}
+.stl-direction-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.stl-fields .stl-check,
+.stl-check {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+}
+.stl-fields small {
+  display: block;
+}
+.stl-details {
+  border-top: 1px solid var(--stl-line);
+  padding: 16px 24px;
+}
+.stl-details label {
+  max-width: 650px;
+  margin: 10px 0;
+}
+.stl-app summary {
+  cursor: pointer;
+  font-weight: 550;
+}
+.stl-project-menu {
+  position: relative;
+}
+.stl-project-menu > div {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  top: 36px;
+  min-width: 220px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+  background: white;
+  border: 1px solid var(--stl-line);
+  box-shadow: 0 10px 30px #203c3820;
+  border-radius: 8px;
+}
+.stl-app [role="alert"] {
+  color: #943f24;
+  padding: 10px 20px;
+}
+.stl-repair > .geometry-preview {
+  height: 350px;
+}
+.stl-detached {
+  height: 100vh;
+}
+@media (max-width: 760px) {
+  .stl-topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .stl-topbar > small {
+    display: none;
+  }
+  .stl-navigation {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px 12px;
+  }
+  .stl-calibration-grid {
+    grid-template-columns: 1fr;
+  }
+  .stl-calibration-grid > .geometry-preview {
+    position: static;
+    grid-row: 1;
+    min-height: 250px;
+  }
+  .stl-setup {
+    padding: 12px;
+  }
+  .stl-secondary-bar small {
+    display: none;
+  }
+}

@@ -33,14 +33,9 @@ import {
 import { isOutputName } from "./outputs";
 import { canCarryRole, isRoleName } from "./roles";
 
-/**
- * The one weight-sheet format this build writes and reads.
- *
- * The weight estimate has not shipped, so the item model remains version 1 rather than carrying a migration
- * from the page model used during development. Once this format ships, incompatible changes must increment
- * the version and provide an upgrade path.
- */
-export const SHEET_VERSION = 1;
+/** Version 2 adds explicit transverse physical cuts. Version 1 plane/station
+ * definitions are read unchanged; station cuts are NEVER reinterpreted as planes. */
+export const SHEET_VERSION = 2;
 
 interface StoredField {
   k: FieldKind;
@@ -321,7 +316,7 @@ export function parseSheet(text: string | null | undefined): WeightBook {
   if (typeof doc !== "object" || doc === null || Array.isArray(doc))
     return emptyBook();
   const raw = doc as Record<string, unknown>;
-  if (raw.version !== SHEET_VERSION) return emptyBook();
+  if (raw.version !== 1 && raw.version !== SHEET_VERSION) return emptyBook();
   return readDocument(raw);
 }
 

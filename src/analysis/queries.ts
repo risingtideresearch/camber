@@ -44,6 +44,10 @@ export function createHullAnalysis(
     Object.freeze(mapping.offset);
     Object.freeze(mapping);
   }
+  if (immutableContext.shellScope) {
+    Object.freeze(immutableContext.shellScope.surfaces);
+    Object.freeze(immutableContext.shellScope);
+  }
   if (immutableContext.kgDatum) Object.freeze(immutableContext.kgDatum);
   const fixed = new Map<string, Promise<QueryResult<unknown>>>();
   const geometry = new Map<string, Promise<QueryResult<unknown>>>();
@@ -81,6 +85,8 @@ export function createHullAnalysis(
   return {
     context: immutableContext,
     capabilities: Object.freeze({ ...capabilities }),
+    project: (input, options) => query("project", input, options),
+    displayGeometry: (options) => query("displayGeometry", null, options),
     section: (input, options) => query("section", input, options),
     stability: (options) => query("stability", null, options),
     measurements: (options) => query("measurements", null, options),

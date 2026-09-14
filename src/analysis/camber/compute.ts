@@ -1,3 +1,5 @@
+import { meshProjection, meshDisplayGeometry } from "../mesh/projection";
+import type { ProjectionRequest } from "../projections";
 import { camberPlaneMesh } from "./planeMesh";
 import { meshSection } from "../mesh/section";
 import type { SectionRequest } from "../sections";
@@ -60,6 +62,10 @@ export function createCamberComputation() {
     let planeFailure: string | undefined;
     let measurer: ReturnType<typeof createSliceMeasurer> | null = null;
     const measure = (query: SliceQuery): Available<SliceMeasurement> => {
+      if (query.shape === "transverse")
+        return unavailable(
+          "Transverse cuts use shared physical-plane orchestration, not authored stations",
+        );
       const key = JSON.stringify(query);
       const cached = cuts.get(key);
       if (cached) return cached;
@@ -85,6 +91,8 @@ export function createCamberComputation() {
       if (input === null && values.has(kind)) return values.get(kind)!;
       let result: Available<unknown>;
       switch (kind) {
+        case "project":
+        case "displayGeometry":
         case "section": {
           if (planeFailure) return unavailable(planeFailure);
           if (!planeMesh) {
@@ -95,6 +103,10 @@ export function createCamberComputation() {
               return unavailable(planeFailure);
             }
           }
+          if (kind === "project")
+            return meshProjection(planeMesh, input as ProjectionRequest);
+          if (kind === "displayGeometry")
+            return available(meshDisplayGeometry(planeMesh));
           return meshSection(planeMesh, input as SectionRequest);
         }
         case "stability": {

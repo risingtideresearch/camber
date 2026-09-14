@@ -1,5 +1,10 @@
 // Application-facing query boundary. Numerical analysis is SI. Physical plane sections
 // are distinct from compatibility queries preserving the existing sheet semantics.
+import type {
+  ProjectionRequest,
+  ProjectionResult,
+  DisplayGeometry,
+} from "./projections";
 import type { SectionRequest, SectionResult } from "./sections";
 import type { Vec3 } from "../core/math";
 import type { HullMetrics } from "./hullMetrics";
@@ -43,6 +48,11 @@ export interface AnalysisContext {
     readonly rows: readonly [Vec3, Vec3, Vec3];
     readonly offset: Vec3;
   };
+  readonly shellScope?: {
+    readonly confirmed: true;
+    readonly surfaces: readonly string[];
+    readonly label: string;
+  };
   readonly kgDatum?: { readonly frame: "upright"; readonly z: number };
 }
 
@@ -81,12 +91,15 @@ export interface QueryOptions {
 export interface HullAnalysis {
   readonly context: AnalysisContext;
   readonly capabilities: {
-    readonly stability: boolean;
-    readonly measurements: boolean;
-    readonly legacySlices: boolean;
-    readonly pointViews: boolean;
-    readonly arbitraryPlanes: boolean;
+    readonly authoredStations: boolean;
   };
+  project(
+    query: ProjectionRequest,
+    options?: QueryOptions,
+  ): Promise<QueryResult<ProjectionResult>>;
+  displayGeometry(
+    options?: QueryOptions,
+  ): Promise<QueryResult<DisplayGeometry>>;
   section(
     query: SectionRequest,
     options?: QueryOptions,
@@ -108,6 +121,8 @@ export interface HullAnalysis {
 
 /** Serializable request/result map shared by the facade and worker adapter. */
 export interface AnalysisQueries {
+  project: { input: ProjectionRequest; output: ProjectionResult };
+  displayGeometry: { input: null; output: DisplayGeometry };
   section: { input: SectionRequest; output: SectionResult };
   stability: { input: null; output: StabilityData };
   measurements: { input: null; output: HullMetrics };

@@ -81,6 +81,6 @@ export function finishWeightBook(
     positions: plan.positions,
     measurements,
     measurementProblems,
-    results: evaluateBook(book, metrics, measurements),
+    results: evaluateBook(book, metrics, measurements, measurementProblems),
   };
 }

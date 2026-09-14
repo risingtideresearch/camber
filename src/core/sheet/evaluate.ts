@@ -331,6 +331,7 @@ export function evaluateBook(
   book: WeightBook,
   metrics: HullMetrics | null,
   sliceMeasurements: SliceMeasurements = new Map(),
+  measurementProblems: ReadonlyMap<string, string> = new Map(),
 ): BookResults {
   const cells = new Map<string, Cell>();
   const sources = new Map<string, Source>();
@@ -559,7 +560,8 @@ export function evaluateBook(
       const measured = sliceMeasurements.get(sliceMeasurementKey(item.id, key));
       if (!measured)
         return fail(
-          `${item.name}.${key} has not produced a valid hull cut`,
+          measurementProblems.get(sliceMeasurementKey(item.id, key)) ??
+            `${item.name}.${key} has not produced a valid hull cut`,
           at,
         );
       const measuredField = leaf as SliceValueField;
@@ -568,13 +570,20 @@ export function evaluateBook(
       if (currentCell!.field?.k === "cut" && currentCell!.leaf === "pos")
         fail("a cut position cannot depend on measured cut values", at);
       const position = valueAt(item.id, key, at, "pos");
+      if (measured.unavailable?.[measuredField])
+        return fail(measured.unavailable[measuredField]!, at);
+      if (
+        measured.derivativeUnavailable &&
+        Object.values(position.d).some((d) => d !== 0)
+      )
+        return fail(measured.derivativeUnavailable, at);
       const slope = measured.derivative[measuredField];
       return {
         v: measured[measuredField],
         d: Object.fromEntries(
           Object.entries(position.d).map(([source, gradient]) => [
             source,
-            gradient * slope,
+            gradient === 0 ? 0 : gradient * slope,
           ]),
         ),
         dim: measuredField === "area" ? AREA : LENGTH,
@@ -761,7 +770,10 @@ export function evaluateBook(
         if (axis === "x" || axis === "y" || axis === "z") {
           const point = hullPoint(metrics!, rest[0], axis)!;
           if (!Number.isFinite(point.v))
-            fail(`HULL.${rest[0]}.${axis} is unavailable`, at);
+            fail(
+              `HULL.${rest[0]}.${axis} is unavailable: ${metrics!.unavailable?.[rest[0]] ?? "not defined for this hull condition"}`,
+              at,
+            );
           return point;
         }
         fail(

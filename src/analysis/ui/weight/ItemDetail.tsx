@@ -81,6 +81,7 @@ export interface ItemDetailProps {
   readonly item: Item;
   readonly results: BookResults;
   readonly measurements: SliceMeasurements;
+  readonly measurementProblems?: ReadonlyMap<string, string>;
   readonly reading: "worst" | "likely";
   readonly focus: Focus | null;
   /** This item was just made from outside the detail view, so its name is the next thing to author. */
@@ -313,6 +314,7 @@ export function ItemDetail(props: ItemDetailProps) {
             index={index}
             results={results}
             measurements={measurements}
+            measurementProblems={props.measurementProblems}
             reading={reading}
             completions={completions}
             reorder={reorder}
@@ -384,6 +386,7 @@ interface FieldBlockProps {
   readonly index: number;
   readonly results: BookResults;
   readonly measurements: SliceMeasurements;
+  readonly measurementProblems?: ReadonlyMap<string, string>;
   readonly reading: "worst" | "likely";
   readonly completions: {
     readonly coordinate: readonly Completion[];
@@ -561,12 +564,13 @@ function FieldHeader({
               type: "setCutShape",
               item: item.id,
               field: fieldKey,
-              shape: event.target.value as "plane" | "station",
+              shape: event.target.value as "plane" | "station" | "transverse",
             })
           }
         >
-          <option value="station">Station</option>
+          <option value="station">Authored station (Camber)</option>
           <option value="plane">Horizontal</option>
+          <option value="transverse">Transverse (physical plane)</option>
         </select>
       )}
       {confirmRemove ? (
@@ -696,6 +700,7 @@ function FieldCells({
   field,
   results,
   measurements,
+  measurementProblems,
   reading,
   completions,
   onSelect,
@@ -776,6 +781,9 @@ function FieldCells({
 
       {field.k === "cut" && (
         <Measured
+          problem={measurementProblems?.get(
+            sliceMeasurementKey(item.id, fieldKey),
+          )}
           measurement={measurements.get(sliceMeasurementKey(item.id, fieldKey))}
         />
       )}
@@ -884,13 +892,16 @@ const MEASURED: Record<SliceValueField, { label: string; unit: string }> = {
 /** What a cut turned out to be. Measured off the hull, so read-only wherever it appears. */
 function Measured({
   measurement,
+  problem,
 }: {
   readonly measurement: SliceMeasurement | undefined;
+  readonly problem?: string;
 }) {
   if (!measurement)
     return (
       <p className="wcellval bad">
-        This has not produced a valid hull cut — check the position.
+        {problem ??
+          "This has not produced a valid hull cut — check the position."}
       </p>
     );
   return (
@@ -898,7 +909,12 @@ function Measured({
       {SLICE_VALUE_FIELDS.map((name) => (
         <Fragment key={name}>
           <dt>{MEASURED[name].label}</dt>
-          <dd>
+          <dd
+            title={
+              measurement.unavailable?.[name] ??
+              measurement.derivativeUnavailable
+            }
+          >
             {sig(measurement[name])} {MEASURED[name].unit}
           </dd>
         </Fragment>

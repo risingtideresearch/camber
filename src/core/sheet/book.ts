@@ -46,9 +46,13 @@ import { renameReferences } from "./rename";
 // ---------- the authored shape ----------
 
 /** What a slice cuts with. A plane is horizontal; a station is normal to the sheer plan's heading. */
-export type SliceShape = "plane" | "station";
+export type SliceShape = "plane" | "station" | "transverse";
 
-export const SLICE_SHAPES: readonly SliceShape[] = ["plane", "station"];
+export const SLICE_SHAPES: readonly SliceShape[] = [
+  "plane",
+  "station",
+  "transverse",
+];
 
 export const isSliceShape = (shape: string): shape is SliceShape =>
   (SLICE_SHAPES as readonly string[]).includes(shape);
@@ -113,7 +117,7 @@ export interface PointField {
  * One cut through the hull, which reports its area, open and closed perimeters, and its centroid.
  *
  * `pos` is in the sheet's frame, as a point's coordinates are: a height above the keel baseline for a plane,
- * x from the transom for a station.
+ * x from the transom for a station, or weight-frame x for a physical transverse plane.
  */
 /*
  * A cut carries no role. See the note on `RoleSpec.kinds`: a role names one value, and a cut is a position

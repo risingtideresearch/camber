@@ -91,3 +91,36 @@ export function trianglesMeet(
   }
   return true;
 }
+
+/** Permitted shared edge/vertex contacts are inset only by numerical tolerance. */
+export function triangleConflict(
+  vertices: Vec3[],
+  f: Face,
+  g: Face,
+  tolerance: number,
+): boolean {
+  const a = f.map((i) => vertices[i]),
+    b = g.map((i) => vertices[i]);
+  const shared = f.some((i) => g.includes(i));
+  const inset = (p: Vec3[]) => {
+    const center = p[0].map(
+      (_, i) => (p[0][i] + p[1][i] + p[2][i]) / 3,
+    ) as Vec3;
+    return p.map((v) =>
+      V.lerp(
+        v,
+        center,
+        Math.min(
+          0.01,
+          (tolerance * 8) /
+            Math.max(tolerance, Math.hypot(...V.sub(v, center))),
+        ),
+      ),
+    );
+  };
+  return trianglesMeet(
+    shared ? inset(a) : a,
+    shared ? inset(b) : b,
+    shared ? 0 : tolerance,
+  );
+}

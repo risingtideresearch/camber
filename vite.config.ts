@@ -2,9 +2,10 @@ import { resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Multi-page app. index.html is a bare redirect to the library (the home page); the other four HTML
+// Multi-page app. index.html is a bare redirect to the library (the home page); the other five HTML
 // entry points each pull in their own source module.
 //   index.html       → (redirect to library.html)
+//   analysis.html    → src/stl-analysis.tsx  (local STL analysis workspace)
 //   library.html     → src/library.tsx       (React design library)
 //   editor.html      → src/editor.tsx        (React editor)
 //   panel.html       → src/panel.tsx         (one detached editor panel, joined to an editor's session)
@@ -20,6 +21,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         index: resolve(import.meta.dirname, "index.html"),
+        analysis: resolve(import.meta.dirname, "analysis.html"),
         library: resolve(import.meta.dirname, "library.html"),
         editor: resolve(import.meta.dirname, "editor.html"),
         panel: resolve(import.meta.dirname, "panel.html"),

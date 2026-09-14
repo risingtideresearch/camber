@@ -1,3 +1,6 @@
+import { meshMeasurements } from "./measurements";
+import { meshProjection, meshDisplayGeometry } from "./projection";
+import type { ProjectionRequest } from "../projections";
 import { V, type Vec3 } from "../../core/math";
 import {
   available,
@@ -19,7 +22,7 @@ import { deckReference } from "./closure";
 import { meshImmersion } from "./immersion";
 import type { PreparedMesh } from "./prepare";
 import { meshSection } from "./section";
-import { buildTree } from "./spatial";
+import { bounds, buildTree } from "./spatial";
 import { symmetricAboutCentreline } from "./symmetry";
 
 export {
@@ -45,7 +48,11 @@ export function meshBackend(
   ];
   const vertices = mesh.vertices.map(rotate),
     upright = { ...mesh, vertices, tree: buildTree(vertices, mesh.faces) },
-    sheer = deckReference(mesh).map(rotate);
+    sheer = (
+      mesh.report.openHydrostatics
+        ? mesh.boundary[0].map((id) => mesh.vertices[id])
+        : deckReference(mesh)
+    ).map(rotate);
   return {
     keelZ: setup.keelZ,
     omitImmersedReference: false,
@@ -60,6 +67,8 @@ export function meshBackend(
         lo = Math.min(lo, h);
         hi = Math.max(hi, h);
       }
+      if (mesh.report.openHydrostatics)
+        for (const p of sheer) hi = Math.min(hi, V.dot(p, n));
       return [lo, hi];
     },
     at: (heel, wl, moments) => {
@@ -99,30 +108,109 @@ export function meshBackend(
     },
   };
 }
+interface SymmetryQuality {
+  exact: boolean;
+  acceptable: boolean;
+  maximumDifference: number;
+  summary: string;
+}
+
+/** STL tessellations almost never mirror to predicate tolerance. Judge whether
+ * the resulting buoyancy is approximately symmetric instead of requiring every
+ * reflected triangle to have nanometre-level matching coverage. */
+function symmetryQuality(
+  mesh: PreparedMesh,
+  setup: MeshAnalysisSetup,
+): SymmetryQuality {
+  const exact = symmetricAboutCentreline(mesh);
+  if (exact)
+    return {
+      exact,
+      acceptable: true,
+      maximumDifference: 0,
+      summary: "Exact reflected surface coverage",
+    };
+  const box = bounds(mesh.vertices),
+    beam = box.max[1] - box.min[1],
+    backend = meshBackend(mesh, setup),
+    differences: number[] = [];
+  if (!(beam > mesh.report.tolerance))
+    return {
+      exact,
+      acceptable: false,
+      maximumDifference: Infinity,
+      summary: "The envelope has no usable transverse extent",
+    };
+  differences.push(Math.abs(box.min[1] + box.max[1]) / beam);
+  const uprightSpan = backend.heightSpan(0),
+    representativeHeight = mesh.report.openHydrostatics
+      ? (uprightSpan[0] + uprightSpan[1]) / 2
+      : uprightSpan[1] + (uprightSpan[1] - uprightSpan[0]),
+    representative = backend.at(0, representativeHeight);
+  if (representative.vol > (backend.volumeEpsilon ?? 0))
+    differences.push(Math.abs(representative.yB) / beam);
+  for (const angle of [Math.PI / 6, (40 * Math.PI) / 180]) {
+    const port = backend.heightSpan(-angle),
+      starboard = backend.heightSpan(angle),
+      lo = Math.max(port[0], starboard[0]),
+      hi = Math.min(port[1], starboard[1]);
+    for (const fraction of [0.25, 0.5, 0.75]) {
+      const waterline = lo + (hi - lo) * fraction,
+        a = backend.at(angle, waterline).vol,
+        b = backend.at(-angle, waterline).vol,
+        mean = (a + b) / 2;
+      if (mean > (backend.volumeEpsilon ?? 0))
+        differences.push(Math.abs(a - b) / mean);
+    }
+  }
+  const maximumDifference = Math.max(...differences);
+  // This is a model applicability tolerance, not a geometry error bound. Larger
+  // asymmetry needs a two-sided/asymmetric stability model rather than more STL repair.
+  const acceptable = maximumDifference <= 0.05;
+  return {
+    exact,
+    acceptable,
+    maximumDifference,
+    summary: `${(maximumDifference * 100).toPrecision(2)}% maximum centreline/±30°/40° buoyancy discrepancy`,
+  };
+}
+
 export function meshStability(
   mesh: PreparedMesh,
   setup: MeshAnalysisSetup,
 ): Available<StabilityData> {
   meshContext(setup);
-  if (!mesh.report.closed)
+  if (!mesh.report.closed && !mesh.report.openHydrostatics)
     return unavailable(
-      "Stability requires a confirmed closed buoyancy envelope",
+      mesh.report.envelopeError ??
+        "Stability requires a closed envelope or validated open sheer",
     );
-  if (!symmetricAboutCentreline(mesh))
+  const symmetry = symmetryQuality(mesh, setup);
+  if (!symmetry.acceptable)
     return unavailable(
-      "The initial stability model requires a port/starboard-symmetric envelope about hull y=0",
+      `The centreline-symmetric stability model does not support this envelope (${symmetry.summary}; limit 5.0%)`,
     );
   const backend = meshBackend(mesh, setup),
     steps = setup.sinkageSteps ?? 32,
     curves = buildCrossCurves(backend, { steps }),
     limit = buildInitialStability(backend, curves);
-  const reference = backend.at(0, setup.referenceWaterlineZ, true),
-    valid = reference.vol > backend.volumeEpsilon! && !!reference.waterplane;
+  let reference: ReturnType<typeof backend.at> | null = null;
+  try {
+    if (setup.referenceWaterlineZ !== undefined)
+      reference = backend.at(0, setup.referenceWaterlineZ, true);
+  } catch {
+    // An authored reference above an open rim does not invalidate lower,
+    // pre-immersion cross curves.
+  }
+  const valid =
+    !!reference &&
+    reference.vol > backend.volumeEpsilon! &&
+    !!reference.waterplane;
   const sheer = Number.isFinite(curves.sheerZ[0]);
   return available({
     curves,
     limit,
-    hydro: valid ? { vol: reference.vol, kb: reference.zB } : null,
+    hydro: valid ? { vol: reference!.vol, kb: reference!.zB } : null,
     lowestSheerKg: sheer ? curves.sheerZ[0] - setup.keelZ : NaN,
     availability: {
       sheer: sheer
@@ -136,13 +224,29 @@ export function meshStability(
       ),
     },
     assumptions: [
-      "Fixed trim; symmetric envelope; centreline G; KG above the stated upright datum",
-      "Closed numerical envelope, not a vessel safety certification",
-      ...(sheer
+      "Fixed trim; symmetric-envelope approximation; centreline G; KG above the stated upright datum",
+      mesh.report.openHydrostatics
+        ? "Validated open sheer; each heel row stops at first rim immersion"
+        : "Closed numerical envelope, not a vessel safety certification",
+      ...(!symmetry.exact
         ? [
-            "Synthetic deck closure is hypothetical after reference-edge immersion",
+            `Approximately symmetric STL accepted (${symmetry.summary}; both heel directions are not independently modelled)`,
           ]
-        : ["Sheer immersion is unknown, not never immersed"]),
+        : []),
+      ...(mesh.report.repair
+        ? [
+            "Bounded mesh repairs applied; small-hole patches are not downflooding or deck references",
+          ]
+        : []),
+      ...(mesh.report.openHydrostatics
+        ? [
+            "No deck cap is added; states at and beyond open-rim immersion are unavailable",
+          ]
+        : sheer
+          ? [
+              "Synthetic sheer closure is hypothetical after reference-edge immersion",
+            ]
+          : ["Sheer immersion is unknown, not never immersed"]),
     ],
     numerics: {
       method: "clipped signed tetrahedra; PCHIP sinkage interpolation",
@@ -165,15 +269,28 @@ export function createMeshComputation(
   ): QueryResult<AnalysisQueries[K]["output"]> => {
     let result: Available<unknown>;
     switch (kind) {
+      case "measurements":
+        result = available(meshMeasurements(mesh, setup));
+        break;
+      case "project":
+        result = meshProjection(mesh, input as ProjectionRequest);
+        break;
+      case "displayGeometry":
+        result = available(meshDisplayGeometry(mesh));
+        break;
       case "section":
-        result = meshSection(mesh, input as SectionRequest);
+        result = mesh.report.envelopeError
+          ? unavailable(
+              `Measured sections require supported surface topology: ${mesh.report.envelopeError}`,
+            )
+          : meshSection(mesh, input as SectionRequest);
         break;
       case "stability":
         result = stability ??= meshStability(mesh, setup);
         break;
       default:
         result = unavailable(
-          `${kind} is not implemented for mesh sources in the Phase 2 spike`,
+          `${kind} is a legacy Camber geometry query; use physical section/project queries for mesh sources`,
         );
     }
     return {

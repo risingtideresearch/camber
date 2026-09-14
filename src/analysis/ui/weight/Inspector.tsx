@@ -71,6 +71,7 @@ export interface InspectorProps {
   readonly book: WeightBook;
   readonly results: BookResults;
   readonly measurements: SliceMeasurements;
+  readonly measurementProblems?: ReadonlyMap<string, string>;
   readonly focus: Focus | null;
   /** Which reading the rest of the panel is showing, so this can mark it as the one being quoted. */
   readonly reading: "worst" | "likely";
@@ -387,9 +388,20 @@ function CutSpread(props: CellProps) {
       <PickTable rows={rows} />
       {!measurement && (
         <p className="winspbad">
-          This has not produced a valid hull cut — check the position.
+          {props.measurementProblems?.get(
+            sliceMeasurementKey(item.id, fieldKey),
+          ) ?? "This has not produced a valid hull cut — check the position."}
         </p>
       )}
+      {measurement?.derivativeUnavailable && (
+        <p className="winspbad">{measurement.derivativeUnavailable}</p>
+      )}
+      {measurement?.unavailable &&
+        Object.entries(measurement.unavailable).map(([name, reason]) => (
+          <p className="winspbad" key={name}>
+            {name}: {reason}
+          </p>
+        ))}
       {picked === "pos" ? (
         <Authored {...props} leaf="pos" />
       ) : reading ? (
@@ -435,11 +447,25 @@ function measuredReading(
   sources: SourceTable,
 ): Reading | null {
   const quantity = position?.quantity;
-  if (!quantity) return null;
+  if (
+    !quantity ||
+    !Number.isFinite(measurement[key]) ||
+    measurement.unavailable?.[key] ||
+    (measurement.derivativeUnavailable &&
+      Object.values(quantity.d).some((d) => d !== 0))
+  )
+    return null;
   return read(
     {
       v: measurement[key],
-      d: combine(quantity.d, measurement.derivative[key], EMPTY_GRADIENT, 0),
+      d: combine(
+        quantity.d,
+        Number.isFinite(measurement.derivative[key])
+          ? measurement.derivative[key]
+          : 0,
+        EMPTY_GRADIENT,
+        0,
+      ),
       dim: key === "area" ? AREA : LENGTH,
     },
     sources,
