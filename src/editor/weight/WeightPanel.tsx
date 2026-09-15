@@ -137,7 +137,7 @@ function WeightPanelContents() {
   } | null>(null);
 
   const hullSampling = sampling();
-  const { measurements, results } = useWeightBookResults(
+  const { measurements, footprints, results } = useWeightBookResults(
     book,
     model,
     hullSampling,
@@ -315,6 +315,7 @@ function WeightPanelContents() {
               rows,
               results,
               measurements,
+              footprints,
               reading,
               focus,
               setFocus,
@@ -450,6 +451,7 @@ interface BodyProps {
   readonly columns: ReturnType<typeof viewColumns>;
   readonly rows: ReturnType<typeof viewRows>;
   readonly results: ReturnType<typeof useWeightBookResults>["results"];
+  readonly footprints: ReturnType<typeof useWeightBookResults>["footprints"];
   readonly measurements: ReturnType<
     typeof useWeightBookResults
   >["measurements"];
@@ -910,6 +912,7 @@ function ViewBody(props: BodyProps) {
           <ItemDetail
             book={book}
             item={detail}
+            footprints={props.footprints}
             results={results}
             measurements={props.measurements}
             reading={props.reading}

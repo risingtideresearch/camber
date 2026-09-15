@@ -26,10 +26,7 @@ import {
   type WeightBook,
 } from "../../core/sheet/book";
 import { resultAt, type BookResults } from "../../core/sheet/evaluate";
-import {
-  sliceMeasurementKey,
-  type SliceMeasurements,
-} from "../../core/sheet/slices";
+import { type SliceMeasurements } from "../../core/sheet/slices";
 import type { Column, Row } from "../../core/sheet/views";
 import { placementFor } from "./pointPlots";
 import {
@@ -345,7 +342,6 @@ function Cell({
   item,
   column,
   results,
-  measurements,
   reading,
   setFocus,
   send,
@@ -376,14 +372,21 @@ function Cell({
     );
 
   if (column.source.k === "measure") {
-    const measured = measurements.get(
-      sliceMeasurementKey(item.id, column.fieldKey),
+    const result = resultAt(
+      results,
+      item.id,
+      column.fieldKey,
+      column.source.measure,
     );
-    const value = measured?.[column.source.measure];
+    const value = result?.reading?.v;
     return (
       <td
         className="wcell wmeasured"
-        title="Measured off the hull — not authored"
+        title={
+          result?.error ??
+          result?.unitWarning ??
+          "Measured off the hull — not authored"
+        }
       >
         {value === undefined ? "—" : sig(value)}
       </td>

@@ -23,6 +23,13 @@
 // field (`fieldUsers`), and the state of a move in progress (`useFieldReorder`). A block computing its own
 // would be quadratic in the size of a schedule, which is exactly the thing that grows.
 
+import type { FootprintMeasurements } from "../../core/sheet/footprints";
+import { FootprintPreview, CutPreview } from "./FootprintPreview";
+import {
+  sliceMeasurementKey,
+  type SliceMeasurements,
+} from "../../core/sheet/slices";
+import { CG_NAMES, GEOMETRY_LEAVES } from "../../core/sheet/sectionMeasures";
 import {
   Fragment,
   useEffect,
@@ -46,19 +53,13 @@ import {
   type FieldLeaf,
   type Item,
   type WeightBook,
+  type SliceShape,
 } from "../../core/sheet/book";
 import {
   fieldUsers,
   resultAt,
   type BookResults,
 } from "../../core/sheet/evaluate";
-import {
-  SLICE_VALUE_FIELDS,
-  sliceMeasurementKey,
-  type SliceMeasurement,
-  type SliceMeasurements,
-  type SliceValueField,
-} from "../../core/sheet/slices";
 import { rolesForKind } from "../../core/sheet/roles";
 import { placementFor } from "./pointPlots";
 import {
@@ -80,6 +81,7 @@ export interface ItemDetailProps {
   readonly book: WeightBook;
   readonly item: Item;
   readonly results: BookResults;
+  readonly footprints: FootprintMeasurements;
   readonly measurements: SliceMeasurements;
   readonly reading: "worst" | "likely";
   readonly focus: Focus | null;
@@ -94,6 +96,7 @@ const KIND_LABEL: Record<FieldKind, string> = {
   scalar: "a value",
   point: "a position",
   cut: "a section through the hull",
+  footprint: "a footprint",
 };
 
 // ---------- moving a field ----------
@@ -223,8 +226,17 @@ function useFieldReorder(
 // ---------- the card ----------
 
 export function ItemDetail(props: ItemDetailProps) {
-  const { book, item, results, measurements, reading, focus, setFocus, send } =
-    props;
+  const {
+    book,
+    item,
+    results,
+    measurements,
+    footprints,
+    reading,
+    focus,
+    setFocus,
+    send,
+  } = props;
   // Folded blocks, and the field whose name is waiting for the caret. Both are keyed by (item, field) rather
   // than by field alone: this component is not remounted when the detail view moves to another item, so
   // anything held under a bare key would carry over to a field of the same name on the next one.
@@ -313,6 +325,7 @@ export function ItemDetail(props: ItemDetailProps) {
             index={index}
             results={results}
             measurements={measurements}
+            footprints={footprints}
             reading={reading}
             completions={completions}
             reorder={reorder}
@@ -329,7 +342,7 @@ export function ItemDetail(props: ItemDetailProps) {
       </div>
 
       <div className="wdetailadd">
-        {(["scalar", "point", "cut"] as const).map((kind) => (
+        {(["scalar", "point", "cut", "footprint"] as const).map((kind) => (
           <button
             key={kind}
             title={`Add ${KIND_LABEL[kind]}`}
@@ -383,6 +396,7 @@ interface FieldBlockProps {
   readonly field: Field;
   readonly index: number;
   readonly results: BookResults;
+  readonly footprints: FootprintMeasurements;
   readonly measurements: SliceMeasurements;
   readonly reading: "worst" | "likely";
   readonly completions: {
@@ -523,7 +537,9 @@ function FieldHeader({
           declared?.unitWarning ??
           (declared?.unitIsDerived
             ? "What the formula works out to. Type another unit of the same kind to show it in that instead."
-            : "What this field is written in — one unit covers all of its cells.")
+            : field.k === "footprint"
+              ? "Distance unit for bounds and spacing. Equivalent count is always dimensionless."
+              : "What this field is written in — one unit covers all of its cells.")
         }
         onCommit={(unit) =>
           send({ type: "setFieldUnit", item: item.id, field: fieldKey, unit })
@@ -552,21 +568,40 @@ function FieldHeader({
           {derived ? "Derived" : "Coordinates"}
         </button>
       )}
-      {field.k === "cut" && (
+      {(field.k === "cut" || field.k === "footprint") && (
         <select
           value={field.shape}
-          aria-label="Cut shape"
+          aria-label="Cut orientation"
           onChange={(event) =>
             send({
               type: "setCutShape",
               item: item.id,
               field: fieldKey,
-              shape: event.target.value as "plane" | "station",
+              shape: event.target.value as SliceShape,
             })
           }
         >
-          <option value="station">Station</option>
+          <option value="station">Sweep station</option>
+          <option value="transverse">Transverse vertical</option>
+          <option value="longitudinal">Longitudinal vertical</option>
           <option value="plane">Horizontal</option>
+        </select>
+      )}
+      {field.k === "footprint" && (
+        <select
+          aria-label="footprint repetition"
+          value={field.repetition}
+          onChange={(event) =>
+            send({
+              type: "setFootprintRepetition",
+              item: item.id,
+              field: fieldKey,
+              repetition: event.target.value as "spacing" | "count",
+            })
+          }
+        >
+          <option value="spacing">Typical spacing</option>
+          <option value="count">Equivalent count</option>
         </select>
       )}
       {confirmRemove ? (
@@ -691,11 +726,12 @@ function RoleChips({
 }
 
 function FieldCells({
+  footprints,
+  measurements,
   item,
   fieldKey,
   field,
   results,
-  measurements,
   reading,
   completions,
   onSelect,
@@ -743,7 +779,26 @@ function FieldCells({
               (field as unknown as Record<string, string>)[leaf] ?? "";
             return (
               <label key={leaf} className="wfieldcell">
-                <span>{leavesOf(field).length > 1 ? leaf : fieldKey}</span>
+                <span>
+                  {field.k === "footprint"
+                    ? (
+                        {
+                          start: "From",
+                          end: "To",
+                          spacing: "Typical spacing",
+                          count: "Equivalent count",
+                        } as Record<string, string>
+                      )[leaf]
+                    : field.k === "cut"
+                      ? field.shape === "plane"
+                        ? "Height"
+                        : field.shape === "longitudinal"
+                          ? "Lateral offset"
+                          : "Longitudinal position"
+                      : leavesOf(field).length > 1
+                        ? leaf
+                        : fieldKey}
+                </span>
                 <FormulaField
                   value={text}
                   error={result?.error ?? null}
@@ -774,10 +829,32 @@ function FieldCells({
         </div>
       )}
 
-      {field.k === "cut" && (
-        <Measured
-          measurement={measurements.get(sliceMeasurementKey(item.id, fieldKey))}
-        />
+      {(field.k === "cut" || field.k === "footprint") && (
+        <div className="wgeometryinfo">
+          {field.k === "cut" && (
+            <CutPreview
+              measurement={measurements.get(
+                sliceMeasurementKey(item.id, fieldKey),
+              )}
+            />
+          )}
+          {field.k === "footprint" && (
+            <FootprintPreview
+              equivalentCount={
+                <Readout
+                  {...{ results, item, fieldKey, reading }}
+                  leaf="equivalentCount"
+                />
+              }
+              measurement={
+                footprints.get(sliceMeasurementKey(item.id, fieldKey))?.value
+              }
+            />
+          )}
+          {(field.k === "cut" || field.k === "footprint") && (
+            <GeometryReadout {...{ field, results, item, fieldKey, reading }} />
+          )}
+        </div>
       )}
     </>
   );
@@ -797,7 +874,11 @@ function FieldSummary({
   readonly reading: "worst" | "likely";
 }) {
   const leaves =
-    field.k === "point" ? (["x", "y", "z"] as const) : leavesOf(field);
+    field.k === "point"
+      ? (["x", "y", "z"] as const)
+      : field.k === "footprint"
+        ? ["area"]
+        : leavesOf(field);
   const values = leaves.map((leaf) =>
     resultAt(results, item.id, fieldKey, leaf),
   );
@@ -865,44 +946,69 @@ function Readout({
   );
 }
 
-/**
- * How each measured value is labelled and written.
- *
- * A `Record` over `SliceValueField` rather than a list spelled out here: a value added to
- * `SLICE_VALUE_FIELDS` becomes nameable in a formula the moment it exists, and this pane is where it would
- * otherwise go quietly missing. Now it cannot compile until it has been given a name and a unit.
- */
-const MEASURED: Record<SliceValueField, { label: string; unit: string }> = {
-  area: { label: "area", unit: "m²" },
-  closedPerimeter: { label: "closed perimeter", unit: "m" },
-  openPerimeter: { label: "open perimeter", unit: "m" },
-  x: { label: "centroid x", unit: "m" },
-  y: { label: "centroid y", unit: "m" },
-  z: { label: "centroid z", unit: "m" },
-};
-
-/** What a cut turned out to be. Measured off the hull, so read-only wherever it appears. */
-function Measured({
-  measurement,
+/** Geometry is read through the evaluator, including its shared uncertainty sources. */
+function GeometryReadout({
+  field,
+  results,
+  item,
+  fieldKey,
+  reading,
 }: {
-  readonly measurement: SliceMeasurement | undefined;
+  field: Field;
+  results: BookResults;
+  item: Item;
+  fieldKey: string;
+  reading: "worst" | "likely";
 }) {
-  if (!measurement)
-    return (
-      <p className="wcellval bad">
-        This has not produced a valid hull cut — check the position.
-      </p>
-    );
+  const failure = resultAt(results, item.id, fieldKey, "area")?.error;
   return (
-    <dl className="wmeasurelist">
-      {SLICE_VALUE_FIELDS.map((name) => (
-        <Fragment key={name}>
-          <dt>{MEASURED[name].label}</dt>
-          <dd>
-            {sig(measurement[name])} {MEASURED[name].unit}
-          </dd>
-        </Fragment>
-      ))}
-    </dl>
+    <>
+      {field.k === "footprint" && (
+        <p className="whint">
+          A footprint estimates a uniform distribution, not individual member
+          positions. No end members or mirrored copies are added. Spacing
+          uncertainty describes the average spacing of the whole family.
+        </p>
+      )}
+      {(field.k === "footprint" || field.k === "cut") &&
+        field.shape === "transverse" && (
+          <p className="whint">
+            World-vertical planes. Longitudinal position and spacing are
+            measured along the deck-flat z = 0 axis, not perpendicular to the
+            planes. With rake, the centroid can have a different x.
+          </p>
+        )}
+      {failure ? (
+        <ResultIssue message={failure} severity="error" />
+      ) : (
+        <dl className="wmeasurelist">
+          {(field.k === "footprint"
+            ? ["equivalentCount", ...GEOMETRY_LEAVES]
+            : GEOMETRY_LEAVES
+          ).map((leaf) => (
+            <Fragment key={leaf}>
+              <dt>
+                {leaf === "equivalentCount" ? "Equivalent count" : leaf}
+                {field.k === "footprint" &&
+                !leaf.includes(".") &&
+                leaf !== "equivalentCount"
+                  ? " (estimated total)"
+                  : ""}
+              </dt>
+              <dd>
+                <Readout
+                  {...{ results, item, fieldKey, reading }}
+                  leaf={leaf}
+                />
+              </dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+      <p className="whint">
+        Open length follows hull skin only. Closed length includes deck/transom
+        closure. {CG_NAMES.join(", ")} are separate, measure-weighted positions.
+      </p>
+    </>
   );
 }

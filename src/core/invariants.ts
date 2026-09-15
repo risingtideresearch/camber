@@ -217,8 +217,17 @@ export function bookViolations(book: WeightBook): string[] {
         out.push(`items[${i}].${key} is not a name a formula can use`);
       if (!isFieldKind(field.k))
         out.push(`items[${i}].${key} has an unknown kind "${field.k}"`);
-      else if (field.k === "cut" && !isSliceShape(field.shape))
+      else if (
+        (field.k === "cut" || field.k === "footprint") &&
+        !isSliceShape(field.shape)
+      )
         out.push(`items[${i}].${key} cuts with an unknown "${field.shape}"`);
+      else if (
+        field.k === "footprint" &&
+        field.repetition !== "count" &&
+        field.repetition !== "spacing"
+      )
+        out.push(`items[${i}].${key} has an unknown repetition mode`);
     }
   });
 

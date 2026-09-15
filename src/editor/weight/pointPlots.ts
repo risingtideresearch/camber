@@ -187,7 +187,7 @@ export function plotCuts(
       // Only a station has an attitude worth drawing, and only a measured one has it to draw FROM: the curve
       // is the cut the hull actually produced, so nothing here re-derives what the plan is doing.
       const measurement =
-        field.shape === "station" && frame
+        (field.shape === "station" || field.shape === "transverse") && frame
           ? measurements.get(sliceMeasurementKey(item.id, fieldKey))
           : undefined;
       // One half of the curve. The two are mirrored in y and carry the SAME x, so they project onto exactly
@@ -197,7 +197,10 @@ export function plotCuts(
       // The mirrored half ends back at the keel, and −0 passes a `>= 0` test, so filtering would collect that
       // last point too and close the curve with a straight line from the sheer to the keel.
       const trace: Vec2[] = measurement
-        ? halfCurve(measurement.curve).map((p) => {
+        ? (field.shape === "station"
+            ? halfCurve(measurement.curve)
+            : [...measurement.curve]
+          ).map((p) => {
             const sheet = toSheet(frame!, p);
             return [sheet[0], sheet[2]];
           })
@@ -212,7 +215,12 @@ export function plotCuts(
             : item.name || "unnamed",
         // Which axis a cut is a plane of is which KIND of cut it is — the same reading `slices.ts` gives the
         // number, and the same one `snapTargets` offers it under.
-        axis: field.shape === "plane" ? "z" : "x",
+        axis:
+          field.shape === "plane"
+            ? "z"
+            : field.shape === "longitudinal"
+              ? "y"
+              : "x",
         // A position that errored or was never written is drawn NOWHERE, rather than at the transom: a cut
         // at zero because its formula is broken is a lie the drawing would tell convincingly.
         at: result?.reading ? result.reading.v : NaN,
@@ -305,12 +313,19 @@ export function snapTargets(
     if (!item.name) continue;
     for (const [fieldKey, field] of Object.entries(item.fields)) {
       if (field.k !== "cut") continue;
+      // A world-vertical transverse plane is not a constant sheet-x coordinate with rake.
+      if (field.shape === "transverse") continue;
       const position = resultAt(results, item.id, fieldKey, "pos");
       if (!position?.reading || position.error) continue;
       // A cut's `pos` is a height for a horizontal cut and a station for a plane-normal one, so which axis it
       // offers is which kind of cut it is. That is the same reading `slices.ts` gives the number.
       out.push({
-        axis: field.shape === "plane" ? "z" : "x",
+        axis:
+          field.shape === "plane"
+            ? "z"
+            : field.shape === "longitudinal"
+              ? "y"
+              : "x",
         at: position.reading.v,
         formula: `${item.name}.${fieldKey}.pos`,
         label: `${item.name}.${fieldKey}`,

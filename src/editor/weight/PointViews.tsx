@@ -79,7 +79,7 @@ export interface PlottedCut {
   readonly itemId: string;
   readonly fieldKey: string;
   readonly name: string;
-  readonly axis: "x" | "z";
+  readonly axis: "x" | "y" | "z";
   /** Sheet-frame metres. NaN where the cell errored or is empty, which is drawn nowhere. */
   readonly at: number;
   /** How far the position could fall below and above the nominal, both non-negative, in sheet metres. */

@@ -19,12 +19,9 @@
 //
 // ---------- nothing here computes an uncertainty ----------
 //
-// `read` produced every number on screen while the book was evaluated. The one exception is a cut's measured
-// values, which are not cells and so have no `Reading` of their own: those are the position's own gradient
-// scaled by the slope `slices.ts` measured beside the value — the identical chain rule `evaluate.ts` applies
-// when a formula reads `.area`, so the ranking under a measurement names the same guesses as the ranking
-// under the position it was cut at.
+// All readings, including geometry outputs, come from the evaluator.
 
+import { GEOMETRY_LEAVES } from "../../core/sheet/sectionMeasures";
 import { useState, type ReactElement } from "react";
 import {
   findItem,
@@ -44,23 +41,11 @@ import {
   type CellResult,
 } from "../../core/sheet/evaluate";
 import {
-  AREA,
   bounds,
-  combine,
-  EMPTY_GRADIENT,
-  LENGTH,
-  read,
   type Contribution,
   type Reading,
-  type SourceTable,
 } from "../../core/sheet/quantity";
-import {
-  SLICE_VALUE_FIELDS,
-  sliceMeasurementKey,
-  type SliceMeasurement,
-  type SliceMeasurements,
-  type SliceValueField,
-} from "../../core/sheet/slices";
+import { type SliceMeasurements } from "../../core/sheet/slices";
 import { inUnit, pct, relative, sig, spreadText } from "./weightFormat";
 import type { Focus } from "./ItemTable";
 
@@ -268,7 +253,8 @@ interface CellProps extends InspectorProps {
 
 function CellSpread(props: CellProps) {
   if (props.field.k === "point") return <PointSpread {...props} />;
-  if (props.field.k === "cut") return <CutSpread {...props} />;
+  if (props.field.k === "cut" || props.field.k === "footprint")
+    return <GeometrySpread {...props} />;
   return (
     <div className="winspector">
       <Head
@@ -340,109 +326,68 @@ function PointSpread(props: CellProps) {
  * through the local slope, so "what does not knowing this station to ±5 cm cost me in area" is a question
  * this pane can answer and the schedule cannot.
  */
-function CutSpread(props: CellProps) {
-  const { results, measurements, item, fieldKey, onGo } = props;
-  // Which row is being read. The position is a cell and moves the caret with it; a measurement is not, so
-  // its selection lives here and nowhere else.
-  const [picked, setPicked] = useState<"pos" | SliceValueField>("pos");
-  const position = resultAt(results, item.id, fieldKey, "pos");
-  const measurement = measurements.get(sliceMeasurementKey(item.id, fieldKey));
-
-  const measured = (key: SliceValueField): Reading | null =>
-    measurement
-      ? measuredReading(position, measurement, key, results.sources)
-      : null;
-
-  const rows: PickRow[] = [
-    cellRow("pos", position, picked === "pos", () => {
-      setPicked("pos");
-      onGo(item.id, fieldKey, "pos");
-    }),
-    ...SLICE_VALUE_FIELDS.map((key) => {
-      const reading = measured(key);
-      return {
-        key,
-        label: key,
-        value: measurement ? measurement[key] : null,
-        unit: measuredUnit(key),
-        spread: reading
-          ? spreadText(reading.worst.lo, reading.worst.hi, 1)
-          : "",
-        // Six rows each saying the cut failed would drown the one message that explains why, below.
-        note: "—",
-        on: picked === key,
-        onPick: () => setPicked(key),
-      };
-    }),
+function GeometrySpread(props: CellProps) {
+  const { results, item, fieldKey, field, onGo } = props;
+  const authored = leavesOf(field);
+  const [picked, setPicked] = useState<string>(props.leaf);
+  const selected = [
+    ...authored,
+    ...GEOMETRY_LEAVES,
+    "equivalentCount",
+  ].includes(picked)
+    ? picked
+    : authored[0];
+  const leaves = [
+    ...authored,
+    ...(field.k === "footprint" ? ["equivalentCount"] : []),
+    ...GEOMETRY_LEAVES,
   ];
-
-  const reading = picked === "pos" ? null : measured(picked);
-
+  const result = resultAt(results, item.id, fieldKey, selected);
   return (
     <div className="winspector">
       <Head
-        address={`${item.name || "unnamed"}.${fieldKey}.${picked}`}
-        kind="cut"
+        address={`${item.name || "unnamed"}.${fieldKey}.${selected}`}
+        kind={field.k === "footprint" ? "footprint" : "cut"}
       />
-      <PickTable rows={rows} />
-      {!measurement && (
-        <p className="winspbad">
-          This has not produced a valid hull cut — check the position.
-        </p>
-      )}
-      {picked === "pos" ? (
-        <Authored {...props} leaf="pos" />
-      ) : reading ? (
+      <PickTable
+        rows={leaves.map((leaf) =>
+          cellRow(
+            leaf,
+            resultAt(results, item.id, fieldKey, leaf),
+            selected === leaf,
+            () => {
+              setPicked(leaf);
+              if ((authored as string[]).includes(leaf))
+                onGo(item.id, fieldKey, leaf as FieldLeaf);
+            },
+          ),
+        )}
+      />
+      {(authored as string[]).includes(selected) ? (
+        <Authored {...props} leaf={selected as FieldLeaf} />
+      ) : result?.error ? (
+        <p className="winspbad">{result.error}</p>
+      ) : result?.reading ? (
         <>
           <p className="whint">
-            Measured off the hull, so nothing authored it. Its spread is the
-            position's, carried through the local slope — the hull is not re-cut
-            at either end of the range.
+            Geometry-derived. Spread is a first-order approximation from the
+            shared input sources, not a numerical integration error or an exact
+            bound.
           </p>
+          {result.unitWarning && (
+            <p className="winspbad">{result.unitWarning}</p>
+          )}
           <Detail
-            reading={reading}
+            reading={result.reading}
             factor={1}
-            unit={measuredUnit(picked)}
+            unit={result.unit?.label ?? ""}
             which={props.reading}
             results={results}
             onGo={onGo}
           />
         </>
-      ) : measurement ? (
-        <p className="whint">
-          Nothing can move this: the position it is cut at is exact.
-        </p>
       ) : null}
     </div>
-  );
-}
-
-const measuredUnit = (key: SliceValueField): string =>
-  key === "area" ? "m²" : "m";
-
-/**
- * What a measured cut value is worth, uncertainty and all.
- *
- * The position's gradient scaled by the slope, then read back through the book's own source table — so the
- * ranking under `area` names the guesses that move the POSITION, which is the only thing about a cut anyone
- * can go and improve. Null where the position is exact or would not work out, since there is then no
- * gradient to scale.
- */
-function measuredReading(
-  position: CellResult | undefined,
-  measurement: SliceMeasurement,
-  key: SliceValueField,
-  sources: SourceTable,
-): Reading | null {
-  const quantity = position?.quantity;
-  if (!quantity) return null;
-  return read(
-    {
-      v: measurement[key],
-      d: combine(quantity.d, measurement.derivative[key], EMPTY_GRADIENT, 0),
-      dim: key === "area" ? AREA : LENGTH,
-    },
-    sources,
   );
 }
 
@@ -762,7 +707,9 @@ export function Drivers({
               <button
                 className="wtermlabel wtermgo"
                 title="Go to the cell this was written in"
-                onClick={() => onGo(at.itemId, at.fieldKey, at.leaf)}
+                onClick={() =>
+                  onGo(at.itemId, at.fieldKey, at.leaf as FieldLeaf)
+                }
               >
                 {term.label}
               </button>

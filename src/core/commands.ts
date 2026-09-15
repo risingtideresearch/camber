@@ -824,6 +824,8 @@ export function describeCommand(cmd: DocumentCommand): string {
         .join(", ")})`;
     case "setFieldUnit":
       return cmd.unit ? `Write ${cmd.field} in ${cmd.unit}` : "Clear a unit";
+    case "setFootprintRepetition":
+      return `Set footprint repetition to ${cmd.repetition}`;
     case "setCutShape":
       return `Cut with a ${cmd.shape}`;
     case "setFieldRole":

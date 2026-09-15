@@ -100,6 +100,15 @@ export function renameReferences(
               z: formula(field.z),
             };
             break;
+          case "footprint":
+            next = {
+              ...field,
+              start: formula(field.start),
+              end: formula(field.end),
+              spacing: formula(field.spacing),
+              count: formula(field.count),
+            };
+            break;
           case "cut":
             next = { ...field, pos: formula(field.pos) };
             break;

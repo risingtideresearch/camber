@@ -37,6 +37,13 @@
 // it lazily means a cell that references nothing is evaluated even when the rest of the book is tangled.
 
 import {
+  CG_NAMES,
+  GEOMETRY_LEAVES,
+  geometryValue,
+  type Measure,
+} from "./sectionMeasures";
+import type { FootprintMeasurements } from "./footprints";
+import {
   evaluate,
   FormulaError,
   parseFormula,
@@ -52,6 +59,9 @@ import {
 } from "../hullMetrics";
 import {
   AREA,
+  DIMLESS,
+  combine,
+  sub,
   add,
   div,
   exact,
@@ -89,7 +99,6 @@ import {
   SLICE_VALUE_FIELDS,
   sliceMeasurementKey,
   type SliceMeasurements,
-  type SliceValueField,
 } from "./slices";
 
 /**
@@ -106,7 +115,7 @@ export interface CellResult {
   readonly itemId: string;
   readonly fieldKey: string;
   /** Which cell of the field this is. A scalar has only `"formula"`; a point has three. */
-  readonly leaf: FieldLeaf;
+  readonly leaf: string;
   /** A blank formula has no value and no error — it is simply empty. */
   readonly empty: boolean;
   readonly reading: Reading | null;
@@ -165,14 +174,14 @@ export interface BookResults {
 export const cellKey = (
   itemId: string,
   fieldKey: string,
-  leaf: FieldLeaf = "formula",
+  leaf: string = "formula",
 ): string => `${itemId} ${fieldKey} ${leaf}`;
 
 export const resultAt = (
   results: BookResults,
   itemId: string,
   fieldKey: string,
-  leaf: FieldLeaf = "formula",
+  leaf: string = "formula",
 ): CellResult | undefined => results.cells.get(cellKey(itemId, fieldKey, leaf));
 
 export const resultFor = (
@@ -286,7 +295,7 @@ export function fieldUses(
       found.set(address, {
         itemId: cell.itemId,
         fieldKey: cell.fieldKey,
-        leaf: sharedDerivation ? "from" : cell.leaf,
+        leaf: sharedDerivation ? "from" : (cell.leaf as FieldLeaf),
         address,
       });
   }
@@ -306,7 +315,7 @@ interface Cell {
   readonly item: Item | null;
   readonly fieldKey: string;
   readonly field: Field | null;
-  readonly leaf: FieldLeaf;
+  readonly leaf: string;
   readonly source: string;
   /** Parsed once, whatever it is referenced from. */
   tree: Node | null;
@@ -317,6 +326,7 @@ interface Cell {
   value: Quantity | null;
   error: { message: string; at: number } | null;
   unitWarning: string | null;
+  readonly measuredLeaf?: string;
   /** This cell's dependency graph reaches a geometry-derived cut leaf. */
   usesSliceMeasurement: boolean;
 }
@@ -331,6 +341,7 @@ export function evaluateBook(
   book: WeightBook,
   metrics: HullMetrics | null,
   sliceMeasurements: SliceMeasurements = new Map(),
+  footprintMeasurements: FootprintMeasurements = new Map(),
 ): BookResults {
   const cells = new Map<string, Cell>();
   const sources = new Map<string, Source>();
@@ -363,12 +374,17 @@ export function evaluateBook(
     item: Item | null,
     fieldKey: string,
     field: Field | null,
-    leaf: FieldLeaf,
+    leaf: string,
     text: string,
     unit: string,
+    measuredLeaf?: string,
   ): void => {
     const declaration = declare(unit);
-    const position = field?.k === "point" || field?.k === "cut";
+    const position =
+      !measuredLeaf &&
+      (field?.k === "point" ||
+        field?.k === "cut" ||
+        (field?.k === "footprint" && leaf !== "count"));
     // Positions have a known dimension independent of their formula. A mass unit on a scalar is useful; on
     // a coordinate it would make geometry interpret kilograms as metres, so refuse it at the cell boundary.
     const unitError =
@@ -376,13 +392,13 @@ export function evaluateBook(
       (position &&
       declaration.declared &&
       !sameDim(declaration.declared.dim, LENGTH)
-        ? `${field.k === "point" ? "point coordinates" : "cut positions"} must use a distance unit — try m, cm, mm, in, or ft`
+        ? `${field.k === "point" ? "point coordinates" : field.k === "footprint" ? "footprint bounds and spacing" : "cut positions"} must use a distance unit — try m, cm, mm, in, or ft`
         : null);
     const declared = declaration.declared;
     let tree: Node | null = null;
     let parseError: FormulaError | null = null;
     const trimmed = text.trim();
-    if (trimmed) {
+    if (trimmed && !measuredLeaf) {
       try {
         tree = parseFormula(trimmed, symbols);
       } catch (error) {
@@ -397,6 +413,7 @@ export function evaluateBook(
       fieldKey,
       field,
       leaf,
+      measuredLeaf,
       source: trimmed,
       tree,
       parseError,
@@ -426,8 +443,15 @@ export function evaluateBook(
           field,
           leaf,
           derivation ?? leafOf(field, leaf) ?? "",
-          fieldUnit(field),
+          field.k === "footprint" && leaf === "count" ? "" : fieldUnit(field),
         );
+      if (field.k === "cut" || field.k === "footprint")
+        for (const leaf of [
+          ...GEOMETRY_LEAVES,
+          ...(field.k === "footprint" ? ["equivalentCount"] : []),
+        ])
+          // Measured addresses are read-only results, never authored command leaves.
+          addCell(item, key, field, leaf, "[measured]", "", leaf);
     }
 
   // The book's own answers, as cells in the same space. They declare no unit — an output is whatever its
@@ -522,7 +546,10 @@ export function evaluateBook(
     // A CUT has a position too — the centroid of what it cuts — so it binds the same way, and the
     // area-weighted centre of a set of sections is that same expression with areas where the masses were.
     const axis = currentCell?.leaf;
-    if (axis === "x" || axis === "y" || axis === "z") {
+    if (
+      field.k !== "footprint" &&
+      (axis === "x" || axis === "y" || axis === "z")
+    ) {
       if (field.k === "point") return valueAt(item.id, key, at, axis);
       return leafValue(item, key, field, axis, at);
     }
@@ -549,36 +576,117 @@ export function evaluateBook(
         `${item.name}.${key} is a single value — .${leaf} is one dot too deep`,
         at,
       );
-    if (field.k === "cut") {
-      if (leaf === "pos") return valueAt(item.id, key, at, "pos");
-      if (!(SLICE_VALUE_FIELDS as readonly string[]).includes(leaf))
-        fail(
-          `a cut has no ${leaf} — try .pos, .${SLICE_VALUE_FIELDS.join(", .")}`,
-          at,
-        );
-      const measured = sliceMeasurements.get(sliceMeasurementKey(item.id, key));
-      if (!measured)
-        return fail(
-          `${item.name}.${key} has not produced a valid hull cut`,
-          at,
-        );
-      const measuredField = leaf as SliceValueField;
-      currentCell!.usesSliceMeasurement = true;
-      // A direct measured leaf has no intervening valueAt call to propagate the marker back to the position.
-      if (currentCell!.field?.k === "cut" && currentCell!.leaf === "pos")
-        fail("a cut position cannot depend on measured cut values", at);
-      const position = valueAt(item.id, key, at, "pos");
-      const slope = measured.derivative[measuredField];
-      return {
-        v: measured[measuredField],
-        d: Object.fromEntries(
-          Object.entries(position.d).map(([source, gradient]) => [
-            source,
-            gradient * slope,
-          ]),
-        ),
-        dim: measuredField === "area" ? AREA : LENGTH,
+    if (field.k === "cut" || field.k === "footprint") {
+      if ((leavesOf(field) as string[]).includes(leaf))
+        return valueAt(item.id, key, at, leaf as FieldLeaf);
+      if ((CG_NAMES as readonly string[]).includes(leaf)) {
+        const axis = currentCell?.leaf;
+        if (axis !== "x" && axis !== "y" && axis !== "z")
+          fail(`${leaf} is a point — write .x, .y, or .z`, at);
+        leaf += `.${axis}`;
+      }
+      const aliases: Record<string, string> = {
+        openPerimeter: "openLength",
+        closedPerimeter: "closedLength",
+        x: "areaCg.x",
+        y: "areaCg.y",
+        z: "areaCg.z",
       };
+      if (field.k === "cut") leaf = aliases[leaf] ?? leaf;
+      if (
+        !GEOMETRY_LEAVES.includes(leaf) &&
+        !(field.k === "footprint" && leaf === "equivalentCount")
+      )
+        fail(
+          `a ${field.k} has no ${leaf} — choose area, openLength, closedLength, or their Cg coordinates`,
+          at,
+        );
+      currentCell!.usesSliceMeasurement = true;
+      if (cutPositionDepth > 0)
+        fail(
+          "a cut position or footprint input cannot depend on measured cut values or footprints",
+          at,
+        );
+      if (field.k === "cut") {
+        const measured = sliceMeasurements.get(
+          sliceMeasurementKey(item.id, key),
+        );
+        if (!measured)
+          return fail(
+            `${item.name}.${key} has not produced a valid hull cut`,
+            at,
+          );
+        const position = valueAt(item.id, key, at, "pos");
+        currentCell!.unitWarning ??= measured.warning ?? null;
+        const slope = measured.geometryDerivative[leaf];
+        if (!Number.isFinite(slope) && Object.keys(position.d).length)
+          fail(
+            "Cut uncertainty crosses an undefined centroid or geometry transition",
+            at,
+          );
+        return {
+          v: geometryValue(measured.measures, leaf),
+          d: combine(position.d, Number.isFinite(slope) ? slope : 0, {}, 0),
+          dim: leaf === "area" ? AREA : LENGTH,
+        };
+      }
+      const start = valueAt(item.id, key, at, "start"),
+        end = valueAt(item.id, key, at, "end");
+      const repeat = valueAt(item.id, key, at, field.repetition);
+      if (!sameDim(repeat.dim, field.repetition === "count" ? DIMLESS : LENGTH))
+        fail(
+          "Equivalent count must be dimensionless and spacing must be a distance",
+          at,
+        );
+      if (!Number.isFinite(repeat.v) || repeat.v <= 0 || end.v <= start.v)
+        fail("footprint needs positive repetition and From less than To", at);
+      const span = sub(end, start);
+      const density =
+        field.repetition === "count"
+          ? div(repeat, span)
+          : div(exact(1), repeat);
+      const reach = read(repeat, sources).worst;
+      const spanReach = read(span, sources).worst;
+      if (repeat.v - reach.lo <= 0 || span.v - spanReach.lo <= 0)
+        currentCell!.unitWarning ??=
+          "The input uncertainty reaches zero spacing/count or reversed bounds; this local approximation is unreliable";
+      if (leaf === "equivalentCount")
+        return field.repetition === "count" ? repeat : div(span, repeat);
+      const result = footprintMeasurements.get(
+        sliceMeasurementKey(item.id, key),
+      );
+      if (!result?.value)
+        return fail(
+          result?.error ??
+            `${item.name}.${key} has not produced a valid footprint`,
+          at,
+        );
+      const measured = result.value;
+      currentCell!.unitWarning ??= measured.warning ?? null;
+      const name = leaf.split(".")[0].replace(/Cg$/, "") as
+        "area" | "openLength" | "closedLength";
+      const integral = measured.integrals[name],
+        a = measured.start[name],
+        b = measured.end[name];
+      const lift = (get: (m: Measure) => number, dim: Dim): Quantity => ({
+        v: get(integral),
+        d: combine(start.d, -get(a), end.d, get(b)),
+        dim,
+      });
+      const amountDim = name === "area" ? { m: 0, l: 3 } : AREA;
+      const amount = lift((m) => m.amount, amountDim);
+      if (!leaf.includes(".")) return mul(density, amount);
+      if (amount.v === 0)
+        fail(
+          `${leaf.split(".")[0]} is undefined because its measure is zero`,
+          at,
+        );
+      const axis = ["x", "y", "z"].indexOf(leaf.split(".")[1]);
+      // Density cancels analytically: shared spacing/count uncertainty cannot move CG.
+      return div(
+        lift((m) => m.moment[axis], { m: 0, l: amountDim.l + 1 }),
+        amount,
+      );
     }
     const leaves = leavesOf(field);
     if (!(leaves as string[]).includes(leaf))
@@ -685,7 +793,7 @@ export function evaluateBook(
       return [
         {
           weight: valueAt(item.id, weight.key, at),
-          value: valueAt(item.id, target.key, at, axis),
+          value: valueAt(item.id, target.key, at, axis as "x" | "y" | "z"),
         },
       ];
     });
@@ -727,8 +835,9 @@ export function evaluateBook(
       );
     }
     if (rest.length === 1) return bareFieldValue(item, key, field!, at);
-    if (rest.length > 2) fail(`${path.join(".")} is one dot too deep`, at);
-    return leafValue(item, key, field!, rest[1], at);
+    if (rest.length > 2 && field!.k !== "cut" && field!.k !== "footprint")
+      fail(`${path.join(".")} is one dot too deep`, at);
+    return leafValue(item, key, field!, rest.slice(1).join("."), at);
   };
 
   const resolve = (path: readonly string[], at: number): Quantity => {
@@ -811,8 +920,12 @@ export function evaluateBook(
       if (sibling) {
         if (rest.length === 0)
           return bareFieldValue(currentItem, head, sibling, at);
-        if (rest.length === 1)
-          return leafValue(currentItem, head, sibling, rest[0], at);
+        if (
+          rest.length === 1 ||
+          sibling.k === "cut" ||
+          sibling.k === "footprint"
+        )
+          return leafValue(currentItem, head, sibling, rest.join("."), at);
         fail(`${path.join(".")} is one dot too deep`, at);
       }
     }
@@ -903,7 +1016,9 @@ export function evaluateBook(
 
   const compute = (cell: Cell): void => {
     const key = cellKey(cell.item?.id ?? OUTPUT_ITEM, cell.fieldKey, cell.leaf);
-    const isCutPosition = cell.field?.k === "cut" && cell.leaf === "pos";
+    const isCutPosition =
+      !cell.measuredLeaf &&
+      (cell.field?.k === "cut" || cell.field?.k === "footprint");
     cell.state = "running";
     visiting.push(key);
     const savedItem = currentItem;
@@ -918,12 +1033,32 @@ export function evaluateBook(
           message: cell.parseError.message,
           at: cell.parseError.at,
         };
+      else if (cell.measuredLeaf)
+        cell.value = leafValue(
+          cell.item!,
+          cell.fieldKey,
+          cell.field!,
+          cell.measuredLeaf,
+          -1,
+        );
       else if (cell.tree) {
         const value = stamp(evaluate(cell.tree, env), cell);
-        const position = cell.field?.k === "point" || cell.field?.k === "cut";
+        const position =
+          cell.field?.k === "point" ||
+          cell.field?.k === "cut" ||
+          (cell.field?.k === "footprint" && cell.leaf !== "count");
         if (position && !sameDim(value.dim, LENGTH))
           cell.error = {
-            message: `${cell.field?.k === "point" ? "a point coordinate" : "a cut position"} must be a distance, and this works out to ${naturalUnit(value.dim).label || "a plain number"}`,
+            message: `${cell.field?.k === "point" ? "a point coordinate" : cell.field?.k === "footprint" ? "a footprint bound or spacing" : "a cut position"} must be a distance, and this works out to ${naturalUnit(value.dim).label || "a plain number"}`,
+            at: -1,
+          };
+        else if (
+          cell.field?.k === "footprint" &&
+          cell.leaf === "count" &&
+          !isDimless(value.dim)
+        )
+          cell.error = {
+            message: "Equivalent count must be a dimensionless number",
             at: -1,
           };
         else cell.value = value;

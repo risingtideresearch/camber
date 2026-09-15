@@ -1,3 +1,8 @@
+import {
+  measureFootprint,
+  type FootprintResult,
+  type FootprintMeasurements,
+} from "../core/sheet/footprints";
 import { useMemo } from "react";
 import type { HullMetrics } from "../core/hullMetrics";
 import type { HullSampling } from "../core/mesh";
@@ -10,6 +15,7 @@ import {
 } from "../core/sheet/evaluate";
 import {
   createSliceMeasurer,
+  createSectionMeasurer,
   sliceMeasurementKey,
   type SliceMeasurement,
   type SliceMeasurements,
@@ -19,6 +25,7 @@ import {
 // cache shares unchanged cuts across panel hooks and across unrelated book edits without retaining old hulls.
 interface GeometryCache {
   readonly values: Map<string, SliceMeasurement>;
+  readonly footprints: Map<string, FootprintResult>;
   resolvedKey: string | null;
   resolved: SliceMeasurements | null;
 }
@@ -36,7 +43,12 @@ function geometryCache(model: Model, sampling: HullSampling): GeometryCache {
   }
   let cache = bySampling.get(sampling);
   if (!cache) {
-    cache = { values: new Map(), resolvedKey: null, resolved: null };
+    cache = {
+      footprints: new Map(),
+      values: new Map(),
+      resolvedKey: null,
+      resolved: null,
+    };
     bySampling.set(sampling, cache);
   }
   return cache;
@@ -46,6 +58,7 @@ export interface WeightBookResults {
   /** First pass, used to resolve and diagnose authored slice positions. */
   readonly positions: BookResults;
   readonly measurements: SliceMeasurements;
+  readonly footprints: FootprintMeasurements;
   /** Final pass, with measured slice leaves available to every formula. */
   readonly results: BookResults;
 }
@@ -106,9 +119,39 @@ export function useWeightBookResults(
     return out;
   }, [book, model, sampling, positions]);
 
+  const footprints = useMemo(() => {
+    const out = new Map<string, FootprintResult>();
+    if (!sampling) return out;
+    const cache = geometryCache(model, sampling).footprints;
+    let measure: ReturnType<typeof createSectionMeasurer> | undefined;
+    for (const item of book.items)
+      for (const [key, field] of Object.entries(item.fields)) {
+        if (field.k !== "footprint") continue;
+        const start = resultAt(positions, item.id, key, "start"),
+          end = resultAt(positions, item.id, key, "end");
+        if (!start?.quantity || !end?.quantity || start.error || end.error)
+          continue;
+        const geometryKey = `${field.shape}\0${start.quantity.v}\0${end.quantity.v}`;
+        let result = cache.get(geometryKey);
+        if (!result) {
+          measure ??= createSectionMeasurer(model, sampling);
+          result = measureFootprint(
+            measure,
+            field.shape,
+            start.quantity.v,
+            end.quantity.v,
+          );
+          if (cache.size >= 32) cache.delete(cache.keys().next().value!);
+          cache.set(geometryKey, result);
+        }
+        out.set(sliceMeasurementKey(item.id, key), result);
+      }
+    return out;
+  }, [book, model, sampling, positions]);
+
   const results = useMemo(
-    () => evaluateBook(book, metrics, measurements),
-    [book, metrics, measurements],
+    () => evaluateBook(book, metrics, measurements, footprints),
+    [book, metrics, measurements, footprints],
   );
-  return { positions, measurements, results };
+  return { positions, measurements, footprints, results };
 }

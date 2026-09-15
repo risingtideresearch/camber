@@ -52,6 +52,11 @@ interface StoredField {
   from?: string;
   shape?: string;
   pos?: string;
+  start?: string;
+  end?: string;
+  repetition?: "spacing" | "count";
+  spacing?: string;
+  count?: string;
   /** A `ROLES` name, on the kinds that may carry one. Absent where the field is just a field. */
   role?: string;
 }
@@ -100,6 +105,8 @@ function storeField(field: Field): StoredField {
         },
         field.role,
       );
+    case "footprint":
+      return { ...field };
     case "cut":
       return {
         k: field.k,
@@ -175,6 +182,19 @@ function readField(raw: Record<string, unknown>, kind: FieldKind): Field {
         y: str(raw.y),
         z: str(raw.z),
         from: str(raw.from),
+      };
+    case "footprint":
+      return {
+        ...field,
+        shape: isSliceShape(str(raw.shape))
+          ? (str(raw.shape) as typeof field.shape)
+          : field.shape,
+        unit: str(raw.unit, "m") || "m",
+        start: str(raw.start),
+        end: str(raw.end),
+        repetition: raw.repetition === "count" ? "count" : "spacing",
+        spacing: str(raw.spacing),
+        count: str(raw.count),
       };
     case "cut": {
       const shape = str(raw.shape);

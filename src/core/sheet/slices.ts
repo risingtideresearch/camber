@@ -7,8 +7,20 @@ import type { Vec3 } from "../math";
 import type { HullSampling } from "../mesh";
 import { sweptSection } from "../mesh";
 import type { Model } from "../model";
-import { cut, heightSpan, stationGeometry, type StationGeom } from "../sweep";
+import { heightSpan, stationGeometry, type StationGeom } from "../sweep";
 import type { SliceShape } from "./book";
+import {
+  closedHullTriangles,
+  intersectPlane,
+  type CutTriangle,
+} from "./planeCuts";
+import {
+  GEOMETRY_LEAVES,
+  geometryValue,
+  lineMeasure,
+  measureAt,
+  type SectionMeasures,
+} from "./sectionMeasures";
 
 export const SLICE_VALUE_FIELDS = [
   "area",
@@ -21,6 +33,13 @@ export const SLICE_VALUE_FIELDS = [
 export type SliceValueField = (typeof SLICE_VALUE_FIELDS)[number];
 
 export interface SliceMeasurement {
+  readonly measures: SectionMeasures;
+  readonly geometryDerivative: Readonly<Record<string, number>>;
+  readonly contours: readonly (readonly Vec3[])[];
+  readonly sheetContours: readonly (readonly Vec3[])[];
+  /** Explicit skin-only segments: never infer these by closing an outline. */
+  readonly sheetSkinSegments: readonly (readonly [Vec3, Vec3])[];
+  readonly warning?: string;
   readonly area: number;
   /** The complete boundary of the cut, including the straight segments that close it. */
   readonly closedPerimeter: number;
@@ -78,7 +97,10 @@ function polygon2(points: readonly [number, number][]): {
   };
 }
 
-type RawSliceMeasurement = Omit<SliceMeasurement, "derivative">;
+export type RawSliceMeasurement = Omit<
+  SliceMeasurement,
+  "derivative" | "geometryDerivative"
+>;
 
 function measureSliceAt(
   model: Model,
@@ -86,34 +108,58 @@ function measureSliceAt(
   geom: StationGeom,
   shape: SliceShape,
   positionMetres: number,
+  triangles: readonly CutTriangle[],
 ): RawSliceMeasurement | null {
   if (!isFinite(positionMetres)) return null;
   const s = unitScale(model.unit, "m");
 
-  if (shape === "plane") {
-    const worldZ = geom.keelZ + positionMetres / s;
-    const result = cut(geom, 0, worldZ, true);
-    // Once the horizontal cut crosses a submerged deck edge, `wp` no longer describes the section of the
-    // closed solid. Refuse that misleading geometry rather than drawing an authoritative-looking wrong cut.
-    if (!result.wp || result.deckDown || result.waterline.length < 3)
-      return null;
-    const cr = geom.cosRake,
-      sr = geom.sinRake,
-      modelX = result.wp.cx * cr + worldZ * sr,
-      modelZ = (worldZ - modelX * sr) / cr;
-    const centroid: Vec3 = [modelX, result.wp.cy, modelZ];
+  const toSheet = (p: Vec3): Vec3 => [
+    (p[0] - model.plan.at(0)[0]) * s,
+    p[1] * s,
+    (p[0] * geom.sinRake + p[2] * geom.cosRake - geom.keelZ) * s,
+  ];
+  if (shape !== "station") {
+    // Transverse planes are world-vertical. pos locates their intersection with
+    // the deck-flat z=0 axis, measured from the book's x origin.
+    const normal: Vec3 =
+      shape === "plane"
+        ? [geom.sinRake, 0, geom.cosRake]
+        : shape === "transverse"
+          ? [geom.cosRake, 0, -geom.sinRake]
+          : [0, 1, 0];
+    const offset =
+      shape === "plane"
+        ? geom.keelZ + positionMetres / s
+        : shape === "transverse"
+          ? (model.plan.at(0)[0] + positionMetres / s) * geom.cosRake
+          : positionMetres / s;
+    const result = intersectPlane(triangles, normal, offset, toSheet, s);
+    const m = result.measures;
+    const cg = m.area.amount
+      ? (m.area.moment.map((v) => v / m.area.amount) as Vec3)
+      : ([0, 0, 0] as Vec3);
+    const mx = cg[0] / s + model.plan.at(0)[0];
+    const centroid: Vec3 = [
+      mx,
+      cg[1] / s,
+      (cg[2] / s + geom.keelZ - mx * geom.sinRake) / geom.cosRake,
+    ];
     return {
-      area: result.wp.area * s * s,
-      closedPerimeter: closedLength(result.waterline) * s,
-      openPerimeter:
-        (openLength(result.waterlineSkin[0]) +
-          openLength(result.waterlineSkin[1])) *
-        s,
-      x: (modelX - model.plan.at(0)[0]) * s,
-      y: result.wp.cy * s,
-      z: positionMetres,
-      curve: result.waterline,
+      measures: m,
+      contours: result.contours,
+      sheetContours: result.contours.map((c) => c.map(toSheet)),
+      sheetSkinSegments: result.skinSegments.map(([a, b]) => [
+        toSheet(a),
+        toSheet(b),
+      ]),
+      area: m.area.amount,
+      openPerimeter: m.openLength.amount,
+      closedPerimeter: m.closedLength.amount,
+      x: cg[0],
+      y: cg[1],
+      z: cg[2],
       centroid,
+      curve: result.contours[0] ?? [],
     };
   }
 
@@ -154,7 +200,28 @@ function measureSliceAt(
     centroid: Vec3 = [cx, 0, half.z],
     worldCentroidZ = cx * geom.sinRake + half.z * geom.cosRake;
 
+  const segments = (points: readonly Vec3[]): [Vec3, Vec3][] =>
+    points.slice(1).map((p, i) => [points[i], p]);
+  const measures: SectionMeasures = {
+    area: measureAt(2 * half.area * s * s, toSheet(centroid)),
+    openLength: lineMeasure(
+      [...segments(starboard), ...segments(port)],
+      toSheet,
+      s,
+    ),
+    closedLength: lineMeasure(
+      [...segments(curve), [curve[curve.length - 1], curve[0]]],
+      toSheet,
+      s,
+    ),
+  };
   return {
+    measures,
+    contours: [curve],
+    sheetContours: [curve.map(toSheet)],
+    sheetSkinSegments: [...segments(starboard), ...segments(port)].map(
+      ([a, b]) => [toSheet(a), toSheet(b)],
+    ),
     area: 2 * half.area * s * s,
     closedPerimeter: closedLength(curve) * s,
     // Only the two hull-skin runs belong to the open perimeter. `curve` also joins their lower ends so the
@@ -177,32 +244,37 @@ export function createSliceMeasurer(
 ): (shape: SliceShape, positionMetres: number) => SliceMeasurement | null {
   const geom = stationGeometry(model, sampling);
   if (!geom) return () => null;
+  const triangles = closedHullTriangles(sampling);
   const s = unitScale(model.unit, "m");
   const longitudinalSpan = (model.plan.at(1)[0] - model.plan.at(0)[0]) * s;
   const [zLo, zHi] = heightSpan(geom, 0);
   const verticalSpan = (zHi - zLo) * s;
+  let lateralSpan = 0;
+  for (const triangle of triangles)
+    for (const p of triangle.points)
+      lateralSpan = Math.max(lateralSpan, 2 * Math.abs(p[1]) * s);
 
+  const safeAt = (shape: SliceShape, pos: number) => {
+    try {
+      return measureSliceAt(model, sampling, geom, shape, pos, triangles);
+    } catch {
+      return null;
+    }
+  };
   return (shape, positionMetres) => {
-    const value = measureSliceAt(model, sampling, geom, shape, positionMetres);
+    const value = safeAt(shape, positionMetres);
     if (!value) return null;
     // The finite-difference scale follows the axis the cut moves on: hull length for stations, hull height
     // for horizontal planes. They often happen to be similar enough numerically, but are unrelated geometry.
-    const span = shape === "station" ? longitudinalSpan : verticalSpan;
+    const span =
+      shape === "station" || shape === "transverse"
+        ? longitudinalSpan
+        : shape === "longitudinal"
+          ? lateralSpan
+          : verticalSpan;
     const h = Math.max(1e-5, span * 1e-4);
-    const below = measureSliceAt(
-      model,
-      sampling,
-      geom,
-      shape,
-      positionMetres - h,
-    );
-    const above = measureSliceAt(
-      model,
-      sampling,
-      geom,
-      shape,
-      positionMetres + h,
-    );
+    const below = safeAt(shape, positionMetres - h);
+    const above = safeAt(shape, positionMetres + h);
     const derivative = Object.fromEntries(
       SLICE_VALUE_FIELDS.map((field) => {
         if (below && above)
@@ -212,7 +284,29 @@ export function createSliceMeasurer(
         return [field, 0];
       }),
     ) as Record<SliceValueField, number>;
-    return { ...value, derivative };
+    const geometryDerivative: Record<string, number> = {};
+    for (const leaf of GEOMETRY_LEAVES) {
+      try {
+        const lo = below
+          ? geometryValue(below.measures, leaf)
+          : geometryValue(value.measures, leaf);
+        const hi = above
+          ? geometryValue(above.measures, leaf)
+          : geometryValue(value.measures, leaf);
+        geometryDerivative[leaf] = (hi - lo) / (below && above ? 2 * h : h);
+      } catch {
+        geometryDerivative[leaf] = NaN;
+      }
+    }
+    return {
+      ...value,
+      derivative,
+      geometryDerivative,
+      warning:
+        !below || !above
+          ? "Cut uncertainty uses a one-sided local slope at a geometry boundary"
+          : undefined,
+    };
   };
 }
 
@@ -224,4 +318,26 @@ export function measureSlice(
   positionMetres: number,
 ): SliceMeasurement | null {
   return createSliceMeasurer(model, sampling)(shape, positionMetres);
+}
+
+/** Raw measurements for integration: preserve geometry errors, distinguish empty sections. */
+export function createSectionMeasurer(model: Model, sampling: HullSampling) {
+  const geom = stationGeometry(model, sampling);
+  const triangles = closedHullTriangles(sampling);
+  return (shape: SliceShape, position: number): RawSliceMeasurement => {
+    if (!geom) throw new Error("Hull geometry is unavailable");
+    const value = measureSliceAt(
+      model,
+      sampling,
+      geom,
+      shape,
+      position,
+      triangles,
+    );
+    if (!value)
+      throw new Error(
+        "No valid sweep station at this position; use a planar orientation or move the bounds inside the hull",
+      );
+    return value;
+  };
 }
