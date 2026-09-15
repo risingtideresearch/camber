@@ -99,7 +99,7 @@ export function globalCompletions(
         hint: `centroid of ${key}, in this cell's coordinate`,
       });
     for (const measure of [
-      ...(fieldKind === "footprint"
+      ...(fieldKind === "repetition"
         ? [
             "start",
             "end",
@@ -128,7 +128,7 @@ export function globalCompletions(
         "item",
         field.k,
         where,
-        field.k === "footprint" ? field.repetition : undefined,
+        field.k === "repetition" ? field.repetition : undefined,
       );
     // A role is offered only where it RESOLVES — one field tagged, not none and not two — which is the rule
     // this whole module keeps: what is offered exists, and what exists is offered.
@@ -239,7 +239,7 @@ export function siblingCompletions(
       out.push({ insert: key, kind: "sibling", hint: "on this item" });
       continue;
     }
-    if (coordinate && field.k !== "footprint")
+    if (coordinate && field.k !== "repetition")
       out.push({
         insert: key,
         kind: "sibling",
@@ -249,7 +249,7 @@ export function siblingCompletions(
       field.k === "point"
         ? ["x", "y", "z"]
         : [
-            ...(field.k === "footprint"
+            ...(field.k === "repetition"
               ? ["start", "end", field.repetition, "equivalentCount", "area"]
               : ["pos", ...SLICE_VALUE_FIELDS]),
             ...GEOMETRY_LEAVES.filter((leaf) => leaf !== "area"),

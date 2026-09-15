@@ -253,7 +253,7 @@ interface CellProps extends InspectorProps {
 
 function CellSpread(props: CellProps) {
   if (props.field.k === "point") return <PointSpread {...props} />;
-  if (props.field.k === "cut" || props.field.k === "footprint")
+  if (props.field.k === "cut" || props.field.k === "repetition")
     return <GeometrySpread {...props} />;
   return (
     <div className="winspector">
@@ -339,7 +339,7 @@ function GeometrySpread(props: CellProps) {
     : authored[0];
   const leaves = [
     ...authored,
-    ...(field.k === "footprint" ? ["equivalentCount"] : []),
+    ...(field.k === "repetition" ? ["equivalentCount"] : []),
     ...GEOMETRY_LEAVES,
   ];
   const result = resultAt(results, item.id, fieldKey, selected);
@@ -347,7 +347,7 @@ function GeometrySpread(props: CellProps) {
     <div className="winspector">
       <Head
         address={`${item.name || "unnamed"}.${fieldKey}.${selected}`}
-        kind={field.k === "footprint" ? "footprint" : "cut"}
+        kind={field.k === "repetition" ? "section repetition" : "cut"}
       />
       <PickTable
         rows={leaves.map((leaf) =>

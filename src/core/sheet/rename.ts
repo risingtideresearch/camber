@@ -100,7 +100,7 @@ export function renameReferences(
               z: formula(field.z),
             };
             break;
-          case "footprint":
+          case "repetition":
             next = {
               ...field,
               start: formula(field.start),

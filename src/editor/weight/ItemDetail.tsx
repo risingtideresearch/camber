@@ -23,9 +23,9 @@
 // field (`fieldUsers`), and the state of a move in progress (`useFieldReorder`). A block computing its own
 // would be quadratic in the size of a schedule, which is exactly the thing that grows.
 
-import type { FootprintMeasurements } from "../../core/sheet/footprints";
-import { FootprintAssumptions } from "./FootprintAssumptions";
-import { FootprintPreview, CutPreview } from "./FootprintPreview";
+import type { RepetitionMeasurements } from "../../core/sheet/repetitions";
+import { RepetitionAssumptions } from "./RepetitionAssumptions";
+import { RepetitionPreview, CutPreview } from "./RepetitionPreview";
 import {
   sliceMeasurementKey,
   type SliceMeasurements,
@@ -82,7 +82,7 @@ export interface ItemDetailProps {
   readonly book: WeightBook;
   readonly item: Item;
   readonly results: BookResults;
-  readonly footprints: FootprintMeasurements;
+  readonly repetitions: RepetitionMeasurements;
   readonly measurements: SliceMeasurements;
   readonly reading: "worst" | "likely";
   readonly focus: Focus | null;
@@ -97,7 +97,7 @@ const KIND_LABEL: Record<FieldKind, string> = {
   scalar: "a value",
   point: "a position",
   cut: "a section through the hull",
-  footprint: "a footprint",
+  repetition: "a section repetition",
 };
 
 // ---------- moving a field ----------
@@ -232,7 +232,7 @@ export function ItemDetail(props: ItemDetailProps) {
     item,
     results,
     measurements,
-    footprints,
+    repetitions,
     reading,
     focus,
     setFocus,
@@ -326,7 +326,7 @@ export function ItemDetail(props: ItemDetailProps) {
             index={index}
             results={results}
             measurements={measurements}
-            footprints={footprints}
+            repetitions={repetitions}
             reading={reading}
             completions={completions}
             reorder={reorder}
@@ -343,7 +343,7 @@ export function ItemDetail(props: ItemDetailProps) {
       </div>
 
       <div className="wdetailadd">
-        {(["scalar", "point", "cut", "footprint"] as const).map((kind) => (
+        {(["scalar", "point", "cut", "repetition"] as const).map((kind) => (
           <button
             key={kind}
             title={`Add ${KIND_LABEL[kind]}`}
@@ -397,7 +397,7 @@ interface FieldBlockProps {
   readonly field: Field;
   readonly index: number;
   readonly results: BookResults;
-  readonly footprints: FootprintMeasurements;
+  readonly repetitions: RepetitionMeasurements;
   readonly measurements: SliceMeasurements;
   readonly reading: "worst" | "likely";
   readonly completions: {
@@ -538,7 +538,7 @@ function FieldHeader({
           declared?.unitWarning ??
           (declared?.unitIsDerived
             ? "What the formula works out to. Type another unit of the same kind to show it in that instead."
-            : field.k === "footprint"
+            : field.k === "repetition"
               ? "Distance unit for bounds and spacing. Equivalent count is always dimensionless."
               : "What this field is written in — one unit covers all of its cells.")
         }
@@ -569,7 +569,7 @@ function FieldHeader({
           {derived ? "Derived" : "Coordinates"}
         </button>
       )}
-      {(field.k === "cut" || field.k === "footprint") && (
+      {(field.k === "cut" || field.k === "repetition") && (
         <select
           value={field.shape}
           aria-label="Cut orientation"
@@ -588,13 +588,13 @@ function FieldHeader({
           <option value="plane">Horizontal</option>
         </select>
       )}
-      {field.k === "footprint" && (
+      {field.k === "repetition" && (
         <select
-          aria-label="footprint repetition"
+          aria-label="Repetition mode"
           value={field.repetition}
           onChange={(event) =>
             send({
-              type: "setFootprintRepetition",
+              type: "setRepetitionMode",
               item: item.id,
               field: fieldKey,
               repetition: event.target.value as "spacing" | "count",
@@ -727,7 +727,7 @@ function RoleChips({
 }
 
 function FieldCells({
-  footprints,
+  repetitions,
   measurements,
   item,
   fieldKey,
@@ -781,7 +781,7 @@ function FieldCells({
             return (
               <label key={leaf} className="wfieldcell">
                 <span>
-                  {field.k === "footprint"
+                  {field.k === "repetition"
                     ? (
                         {
                           start: "From",
@@ -830,7 +830,7 @@ function FieldCells({
         </div>
       )}
 
-      {(field.k === "cut" || field.k === "footprint") && (
+      {(field.k === "cut" || field.k === "repetition") && (
         <div className="wgeometryinfo">
           {field.k === "cut" && (
             <CutPreview
@@ -839,8 +839,8 @@ function FieldCells({
               )}
             />
           )}
-          {field.k === "footprint" && (
-            <FootprintPreview
+          {field.k === "repetition" && (
+            <RepetitionPreview
               equivalentCount={
                 <Readout
                   {...{ results, item, fieldKey, reading }}
@@ -848,11 +848,11 @@ function FieldCells({
                 />
               }
               measurement={
-                footprints.get(sliceMeasurementKey(item.id, fieldKey))?.value
+                repetitions.get(sliceMeasurementKey(item.id, fieldKey))?.value
               }
             />
           )}
-          {(field.k === "cut" || field.k === "footprint") && (
+          {(field.k === "cut" || field.k === "repetition") && (
             <GeometryReadout {...{ field, results, item, fieldKey, reading }} />
           )}
         </div>
@@ -877,7 +877,7 @@ function FieldSummary({
   const leaves =
     field.k === "point"
       ? (["x", "y", "z"] as const)
-      : field.k === "footprint"
+      : field.k === "repetition"
         ? ["area"]
         : leavesOf(field);
   const values = leaves.map((leaf) =>
@@ -964,8 +964,8 @@ function GeometryReadout({
   const failure = resultAt(results, item.id, fieldKey, "area")?.error;
   return (
     <>
-      {field.k === "footprint" && <FootprintAssumptions />}
-      {(field.k === "footprint" || field.k === "cut") &&
+      {field.k === "repetition" && <RepetitionAssumptions />}
+      {(field.k === "repetition" || field.k === "cut") &&
         field.shape === "transverse" && (
           <p className="whint">
             World-vertical planes. Longitudinal position and spacing are
@@ -977,14 +977,14 @@ function GeometryReadout({
         <ResultIssue message={failure} severity="error" />
       ) : (
         <dl className="wmeasurelist">
-          {(field.k === "footprint"
+          {(field.k === "repetition"
             ? ["equivalentCount", ...GEOMETRY_LEAVES]
             : GEOMETRY_LEAVES
           ).map((leaf) => (
             <Fragment key={leaf}>
               <dt>
                 {leaf === "equivalentCount" ? "Equivalent count" : leaf}
-                {field.k === "footprint" &&
+                {field.k === "repetition" &&
                 !leaf.includes(".") &&
                 leaf !== "equivalentCount"
                   ? " (estimated total)"

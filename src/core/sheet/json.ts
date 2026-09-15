@@ -105,7 +105,7 @@ function storeField(field: Field): StoredField {
         },
         field.role,
       );
-    case "footprint":
+    case "repetition":
       return { ...field };
     case "cut":
       return {
@@ -183,7 +183,7 @@ function readField(raw: Record<string, unknown>, kind: FieldKind): Field {
         z: str(raw.z),
         from: str(raw.from),
       };
-    case "footprint":
+    case "repetition":
       return {
         ...field,
         shape: isSliceShape(str(raw.shape))
@@ -209,6 +209,12 @@ function readField(raw: Record<string, unknown>, kind: FieldKind): Field {
   }
 }
 
+/** Accept the former feature name only at the persistence boundary. */
+function readFieldKind(raw: unknown): FieldKind | null {
+  const kind = raw === "footprint" ? "repetition" : str(raw);
+  return isFieldKind(kind) ? kind : null;
+}
+
 function readScope(raw: unknown): ViewScope | null {
   const s = dict(raw);
   switch (str(s.k)) {
@@ -216,10 +222,10 @@ function readScope(raw: unknown): ViewScope | null {
       return { k: "all" };
     case "item":
       return str(s.item) ? { k: "item", item: str(s.item) } : null;
-    case "fieldType":
-      return isFieldKind(str(s.type))
-        ? { k: "fieldType", type: str(s.type) as FieldKind }
-        : null;
+    case "fieldType": {
+      const kind = readFieldKind(s.type);
+      return kind ? { k: "fieldType", type: kind } : null;
+    }
     case "facet":
       return str(s.key) && str(s.value)
         ? { k: "facet", key: str(s.key), value: str(s.value) }
@@ -269,10 +275,10 @@ export function readDocument(raw: Record<string, unknown>): WeightBook {
       const fields: Record<string, Field> = {};
       for (const [key, value] of Object.entries(dict(s.fields))) {
         const f = dict(value);
-        const kind = str(f.k);
+        const kind = readFieldKind(f.k);
         // A field whose kind is unreadable is dropped, per the rule that anything unreadable goes and the
         // rest opens. There is no page to fall back on any more, so the kind has to be on the field.
-        if (!isFieldKind(kind)) continue;
+        if (!kind) continue;
         fields[key] = readField(f, kind);
       }
 

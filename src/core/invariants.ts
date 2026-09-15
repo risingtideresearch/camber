@@ -218,12 +218,12 @@ export function bookViolations(book: WeightBook): string[] {
       if (!isFieldKind(field.k))
         out.push(`items[${i}].${key} has an unknown kind "${field.k}"`);
       else if (
-        (field.k === "cut" || field.k === "footprint") &&
+        (field.k === "cut" || field.k === "repetition") &&
         !isSliceShape(field.shape)
       )
         out.push(`items[${i}].${key} cuts with an unknown "${field.shape}"`);
       else if (
-        field.k === "footprint" &&
+        field.k === "repetition" &&
         field.repetition !== "count" &&
         field.repetition !== "spacing"
       )

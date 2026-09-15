@@ -1,8 +1,11 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { FootprintAssumptions } from "../src/editor/weight/FootprintAssumptions";
-import { FootprintPreview } from "../src/editor/weight/FootprintPreview";
-import { nearestSample, samplePath } from "../src/editor/weight/footprintPlots";
+import { RepetitionAssumptions } from "../src/editor/weight/RepetitionAssumptions";
+import { RepetitionPreview } from "../src/editor/weight/RepetitionPreview";
+import {
+  nearestSample,
+  samplePath,
+} from "../src/editor/weight/repetitionPlots";
 import assert from "node:assert/strict";
 import { defaultHull } from "../src/core/hull";
 import { assemble } from "../src/core/runtime";
@@ -13,16 +16,16 @@ import {
   emptyBook,
   interpretSheetCommand,
   type Field,
-  type FootprintField,
+  type RepetitionField,
   type WeightBook,
 } from "../src/core/sheet/book";
 import { evaluateBook, resultAt, fieldUsers } from "../src/core/sheet/evaluate";
 import { buildSheetJson, parseSheet } from "../src/core/sheet/json";
 import { intersectPlane, type CutTriangle } from "../src/core/sheet/planeCuts";
 import {
-  measureFootprint,
-  type FootprintResult,
-} from "../src/core/sheet/footprints";
+  measureRepetition,
+  type RepetitionResult,
+} from "../src/core/sheet/repetitions";
 import {
   geometryValue,
   measureAt,
@@ -156,13 +159,13 @@ const varying = (_shape: unknown, x: number) =>
     openLength: measureAt(5 + x, [x, 0, 4 / (5 + x)]),
     closedLength: measureAt(6 + 2 * x, [x, 0, 1]),
   });
-const measured = measureFootprint(varying, "transverse", 1, 3);
+const measured = measureRepetition(varying, "transverse", 1, 3);
 assert.ok(measured.value, measured.error ?? "valid integral");
 near(measured.value.integrals.area.amount, 12);
 near(measured.value.integrals.openLength.amount, 14);
 near(geometryValue(measured.value.integrals, "areaCg.x"), 19 / 9, 1e-4);
-const left = measureFootprint(varying, "transverse", 1, 2),
-  right = measureFootprint(varying, "transverse", 2, 3);
+const left = measureRepetition(varying, "transverse", 1, 2),
+  right = measureRepetition(varying, "transverse", 2, 3);
 near(
   left.value!.integrals.area.amount + right.value!.integrals.area.amount,
   measured.value.integrals.area.amount,
@@ -172,9 +175,9 @@ near(
   measured.value.integrals.area.moment[0],
   3e-4,
 );
-assert.match(measureFootprint(varying, "transverse", 3, 1).error!, /From/);
+assert.match(measureRepetition(varying, "transverse", 3, 1).error!, /From/);
 assert.match(
-  measureFootprint(
+  measureRepetition(
     () => {
       throw new Error("invalid geometry");
     },
@@ -186,18 +189,18 @@ assert.match(
 );
 // Empty intersections are valid zero contributions; centroids remain undefined.
 assert.equal(
-  measureFootprint(() => raw(zeroMeasures()), "transverse", 1, 3).value!
+  measureRepetition(() => raw(zeroMeasures()), "transverse", 1, 3).value!
     .integrals.area.amount,
   0,
 );
-const constant = measureFootprint(() => raw(section), "transverse", 1, 3);
+const constant = measureRepetition(() => raw(section), "transverse", 1, 3);
 near(constant.value!.integrals.area.amount, 8);
 console.log(
-  "Footprint quadrature: analytic variable/constant sections, split additivity and failures passed",
+  "Repetition quadrature: analytic variable/constant sections, split additivity and failures passed",
 );
 
-const footprint: FootprintField = {
-  k: "footprint",
+const repetition: RepetitionField = {
+  k: "repetition",
   shape: "transverse",
   unit: "m",
   start: "1",
@@ -213,7 +216,7 @@ const scalar = (formula: string, unit = ""): Field => ({
   role: null,
 });
 const makeBook = (
-  f: FootprintField = footprint,
+  f: RepetitionField = repetition,
   extra: Record<string, Field> = {},
 ): WeightBook => ({
   ...emptyBook(),
@@ -252,7 +255,7 @@ const makeBook = (
     },
   ],
 });
-const evaluate = (book: WeightBook, result: FootprintResult = measured) =>
+const evaluate = (book: WeightBook, result: RepetitionResult = measured) =>
   evaluateBook(book, null, new Map(), new Map([["i members", result]]));
 const book = makeBook();
 const results = evaluate(book);
@@ -270,13 +273,13 @@ near(cell("frameCg", "z").quantity!.v, 4 / 7);
 near(cell("qualified").quantity!.v, cell("cg", "x").quantity!.v);
 assert.equal(Object.keys(cell("cg", "x").quantity!.d).length, 0);
 near(cell("ratio").reading!.worst.hi, 0, 1e-12);
-const counted = evaluate(makeBook({ ...footprint, repetition: "count" }));
+const counted = evaluate(makeBook({ ...repetition, repetition: "count" }));
 near(resultAt(counted, "i", "members", "area")!.quantity!.v, 24);
 assert.equal(
   Object.keys(resultAt(counted, "i", "cg", "x")!.quantity!.d).length,
   0,
 );
-const shifted = evaluate(makeBook({ ...footprint, start: "1 ± 0.01" }));
+const shifted = evaluate(makeBook({ ...repetition, start: "1 ± 0.01" }));
 const shiftedArea = resultAt(shifted, "i", "members", "area")!;
 near(shiftedArea.reading!.worst.hi, 2.48);
 const gradient = Object.entries(
@@ -284,13 +287,13 @@ const gradient = Object.entries(
 )[0][1];
 const cgAt = (a: number) =>
   geometryValue(
-    measureFootprint(varying, "transverse", a, 3).value!.integrals,
+    measureRepetition(varying, "transverse", a, 3).value!.integrals,
     "areaCg.x",
   );
 near(gradient, (cgAt(1.0001) - cgAt(0.9999)) / 0.0002, 1e-4);
 const countBounds = evaluate(
   makeBook({
-    ...footprint,
+    ...repetition,
     repetition: "count",
     start: "1 ± 0.01",
     count: "4",
@@ -298,14 +301,14 @@ const countBounds = evaluate(
 );
 near(resultAt(countBounds, "i", "members", "area")!.reading!.worst.hi, 0.04);
 for (const f of [
-  { ...footprint, spacing: "0" },
-  { ...footprint, repetition: "count" as const, count: "density" },
-  { ...footprint, start: "3" },
+  { ...repetition, spacing: "0" },
+  { ...repetition, repetition: "count" as const, count: "density" },
+  { ...repetition, start: "3" },
 ])
   assert.ok(resultAt(evaluate(makeBook(f)), "i", "mass")!.error);
 assert.match(
   resultAt(
-    evaluate(makeBook({ ...footprint, spacing: "0.5 ± 0.6" })),
+    evaluate(makeBook({ ...repetition, spacing: "0.5 ± 0.6" })),
     "i",
     "members",
     "area",
@@ -313,7 +316,7 @@ assert.match(
   /zero/,
 );
 for (const leaf of ["start", "end", "spacing"] as const) {
-  const bad = evaluate(makeBook({ ...footprint, [leaf]: "members.area / 1" }));
+  const bad = evaluate(makeBook({ ...repetition, [leaf]: "members.area / 1" }));
   assert.match(
     resultAt(bad, "i", "members", leaf)!.error!,
     /cannot depend on measured/,
@@ -321,7 +324,7 @@ for (const leaf of ["start", "end", "spacing"] as const) {
 }
 const indirect = evaluate(
   makeBook(
-    { ...footprint, start: "bridge" },
+    { ...repetition, start: "bridge" },
     { bridge: scalar("members.areaCg.x") },
   ),
 );
@@ -333,7 +336,7 @@ assert.match(
 const firstPass = evaluateBook(book, null);
 assert.equal(resultAt(firstPass, "i", "members", "start")!.error, null);
 assert.ok(resultAt(firstPass, "i", "members", "area")!.error);
-const emptyResult = measureFootprint(
+const emptyResult = measureRepetition(
   () => raw(zeroMeasures()),
   "transverse",
   1,
@@ -344,14 +347,14 @@ near(resultAt(empty, "i", "mass")!.quantity!.v, 0);
 assert.match(resultAt(empty, "i", "cg", "x")!.error!, /undefined/);
 assert.ok((fieldUsers(book, results, "i").get("members")?.length ?? 0) > 0);
 console.log(
-  "Footprint evaluation: formulas, moments, shared uncertainty, bounds, count and geometry dependency guards passed",
+  "Repetition evaluation: formulas, moments, shared uncertainty, bounds, count and geometry dependency guards passed",
 );
 
-const phasedMeasurement = measureFootprint(varying, "transverse", 1, 3, 0.5);
+const phasedMeasurement = measureRepetition(varying, "transverse", 1, 3, 0.5);
 assert.equal(phasedMeasurement.value!.phaseTotals?.length, 16);
 const phased = evaluate(
   makeBook(
-    { ...footprint, spacing: "0.5" },
+    { ...repetition, spacing: "0.5" },
     { phaseCancel: scalar("members.closedLength - 2 * members.openLength") },
   ),
   phasedMeasurement,
@@ -365,21 +368,21 @@ for (const [key, leaf] of [
   ["cg", "x"],
 ] as const)
   assert.equal(resultAt(phased, "i", key, leaf)?.unitWarning, null);
-const assumptions = renderToStaticMarkup(createElement(FootprintAssumptions));
+const assumptions = renderToStaticMarkup(createElement(RepetitionAssumptions));
 assert.match(assumptions, /class="wpreviewtoggle" aria-expanded="false"/);
 assert.match(assumptions, /Estimation assumptions/);
 assert.match(assumptions, /class="wexptwist"/);
 assert.doesNotMatch(assumptions, /sampled envelope/);
 
 assert.equal(phasedArea.reading!.terms.length, 1);
-assert.match(phasedArea.reading!.terms[0].label, /grid-placement uncertainty/);
+assert.match(phasedArea.reading!.terms[0].label, /placement uncertainty/);
 assert.ok(resultAt(phased, "i", "cg", "x")!.reading!.likely.hi > 0);
 // The same phase moves every measured property together. Here the varying
 // parts cancel exactly, which independent per-property tolerances could not see.
 near(resultAt(phased, "i", "phaseCancel")!.reading!.likely.hi, 0, 1e-12);
 const phasedConstant = evaluate(
-  makeBook({ ...footprint, spacing: "0.5" }),
-  measureFootprint(() => raw(section), "transverse", 1, 3, 0.5),
+  makeBook({ ...repetition, spacing: "0.5" }),
+  measureRepetition(() => raw(section), "transverse", 1, 3, 0.5),
 );
 near(
   resultAt(phasedConstant, "i", "members", "area")!.reading!.likely.hi,
@@ -393,7 +396,7 @@ console.log(
 // Stratification captures rare extra members exactly for constant sections.
 for (const count of [0.01, 0.99, 1.01, 3.999, 4.001, 254.5, 255.5, 256.5]) {
   const pitch = 2 / count;
-  const measurement = measureFootprint(
+  const measurement = measureRepetition(
     () => raw(section),
     "transverse",
     1,
@@ -402,7 +405,7 @@ for (const count of [0.01, 0.99, 1.01, 3.999, 4.001, 254.5, 255.5, 256.5]) {
   );
   assert.ok(measurement.value, measurement.error ?? "valid phase sampling");
   const result = evaluate(
-    makeBook({ ...footprint, spacing: String(pitch) }),
+    makeBook({ ...repetition, spacing: String(pitch) }),
     measurement,
   );
   const reading = resultAt(result, "i", "members", "area")!.reading!;
@@ -421,13 +424,13 @@ for (const count of [0.01, 0.99, 1.01, 3.999, 4.001, 254.5, 255.5, 256.5]) {
     );
 }
 assert.match(
-  measureFootprint(() => raw(section), "transverse", 1, 3, 2 / 1000).error!,
+  measureRepetition(() => raw(section), "transverse", 1, 3, 2 / 1000).error!,
   /sampling budget/,
 );
 // An exact fractional equivalent count still has placement uncertainty.
 const equivalent = evaluate(
-  makeBook({ ...footprint, repetition: "count", count: "0.01" }),
-  measureFootprint(() => raw(section), "transverse", 1, 3, 2 / 0.01),
+  makeBook({ ...repetition, repetition: "count", count: "0.01" }),
+  measureRepetition(() => raw(section), "transverse", 1, 3, 2 / 0.01),
 );
 near(
   resultAt(equivalent, "i", "members", "area")!.reading!.likely.hi,
@@ -442,7 +445,7 @@ assert.match(
 // product linearization, rather than mixing finite centroid and amount deltas.
 const momentResult = evaluate(
   makeBook(
-    { ...footprint, spacing: "0.5" },
+    { ...repetition, spacing: "0.5" },
     {
       moment: scalar("members.area * members.areaCg.x"),
     },
@@ -472,7 +475,7 @@ const ellipse = likelyRegion(
 near(Math.max(...ellipse.map((p) => p[0])), cgX.reading!.likely.hi);
 assert.ok(cgX.reading!.worst.hi > cgX.reading!.likely.hi);
 console.log(
-  "Grid-placement: fractional counts, empty layouts, budget, moment consistency and plotted envelopes passed",
+  "Placement: fractional counts, empty layouts, budget, moment consistency and plotted envelopes passed",
 );
 
 // Model groups are mutually exclusive within each group, independent between
@@ -543,13 +546,13 @@ near(read(mixedX, mixedSources).worst.lo, 6);
 near(read(mixedX, mixedSources).worst.hi, 5);
 for (const pitch of [0, -1, Infinity, NaN])
   assert.match(
-    measureFootprint(varying, "transverse", 1, 3, pitch).error!,
+    measureRepetition(varying, "transverse", 1, 3, pitch).error!,
     /positive spacing/,
   );
 // Exact count fixes mean density, not placement. Equivalent input modes must
 // yield identical placement spreads for both summed geometry and centroid.
 const countWithPhases = evaluate(
-  makeBook({ ...footprint, repetition: "count", count: "4" }),
+  makeBook({ ...repetition, repetition: "count", count: "4" }),
   phasedMeasurement,
 );
 for (const [key, leaf] of [
@@ -570,13 +573,40 @@ near(
 );
 
 assert.deepEqual(parseSheet(buildSheetJson(book)), book);
+// Old saved fields and type-filtered views migrate without changing authored
+// names or formulas. New saves use only the new field-kind name.
+const legacyBook = {
+  ...book,
+  views: [
+    {
+      id: "legacy-repetitions",
+      name: "Members",
+      scope: { k: "fieldType" as const, type: "repetition" as const },
+      groupBy: [],
+      layout: "table" as const,
+    },
+  ],
+};
+const legacyJson = buildSheetJson(legacyBook)
+  .replace(/"k": "repetition"/g, '"k": "footprint"')
+  .replace(/"type": "repetition"/g, '"type": "footprint"');
+const migrated = parseSheet(legacyJson);
+assert.deepEqual(migrated, legacyBook);
+assert.doesNotMatch(buildSheetJson(migrated), /"(?:k|type)": "footprint"/);
+const migratedArea = resultAt(evaluate(migrated), "i", "members", "area")!;
+assert.ok(migratedArea.reading);
+assert.deepEqual(
+  migratedArea.reading,
+  resultAt(evaluate(legacyBook), "i", "members", "area")!.reading,
+);
+
 assert.equal(bookViolations(book).length, 0);
-assert.equal(blankField("footprint").k, "footprint");
+assert.equal(blankField("repetition").k, "repetition");
 const renamed = interpretSheetCommand(book, {
   type: "renameField",
   item: "i",
   key: "members",
-  name: "footprint",
+  name: "repetition",
   updateReferences: true,
 });
 assert.ok(!("rejected" in renamed));
@@ -584,20 +614,20 @@ const renamedResults = evaluateBook(
   renamed.book,
   null,
   new Map(),
-  new Map([["i footprint", measured]]),
+  new Map([["i repetition", measured]]),
 );
 assert.equal(resultAt(renamedResults, "i", "mass")!.error, null);
 assert.equal(resultAt(renamedResults, "i", "qualified")!.error, null);
 const countMode = interpretSheetCommand(book, {
-  type: "setFootprintRepetition",
+  type: "setRepetitionMode",
   item: "i",
   field: "members",
   repetition: "count",
 });
 assert.ok(!("rejected" in countMode));
 assert.equal(
-  (countMode.book.items[0].fields.members as FootprintField).spacing,
-  footprint.spacing,
+  (countMode.book.items[0].fields.members as RepetitionField).spacing,
+  repetition.spacing,
 );
 for (const leaf of ["formula", "x"] as const) {
   const completions = completionsFor(book, book.items[0], leaf);
@@ -617,7 +647,7 @@ for (const leaf of ["formula", "x"] as const) {
   );
 }
 console.log(
-  "Footprint persistence, commands, reference rewriting and autocomplete passed",
+  "Repetition persistence, commands, reference rewriting and autocomplete passed",
 );
 
 const hull = defaultHull();
@@ -628,10 +658,10 @@ const measure = createSectionMeasurer(model, sampling),
 for (const shape of ["transverse", "longitudinal", "plane"] as const) {
   const a = shape === "transverse" ? 1 : shape === "longitudinal" ? -0.5 : 0.2,
     b = shape === "transverse" ? 4 : shape === "longitudinal" ? 0.5 : 0.8;
-  const result = measureFootprint(measure, shape, a, b);
+  const result = measureRepetition(measure, shape, a, b);
   assert.ok(result.value, result.error ?? "valid hull integral");
   assert.ok(result.value.integrals.area.amount > 0);
-  const grid = measureFootprint(measure, shape, a, b, (b - a) / 6.3);
+  const grid = measureRepetition(measure, shape, a, b, (b - a) / 6.3);
   assert.ok(grid.value, grid.error ?? "valid hull phase sampling");
   near(
     grid.value.phaseTotals!.reduce((sum, p) => sum + p.weight, 0),
@@ -672,7 +702,7 @@ near(resultAt(cutResults, "c", "cg")!.reading!.worst.hi, 0);
 assert.ok(resultAt(cutResults, "c", "area")!.reading!.worst.hi > 0);
 assert.deepEqual(parseSheet(buildSheetJson(cutBook)), cutBook);
 console.log(
-  "Real hull: all orientations, Footprint integration, lateral symmetry and legacy aliases passed",
+  "Real hull: all orientations, Repetition integration, lateral symmetry and legacy aliases passed",
 );
 
 const raked = assemble({ ...hull, deckRake: 0.12 });
@@ -695,7 +725,7 @@ for (const p of horizontal.sheetContours.flat()) near(p[2], 0.6);
 near(rakedMeasure("station", 2).area, measure("station", 2).area);
 let sequence = 0;
 assert.match(
-  measureFootprint(
+  measureRepetition(
     () =>
       raw({
         area: measureAt(++sequence, [1, 0, 0]),
@@ -759,16 +789,16 @@ console.log(
 
 // The preview section count is visualization, not the authored equivalent count.
 const previewMarkup = renderToStaticMarkup(
-  createElement(FootprintPreview, {
+  createElement(RepetitionPreview, {
     measurement: { ...measured.value!, samples: previewSamples },
     equivalentCount: createElement("span", null, "14 ± 2"),
   }),
 );
-assert.ok(previewMarkup.includes("footprint preview"));
+assert.ok(previewMarkup.includes("repetition preview"));
 assert.ok(previewMarkup.includes("Equivalent count"));
 assert.ok(previewMarkup.includes("14 ± 2"));
 assert.ok(previewMarkup.includes("3 preview sections · visualization only"));
 assert.ok(previewMarkup.includes('aria-label="Preview section"'));
-assert.ok(!previewMarkup.includes("Footprint preview"));
+assert.ok(!previewMarkup.includes("Repetition preview"));
 assert.ok(!previewMarkup.includes("Preview sample"));
 console.log("Preview section labeling stays distinct from equivalent count");

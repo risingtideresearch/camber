@@ -2968,14 +2968,14 @@ button.wtermgo:focus-visible {
   overflow-wrap: anywhere;
 }
 .wgeometryinfo > .whint,
-.wfootprintpreview .whint {
+.wrepetitionpreview .whint {
   margin: 8px 0;
   padding: 0;
 }
-.wfieldblock.footprint .wfieldcell {
+.wfieldblock.repetition .wfieldcell {
   grid-template-columns: 96px minmax(130px, 1fr) minmax(110px, auto);
 }
-.wfootprintpreview {
+.wrepetitionpreview {
   margin: 4px 0 12px;
 }
 .wpreviewtoggle {
@@ -3030,12 +3030,12 @@ button.wtermgo:focus-visible {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
 }
-.wfootprintprojections {
+.wrepetitionprojections {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
-.wfootprintprojections figure {
+.wrepetitionprojections figure {
   min-width: 0;
   margin: 0;
   border: 1px solid var(--line);
@@ -3079,7 +3079,7 @@ button.wtermgo:focus-visible {
   fill: none;
   stroke: currentColor;
 }
-.wfootprintprojections figcaption {
+.wrepetitionprojections figcaption {
   padding: 0 8px 6px;
   color: var(--mut);
   font-size: 10px;
@@ -3107,21 +3107,21 @@ button.wtermgo:focus-visible {
 .wpreviewsample strong {
   color: var(--fore);
 }
-.wfootprintpreview table {
+.wrepetitionpreview table {
   width: 100%;
   border-collapse: collapse;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
-.wfootprintpreview td,
-.wfootprintpreview th {
+.wrepetitionpreview td,
+.wrepetitionpreview th {
   padding: 4px;
   text-align: right;
 }
-.wfootprintpreview tr.on {
+.wrepetitionpreview tr.on {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
-.wfootprintpreview td button {
+.wrepetitionpreview td button {
   border: 0;
   background: transparent;
   color: var(--accent);
@@ -3132,12 +3132,12 @@ button.wtermgo:focus-visible {
   .wgeometryinfo {
     margin-right: 8px;
   }
-  .wfieldblock.footprint .wfieldcell {
+  .wfieldblock.repetition .wfieldcell {
     grid-template-columns: 80px minmax(0, 1fr);
   }
 }
 @container (max-width: 340px) {
-  .wfootprintprojections {
+  .wrepetitionprojections {
     grid-template-columns: minmax(0, 1fr);
   }
 }

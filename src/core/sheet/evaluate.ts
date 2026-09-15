@@ -42,7 +42,7 @@ import {
   geometryValue,
   type Measure,
 } from "./sectionMeasures";
-import type { FootprintMeasurements } from "./footprints";
+import type { RepetitionMeasurements } from "./repetitions";
 import {
   evaluate,
   FormulaError,
@@ -341,14 +341,14 @@ export function evaluateBook(
   book: WeightBook,
   metrics: HullMetrics | null,
   sliceMeasurements: SliceMeasurements = new Map(),
-  footprintMeasurements: FootprintMeasurements = new Map(),
+  repetitionMeasurements: RepetitionMeasurements = new Map(),
 ): BookResults {
   const cells = new Map<string, Cell>();
   const sources = new Map<string, Source>();
   let sourceSeq = 0;
   // One component per sampled grid phase. Components share a group so `read`
   // presents their covariance-preserving RMS as one approximation term.
-  const footprintPhaseSources = new Map<string, readonly Source[]>();
+  const repetitionPhaseSources = new Map<string, readonly Source[]>();
 
   // Item names are globally unique, so ONE index serves the whole book — the page model needed one per page
   // because the same name could mean different things on two pages, and that is exactly the ambiguity items
@@ -387,7 +387,7 @@ export function evaluateBook(
       !measuredLeaf &&
       (field?.k === "point" ||
         field?.k === "cut" ||
-        (field?.k === "footprint" && leaf !== "count"));
+        (field?.k === "repetition" && leaf !== "count"));
     // Positions have a known dimension independent of their formula. A mass unit on a scalar is useful; on
     // a coordinate it would make geometry interpret kilograms as metres, so refuse it at the cell boundary.
     const unitError =
@@ -395,7 +395,7 @@ export function evaluateBook(
       (position &&
       declaration.declared &&
       !sameDim(declaration.declared.dim, LENGTH)
-        ? `${field.k === "point" ? "point coordinates" : field.k === "footprint" ? "footprint bounds and spacing" : "cut positions"} must use a distance unit — try m, cm, mm, in, or ft`
+        ? `${field.k === "point" ? "point coordinates" : field.k === "repetition" ? "repetition bounds and spacing" : "cut positions"} must use a distance unit — try m, cm, mm, in, or ft`
         : null);
     const declared = declaration.declared;
     let tree: Node | null = null;
@@ -446,12 +446,12 @@ export function evaluateBook(
           field,
           leaf,
           derivation ?? leafOf(field, leaf) ?? "",
-          field.k === "footprint" && leaf === "count" ? "" : fieldUnit(field),
+          field.k === "repetition" && leaf === "count" ? "" : fieldUnit(field),
         );
-      if (field.k === "cut" || field.k === "footprint")
+      if (field.k === "cut" || field.k === "repetition")
         for (const leaf of [
           ...GEOMETRY_LEAVES,
-          ...(field.k === "footprint" ? ["equivalentCount"] : []),
+          ...(field.k === "repetition" ? ["equivalentCount"] : []),
         ])
           // Measured addresses are read-only results, never authored command leaves.
           addCell(item, key, field, leaf, "[measured]", "", leaf);
@@ -550,7 +550,7 @@ export function evaluateBook(
     // area-weighted centre of a set of sections is that same expression with areas where the masses were.
     const axis = currentCell?.leaf;
     if (
-      field.k !== "footprint" &&
+      field.k !== "repetition" &&
       (axis === "x" || axis === "y" || axis === "z")
     ) {
       if (field.k === "point") return valueAt(item.id, key, at, axis);
@@ -579,7 +579,7 @@ export function evaluateBook(
         `${item.name}.${key} is a single value — .${leaf} is one dot too deep`,
         at,
       );
-    if (field.k === "cut" || field.k === "footprint") {
+    if (field.k === "cut" || field.k === "repetition") {
       if ((leavesOf(field) as string[]).includes(leaf))
         return valueAt(item.id, key, at, leaf as FieldLeaf);
       if ((CG_NAMES as readonly string[]).includes(leaf)) {
@@ -598,7 +598,7 @@ export function evaluateBook(
       if (field.k === "cut") leaf = aliases[leaf] ?? leaf;
       if (
         !GEOMETRY_LEAVES.includes(leaf) &&
-        !(field.k === "footprint" && leaf === "equivalentCount")
+        !(field.k === "repetition" && leaf === "equivalentCount")
       )
         fail(
           `a ${field.k} has no ${leaf} — choose area, openLength, closedLength, or their Cg coordinates`,
@@ -607,7 +607,7 @@ export function evaluateBook(
       currentCell!.usesSliceMeasurement = true;
       if (cutPositionDepth > 0)
         fail(
-          "a cut position or footprint input cannot depend on measured cut values or footprints",
+          "a cut position or repetition input cannot depend on measured cut values or repetitions",
           at,
         );
       if (field.k === "cut") {
@@ -642,7 +642,10 @@ export function evaluateBook(
           at,
         );
       if (!Number.isFinite(repeat.v) || repeat.v <= 0 || end.v <= start.v)
-        fail("footprint needs positive repetition and From less than To", at);
+        fail(
+          "section repetition needs positive spacing/count and From less than To",
+          at,
+        );
       const span = sub(end, start);
       const density =
         field.repetition === "count"
@@ -655,13 +658,13 @@ export function evaluateBook(
           "The input uncertainty reaches zero spacing/count or reversed bounds; this local approximation is unreliable";
       if (leaf === "equivalentCount")
         return field.repetition === "count" ? repeat : div(span, repeat);
-      const result = footprintMeasurements.get(
+      const result = repetitionMeasurements.get(
         sliceMeasurementKey(item.id, key),
       );
       if (!result?.value)
         return fail(
           result?.error ??
-            `${item.name}.${key} has not produced a valid footprint`,
+            `${item.name}.${key} has not produced a valid repetition`,
           at,
         );
       const measured = result.value;
@@ -697,15 +700,15 @@ export function evaluateBook(
       const phases = measured.phaseTotals;
       if (!phases?.length) return nominal;
       const phaseKey = sliceMeasurementKey(item.id, key);
-      let phaseSources = footprintPhaseSources.get(phaseKey);
+      let phaseSources = repetitionPhaseSources.get(phaseKey);
       if (!phaseSources) {
-        const group = `footprint-phase:${phaseKey}`;
+        const group = `repetition-phase:${phaseKey}`;
         const target = cellKey(item.id, key, field.repetition);
         phaseSources = phases.map((phase) => {
           const source: Source = {
             id: `s${sourceSeq++}`,
             sample: { group, weight: phase.weight },
-            label: `${item.name}.${key} — grid-placement uncertainty`,
+            label: `${item.name}.${key} — placement uncertainty`,
             at: target,
             lo: 1,
             hi: 1,
@@ -713,7 +716,7 @@ export function evaluateBook(
           sources.set(source.id, source);
           return source;
         });
-        footprintPhaseSources.set(phaseKey, phaseSources);
+        repetitionPhaseSources.set(phaseKey, phaseSources);
       }
       // Linearize the centroid from amount and moment together. This makes
       // amount * centroid recover the same first-order moment deviations.
@@ -722,7 +725,7 @@ export function evaluateBook(
         phases.some((p) => p.measures[name].amount === 0)
       )
         fail(
-          "Grid-placement centroid is undefined for an empty sampled layout; increase the footprint extent or repetition density",
+          "Placement centroid is undefined for an empty sampled layout; increase the repetition extent or repetition density",
           at,
         );
       const approximation = Object.fromEntries(
@@ -888,7 +891,7 @@ export function evaluateBook(
       );
     }
     if (rest.length === 1) return bareFieldValue(item, key, field!, at);
-    if (rest.length > 2 && field!.k !== "cut" && field!.k !== "footprint")
+    if (rest.length > 2 && field!.k !== "cut" && field!.k !== "repetition")
       fail(`${path.join(".")} is one dot too deep`, at);
     return leafValue(item, key, field!, rest.slice(1).join("."), at);
   };
@@ -976,7 +979,7 @@ export function evaluateBook(
         if (
           rest.length === 1 ||
           sibling.k === "cut" ||
-          sibling.k === "footprint"
+          sibling.k === "repetition"
         )
           return leafValue(currentItem, head, sibling, rest.join("."), at);
         fail(`${path.join(".")} is one dot too deep`, at);
@@ -1071,7 +1074,7 @@ export function evaluateBook(
     const key = cellKey(cell.item?.id ?? OUTPUT_ITEM, cell.fieldKey, cell.leaf);
     const isCutPosition =
       !cell.measuredLeaf &&
-      (cell.field?.k === "cut" || cell.field?.k === "footprint");
+      (cell.field?.k === "cut" || cell.field?.k === "repetition");
     cell.state = "running";
     visiting.push(key);
     const savedItem = currentItem;
@@ -1099,14 +1102,14 @@ export function evaluateBook(
         const position =
           cell.field?.k === "point" ||
           cell.field?.k === "cut" ||
-          (cell.field?.k === "footprint" && cell.leaf !== "count");
+          (cell.field?.k === "repetition" && cell.leaf !== "count");
         if (position && !sameDim(value.dim, LENGTH))
           cell.error = {
-            message: `${cell.field?.k === "point" ? "a point coordinate" : cell.field?.k === "footprint" ? "a footprint bound or spacing" : "a cut position"} must be a distance, and this works out to ${naturalUnit(value.dim).label || "a plain number"}`,
+            message: `${cell.field?.k === "point" ? "a point coordinate" : cell.field?.k === "repetition" ? "a repetition bound or spacing" : "a cut position"} must be a distance, and this works out to ${naturalUnit(value.dim).label || "a plain number"}`,
             at: -1,
           };
         else if (
-          cell.field?.k === "footprint" &&
+          cell.field?.k === "repetition" &&
           cell.leaf === "count" &&
           !isDimless(value.dim)
         )

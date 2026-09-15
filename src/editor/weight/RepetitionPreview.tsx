@@ -1,6 +1,6 @@
 import { useState, type PointerEvent, type ReactNode } from "react";
 import { GeometryDisclosure } from "./GeometryDisclosure";
-import type { FootprintMeasurement } from "../../core/sheet/footprints";
+import type { RepetitionMeasurement } from "../../core/sheet/repetitions";
 import type { RawSliceMeasurement } from "../../core/sheet/slices";
 import { geometryValue } from "../../core/sheet/sectionMeasures";
 import type { Vec3 } from "../../core/math";
@@ -8,15 +8,15 @@ import { sig } from "./weightFormat";
 import {
   nearestSample,
   samplePath,
-  type FootprintView,
+  type RepetitionView,
   type Projection,
-} from "./footprintPlots";
+} from "./repetitionPlots";
 
-export function FootprintPreview({
+export function RepetitionPreview({
   measurement,
   equivalentCount,
 }: {
-  readonly measurement: FootprintMeasurement | undefined;
+  readonly measurement: RepetitionMeasurement | undefined;
   readonly equivalentCount: ReactNode;
 }) {
   if (!measurement) return null;
@@ -24,7 +24,7 @@ export function FootprintPreview({
     <MeasurePreview
       samples={measurement.samples}
       equivalentCount={equivalentCount}
-      footprint
+      repetition
     />
   );
 }
@@ -35,10 +35,10 @@ export function CutPreview({
   readonly measurement: RawSliceMeasurement | undefined;
 }) {
   if (!measurement) return null;
-  return <MeasurePreview samples={[measurement]} footprint={false} />;
+  return <MeasurePreview samples={[measurement]} repetition={false} />;
 }
 
-const VIEWS: readonly { value: FootprintView; label: string; unit: string }[] =
+const VIEWS: readonly { value: RepetitionView; label: string; unit: string }[] =
   [
     { value: "area", label: "Area", unit: "m²" },
     { value: "closedLength", label: "Closed length", unit: "m" },
@@ -49,14 +49,14 @@ const VIEWS: readonly { value: FootprintView; label: string; unit: string }[] =
  * scale and shows that sample using the selected geometric measure. */
 function MeasurePreview({
   samples,
-  footprint,
+  repetition,
   equivalentCount,
 }: {
   samples: readonly RawSliceMeasurement[];
-  footprint: boolean;
+  repetition: boolean;
   equivalentCount?: ReactNode;
 }) {
-  const [view, setView] = useState<FootprintView>("area");
+  const [view, setView] = useState<RepetitionView>("area");
   const [picked, setPicked] = useState(Math.floor(samples.length / 2));
   const [hover, setHover] = useState<number | null>(null);
   const active = Math.min(hover ?? picked, Math.max(0, samples.length - 1));
@@ -103,14 +103,14 @@ function MeasurePreview({
     <svg
       viewBox="0 0 300 184"
       role="img"
-      aria-label={`${isProfile ? "Profile x/z" : "Section y/z"}, ${spec.label}, ${footprint ? `preview section ${active + 1} of ${samples.length}` : "cut"}`}
-      className={`wpreviewplot ${view}${isProfile && footprint ? " interactive" : ""}`}
+      aria-label={`${isProfile ? "Profile x/z" : "Section y/z"}, ${spec.label}, ${repetition ? `preview section ${active + 1} of ${samples.length}` : "cut"}`}
+      className={`wpreviewplot ${view}${isProfile && repetition ? " interactive" : ""}`}
       onPointerMove={
-        isProfile && footprint ? (event) => setHover(hit(event)) : undefined
+        isProfile && repetition ? (event) => setHover(hit(event)) : undefined
       }
       onPointerLeave={isProfile ? () => setHover(null) : undefined}
       onPointerDown={
-        isProfile && footprint
+        isProfile && repetition
           ? (event) => {
               const index = hit(event);
               if (index !== null) setPicked(index);
@@ -141,18 +141,18 @@ function MeasurePreview({
         >
           <circle r="4" />
           <path d="M-7,0H7 M0,-7V7" />
-          <title>{`${footprint ? `Preview section ${active + 1}` : "Cut"} ${spec.label.toLowerCase()} centroid: ${centroid.map((v) => sig(v)).join(", ")} m`}</title>
+          <title>{`${repetition ? `Preview section ${active + 1}` : "Cut"} ${spec.label.toLowerCase()} centroid: ${centroid.map((v) => sig(v)).join(", ")} m`}</title>
         </g>
       )}
     </svg>
   );
   return (
-    <div className="wfootprintpreview">
+    <div className="wrepetitionpreview">
       <GeometryDisclosure
-        label={footprint ? "footprint preview" : "Cut preview"}
-        initiallyOpen={footprint}
+        label={repetition ? "repetition preview" : "Cut preview"}
+        initiallyOpen={repetition}
       >
-        {footprint && (
+        {repetition && (
           <>
             <div className="wpreviewcount">
               <span>Equivalent count</span>
@@ -177,7 +177,7 @@ function MeasurePreview({
             </button>
           ))}
         </div>
-        <div className="wfootprintprojections">
+        <div className="wrepetitionprojections">
           <figure>
             {draw(profile, true)}
             <figcaption>Profile · x / z</figcaption>
@@ -186,12 +186,12 @@ function MeasurePreview({
             {draw(section, false)}
             <figcaption>
               Section · y / z ·{" "}
-              {footprint ? `preview section ${active + 1}` : "cut"}
+              {repetition ? `preview section ${active + 1}` : "cut"}
             </figcaption>
           </figure>
         </div>
         <div className="wpreviewsample">
-          {footprint && (
+          {repetition && (
             <label>
               Preview section {active + 1} / {samples.length}
               <input
@@ -220,10 +220,10 @@ function MeasurePreview({
             : view === "closedLength"
               ? "Complete boundary, including closure"
               : "Hull-skin intersections only — no closing edges"}
-          . The marker is this {footprint ? "preview section’s" : "cut’s"}{" "}
+          . The marker is this {repetition ? "preview section’s" : "cut’s"}{" "}
           {spec.label.toLowerCase()} centroid.
         </p>
-        {footprint && (
+        {repetition && (
           <>
             <p className="whint">
               Hover the profile to inspect a preview section; click to keep it

@@ -133,9 +133,9 @@ export interface CutField {
   readonly pos: string;
 }
 
-/** An estimated uniform distribution of sections, not an integer member layout. */
-export interface FootprintField {
-  readonly k: "footprint";
+/** A section repetition: regularly spaced sections with unknown placement, not an authored member layout. */
+export interface RepetitionField {
+  readonly k: "repetition";
   readonly shape: SliceShape;
   readonly unit: string;
   readonly start: string;
@@ -145,7 +145,7 @@ export interface FootprintField {
   readonly count: string;
 }
 
-export type Field = ScalarField | PointField | CutField | FootprintField;
+export type Field = ScalarField | PointField | CutField | RepetitionField;
 
 export type FieldKind = Field["k"];
 
@@ -153,7 +153,7 @@ export const FIELD_KINDS: readonly FieldKind[] = [
   "scalar",
   "point",
   "cut",
-  "footprint",
+  "repetition",
 ];
 
 export const isFieldKind = (kind: string): kind is FieldKind =>
@@ -531,7 +531,7 @@ export const DEFAULT_FIELD_KEY: Record<FieldKind, string> = {
   scalar: "value",
   point: "position",
   cut: "section",
-  footprint: "members",
+  repetition: "members",
 };
 
 /** The unit a field actually authors in, including the intrinsic default for positions. */
@@ -542,11 +542,11 @@ export const fieldUnit = (field: Field): string =>
 
 /** Which of the item's values this field is, or null. A cut is never one — see `roles.ts`. */
 export const roleOf = (field: Field): string | null =>
-  field.k === "cut" || field.k === "footprint" ? null : field.role;
+  field.k === "cut" || field.k === "repetition" ? null : field.role;
 
 /** The same field, tagged or untagged. A cut is returned as it was, because it cannot carry one. */
 export const withRole = (field: Field, role: string | null): Field =>
-  field.k === "cut" || field.k === "footprint" ? field : { ...field, role };
+  field.k === "cut" || field.k === "repetition" ? field : { ...field, role };
 
 /** Every field of the item carrying a role, in authored order. More than one is a book to complain about. */
 export const roleKeys = (item: Item, role: string): string[] =>
@@ -593,9 +593,9 @@ export function blankField(kind: FieldKind): Field {
         from: "",
         role: null,
       };
-    case "footprint":
+    case "repetition":
       return {
-        k: "footprint",
+        k: "repetition",
         shape: "transverse",
         unit: "m",
         start: "",
@@ -633,7 +633,7 @@ export function leafOf(field: Field, leaf: FieldLeaf): string | null {
     case "point":
       if (leaf === "from") return field.from;
       return leaf === "x" || leaf === "y" || leaf === "z" ? field[leaf] : null;
-    case "footprint":
+    case "repetition":
       return leaf === "start" ||
         leaf === "end" ||
         leaf === "spacing" ||
@@ -663,7 +663,7 @@ export function leavesOf(field: Field): FieldLeaf[] {
       return ["formula"];
     case "point":
       return ["x", "y", "z"];
-    case "footprint":
+    case "repetition":
       return ["start", "end", field.repetition];
     case "cut":
       return ["pos"];
@@ -728,7 +728,7 @@ export type SheetCommand =
    */
   | { type: "setFieldRole"; item: string; field: string; role: string | null }
   | {
-      type: "setFootprintRepetition";
+      type: "setRepetitionMode";
       item: string;
       field: string;
       repetition: "spacing" | "count";
@@ -780,7 +780,7 @@ export const SHEET_COMMAND_TYPES = {
   setFieldUnit: 1,
   setFieldRole: 1,
   setCutShape: 1,
-  setFootprintRepetition: 1,
+  setRepetitionMode: 1,
   setPointPosition: 1,
   setOutput: 1,
   setSheetDensity: 1,
@@ -1112,17 +1112,19 @@ export function interpretSheetCommand(
       });
     }
 
-    case "setFootprintRepetition":
+    case "setRepetitionMode":
       return editField(book, command.item, command.field, (field) => {
-        if (field.k !== "footprint")
-          return { rejected: "only a footprint has repetition" };
+        if (field.k !== "repetition")
+          return {
+            rejected: "only a section repetition has a repetition mode",
+          };
         if (command.repetition !== "count" && command.repetition !== "spacing")
           return { rejected: "unknown repetition mode" };
         return { ...field, repetition: command.repetition };
       });
     case "setCutShape":
       return editField(book, command.item, command.field, (field) => {
-        if (field.k !== "cut" && field.k !== "footprint")
+        if (field.k !== "cut" && field.k !== "repetition")
           return { rejected: "only geometry fields have an orientation" };
         if (!isSliceShape(command.shape))
           return { rejected: "unknown orientation" };

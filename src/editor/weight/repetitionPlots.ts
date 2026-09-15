@@ -1,14 +1,14 @@
 import type { Vec3 } from "../../core/math";
 import type { RawSliceMeasurement } from "../../core/sheet/slices";
 
-export type FootprintView = "area" | "openLength" | "closedLength";
+export type RepetitionView = "area" | "openLength" | "closedLength";
 export type Projection = (point: Vec3) => readonly [number, number];
 
 /** One SVG subpath per contour preserves holes with even-odd fill. Open length
  * uses tagged skin segments, including disjoint runs, without closing them. */
 export function samplePath(
   sample: RawSliceMeasurement,
-  view: FootprintView,
+  view: RepetitionView,
   at: Projection,
 ): string {
   if (view === "openLength")

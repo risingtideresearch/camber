@@ -150,7 +150,7 @@ function columnsFor(key: string, kind: FieldKind): Column[] {
       return (["x", "y", "z"] as const).map((leaf) =>
         leafColumn(key, kind, leaf, leaf, key),
       );
-    case "footprint":
+    case "repetition":
       return [
         leafColumn(key, kind, "start", "from", key),
         leafColumn(key, kind, "end", "to", key),
@@ -504,7 +504,7 @@ export function problemsOf(
     // A geometry failure is a field problem even before another formula consumes
     // it. Navigate to an authored input, never pretend its measured area is editable.
     for (const [fieldKey, field] of Object.entries(item.fields)) {
-      if (field.k !== "cut" && field.k !== "footprint") continue;
+      if (field.k !== "cut" && field.k !== "repetition") continue;
       const cell = results.cells.get(cellKey(item.id, fieldKey, "area"));
       const message = cell?.error ?? cell?.unitWarning;
       if (

@@ -10,7 +10,7 @@ import {
   type SectionMeasures,
 } from "./sectionMeasures";
 
-export interface FootprintMeasurement {
+export interface RepetitionMeasurement {
   readonly integrals: SectionMeasures;
   /** Leibniz boundary derivatives: d integral / da = -q(a), d / db = q(b). */
   readonly start: SectionMeasures;
@@ -23,10 +23,10 @@ export interface FootprintMeasurement {
   }[];
   readonly warning?: string;
 }
-export type FootprintResult =
-  | { readonly value: FootprintMeasurement; readonly error?: never }
+export type RepetitionResult =
+  | { readonly value: RepetitionMeasurement; readonly error?: never }
   | { readonly error: string; readonly value?: never };
-export type FootprintMeasurements = ReadonlyMap<string, FootprintResult>;
+export type RepetitionMeasurements = ReadonlyMap<string, RepetitionResult>;
 
 const weighted = (
   values: readonly SectionMeasures[],
@@ -58,17 +58,17 @@ const close = (a: SectionMeasures, b: SectionMeasures, span: number): boolean =>
  * Require successive refinements to agree; this estimates quadrature error on the
  * sampled hull, not hull-discretization error or confidence in the structure.
  */
-export function measureFootprint(
+export function measureRepetition(
   measure: (shape: SliceShape, pos: number) => RawSliceMeasurement,
   shape: SliceShape,
   start: number,
   end: number,
   /** Nominal regular-grid pitch. Omit when only the continuous integral is needed. */
   pitch?: number,
-): FootprintResult {
+): RepetitionResult {
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)
     return {
-      error: "footprint bounds must be finite and From must be less than To",
+      error: "repetition bounds must be finite and From must be less than To",
     };
   try {
     const span = end - start;
@@ -90,7 +90,7 @@ export function measureFootprint(
     if (!converged)
       return {
         error:
-          "footprint integration did not converge; split the region or refine the hull sampling",
+          "repetition integration did not converge; split the region or refine the hull sampling",
       };
     // Evaluate just inside the extent if an endpoint coincides with a boundary
     // face. This is one-sided and is explicitly surfaced as a warning.
@@ -112,11 +112,11 @@ export function measureFootprint(
 
     // Stratify at the member-count transition. Even a very rare extra member
     // must receive its actual probability, rather than disappear between offsets.
-    let phaseTotals: FootprintMeasurement["phaseTotals"];
+    let phaseTotals: RepetitionMeasurement["phaseTotals"];
     if (pitch !== undefined) {
       if (!Number.isFinite(pitch) || pitch <= 0)
         throw new Error(
-          "Grid-placement uncertainty needs a finite positive spacing",
+          "Placement uncertainty needs a finite positive spacing",
         );
       const members = span / pitch;
       const fraction = members - Math.floor(members);
@@ -129,7 +129,7 @@ export function measureFootprint(
       const nominal = flatten(integrals).map((v) => v / pitch);
       for (let n = 4; n <= 64; n *= 2) {
         const totals: NonNullable<
-          FootprintMeasurement["phaseTotals"]
+          RepetitionMeasurement["phaseTotals"]
         >[number][] = [];
         for (let j = 1; j < edges.length; j++) {
           const width = edges[j] - edges[j - 1];
@@ -140,7 +140,7 @@ export function measureFootprint(
             const count = Math.max(0, Math.ceil(members - phase));
             if (work + count > 8192)
               throw new Error(
-                "Grid-placement uncertainty exceeded its sampling budget; increase spacing or reduce equivalent count",
+                "Placement uncertainty exceeded its sampling budget; increase spacing or reduce equivalent count",
               );
             work += count;
             for (let k = 0; k < count; k++) {
@@ -181,7 +181,7 @@ export function measureFootprint(
       }
       if (!phaseConverged)
         throw new Error(
-          "Grid-placement uncertainty did not converge; revise the footprint extent or repetition",
+          "Placement uncertainty did not converge; revise the repetition extent or spacing/count",
         );
     }
     return {
