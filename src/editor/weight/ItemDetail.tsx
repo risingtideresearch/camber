@@ -24,6 +24,7 @@
 // would be quadratic in the size of a schedule, which is exactly the thing that grows.
 
 import type { FootprintMeasurements } from "../../core/sheet/footprints";
+import { FootprintAssumptions } from "./FootprintAssumptions";
 import { FootprintPreview, CutPreview } from "./FootprintPreview";
 import {
   sliceMeasurementKey,
@@ -963,13 +964,7 @@ function GeometryReadout({
   const failure = resultAt(results, item.id, fieldKey, "area")?.error;
   return (
     <>
-      {field.k === "footprint" && (
-        <p className="whint">
-          A footprint estimates a uniform distribution, not individual member
-          positions. No end members or mirrored copies are added. Spacing
-          uncertainty describes the average spacing of the whole family.
-        </p>
-      )}
+      {field.k === "footprint" && <FootprintAssumptions />}
       {(field.k === "footprint" || field.k === "cut") &&
         field.shape === "transverse" && (
           <p className="whint">

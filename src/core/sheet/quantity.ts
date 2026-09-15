@@ -83,6 +83,11 @@ export interface Source {
   readonly id: string;
   /** What the sensitivity list calls it. The row it was typed in, which is why rows have names. */
   readonly label: string;
+  /** A mutually exclusive model-discrepancy sample. Gradients carry raw
+   * deviations; weights sum to one within a group. Likely uses weighted RMS
+   * about nominal, worst uses the sampled envelope (not a continuous bound).
+   */
+  readonly sample?: { readonly group: string; readonly weight: number };
   /**
    * An OPAQUE handle on the cell the `±` was typed in, for a reader that wants to go there rather than
    * only read the name. A plain string because nothing at this layer knows what a cell is: the evaluator puts
@@ -392,7 +397,7 @@ export interface Contribution {
 export interface Reading {
   readonly v: number;
   readonly dim: Dim;
-  /** Everything wrong at once, in the same direction. A bound, but a LINEARIZED one — see the header. */
+  /** Linearized input bounds plus sampled model-discrepancy envelopes, not a rigorous bound. */
   readonly worst: { lo: number; hi: number };
   /** Independent errors, in quadrature. The number to actually quote. */
   readonly likely: { lo: number; hi: number };
@@ -417,7 +422,18 @@ export function read(q: Quantity, sources: SourceTable): Reading {
     sqLo = 0,
     sqHi = 0,
     variance = 0;
-  const raw: { c: Omit<Contribution, "share">; halfWidth: number }[] = [];
+  const components = new Map<
+    string,
+    {
+      source: string;
+      label: string;
+      at?: string;
+      lo2: number;
+      hi2: number;
+      worstLo: number;
+      worstHi: number;
+    }
+  >();
 
   for (const id in q.d) {
     const g = q.d[id];
@@ -427,14 +443,48 @@ export function read(q: Quantity, sources: SourceTable): Reading {
     // one swaps them, which is the whole reason the gradient keeps its sign.
     const lo = g > 0 ? g * source.lo : -g * source.hi;
     const hi = g > 0 ? g * source.hi : -g * source.lo;
-    worstLo += lo;
-    worstHi += hi;
+    const key = source.sample?.group ?? id;
+    const part = components.get(key) ?? {
+      source: key,
+      label: source.label,
+      at: source.at,
+      lo2: 0,
+      hi2: 0,
+      worstLo: 0,
+      worstHi: 0,
+    };
+    if (source.sample) {
+      part.lo2 += source.sample.weight * g * g;
+      part.hi2 += source.sample.weight * g * g;
+      part.worstLo = Math.max(part.worstLo, -g);
+      part.worstHi = Math.max(part.worstHi, g);
+    } else {
+      part.lo2 += lo * lo;
+      part.hi2 += hi * hi;
+      part.worstLo += lo;
+      part.worstHi += hi;
+    }
+    components.set(key, part);
+  }
+
+  const raw: { c: Omit<Contribution, "share">; halfWidth: number }[] = [];
+  for (const part of components.values()) {
+    const lo = Math.sqrt(part.lo2),
+      hi = Math.sqrt(part.hi2);
+    worstLo += part.worstLo;
+    worstHi += part.worstHi;
     sqLo += lo * lo;
     sqHi += hi * hi;
     const half = (lo + hi) / 2;
     variance += half * half;
     raw.push({
-      c: { source: id, label: source.label, at: source.at, lo, hi },
+      c: {
+        source: part.source,
+        label: part.label,
+        at: part.at,
+        lo,
+        hi,
+      },
       halfWidth: half,
     });
   }

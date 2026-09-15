@@ -16,6 +16,11 @@ export interface FootprintMeasurement {
   readonly start: SectionMeasures;
   readonly end: SectionMeasures;
   readonly samples: readonly RawSliceMeasurement[];
+  /** Discrete regular-grid totals at uniformly sampled offsets within one pitch. */
+  readonly phaseTotals?: readonly {
+    measures: SectionMeasures;
+    weight: number;
+  }[];
   readonly warning?: string;
 }
 export type FootprintResult =
@@ -58,6 +63,8 @@ export function measureFootprint(
   shape: SliceShape,
   start: number,
   end: number,
+  /** Nominal regular-grid pitch. Omit when only the continuous integral is needed. */
+  pitch?: number,
 ): FootprintResult {
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)
     return {
@@ -102,7 +109,84 @@ export function measureFootprint(
     const samples = Array.from({ length: 7 }, (_, i) =>
       measure(shape, start + ((i + 0.5) * span) / 7),
     );
-    return { value: { integrals, start: a, end: b, samples, warning } };
+
+    // Stratify at the member-count transition. Even a very rare extra member
+    // must receive its actual probability, rather than disappear between offsets.
+    let phaseTotals: FootprintMeasurement["phaseTotals"];
+    if (pitch !== undefined) {
+      if (!Number.isFinite(pitch) || pitch <= 0)
+        throw new Error(
+          "Grid-placement uncertainty needs a finite positive spacing",
+        );
+      const members = span / pitch;
+      const fraction = members - Math.floor(members);
+      const edges = fraction > 0 ? [0, fraction, 1] : [0, 1];
+      let work = 0;
+      let previousSpread: number[] | undefined;
+      let phaseConverged = false;
+      const flatten = (m: SectionMeasures) =>
+        MEASURE_NAMES.flatMap((name) => [m[name].amount, ...m[name].moment]);
+      const nominal = flatten(integrals).map((v) => v / pitch);
+      for (let n = 4; n <= 64; n *= 2) {
+        const totals: NonNullable<
+          FootprintMeasurement["phaseTotals"]
+        >[number][] = [];
+        for (let j = 1; j < edges.length; j++) {
+          const width = edges[j] - edges[j - 1];
+          for (let i = 0; i < n; i++) {
+            let total = zeroMeasures();
+            const phase = edges[j - 1] + ((i + 0.5) * width) / n;
+            // Integer indexing avoids accumulated position error.
+            const count = Math.max(0, Math.ceil(members - phase));
+            if (work + count > 8192)
+              throw new Error(
+                "Grid-placement uncertainty exceeded its sampling budget; increase spacing or reduce equivalent count",
+              );
+            work += count;
+            for (let k = 0; k < count; k++) {
+              const at = start + (k + phase) * pitch;
+              total = weighted([total, measure(shape, at).measures], 1);
+            }
+            totals.push({ measures: total, weight: width / n });
+          }
+        }
+        const spread = nominal.map((v, axis) =>
+          Math.sqrt(
+            totals.reduce(
+              (sum, sample) =>
+                sum + sample.weight * (flatten(sample.measures)[axis] - v) ** 2,
+              0,
+            ),
+          ),
+        );
+        phaseTotals = totals;
+        if (
+          previousSpread &&
+          spread.every(
+            (v, i) =>
+              Math.abs(v - previousSpread![i]) <=
+              0.02 *
+                Math.max(
+                  v,
+                  previousSpread![i],
+                  Math.abs(nominal[i]) * 1e-6,
+                  1e-12,
+                ),
+          )
+        ) {
+          phaseConverged = true;
+          break;
+        }
+        previousSpread = spread;
+      }
+      if (!phaseConverged)
+        throw new Error(
+          "Grid-placement uncertainty did not converge; revise the footprint extent or repetition",
+        );
+    }
+    return {
+      value: { integrals, start: a, end: b, samples, phaseTotals, warning },
+    };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }

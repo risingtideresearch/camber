@@ -3000,6 +3000,15 @@ button.wtermgo:focus-visible {
 .wpreviewtoggle:focus-visible {
   color: var(--accent);
 }
+.wgeometryassumptions {
+  margin: 4px 0 12px;
+}
+.wgeometryassumptions p {
+  margin: 0;
+}
+.wgeometryassumptions p + p {
+  margin-top: 8px;
+}
 .wpreviewmodes {
   display: flex;
   flex-wrap: wrap;

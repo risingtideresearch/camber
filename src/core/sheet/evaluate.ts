@@ -346,6 +346,9 @@ export function evaluateBook(
   const cells = new Map<string, Cell>();
   const sources = new Map<string, Source>();
   let sourceSeq = 0;
+  // One component per sampled grid phase. Components share a group so `read`
+  // presents their covariance-preserving RMS as one approximation term.
+  const footprintPhaseSources = new Map<string, readonly Source[]>();
 
   // Item names are globally unique, so ONE index serves the whole book — the page model needed one per page
   // because the same name could mean different things on two pages, and that is exactly the ambiguity items
@@ -675,18 +678,68 @@ export function evaluateBook(
       });
       const amountDim = name === "area" ? { m: 0, l: 3 } : AREA;
       const amount = lift((m) => m.amount, amountDim);
-      if (!leaf.includes(".")) return mul(density, amount);
-      if (amount.v === 0)
+      let nominal: Quantity;
+      if (!leaf.includes(".")) nominal = mul(density, amount);
+      else {
+        if (amount.v === 0)
+          fail(
+            `${leaf.split(".")[0]} is undefined because its measure is zero`,
+            at,
+          );
+        const axis = ["x", "y", "z"].indexOf(leaf.split(".")[1]);
+        // Density cancels analytically: shared spacing/count uncertainty cannot move CG.
+        nominal = div(
+          lift((m) => m.moment[axis], { m: 0, l: amountDim.l + 1 }),
+          amount,
+        );
+      }
+
+      const phases = measured.phaseTotals;
+      if (!phases?.length) return nominal;
+      const phaseKey = sliceMeasurementKey(item.id, key);
+      let phaseSources = footprintPhaseSources.get(phaseKey);
+      if (!phaseSources) {
+        const group = `footprint-phase:${phaseKey}`;
+        const target = cellKey(item.id, key, field.repetition);
+        phaseSources = phases.map((phase) => {
+          const source: Source = {
+            id: `s${sourceSeq++}`,
+            sample: { group, weight: phase.weight },
+            label: `${item.name}.${key} — grid-placement uncertainty`,
+            at: target,
+            lo: 1,
+            hi: 1,
+          };
+          sources.set(source.id, source);
+          return source;
+        });
+        footprintPhaseSources.set(phaseKey, phaseSources);
+      }
+      // Linearize the centroid from amount and moment together. This makes
+      // amount * centroid recover the same first-order moment deviations.
+      if (
+        leaf.includes(".") &&
+        phases.some((p) => p.measures[name].amount === 0)
+      )
         fail(
-          `${leaf.split(".")[0]} is undefined because its measure is zero`,
+          "Grid-placement centroid is undefined for an empty sampled layout; increase the footprint extent or repetition density",
           at,
         );
-      const axis = ["x", "y", "z"].indexOf(leaf.split(".")[1]);
-      // Density cancels analytically: shared spacing/count uncertainty cannot move CG.
-      return div(
-        lift((m) => m.moment[axis], { m: 0, l: amountDim.l + 1 }),
-        amount,
+      const approximation = Object.fromEntries(
+        phases.map((phase, i) => {
+          const m = phase.measures[name];
+          const delta = !leaf.includes(".")
+            ? m.amount - nominal.v
+            : (m.moment[["x", "y", "z"].indexOf(leaf.split(".")[1])] -
+                nominal.v * m.amount) /
+              (amount.v * density.v);
+          return [phaseSources![i].id, delta];
+        }),
       );
+      return {
+        ...nominal,
+        d: combine(nominal.d, 1, approximation, 1),
+      };
     }
     const leaves = leavesOf(field);
     if (!(leaves as string[]).includes(leaf))

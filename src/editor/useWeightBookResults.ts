@@ -128,10 +128,22 @@ export function useWeightBookResults(
       for (const [key, field] of Object.entries(item.fields)) {
         if (field.k !== "footprint") continue;
         const start = resultAt(positions, item.id, key, "start"),
-          end = resultAt(positions, item.id, key, "end");
-        if (!start?.quantity || !end?.quantity || start.error || end.error)
+          end = resultAt(positions, item.id, key, "end"),
+          repetition = resultAt(positions, item.id, key, field.repetition);
+        if (
+          !start?.quantity ||
+          !end?.quantity ||
+          !repetition?.quantity ||
+          start.error ||
+          end.error ||
+          repetition.error
+        )
           continue;
-        const geometryKey = `${field.shape}\0${start.quantity.v}\0${end.quantity.v}`;
+        const pitch =
+          field.repetition === "spacing"
+            ? repetition.quantity.v
+            : (end.quantity.v - start.quantity.v) / repetition.quantity.v;
+        const geometryKey = `${field.shape}\0${start.quantity.v}\0${end.quantity.v}\0${pitch}`;
         let result = cache.get(geometryKey);
         if (!result) {
           measure ??= createSectionMeasurer(model, sampling);
@@ -140,6 +152,7 @@ export function useWeightBookResults(
             field.shape,
             start.quantity.v,
             end.quantity.v,
+            pitch,
           );
           if (cache.size >= 32) cache.delete(cache.keys().next().value!);
           cache.set(geometryKey, result);

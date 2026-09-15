@@ -1,4 +1,5 @@
 import { useState, type PointerEvent, type ReactNode } from "react";
+import { GeometryDisclosure } from "./GeometryDisclosure";
 import type { FootprintMeasurement } from "../../core/sheet/footprints";
 import type { RawSliceMeasurement } from "../../core/sheet/slices";
 import { geometryValue } from "../../core/sheet/sectionMeasures";
@@ -35,36 +36,6 @@ export function CutPreview({
 }) {
   if (!measurement) return null;
   return <MeasurePreview samples={[measurement]} footprint={false} />;
-}
-
-/** The same disclosure glyph and gutter as the field and explorer, with native
- * button keyboard behavior instead of browser-dependent details markers. */
-function Disclosure({
-  label,
-  initiallyOpen = false,
-  children,
-}: {
-  label: string;
-  initiallyOpen?: boolean;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(initiallyOpen);
-  return (
-    <section className="wpreviewdisclosure">
-      <button
-        type="button"
-        className="wpreviewtoggle"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        <span className="wexptwist" aria-hidden="true">
-          {open ? "▾" : "▸"}
-        </span>
-        <span>{label}</span>
-      </button>
-      {open && children}
-    </section>
-  );
 }
 
 const VIEWS: readonly { value: FootprintView; label: string; unit: string }[] =
@@ -177,7 +148,7 @@ function MeasurePreview({
   );
   return (
     <div className="wfootprintpreview">
-      <Disclosure
+      <GeometryDisclosure
         label={footprint ? "footprint preview" : "Cut preview"}
         initiallyOpen={footprint}
       >
@@ -259,7 +230,7 @@ function MeasurePreview({
               selected, or use the preview section slider. These sections
               illustrate the region, not individual member positions.
             </p>
-            <Disclosure label="Preview section measurements">
+            <GeometryDisclosure label="Preview section measurements">
               <table>
                 <thead>
                   <tr>
@@ -292,10 +263,10 @@ function MeasurePreview({
                   ))}
                 </tbody>
               </table>
-            </Disclosure>
+            </GeometryDisclosure>
           </>
         )}
-      </Disclosure>
+      </GeometryDisclosure>
     </div>
   );
 }

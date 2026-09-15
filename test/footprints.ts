@@ -1,5 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { FootprintAssumptions } from "../src/editor/weight/FootprintAssumptions";
 import { FootprintPreview } from "../src/editor/weight/FootprintPreview";
 import { nearestSample, samplePath } from "../src/editor/weight/footprintPlots";
 import assert from "node:assert/strict";
@@ -34,6 +35,13 @@ import {
   type RawSliceMeasurement,
 } from "../src/core/sheet/slices";
 import { completionsFor } from "../src/editor/weight/weightCompletions";
+import {
+  read,
+  LENGTH,
+  type Quantity,
+  type Source,
+} from "../src/core/sheet/quantity";
+import { worstRegion, likelyRegion } from "../src/core/sheet/points";
 import { bookViolations } from "../src/core/invariants";
 
 const near = (a: number, b: number, tol = 1e-8) =>
@@ -339,6 +347,228 @@ console.log(
   "Footprint evaluation: formulas, moments, shared uncertainty, bounds, count and geometry dependency guards passed",
 );
 
+const phasedMeasurement = measureFootprint(varying, "transverse", 1, 3, 0.5);
+assert.equal(phasedMeasurement.value!.phaseTotals?.length, 16);
+const phased = evaluate(
+  makeBook(
+    { ...footprint, spacing: "0.5" },
+    { phaseCancel: scalar("members.closedLength - 2 * members.openLength") },
+  ),
+  phasedMeasurement,
+);
+const phasedArea = resultAt(phased, "i", "members", "area")!;
+assert.ok(phasedArea.reading!.likely.hi > 0);
+// Normal model assumptions are not diagnostic warnings, including downstream formulas.
+for (const [key, leaf] of [
+  ["members", "area"],
+  ["mass", undefined],
+  ["cg", "x"],
+] as const)
+  assert.equal(resultAt(phased, "i", key, leaf)?.unitWarning, null);
+const assumptions = renderToStaticMarkup(createElement(FootprintAssumptions));
+assert.match(assumptions, /class="wpreviewtoggle" aria-expanded="false"/);
+assert.match(assumptions, /Estimation assumptions/);
+assert.match(assumptions, /class="wexptwist"/);
+assert.doesNotMatch(assumptions, /sampled envelope/);
+
+assert.equal(phasedArea.reading!.terms.length, 1);
+assert.match(phasedArea.reading!.terms[0].label, /grid-placement uncertainty/);
+assert.ok(resultAt(phased, "i", "cg", "x")!.reading!.likely.hi > 0);
+// The same phase moves every measured property together. Here the varying
+// parts cancel exactly, which independent per-property tolerances could not see.
+near(resultAt(phased, "i", "phaseCancel")!.reading!.likely.hi, 0, 1e-12);
+const phasedConstant = evaluate(
+  makeBook({ ...footprint, spacing: "0.5" }),
+  measureFootprint(() => raw(section), "transverse", 1, 3, 0.5),
+);
+near(
+  resultAt(phasedConstant, "i", "members", "area")!.reading!.likely.hi,
+  0,
+  1e-12,
+);
+console.log(
+  "Grid-phase approximation: discrete spread, shared covariance and constant sections passed",
+);
+
+// Stratification captures rare extra members exactly for constant sections.
+for (const count of [0.01, 0.99, 1.01, 3.999, 4.001, 254.5, 255.5, 256.5]) {
+  const pitch = 2 / count;
+  const measurement = measureFootprint(
+    () => raw(section),
+    "transverse",
+    1,
+    3,
+    pitch,
+  );
+  assert.ok(measurement.value, measurement.error ?? "valid phase sampling");
+  const result = evaluate(
+    makeBook({ ...footprint, spacing: String(pitch) }),
+    measurement,
+  );
+  const reading = resultAt(result, "i", "members", "area")!.reading!;
+  const fraction = count - Math.floor(count);
+  near(
+    reading.likely.hi,
+    section.area.amount * Math.sqrt(fraction * (1 - fraction)),
+    1e-8,
+  );
+  near(reading.worst.lo, section.area.amount * fraction, 1e-8);
+  near(reading.worst.hi, section.area.amount * (1 - fraction), 1e-8);
+  if (count < 1)
+    assert.match(
+      resultAt(result, "i", "cg", "x")!.error!,
+      /empty sampled layout/,
+    );
+}
+assert.match(
+  measureFootprint(() => raw(section), "transverse", 1, 3, 2 / 1000).error!,
+  /sampling budget/,
+);
+// An exact fractional equivalent count still has placement uncertainty.
+const equivalent = evaluate(
+  makeBook({ ...footprint, repetition: "count", count: "0.01" }),
+  measureFootprint(() => raw(section), "transverse", 1, 3, 2 / 0.01),
+);
+near(
+  resultAt(equivalent, "i", "members", "area")!.reading!.likely.hi,
+  section.area.amount * Math.sqrt(0.01 * 0.99),
+);
+assert.match(
+  resultAt(equivalent, "i", "cg", "x")!.error!,
+  /empty sampled layout/,
+);
+
+// Shared amount/moment deviations reconstruct first moments under the sheet's
+// product linearization, rather than mixing finite centroid and amount deltas.
+const momentResult = evaluate(
+  makeBook(
+    { ...footprint, spacing: "0.5" },
+    {
+      moment: scalar("members.area * members.areaCg.x"),
+    },
+  ),
+  phasedMeasurement,
+);
+const moment = resultAt(momentResult, "i", "moment")!.quantity!;
+const momentSources = [...momentResult.sources.values()].filter(
+  (s) => s.sample,
+);
+for (let i = 0; i < momentSources.length; i++)
+  near(
+    moment.d[momentSources[i].id] ?? 0,
+    phasedMeasurement.value!.phaseTotals![i].measures.area.moment[0] - moment.v,
+    1e-9,
+  );
+const cgX = resultAt(momentResult, "i", "cg", "x")!;
+const cgZ = resultAt(momentResult, "i", "cg", "z")!;
+const region = worstRegion(cgX.quantity!, cgZ.quantity!, momentResult.sources);
+near(-Math.min(...region.map((p) => p[0])), cgX.reading!.worst.lo);
+near(Math.max(...region.map((p) => p[0])), cgX.reading!.worst.hi);
+const ellipse = likelyRegion(
+  cgX.quantity!,
+  cgZ.quantity!,
+  momentResult.sources,
+);
+near(Math.max(...ellipse.map((p) => p[0])), cgX.reading!.likely.hi);
+assert.ok(cgX.reading!.worst.hi > cgX.reading!.likely.hi);
+console.log(
+  "Grid-placement: fractional counts, empty layouts, budget, moment consistency and plotted envelopes passed",
+);
+
+// Model groups are mutually exclusive within each group, independent between
+// groups, and coexist with ordinary asymmetric input tolerances.
+const mixedSources = new Map<string, Source>([
+  [
+    "a",
+    {
+      id: "a",
+      label: "grid A",
+      lo: 1,
+      hi: 1,
+      sample: { group: "A", weight: 0.25 },
+    },
+  ],
+  [
+    "b",
+    {
+      id: "b",
+      label: "grid A",
+      lo: 1,
+      hi: 1,
+      sample: { group: "A", weight: 0.75 },
+    },
+  ],
+  [
+    "c",
+    {
+      id: "c",
+      label: "grid B",
+      lo: 1,
+      hi: 1,
+      sample: { group: "B", weight: 0.5 },
+    },
+  ],
+  [
+    "d",
+    {
+      id: "d",
+      label: "grid B",
+      lo: 1,
+      hi: 1,
+      sample: { group: "B", weight: 0.5 },
+    },
+  ],
+  ["input", { id: "input", label: "input", lo: 1, hi: 2 }],
+]);
+const mixedX: Quantity = {
+  v: 0,
+  dim: LENGTH,
+  d: { a: -3, b: 1, c: -2, d: 2, input: 1 },
+};
+const mixedY: Quantity = {
+  v: 0,
+  dim: LENGTH,
+  d: { a: 6, b: -2, c: -1, d: 1, input: -2 },
+};
+const mixedRegion = worstRegion(mixedX, mixedY, mixedSources);
+for (const [axis, quantity] of [mixedX, mixedY].entries()) {
+  const reading = read(quantity, mixedSources);
+  near(-Math.min(...mixedRegion.map((p) => p[axis])), reading.worst.lo);
+  near(Math.max(...mixedRegion.map((p) => p[axis])), reading.worst.hi);
+  assert.equal(reading.terms.length, 3);
+}
+near(read(mixedX, mixedSources).likely.lo, Math.sqrt(8));
+near(read(mixedX, mixedSources).likely.hi, Math.sqrt(11));
+near(read(mixedX, mixedSources).worst.lo, 6);
+near(read(mixedX, mixedSources).worst.hi, 5);
+for (const pitch of [0, -1, Infinity, NaN])
+  assert.match(
+    measureFootprint(varying, "transverse", 1, 3, pitch).error!,
+    /positive spacing/,
+  );
+// Exact count fixes mean density, not placement. Equivalent input modes must
+// yield identical placement spreads for both summed geometry and centroid.
+const countWithPhases = evaluate(
+  makeBook({ ...footprint, repetition: "count", count: "4" }),
+  phasedMeasurement,
+);
+for (const [key, leaf] of [
+  ["members", "area"],
+  ["cg", "x"],
+] as const) {
+  const reading = resultAt(countWithPhases, "i", key, leaf)!.reading!;
+  const spacingReading = resultAt(phased, "i", key, leaf)!.reading!;
+  assert.ok(reading.likely.hi > 0);
+  near(reading.likely.hi, spacingReading.likely.hi);
+  near(reading.worst.lo, spacingReading.worst.lo);
+  near(reading.worst.hi, spacingReading.worst.hi);
+}
+near(
+  resultAt(countWithPhases, "i", "members", "equivalentCount")!.reading!.likely
+    .hi,
+  0,
+);
+
 assert.deepEqual(parseSheet(buildSheetJson(book)), book);
 assert.equal(bookViolations(book).length, 0);
 assert.equal(blankField("footprint").k, "footprint");
@@ -401,6 +631,12 @@ for (const shape of ["transverse", "longitudinal", "plane"] as const) {
   const result = measureFootprint(measure, shape, a, b);
   assert.ok(result.value, result.error ?? "valid hull integral");
   assert.ok(result.value.integrals.area.amount > 0);
+  const grid = measureFootprint(measure, shape, a, b, (b - a) / 6.3);
+  assert.ok(grid.value, grid.error ?? "valid hull phase sampling");
+  near(
+    grid.value.phaseTotals!.reduce((sum, p) => sum + p.weight, 0),
+    1,
+  );
 }
 const port = measure("longitudinal", -0.4),
   starboard = measure("longitudinal", 0.4);
