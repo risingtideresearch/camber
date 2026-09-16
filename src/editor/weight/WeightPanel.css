@@ -1727,7 +1727,8 @@ button.wtermgo:focus-visible {
   margin-bottom: 12px;
 }
 .wdetail input,
-.wdetail textarea {
+.wdetail textarea,
+.wdetail .wboundaryheading select {
   font: inherit;
   background: var(--bg);
   color: var(--fore);
@@ -1736,7 +1737,8 @@ button.wtermgo:focus-visible {
   padding: 3px 6px;
 }
 .wdetail input:focus,
-.wdetail textarea:focus {
+.wdetail textarea:focus,
+.wdetail .wboundaryheading select:focus {
   border-color: var(--accent);
   outline: none;
 }
@@ -2972,8 +2974,16 @@ button.wtermgo:focus-visible {
   margin: 8px 0;
   padding: 0;
 }
+.wfieldblock.cut,
+.wfieldblock.repetition {
+  --wgeometry-label-width: 96px;
+}
+.wfieldblock.cut .wfieldcell,
 .wfieldblock.repetition .wfieldcell {
-  grid-template-columns: 96px minmax(130px, 1fr) minmax(110px, auto);
+  grid-template-columns: var(--wgeometry-label-width) minmax(130px, 1fr) minmax(
+      110px,
+      auto
+    );
 }
 .wrepetitionpreview {
   margin: 4px 0 12px;
@@ -3132,8 +3142,13 @@ button.wtermgo:focus-visible {
   .wgeometryinfo {
     margin-right: 8px;
   }
+  .wfieldblock.cut,
+  .wfieldblock.repetition {
+    --wgeometry-label-width: 80px;
+  }
+  .wfieldblock.cut .wfieldcell,
   .wfieldblock.repetition .wfieldcell {
-    grid-template-columns: 80px minmax(0, 1fr);
+    grid-template-columns: var(--wgeometry-label-width) minmax(0, 1fr);
   }
 }
 @container (max-width: 340px) {
@@ -3151,4 +3166,59 @@ button.wtermgo:focus-visible {
   font-size: 12px;
   color: var(--fore);
   font-variant-numeric: tabular-nums;
+}
+
+/* Boundary removal is a small, local action beside its label, visually distinct
+   from deleting an item/field. Keep the formula and readout columns aligned. */
+.wboundaryheading select {
+  width: 100%;
+  min-width: 0;
+}
+.wboundaryrow {
+  position: relative;
+}
+.wboundaryrow .wfieldcell > span:first-child {
+  padding-right: 16px;
+}
+.wboundaryremove {
+  position: absolute;
+  left: calc(var(--wgeometry-label-width) - 16px);
+  top: 0;
+  width: 20px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--mut);
+  font: 14px/1 sans-serif;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.wboundaryremove:hover,
+.wboundaryremove:focus-visible {
+  opacity: 1;
+  color: var(--fore);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.wboundaryremove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.wboundaries > .whint {
+  margin: 3px 0;
+  padding: 0;
+}
+
+.wpreviewtop {
+  stroke: var(--mut);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+
+.wgeometryprogress {
+  margin: 6px 12px;
+  color: var(--mut);
+  font-size: 11px;
 }

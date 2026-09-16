@@ -12,7 +12,8 @@ export interface StabilityAnalysis {
   /**
    * The same hull, measured the way a weight sheet reads it: in metres and kilograms, with the whole-shell
    * numbers the design waterline's cut cannot give. It rides along with the stability payload because it is
-   * one extra cut on a hull this worker has already swept — the weight panel needs no worker of its own.
+   * one extra cut on a hull this worker has already swept. Authored sections/repetitions are computed
+   * independently in the weight-geometry worker.
    */
   readonly metrics: HullMetrics | null;
   readonly lowestSheerKg: number;

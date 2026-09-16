@@ -1,3 +1,10 @@
+import {
+  BOUNDARIES,
+  activeBoundaries,
+  isBoundaryLeaf,
+  relevantBoundaries,
+  type BoundaryLeaf,
+} from "../../core/sheet/boundaries";
 // ---------- one item, and everything it carries ----------
 //
 // The view the page model could not express at all. An engine has a mass, a position and perhaps a cost, and
@@ -738,6 +745,17 @@ function FieldCells({
   onSelect,
   send,
 }: FieldBlockProps) {
+  const previewLimits =
+    field.k === "cut" || field.k === "repetition"
+      ? Object.fromEntries(
+          activeBoundaries(field).flatMap((boundary) => {
+            const result = resultAt(results, item.id, fieldKey, boundary.leaf);
+            return result?.reading && !result.error
+              ? [[boundary.leaf, result.reading.v]]
+              : [];
+          }),
+        )
+      : {};
   const derived = isDerived(field);
   const listFor = (leaf: FieldLeaf) =>
     isCoordinate(leaf) ? completions.coordinate : completions.plain;
@@ -774,59 +792,158 @@ function FieldCells({
         </div>
       ) : (
         <div className="wfieldcells">
-          {leavesOf(field).map((leaf) => {
-            const result = resultAt(results, item.id, fieldKey, leaf);
-            const text =
-              (field as unknown as Record<string, string>)[leaf] ?? "";
-            return (
-              <label key={leaf} className="wfieldcell">
-                <span>
-                  {field.k === "repetition"
-                    ? (
-                        {
-                          start: "From",
-                          end: "To",
-                          spacing: "Typical spacing",
-                          count: "Equivalent count",
-                        } as Record<string, string>
-                      )[leaf]
-                    : field.k === "cut"
-                      ? field.shape === "plane"
-                        ? "Height"
-                        : field.shape === "longitudinal"
-                          ? "Lateral offset"
-                          : "Longitudinal position"
-                      : leavesOf(field).length > 1
-                        ? leaf
-                        : fieldKey}
-                </span>
+          {leavesOf(field)
+            .filter((leaf) => !isBoundaryLeaf(leaf))
+            .map((leaf) => {
+              const result = resultAt(results, item.id, fieldKey, leaf);
+              const text =
+                (field as unknown as Record<string, string>)[leaf] ?? "";
+              return (
+                <label key={leaf} className="wfieldcell">
+                  <span>
+                    {field.k === "repetition"
+                      ? (
+                          {
+                            start: "From",
+                            end: "To",
+                            spacing: "Typical spacing",
+                            count: "Equivalent count",
+                          } as Record<string, string>
+                        )[leaf]
+                      : field.k === "cut"
+                        ? field.shape === "plane"
+                          ? "Height"
+                          : field.shape === "longitudinal"
+                            ? "Lateral offset"
+                            : "Longitudinal position"
+                        : leavesOf(field).length > 1
+                          ? leaf
+                          : fieldKey}
+                  </span>
+                  <FormulaField
+                    value={text}
+                    error={result?.error ?? null}
+                    completions={listFor(leaf)}
+                    onCommit={(formula) =>
+                      send({
+                        type: "setFieldFormula",
+                        item: item.id,
+                        field: fieldKey,
+                        leaf,
+                        formula,
+                      })
+                    }
+                    onFocus={() => onSelect(leaf)}
+                  />
+                  {field.k !== "scalar" && (
+                    <Readout
+                      {...{ results, item, fieldKey, reading }}
+                      leaf={leaf}
+                      placement={
+                        isCoordinate(leaf) ? placementFor(text, result) : null
+                      }
+                    />
+                  )}
+                </label>
+              );
+            })}
+        </div>
+      )}
+
+      {(field.k === "cut" || field.k === "repetition") && (
+        <div className="wfieldcells wboundaries">
+          <div className="wfieldcell wboundaryheading">
+            <span>Boundaries</span>
+            {relevantBoundaries(field.shape).some(
+              (b) => !activeBoundaries(field).includes(b),
+            ) && (
+              <select
+                aria-label="Add boundary"
+                value=""
+                onChange={(event) => {
+                  if (event.target.value)
+                    send({
+                      type: "setSectionBoundary",
+                      item: item.id,
+                      field: fieldKey,
+                      leaf: event.target.value as BoundaryLeaf,
+                      enabled: true,
+                    });
+                }}
+              >
+                <option value="">Add boundary…</option>
+                {relevantBoundaries(field.shape)
+                  .filter((b) => !activeBoundaries(field).includes(b))
+                  .map((b) => (
+                    <option key={b.leaf} value={b.leaf}>
+                      {b.label}
+                    </option>
+                  ))}
+              </select>
+            )}
+          </div>
+          {activeBoundaries(field).map((boundary) => (
+            <div className="wboundaryrow" key={boundary.leaf}>
+              <label className="wfieldcell" title={boundary.hint}>
+                <span>{boundary.label}</span>
                 <FormulaField
-                  value={text}
-                  error={result?.error ?? null}
-                  completions={listFor(leaf)}
+                  value={field[boundary.leaf] ?? ""}
+                  error={
+                    resultAt(results, item.id, fieldKey, boundary.leaf)
+                      ?.error ?? null
+                  }
+                  completions={listFor(boundary.leaf)}
                   onCommit={(formula) =>
                     send({
                       type: "setFieldFormula",
                       item: item.id,
                       field: fieldKey,
-                      leaf,
+                      leaf: boundary.leaf,
                       formula,
                     })
                   }
-                  onFocus={() => onSelect(leaf)}
+                  onFocus={() => onSelect(boundary.leaf)}
                 />
-                {field.k !== "scalar" && (
-                  <Readout
-                    {...{ results, item, fieldKey, reading }}
-                    leaf={leaf}
-                    placement={
-                      isCoordinate(leaf) ? placementFor(text, result) : null
-                    }
-                  />
-                )}
+                <Readout
+                  {...{ results, item, fieldKey, reading }}
+                  leaf={boundary.leaf}
+                />
               </label>
-            );
-          })}
+              <button
+                type="button"
+                className="wboundaryremove"
+                aria-label={`Remove ${boundary.label.toLowerCase()} boundary`}
+                title={`Remove ${boundary.label.toLowerCase()} boundary; keep its formula for later`}
+                onClick={() =>
+                  send({
+                    type: "setSectionBoundary",
+                    item: item.id,
+                    field: fieldKey,
+                    leaf: boundary.leaf,
+                    enabled: false,
+                  })
+                }
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          {activeBoundaries(field).length > 0 && (
+            <p className="whint">
+              All limits apply together, within the hull. Removing a limit
+              retains its formula.
+            </p>
+          )}
+          {BOUNDARIES.some(
+            (b) =>
+              field.boundaryEnabled?.[b.leaf] &&
+              !relevantBoundaries(field.shape).includes(b),
+          ) && (
+            <p className="whint">
+              Saved limits parallel to this section are paused; position or From
+              / To controls that direction.
+            </p>
+          )}
         </div>
       )}
 
@@ -834,6 +951,8 @@ function FieldCells({
         <div className="wgeometryinfo">
           {field.k === "cut" && (
             <CutPreview
+              shape={field.shape}
+              limits={previewLimits}
               measurement={measurements.get(
                 sliceMeasurementKey(item.id, fieldKey),
               )}
@@ -841,6 +960,8 @@ function FieldCells({
           )}
           {field.k === "repetition" && (
             <RepetitionPreview
+              shape={field.shape}
+              limits={previewLimits}
               equivalentCount={
                 <Readout
                   {...{ results, item, fieldKey, reading }}
@@ -879,7 +1000,9 @@ function FieldSummary({
       ? (["x", "y", "z"] as const)
       : field.k === "repetition"
         ? ["area"]
-        : leavesOf(field);
+        : field.k === "cut"
+          ? ["pos"]
+          : leavesOf(field);
   const values = leaves.map((leaf) =>
     resultAt(results, item.id, fieldKey, leaf),
   );

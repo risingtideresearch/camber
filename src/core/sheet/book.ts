@@ -1,3 +1,10 @@
+import {
+  activeBoundaries,
+  isBoundaryLeaf,
+  relevantBoundaries,
+  type BoundaryFields,
+  type BoundaryLeaf,
+} from "./boundaries";
 // ---------- the weight book: items carrying fields, authored, plain and serializable ----------
 //
 // A weight estimate is a SCHEDULE, not a grid: named things, each carrying what is known about it. So a cell
@@ -125,7 +132,7 @@ export interface PointField {
  * A cut carries no role. See the note on `RoleSpec.kinds`: a role names one value, and a cut is a position
  * plus whatever is measured off it, so tagging one would have to name a leaf as well.
  */
-export interface CutField {
+export interface CutField extends BoundaryFields {
   readonly k: "cut";
   readonly shape: SliceShape;
   /** Unit used to author and display `pos`; blank derives metres from a dimensioned formula. */
@@ -134,7 +141,7 @@ export interface CutField {
 }
 
 /** A section repetition: regularly spaced sections with unknown placement, not an authored member layout. */
-export interface RepetitionField {
+export interface RepetitionField extends BoundaryFields {
   readonly k: "repetition";
   readonly shape: SliceShape;
   readonly unit: string;
@@ -191,6 +198,7 @@ export type FieldLeaf =
   | "y"
   | "z"
   | "pos"
+  | BoundaryLeaf
   | "from"
   | "start"
   | "end"
@@ -627,6 +635,8 @@ export const blankItem = (id: string, name: string): Item => ({
  * one. `leavesOf` is the other list, and the two stopped mirroring each other for exactly that reason.
  */
 export function leafOf(field: Field, leaf: FieldLeaf): string | null {
+  if ((field.k === "cut" || field.k === "repetition") && isBoundaryLeaf(leaf))
+    return field[leaf] ?? "";
   switch (field.k) {
     case "scalar":
       return leaf === "formula" ? field.formula : null;
@@ -664,9 +674,14 @@ export function leavesOf(field: Field): FieldLeaf[] {
     case "point":
       return ["x", "y", "z"];
     case "repetition":
-      return ["start", "end", field.repetition];
+      return [
+        "start",
+        "end",
+        field.repetition,
+        ...activeBoundaries(field).map((b) => b.leaf),
+      ];
     case "cut":
-      return ["pos"];
+      return ["pos", ...activeBoundaries(field).map((b) => b.leaf)];
   }
 }
 
@@ -733,6 +748,13 @@ export type SheetCommand =
       field: string;
       repetition: "spacing" | "count";
     }
+  | {
+      type: "setSectionBoundary";
+      item: string;
+      field: string;
+      leaf: BoundaryLeaf;
+      enabled: boolean;
+    }
   | { type: "setCutShape"; item: string; field: string; shape: SliceShape }
   /**
    * A point moved, as ONE edit.
@@ -780,6 +802,7 @@ export const SHEET_COMMAND_TYPES = {
   setFieldUnit: 1,
   setFieldRole: 1,
   setCutShape: 1,
+  setSectionBoundary: 1,
   setRepetitionMode: 1,
   setPointPosition: 1,
   setOutput: 1,
@@ -1121,6 +1144,30 @@ export function interpretSheetCommand(
         if (command.repetition !== "count" && command.repetition !== "spacing")
           return { rejected: "unknown repetition mode" };
         return { ...field, repetition: command.repetition };
+      });
+    case "setSectionBoundary":
+      return editField(book, command.item, command.field, (field) => {
+        if (field.k !== "cut" && field.k !== "repetition")
+          return { rejected: "only geometry fields have boundaries" };
+        if (
+          !isBoundaryLeaf(command.leaf) ||
+          typeof command.enabled !== "boolean"
+        )
+          return { rejected: "invalid section boundary" };
+        if (
+          command.enabled &&
+          !relevantBoundaries(field.shape).some((b) => b.leaf === command.leaf)
+        )
+          return {
+            rejected: "this boundary is redundant for the section orientation",
+          };
+        return {
+          ...field,
+          boundaryEnabled: {
+            ...field.boundaryEnabled,
+            [command.leaf]: command.enabled,
+          },
+        };
       });
     case "setCutShape":
       return editField(book, command.item, command.field, (field) => {

@@ -14,6 +14,8 @@ export interface WorkerTaskQueue<Request extends KeyedTask> {
   post(request: Request): boolean;
   /** Whether this exact task is running or is the newest task waiting behind it. */
   pending(key: string): boolean;
+  /** The latest state is already cached (or has no jobs); discard obsolete waiting work. */
+  discardQueued(): void;
   dispose(): void;
 }
 
@@ -44,6 +46,7 @@ export function createWorkerTaskQueue<
     try {
       const made = makeWorker();
       made.onmessage = (event: MessageEvent<Response>) => {
+        if (worker !== made) return;
         const task = inflight;
         inflight = null;
         const next = queued;
@@ -56,7 +59,9 @@ export function createWorkerTaskQueue<
           task ? performance.now() - task.sentAt : Number.NaN,
         );
       };
-      made.onerror = (event) => fail(event.error ?? event.message);
+      made.onerror = (event) => {
+        if (worker === made) fail(event.error ?? event.message);
+      };
       worker = made;
     } catch (reason) {
       fail(reason);
@@ -72,18 +77,29 @@ export function createWorkerTaskQueue<
     const active = ensureWorker();
     if (!active) return false;
     inflight = { key: request.key, sentAt: performance.now() };
-    active.postMessage(request);
-    return true;
+    try {
+      active.postMessage(request);
+      return true;
+    } catch (reason) {
+      fail(reason);
+      return false;
+    }
   };
 
   return {
     post(request) {
-      if (inflight?.key === request.key || queued?.key === request.key)
+      if (inflight?.key === request.key) {
+        queued = null; // An undo can make the running task the newest request again.
         return true;
+      }
+      if (queued?.key === request.key) return true;
       return send(request);
     },
     pending(key) {
       return inflight?.key === key || queued?.key === key;
+    },
+    discardQueued() {
+      queued = null;
     },
     dispose() {
       worker?.terminate();

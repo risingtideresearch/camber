@@ -1,75 +1,73 @@
-import {
-  measureRepetition,
-  type RepetitionResult,
-  type RepetitionMeasurements,
-} from "../core/sheet/repetitions";
-import { useMemo } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { cloneHull } from "../core/hull";
 import type { HullMetrics } from "../core/hullMetrics";
 import type { HullSampling } from "../core/mesh";
 import type { Model } from "../core/model";
 import type { WeightBook } from "../core/sheet/book";
+import { evaluateBook, type BookResults } from "../core/sheet/evaluate";
+import type { SliceMeasurements } from "../core/sheet/slices";
+import type { RepetitionMeasurements } from "../core/sheet/repetitions";
+import type {
+  WeightGeometryHull,
+  WeightGeometryResult,
+} from "../worker/weightGeometryProtocol";
+import { createWeightGeometryResource } from "./weightGeometryResource";
 import {
-  evaluateBook,
-  resultAt,
-  type BookResults,
-} from "../core/sheet/evaluate";
-import {
-  createSliceMeasurer,
-  createSectionMeasurer,
-  sliceMeasurementKey,
-  type SliceMeasurement,
-  type SliceMeasurements,
-} from "../core/sheet/slices";
+  planWeightGeometry,
+  resolveWeightGeometry,
+} from "./weightGeometryPlan";
 
-// Geometry depends only on the runtime model, its sampling, the shape and nominal position. A weak two-level
-// cache shares unchanged cuts across panel hooks and across unrelated book edits without retaining old hulls.
-interface GeometryCache {
-  readonly values: Map<string, SliceMeasurement>;
-  readonly repetitions: Map<string, RepetitionResult>;
-  resolvedKey: string | null;
-  resolved: SliceMeasurements | null;
-}
-
-const MEASUREMENT_CACHE = new WeakMap<
-  Model,
-  WeakMap<HullSampling, GeometryCache>
->();
-
-function geometryCache(model: Model, sampling: HullSampling): GeometryCache {
-  let bySampling = MEASUREMENT_CACHE.get(model);
+type GeometryResource = ReturnType<typeof createWeightGeometryResource>;
+const RESOURCES = new WeakMap<Model, WeakMap<HullSampling, GeometryResource>>();
+function geometryResource(
+  model: Model,
+  sampling: HullSampling,
+): GeometryResource {
+  let bySampling = RESOURCES.get(model);
   if (!bySampling) {
     bySampling = new WeakMap();
-    MEASUREMENT_CACHE.set(model, bySampling);
+    RESOURCES.set(model, bySampling);
   }
-  let cache = bySampling.get(sampling);
-  if (!cache) {
-    cache = {
-      repetitions: new Map(),
-      values: new Map(),
-      resolvedKey: null,
-      resolved: null,
-    };
-    bySampling.set(sampling, cache);
+  let resource = bySampling.get(sampling);
+  if (!resource) {
+    resource = createWeightGeometryResource(() => {
+      const worker = new Worker(
+        new URL("../worker/weightGeometryWorker.ts", import.meta.url),
+        { type: "module" },
+      );
+      try {
+        const hull: WeightGeometryHull = {
+          type: "hull",
+          state: cloneHull(model),
+          sampling,
+        };
+        worker.postMessage(hull);
+      } catch (error) {
+        worker.terminate();
+        throw error;
+      }
+      return worker;
+    });
+    bySampling.set(sampling, resource);
   }
-  return cache;
+  return resource;
 }
+const EMPTY = { values: new Map<string, WeightGeometryResult>(), error: null };
+const emptySnapshot = () => EMPTY;
+const noSubscription = () => () => {};
 
 export interface WeightBookResults {
-  /** First pass, used to resolve and diagnose authored slice positions. */
   readonly positions: BookResults;
   readonly measurements: SliceMeasurements;
   readonly repetitions: RepetitionMeasurements;
-  /** Final pass, with measured slice leaves available to every formula. */
   readonly results: BookResults;
+  readonly pending: boolean;
+  readonly error: string | null;
 }
 
-/**
- * Evaluate a book around its geometry boundary.
- *
- * Positions are authored formulas, while area/perimeter/centroid are measured values. Keeping both passes
- * here prevents panels from implementing subtly different sequencing. The row cache also means an unrelated
- * formula edit re-evaluates the tiny book but does not rebuild unchanged cuts.
- */
+/** Formulas resolve on the UI thread; geometry never does. A changed boundary
+ * immediately edits the form, then its worker result arrives under that exact
+ * input key. Old geometry is never fed to new formulas while a job is pending. */
 export function useWeightBookResults(
   book: WeightBook,
   model: Model,
@@ -77,94 +75,36 @@ export function useWeightBookResults(
   metrics: HullMetrics | null,
 ): WeightBookResults {
   const positions = useMemo(() => evaluateBook(book, metrics), [book, metrics]);
-
-  const measurements = useMemo(() => {
-    const out = new Map<string, SliceMeasurement>();
-    if (!sampling) return out;
-    const cached = geometryCache(model, sampling);
-    const signature: string[] = [];
-    let measure: ReturnType<typeof createSliceMeasurer> | null = null;
-
-    for (const item of book.items)
-      for (const [fieldKey, field] of Object.entries(item.fields)) {
-        if (field.k !== "cut") continue;
-        const position = resultAt(positions, item.id, fieldKey, "pos");
-        if (position?.error || !position?.reading) continue;
-        const key = sliceMeasurementKey(item.id, fieldKey);
-        const geometryKey = `${field.shape}\u0000${position.reading.v}`;
-        let value = cached.values.get(geometryKey);
-        if (!value) {
-          measure ??= createSliceMeasurer(model, sampling);
-          value = measure(field.shape, position.reading.v) ?? undefined;
-          if (value) {
-            // Position edits can produce an unbounded stream of nominal values. Retain enough cuts for undo
-            // and cross-panel reuse without turning a long editing session into a geometry archive.
-            if (cached.values.size >= 256) {
-              const oldest = cached.values.keys().next().value;
-              if (oldest !== undefined) cached.values.delete(oldest);
-            }
-            cached.values.set(geometryKey, value);
-          }
-        }
-        if (value) {
-          signature.push(`${key}\u0000${geometryKey}`);
-          out.set(key, value);
-        }
-      }
-    const resolvedKey = signature.join("\u0001");
-    if (cached.resolvedKey === resolvedKey && cached.resolved)
-      return cached.resolved;
-    cached.resolvedKey = resolvedKey;
-    cached.resolved = out;
-    return out;
-  }, [book, model, sampling, positions]);
-
-  const repetitions = useMemo(() => {
-    const out = new Map<string, RepetitionResult>();
-    if (!sampling) return out;
-    const cache = geometryCache(model, sampling).repetitions;
-    let measure: ReturnType<typeof createSectionMeasurer> | undefined;
-    for (const item of book.items)
-      for (const [key, field] of Object.entries(item.fields)) {
-        if (field.k !== "repetition") continue;
-        const start = resultAt(positions, item.id, key, "start"),
-          end = resultAt(positions, item.id, key, "end"),
-          repetition = resultAt(positions, item.id, key, field.repetition);
-        if (
-          !start?.quantity ||
-          !end?.quantity ||
-          !repetition?.quantity ||
-          start.error ||
-          end.error ||
-          repetition.error
-        )
-          continue;
-        const pitch =
-          field.repetition === "spacing"
-            ? repetition.quantity.v
-            : (end.quantity.v - start.quantity.v) / repetition.quantity.v;
-        const geometryKey = `${field.shape}\0${start.quantity.v}\0${end.quantity.v}\0${pitch}`;
-        let result = cache.get(geometryKey);
-        if (!result) {
-          measure ??= createSectionMeasurer(model, sampling);
-          result = measureRepetition(
-            measure,
-            field.shape,
-            start.quantity.v,
-            end.quantity.v,
-            pitch,
-          );
-          if (cache.size >= 32) cache.delete(cache.keys().next().value!);
-          cache.set(geometryKey, result);
-        }
-        out.set(sliceMeasurementKey(item.id, key), result);
-      }
-    return out;
-  }, [book, model, sampling, positions]);
-
-  const results = useMemo(
-    () => evaluateBook(book, metrics, measurements, repetitions),
-    [book, metrics, measurements, repetitions],
+  const plan = useMemo(
+    () => planWeightGeometry(book, positions),
+    [book, positions],
   );
-  return { positions, measurements, repetitions, results };
+  const resource = useMemo(
+    () => (sampling ? geometryResource(model, sampling) : null),
+    [model, sampling],
+  );
+  const snapshot = useSyncExternalStore(
+    resource?.subscribe ?? noSubscription,
+    resource?.getSnapshot ?? emptySnapshot,
+    emptySnapshot,
+  );
+  useEffect(() => {
+    resource?.request(plan.jobs);
+  }, [resource, plan]);
+  const geometry = useMemo(
+    () => resolveWeightGeometry(plan, snapshot.values),
+    [plan, snapshot.values],
+  );
+  const results = useMemo(
+    () =>
+      evaluateBook(book, metrics, geometry.measurements, geometry.repetitions),
+    [book, metrics, geometry],
+  );
+  return {
+    positions,
+    ...geometry,
+    results,
+    pending: !!resource && geometry.pending && !snapshot.error,
+    error: snapshot.error,
+  };
 }

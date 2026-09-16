@@ -1,3 +1,4 @@
+import { activeBoundaries } from "../../core/sheet/boundaries";
 import { CG_NAMES, GEOMETRY_LEAVES } from "../../core/sheet/sectionMeasures";
 import { FUNCTIONS } from "../../core/sheet/formula";
 import { HULL_METRICS, HULL_POINTS } from "../../core/hullMetrics";
@@ -67,6 +68,7 @@ export function globalCompletions(
     fieldKind: string,
     where: string,
     repetition?: string,
+    boundaries: readonly string[] = [],
   ): void => {
     const base = `${prefix}${key}`;
     if (fieldKind === "scalar") {
@@ -99,6 +101,7 @@ export function globalCompletions(
         hint: `centroid of ${key}, in this cell's coordinate`,
       });
     for (const measure of [
+      ...boundaries,
       ...(fieldKind === "repetition"
         ? [
             "start",
@@ -129,6 +132,9 @@ export function globalCompletions(
         field.k,
         where,
         field.k === "repetition" ? field.repetition : undefined,
+        field.k === "cut" || field.k === "repetition"
+          ? activeBoundaries(field).map((b) => b.leaf)
+          : [],
       );
     // A role is offered only where it RESOLVES — one field tagged, not none and not two — which is the rule
     // this whole module keeps: what is offered exists, and what exists is offered.
@@ -249,6 +255,7 @@ export function siblingCompletions(
       field.k === "point"
         ? ["x", "y", "z"]
         : [
+            ...activeBoundaries(field).map((b) => b.leaf),
             ...(field.k === "repetition"
               ? ["start", "end", field.repetition, "equivalentCount", "area"]
               : ["pos", ...SLICE_VALUE_FIELDS]),

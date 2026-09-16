@@ -1,3 +1,4 @@
+import { activeBoundaries, validateLimits } from "./boundaries";
 // ---------- evaluating a weight book ----------
 //
 // Takes the authored items and the hull's numbers, and produces a value, a spread and a sensitivity ranking
@@ -610,6 +611,22 @@ export function evaluateBook(
           "a cut position or repetition input cannot depend on measured cut values or repetitions",
           at,
         );
+      const boundaryInputs = activeBoundaries(field).map((boundary) => ({
+        boundary,
+        input: valueAt(item.id, key, at, boundary.leaf),
+      }));
+      try {
+        validateLimits(
+          Object.fromEntries(
+            boundaryInputs.map(({ boundary, input }) => [
+              boundary.leaf,
+              input.v,
+            ]),
+          ),
+        );
+      } catch (error) {
+        fail(error instanceof Error ? error.message : String(error), at);
+      }
       if (field.k === "cut") {
         const measured = sliceMeasurements.get(
           sliceMeasurementKey(item.id, key),
@@ -620,6 +637,21 @@ export function evaluateBook(
             at,
           );
         const position = valueAt(item.id, key, at, "pos");
+        let boundaryGradient = {};
+        for (const { boundary, input } of boundaryInputs) {
+          const slope = measured.boundaryDerivatives?.[boundary.leaf]?.[leaf];
+          if (!Number.isFinite(slope) && Object.keys(input.d).length)
+            fail(
+              `${boundary.label} boundary uncertainty crosses an undefined centroid or geometry transition`,
+              at,
+            );
+          boundaryGradient = combine(
+            boundaryGradient,
+            1,
+            input.d,
+            Number.isFinite(slope) ? slope! : 0,
+          );
+        }
         currentCell!.unitWarning ??= measured.warning ?? null;
         const slope = measured.geometryDerivative[leaf];
         if (!Number.isFinite(slope) && Object.keys(position.d).length)
@@ -629,7 +661,12 @@ export function evaluateBook(
           );
         return {
           v: geometryValue(measured.measures, leaf),
-          d: combine(position.d, Number.isFinite(slope) ? slope : 0, {}, 0),
+          d: combine(
+            position.d,
+            Number.isFinite(slope) ? slope : 0,
+            boundaryGradient,
+            1,
+          ),
           dim: leaf === "area" ? AREA : LENGTH,
         };
       }
@@ -668,6 +705,15 @@ export function evaluateBook(
           at,
         );
       const measured = result.value;
+      const boundaries = boundaryInputs.map(({ boundary, input }) => {
+        const derivative = measured.boundaryDerivatives?.[boundary.leaf];
+        if (Object.keys(input.d).length && !derivative)
+          fail(
+            `${boundary.label} boundary uncertainty has not produced a valid sensitivity`,
+            at,
+          );
+        return { input, derivative };
+      });
       currentCell!.unitWarning ??= measured.warning ?? null;
       const name = leaf.split(".")[0].replace(/Cg$/, "") as
         "area" | "openLength" | "closedLength";
@@ -676,7 +722,16 @@ export function evaluateBook(
         b = measured.end[name];
       const lift = (get: (m: Measure) => number, dim: Dim): Quantity => ({
         v: get(integral),
-        d: combine(start.d, -get(a), end.d, get(b)),
+        d: boundaries.reduce(
+          (gradient, { input, derivative }) =>
+            combine(
+              gradient,
+              1,
+              input.d,
+              derivative ? get(derivative[name]) : 0,
+            ),
+          combine(start.d, -get(a), end.d, get(b)),
+        ),
         dim,
       });
       const amountDim = name === "area" ? { m: 0, l: 3 } : AREA;

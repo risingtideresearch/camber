@@ -137,12 +137,13 @@ function WeightPanelContents() {
   } | null>(null);
 
   const hullSampling = sampling();
-  const { measurements, repetitions, results } = useWeightBookResults(
-    book,
-    model,
-    hullSampling,
-    metrics,
-  );
+  const {
+    measurements,
+    repetitions,
+    results,
+    pending: geometryPending,
+    error: geometryError,
+  } = useWeightBookResults(book, model, hullSampling, metrics);
   const apply = (command: DocumentCommand) => {
     void dispatch(command).then((outcome) => {
       if (command.type !== "renameField" || "rejected" in outcome) return;
@@ -306,6 +307,13 @@ function WeightPanelContents() {
             problemCount={problems.length}
           />
 
+          {(geometryPending || geometryError) && (
+            <p className="wgeometryprogress" role="status">
+              {geometryError
+                ? `Section calculations unavailable: ${geometryError}`
+                : "Updating section geometry… You can keep editing."}
+            </p>
+          )}
           <ViewBody
             {...{
               book,

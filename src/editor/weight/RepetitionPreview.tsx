@@ -1,3 +1,5 @@
+import type { SectionLimits } from "../../core/sheet/boundaries";
+import type { SliceShape } from "../../core/sheet/book";
 import { useState, type PointerEvent, type ReactNode } from "react";
 import { GeometryDisclosure } from "./GeometryDisclosure";
 import type { RepetitionMeasurement } from "../../core/sheet/repetitions";
@@ -15,9 +17,13 @@ import {
 export function RepetitionPreview({
   measurement,
   equivalentCount,
+  limits = {},
+  shape = "transverse",
 }: {
   readonly measurement: RepetitionMeasurement | undefined;
   readonly equivalentCount: ReactNode;
+  readonly limits?: SectionLimits;
+  readonly shape?: SliceShape;
 }) {
   if (!measurement) return null;
   return (
@@ -25,17 +31,30 @@ export function RepetitionPreview({
       samples={measurement.samples}
       equivalentCount={equivalentCount}
       repetition
+      limits={limits}
+      shape={shape}
     />
   );
 }
 
 export function CutPreview({
   measurement,
+  limits = {},
+  shape = "transverse",
 }: {
   readonly measurement: RawSliceMeasurement | undefined;
+  readonly limits?: SectionLimits;
+  readonly shape?: SliceShape;
 }) {
   if (!measurement) return null;
-  return <MeasurePreview samples={[measurement]} repetition={false} />;
+  return (
+    <MeasurePreview
+      samples={[measurement]}
+      repetition={false}
+      limits={limits}
+      shape={shape}
+    />
+  );
 }
 
 const VIEWS: readonly { value: RepetitionView; label: string; unit: string }[] =
@@ -51,11 +70,16 @@ function MeasurePreview({
   samples,
   repetition,
   equivalentCount,
+  limits = {},
+  shape = "transverse",
 }: {
   samples: readonly RawSliceMeasurement[];
   repetition: boolean;
   equivalentCount?: ReactNode;
+  limits?: SectionLimits;
+  shape?: SliceShape;
 }) {
+  const topHeight = limits.topHeight;
   const [view, setView] = useState<RepetitionView>("area");
   const [picked, setPicked] = useState(Math.floor(samples.length / 2));
   const [hover, setHover] = useState<number | null>(null);
@@ -87,8 +111,10 @@ function MeasurePreview({
       92 - (p[axes[1]] - (lo[1] + hi[1]) / 2) * scale,
     ];
   };
+  const horizontal = shape === "plane";
+  const sectionLabel = horizontal ? "Plan x/y" : "Section y/z";
   const profile = fit([0, 2]),
-    section = fit([1, 2]);
+    section = fit(horizontal ? [0, 1] : [1, 2]);
   const hit = (event: PointerEvent<SVGSVGElement>) => {
     // Inverse SVG transform accounts for aspect-ratio letterboxing and resizing.
     const matrix = event.currentTarget.getScreenCTM();
@@ -103,7 +129,7 @@ function MeasurePreview({
     <svg
       viewBox="0 0 300 184"
       role="img"
-      aria-label={`${isProfile ? "Profile x/z" : "Section y/z"}, ${spec.label}, ${repetition ? `preview section ${active + 1} of ${samples.length}` : "cut"}`}
+      aria-label={`${isProfile ? "Profile x/z" : sectionLabel}, ${spec.label}, ${repetition ? `preview section ${active + 1} of ${samples.length}` : "cut"}`}
       className={`wpreviewplot ${view}${isProfile && repetition ? " interactive" : ""}`}
       onPointerMove={
         isProfile && repetition ? (event) => setHover(hit(event)) : undefined
@@ -134,6 +160,20 @@ function MeasurePreview({
         d={samplePath(sample, view, at)}
         fillRule="evenodd"
       />
+      {(isProfile || !horizontal) &&
+        topHeight !== undefined &&
+        at([0, 0, topHeight])[1] >= 0 &&
+        at([0, 0, topHeight])[1] <= 184 && (
+          <line
+            className="wpreviewtop"
+            x1="12"
+            x2="288"
+            y1={at([0, 0, topHeight])[1]}
+            y2={at([0, 0, topHeight])[1]}
+          >
+            <title>{`Top boundary: ${sig(topHeight)} m above keel baseline`}</title>
+          </line>
+        )}
       {centroid && (
         <g
           className="wpreviewcentroid"
@@ -185,7 +225,7 @@ function MeasurePreview({
           <figure>
             {draw(section, false)}
             <figcaption>
-              Section · y / z ·{" "}
+              {horizontal ? "Plan · x / y" : "Section · y / z"} ·{" "}
               {repetition ? `preview section ${active + 1}` : "cut"}
             </figcaption>
           </figure>

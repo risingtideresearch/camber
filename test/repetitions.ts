@@ -1,3 +1,8 @@
+import {
+  activeBoundaries,
+  relevantBoundaries,
+  type SectionLimits,
+} from "../src/core/sheet/boundaries";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { RepetitionAssumptions } from "../src/editor/weight/RepetitionAssumptions";
@@ -802,3 +807,513 @@ assert.ok(previewMarkup.includes('aria-label="Preview section"'));
 assert.ok(!previewMarkup.includes("Repetition preview"));
 assert.ok(!previewMarkup.includes("Preview sample"));
 console.log("Preview section labeling stays distinct from equivalent count");
+
+// Top boundary: clip within the existing hull; closing edges are not hull skin.
+for (const height of [0.5, 1, 1.5]) {
+  const clipped = intersectPlane(triangles, [1, 0, 0], 1.3, identity, 1, {
+    topHeight: height,
+  });
+  near(clipped.measures.area.amount, 2 * height);
+  near(clipped.measures.openLength.amount, 2 + 2 * height);
+  near(clipped.measures.closedLength.amount, 4 + 2 * height);
+  near(geometryValue(clipped.measures, "areaCg.z"), height / 2);
+  assert.ok(clipped.contours.flat().every((p) => p[2] <= height + 1e-9));
+}
+for (const height of [-1, 0]) {
+  const empty = intersectPlane(triangles, [1, 0, 0], 1.3, identity, 1, {
+    topHeight: height,
+  });
+  assert.deepEqual(empty.measures, zeroMeasures());
+  assert.equal(empty.contours.length, 0);
+}
+for (const height of [2, 3])
+  assert.deepEqual(
+    intersectPlane(triangles, [1, 0, 0], 1.3, identity, 1, {
+      topHeight: height,
+    }).measures,
+    section,
+  );
+near(
+  intersectPlane(triangles, [0, 0, 1], 0.7, identity, 1, { topHeight: 0.6 })
+    .measures.area.amount,
+  0,
+);
+near(
+  intersectPlane(triangles, [0, 0, 1], 0.7, identity, 1, { topHeight: 0.7 })
+    .measures.area.amount,
+  8,
+);
+// Nested hole opens onto the trim line; pairing endpoints must not bridge its void.
+const hollow = [...triangles, ...box(0, 4, -0.5, 0.5, 0.5, 1.5)];
+const notch = intersectPlane(hollow, [1, 0, 0], 1.3, identity, 1, {
+  topHeight: 1,
+});
+near(notch.measures.area.amount, 1.5);
+near(notch.measures.closedLength.amount, 7);
+assert.equal(notch.contours.length, 1);
+const islands = intersectPlane(
+  [...box(0, 4, -3, -1), ...box(0, 4, 1, 3)],
+  [1, 0, 0],
+  1.3,
+  identity,
+  1,
+  { topHeight: 1 },
+);
+near(islands.measures.area.amount, 4);
+near(islands.measures.closedLength.amount, 12);
+assert.equal(islands.contours.length, 2);
+
+for (const measurer of [measure, rakedMeasure]) {
+  for (const shape of ["transverse", "station", "longitudinal"] as const) {
+    const pos = shape === "longitudinal" ? 0.3 : 2;
+    const full = measurer(shape, pos);
+    const unchanged = measurer(shape, pos, { topHeight: 100 });
+    near(unchanged.area, full.area, 1e-8);
+    near(unchanged.openPerimeter, full.openPerimeter, 1e-8);
+    near(unchanged.closedPerimeter, full.closedPerimeter, 1e-8);
+    near(unchanged.z, full.z, 1e-8);
+    const clipped = measurer(shape, pos, { topHeight: 0.65 });
+    assert.ok(clipped.area > 0 && clipped.area < full.area);
+    assert.ok(clipped.sheetContours.flat().every((p) => p[2] <= 0.65 + 1e-8));
+    assert.ok(
+      clipped.sheetSkinSegments.flat().every((p) => p[2] <= 0.65 + 1e-8),
+    );
+    near(measurer(shape, pos, { topHeight: -1 }).area, 0);
+  }
+}
+
+const trimmedField: RepetitionField = {
+  ...repetition,
+  spacing: "0.5",
+  boundaryEnabled: { topHeight: true },
+  topHeight: "1 ± 0.1",
+};
+const boxMeasurer = (_shape: unknown, pos: number, limits?: SectionLimits) =>
+  raw(intersectPlane(triangles, [1, 0, 0], pos, identity, 1, limits).measures);
+const trimmedIntegral = measureRepetition(
+  boxMeasurer,
+  "transverse",
+  1,
+  3,
+  0.5,
+  { topHeight: 1 },
+);
+assert.ok(
+  trimmedIntegral.value,
+  trimmedIntegral.error ?? "valid clipped repetition",
+);
+near(
+  trimmedIntegral.value.boundaryDerivatives!.topHeight!.area.amount,
+  4,
+  1e-8,
+);
+const trimmedBook = makeBook(trimmedField);
+const trimmedResults = evaluate(trimmedBook, trimmedIntegral);
+near(resultAt(trimmedResults, "i", "members", "area")!.reading!.v, 8);
+near(
+  resultAt(trimmedResults, "i", "members", "area")!.reading!.worst.hi,
+  0.8,
+  1e-8,
+);
+near(
+  resultAt(trimmedResults, "i", "members", "areaCg.z")!.reading!.worst.hi,
+  0.05,
+  1e-8,
+);
+near(
+  resultAt(trimmedResults, "i", "members", "equivalentCount")!.reading!.v,
+  4,
+);
+assert.deepEqual(parseSheet(buildSheetJson(trimmedBook)), trimmedBook);
+const sheerCommand = interpretSheetCommand(trimmedBook, {
+  type: "setSectionBoundary",
+  item: "i",
+  field: "members",
+  leaf: "topHeight",
+  enabled: false,
+});
+assert.ok("book" in sheerCommand);
+assert.equal(
+  (sheerCommand.book.items[0].fields.members as RepetitionField).topHeight,
+  "1 ± 0.1",
+);
+assert.equal(
+  resultAt(evaluate(sheerCommand.book), "i", "members", "topHeight"),
+  undefined,
+);
+assert.ok(
+  completionsFor(trimmedBook, trimmedBook.items[0], "formula").some(
+    (c) => c.insert === "members.topHeight",
+  ),
+);
+assert.ok(
+  completionsFor(trimmedBook, trimmedBook.items[0], "formula").some(
+    (c) => c.insert === "structure.members.topHeight",
+  ),
+);
+for (const invalid of ["members.area", "2 kg", "not here"]) {
+  const result = evaluate(
+    makeBook({ ...trimmedField, topHeight: invalid }),
+    trimmedIntegral,
+  );
+  assert.ok(resultAt(result, "i", "members", "topHeight")!.error, invalid);
+  assert.ok(resultAt(result, "i", "members", "area")!.error, invalid);
+}
+const clippedSingle = cut("transverse", 2, { topHeight: 0.65 })!;
+const singleHeightBook: WeightBook = {
+  ...cutBook,
+  items: [
+    {
+      ...cutBook.items[0],
+      fields: {
+        ...cutBook.items[0].fields,
+        section: {
+          k: "cut",
+          shape: "transverse",
+          unit: "m",
+          pos: "2",
+          boundaryEnabled: { topHeight: true },
+          topHeight: "0.65 ± 0.01",
+        },
+      },
+    },
+  ],
+};
+assert.deepEqual(
+  parseSheet(buildSheetJson(singleHeightBook)),
+  singleHeightBook,
+);
+const singleHeightResults = evaluateBook(
+  singleHeightBook,
+  null,
+  new Map([["c section", clippedSingle]]),
+);
+near(
+  resultAt(singleHeightResults, "c", "section", "area")!.reading!.worst.hi,
+  Math.abs(clippedSingle.boundaryDerivatives!.topHeight!.area) * 0.01,
+);
+assert.ok(
+  resultAt(singleHeightResults, "c", "section", "area")!.reading!.worst.hi > 0,
+);
+console.log(
+  "Top boundaries: clipping, closure, holes, islands, sweep halves, rake, persistence and uncertainty passed",
+);
+const renamedTop = interpretSheetCommand(
+  makeBook({
+    ...trimmedField,
+    boundaryEnabled: { topHeight: false },
+    topHeight: "density",
+  }),
+  {
+    type: "renameField",
+    item: "i",
+    key: "density",
+    name: "heightSource",
+    updateReferences: true,
+  },
+);
+assert.ok("book" in renamedTop);
+assert.equal(
+  (renamedTop.book.items[0].fields.members as RepetitionField).topHeight,
+  "heightSource",
+);
+const resumedTop = interpretSheetCommand(sheerCommand.book, {
+  type: "setSectionBoundary",
+  item: "i",
+  field: "members",
+  leaf: "topHeight",
+  enabled: true,
+});
+assert.ok("book" in resumedTop);
+assert.deepEqual(resumedTop.book, trimmedBook);
+const trimmedMarkup = renderToStaticMarkup(
+  createElement(RepetitionPreview, {
+    measurement: { ...trimmedIntegral.value!, samples: [clippedSingle] },
+    equivalentCount: "4",
+    limits: { topHeight: 0.65 },
+  }),
+);
+assert.match(trimmedMarkup, /Top boundary: 0\.650 m above keel baseline/);
+assert.match(trimmedMarkup, /class="wpreviewtop"/);
+
+// All six directional limits share one geometry operation; orientation determines
+// which ones are meaningful to author (and which saved inputs are dormant).
+const allLimits = {
+  bottomHeight: 0.5,
+  topHeight: 1.5,
+  aftPosition: 1,
+  forwardPosition: 3,
+  portOffset: -0.5,
+  starboardOffset: 0.5,
+};
+for (const [normal, pos, area, length] of [
+  [[1, 0, 0], 2, 1, 4],
+  [[0, 1, 0], 0, 2, 6],
+  [[0, 0, 1], 1, 2, 6],
+] as const) {
+  const result = intersectPlane(
+    triangles,
+    [...normal],
+    pos,
+    identity,
+    1,
+    allLimits,
+  );
+  near(result.measures.area.amount, area);
+  near(result.measures.closedLength.amount, length);
+  near(result.measures.openLength.amount, 0);
+  near(geometryValue(result.measures, "areaCg.x"), 2);
+  near(geometryValue(result.measures, "areaCg.y"), 0);
+  near(geometryValue(result.measures, "areaCg.z"), 1);
+}
+const portWall = intersectPlane(triangles, [1, 0, 0], 2, identity, 1, {
+  portOffset: 0.2,
+});
+near(portWall.measures.area.amount, 1.6);
+near(portWall.measures.openLength.amount, 2.8);
+near(portWall.measures.closedLength.amount, 5.6);
+near(geometryValue(portWall.measures, "areaCg.y"), 0.6);
+for (const invalid of [
+  { bottomHeight: 2, topHeight: 1 },
+  { aftPosition: 3, forwardPosition: 2 },
+  { portOffset: 1, starboardOffset: -1 },
+])
+  assert.throws(
+    () => intersectPlane(triangles, [1, 0, 0], 2, identity, 1, invalid),
+    /must be less/,
+  );
+
+for (const measurer of [measure, rakedMeasure]) {
+  for (const shape of ["transverse", "station"] as const) {
+    const full = measurer(shape, 2);
+    const half = measurer(shape, 2, { portOffset: 0 });
+    const other = measurer(shape, 2, { starboardOffset: 0 });
+    near(half.area + other.area, full.area, 1e-8);
+    near(half.openPerimeter * 2, full.openPerimeter, 1e-8);
+    assert.ok(half.y > 0);
+    near(half.y, -other.y, 1e-8);
+    assert.ok(half.sheetContours.flat().every((p) => p[1] >= -1e-8));
+    const band = measurer(shape, 2, {
+      bottomHeight: 0.3,
+      topHeight: 0.65,
+      portOffset: -0.2,
+      starboardOffset: 0.4,
+    });
+    assert.ok(band.area > 0 && band.area < full.area);
+    assert.ok(
+      band.sheetContours
+        .flat()
+        .every(
+          (p) =>
+            p[2] >= 0.3 - 1e-8 &&
+            p[2] <= 0.65 + 1e-8 &&
+            p[1] >= -0.2 - 1e-8 &&
+            p[1] <= 0.4 + 1e-8,
+        ),
+    );
+  }
+}
+const rakedDeck = rakedMeasure("plane", 0.6, {
+  aftPosition: 1,
+  forwardPosition: 3,
+  portOffset: -0.3,
+  starboardOffset: 0.5,
+});
+assert.ok(rakedDeck.area > 0);
+for (const p of rakedDeck.contours.flat()) {
+  const position = (p[0] - p[2] * Math.tan(0.12) - raked.plan.at(0)[0]) / 1000;
+  assert.ok(position >= 1 - 1e-8 && position <= 3 + 1e-8);
+}
+console.log(
+  "Directional boundaries: combined box clips, signed offsets, asymmetric sweep halves and world-vertical rake passed",
+);
+const directionalField: RepetitionField = {
+  ...repetition,
+  spacing: "0.5",
+  boundaryEnabled: {
+    topHeight: true,
+    bottomHeight: true,
+    aftPosition: true,
+    forwardPosition: false,
+  },
+  topHeight: "level + 1",
+  bottomHeight: "level",
+  aftPosition: "invalid but dormant",
+  forwardPosition: "level + 2",
+};
+assert.deepEqual(
+  relevantBoundaries("plane").map((b) => b.label),
+  ["Aft", "Forward", "Port", "Starboard"],
+);
+assert.deepEqual(
+  relevantBoundaries("longitudinal").map((b) => b.label),
+  ["Top", "Bottom", "Aft", "Forward"],
+);
+assert.deepEqual(
+  relevantBoundaries("transverse").map((b) => b.label),
+  ["Top", "Bottom", "Port", "Starboard"],
+);
+assert.equal(relevantBoundaries("station").length, 6);
+assert.deepEqual(
+  activeBoundaries(directionalField).map((b) => b.label),
+  ["Top", "Bottom"],
+);
+const directionalBook = makeBook(directionalField, {
+  level: scalar("0.5 ± 0.1", "m"),
+});
+assert.deepEqual(parseSheet(buildSheetJson(directionalBook)), directionalBook);
+assert.deepEqual(bookViolations(directionalBook), []);
+const boundedBox = (_shape: unknown, pos: number, limits?: SectionLimits) =>
+  raw(intersectPlane(triangles, [1, 0, 0], pos, identity, 1, limits).measures);
+const bandIntegral = measureRepetition(boundedBox, "transverse", 1, 3, 0.5, {
+  topHeight: 1.5,
+  bottomHeight: 0.5,
+});
+assert.ok(bandIntegral.value, bandIntegral.error ?? "valid band integral");
+const bandResults = evaluate(directionalBook, bandIntegral);
+near(resultAt(bandResults, "i", "members", "area")!.reading!.v, 8);
+near(resultAt(bandResults, "i", "members", "area")!.reading!.worst.hi, 0, 1e-8);
+near(
+  resultAt(bandResults, "i", "members", "areaCg.z")!.reading!.worst.hi,
+  0.1,
+  1e-8,
+);
+near(resultAt(bandResults, "i", "members", "equivalentCount")!.reading!.v, 4);
+assert.equal(resultAt(bandResults, "i", "members", "aftPosition"), undefined);
+const suggestions = completionsFor(directionalBook, directionalBook.items[0]);
+assert.ok(suggestions.some((c) => c.insert === "members.bottomHeight"));
+assert.ok(!suggestions.some((c) => c.insert === "members.aftPosition"));
+const horizontalCommand = interpretSheetCommand(directionalBook, {
+  type: "setCutShape",
+  item: "i",
+  field: "members",
+  shape: "plane",
+});
+assert.ok("book" in horizontalCommand);
+const horizontalField = horizontalCommand.book.items[0].fields
+  .members as RepetitionField;
+assert.deepEqual(
+  activeBoundaries(horizontalField).map((b) => b.label),
+  ["Aft"],
+);
+assert.equal(horizontalField.topHeight, "level + 1");
+assert.equal(
+  resultAt(evaluate(horizontalCommand.book), "i", "members", "topHeight"),
+  undefined,
+);
+assert.ok(
+  "rejected" in
+    interpretSheetCommand(horizontalCommand.book, {
+      type: "setSectionBoundary",
+      item: "i",
+      field: "members",
+      leaf: "topHeight",
+      enabled: true,
+    }),
+);
+const removeBoundary = interpretSheetCommand(directionalBook, {
+  type: "setSectionBoundary",
+  item: "i",
+  field: "members",
+  leaf: "bottomHeight",
+  enabled: false,
+});
+assert.ok("book" in removeBoundary);
+assert.equal(
+  (removeBoundary.book.items[0].fields.members as RepetitionField).bottomHeight,
+  "level",
+);
+const restoreBoundary = interpretSheetCommand(removeBoundary.book, {
+  type: "setSectionBoundary",
+  item: "i",
+  field: "members",
+  leaf: "bottomHeight",
+  enabled: true,
+});
+assert.ok("book" in restoreBoundary);
+assert.deepEqual(restoreBoundary.book, directionalBook);
+const renamedBoundary = interpretSheetCommand(directionalBook, {
+  type: "renameField",
+  item: "i",
+  key: "level",
+  name: "sole",
+  updateReferences: true,
+});
+assert.ok("book" in renamedBoundary);
+assert.equal(
+  (renamedBoundary.book.items[0].fields.members as RepetitionField)
+    .bottomHeight,
+  "sole",
+);
+assert.equal(
+  (renamedBoundary.book.items[0].fields.members as RepetitionField)
+    .forwardPosition,
+  "sole + 2",
+);
+const reversed = evaluate(
+  makeBook({ ...directionalField, bottomHeight: "2", topHeight: "1" }),
+  bandIntegral,
+);
+assert.match(
+  resultAt(reversed, "i", "members", "area")!.error!,
+  /must be less/,
+);
+// Boundary formulas obey the same dimensional and dependency guards as positions.
+for (const invalid of ["members.area", "3 kg"]) {
+  const checked = evaluate(
+    makeBook({ ...directionalField, bottomHeight: invalid }),
+    bandIntegral,
+  );
+  assert.ok(resultAt(checked, "i", "members", "bottomHeight")!.error);
+}
+console.log(
+  "Directional boundary inputs: applicability, saved formulas, commands, JSON, references, validation and shared uncertainty passed",
+);
+
+// Horizontal previews need plan area, not an edge-on y/z line. Both cuts and
+// repetitions share this renderer; the profile remains available for selection.
+const horizontalPreview = renderToStaticMarkup(
+  createElement(RepetitionPreview, {
+    shape: "plane",
+    measurement: { ...measured.value!, samples: [measure("plane", 0.6)] },
+    equivalentCount: "1",
+    limits: { topHeight: 0.6 },
+  }),
+);
+assert.match(horizontalPreview, /aria-label="Plan x\/y, Area/);
+assert.match(horizontalPreview, /Plan · x \/ y/);
+assert.match(horizontalPreview, /aria-label="Profile x\/z, Area/);
+assert.doesNotMatch(horizontalPreview, /Section y\/z/);
+const planPath = [
+  ...horizontalPreview.matchAll(/class="wpreviewactive" d="([^"]+)"/g),
+][1][1];
+const planY = [...planPath.matchAll(/[ML]([0-9eE+.-]+),([0-9eE+.-]+)/g)].map(
+  (match) => Number(match[2]),
+);
+assert.ok(
+  Math.max(...planY) - Math.min(...planY) > 1,
+  "plan preview must not collapse to an edge-on line",
+);
+assert.equal(
+  (horizontalPreview.match(/class="wpreviewtop"/g) ?? []).length,
+  1,
+  "a height line belongs in the profile, never in the x/y plan",
+);
+assert.match(previewMarkup, /aria-label="Section y\/z, Area/);
+console.log(
+  "Horizontal preview: x/y plan projection, labels and profile-only height marker passed",
+);
+
+// A saved top formula is just another dormant boundary: only the shared enable
+// map activates it, including after persistence and when choosing its orientation.
+const dormantTopBook = makeBook({ ...repetition, topHeight: "0.65" });
+const dormantTop = parseSheet(buildSheetJson(dormantTopBook));
+assert.deepEqual(dormantTop, dormantTopBook);
+assert.deepEqual(
+  activeBoundaries(dormantTop.items[0].fields.members as RepetitionField),
+  [],
+);
+assert.equal(
+  resultAt(evaluate(dormantTop), "i", "members", "topHeight"),
+  undefined,
+);

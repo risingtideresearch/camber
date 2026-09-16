@@ -1,3 +1,4 @@
+import { BOUNDARIES, type BoundaryFields } from "./boundaries";
 // ---------- the weight book, on disk ----------
 //
 // The book is persisted BESIDE the hull document, never inside it: `json.ts` writes a `HullDocument` and
@@ -42,7 +43,7 @@ import { canCarryRole, isRoleName } from "./roles";
  */
 export const SHEET_VERSION = 1;
 
-interface StoredField {
+interface StoredField extends BoundaryFields {
   k: FieldKind;
   formula?: string;
   unit?: string;
@@ -113,6 +114,15 @@ function storeField(field: Field): StoredField {
         shape: field.shape,
         unit: fieldUnit(field),
         pos: field.pos,
+        ...Object.fromEntries(
+          BOUNDARIES.filter((b) => field[b.leaf] !== undefined).map((b) => [
+            b.leaf,
+            field[b.leaf],
+          ]),
+        ),
+        ...(field.boundaryEnabled
+          ? { boundaryEnabled: field.boundaryEnabled }
+          : {}),
       };
   }
 }
@@ -147,6 +157,28 @@ const dict = (v: unknown): Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v)
     ? (v as Record<string, unknown>)
     : {};
+
+/** Preserve dormant formulas, but accept only known boolean enable flags. */
+function readBoundaries(raw: Record<string, unknown>): BoundaryFields {
+  const enabled = dict(raw.boundaryEnabled);
+  return {
+    ...Object.fromEntries(
+      BOUNDARIES.filter((b) => typeof raw[b.leaf] === "string").map((b) => [
+        b.leaf,
+        raw[b.leaf],
+      ]),
+    ),
+    ...(raw.boundaryEnabled && typeof raw.boundaryEnabled === "object"
+      ? {
+          boundaryEnabled: Object.fromEntries(
+            BOUNDARIES.filter((b) => typeof enabled[b.leaf] === "boolean").map(
+              (b) => [b.leaf, enabled[b.leaf]],
+            ),
+          ),
+        }
+      : {}),
+  };
+}
 
 /**
  * One stored field, back into the shape its kind carries.
@@ -186,6 +218,7 @@ function readField(raw: Record<string, unknown>, kind: FieldKind): Field {
     case "repetition":
       return {
         ...field,
+        ...readBoundaries(raw),
         shape: isSliceShape(str(raw.shape))
           ? (str(raw.shape) as typeof field.shape)
           : field.shape,
@@ -200,6 +233,7 @@ function readField(raw: Record<string, unknown>, kind: FieldKind): Field {
       const shape = str(raw.shape);
       return {
         ...field,
+        ...readBoundaries(raw),
         shape: isSliceShape(shape) ? shape : field.shape,
         // A cut position is always a length, so empty and omitted units both take the field's metre default.
         unit: str(raw.unit, field.unit) || field.unit,
