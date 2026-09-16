@@ -1,3 +1,4 @@
+import { BOUNDARIES, type BoundaryFields } from "./boundaries";
 // ---------- the weight book, on disk ----------
 //
 // The book is persisted BESIDE the hull document, never inside it: `json.ts` writes a `HullDocument` and
@@ -42,7 +43,7 @@ import { canCarryRole, isRoleName } from "./roles";
  */
 export const SHEET_VERSION = 1;
 
-interface StoredField {
+interface StoredField extends BoundaryFields {
   k: FieldKind;
   formula?: string;
   unit?: string;
@@ -52,6 +53,11 @@ interface StoredField {
   from?: string;
   shape?: string;
   pos?: string;
+  start?: string;
+  end?: string;
+  repetition?: "spacing" | "count";
+  spacing?: string;
+  count?: string;
   /** A `ROLES` name, on the kinds that may carry one. Absent where the field is just a field. */
   role?: string;
 }
@@ -100,12 +106,23 @@ function storeField(field: Field): StoredField {
         },
         field.role,
       );
+    case "repetition":
+      return { ...field };
     case "cut":
       return {
         k: field.k,
         shape: field.shape,
         unit: fieldUnit(field),
         pos: field.pos,
+        ...Object.fromEntries(
+          BOUNDARIES.filter((b) => field[b.leaf] !== undefined).map((b) => [
+            b.leaf,
+            field[b.leaf],
+          ]),
+        ),
+        ...(field.boundaryEnabled
+          ? { boundaryEnabled: field.boundaryEnabled }
+          : {}),
       };
   }
 }
@@ -140,6 +157,28 @@ const dict = (v: unknown): Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v)
     ? (v as Record<string, unknown>)
     : {};
+
+/** Preserve dormant formulas, but accept only known boolean enable flags. */
+function readBoundaries(raw: Record<string, unknown>): BoundaryFields {
+  const enabled = dict(raw.boundaryEnabled);
+  return {
+    ...Object.fromEntries(
+      BOUNDARIES.filter((b) => typeof raw[b.leaf] === "string").map((b) => [
+        b.leaf,
+        raw[b.leaf],
+      ]),
+    ),
+    ...(raw.boundaryEnabled && typeof raw.boundaryEnabled === "object"
+      ? {
+          boundaryEnabled: Object.fromEntries(
+            BOUNDARIES.filter((b) => typeof enabled[b.leaf] === "boolean").map(
+              (b) => [b.leaf, enabled[b.leaf]],
+            ),
+          ),
+        }
+      : {}),
+  };
+}
 
 /**
  * One stored field, back into the shape its kind carries.
@@ -176,10 +215,25 @@ function readField(raw: Record<string, unknown>, kind: FieldKind): Field {
         z: str(raw.z),
         from: str(raw.from),
       };
+    case "repetition":
+      return {
+        ...field,
+        ...readBoundaries(raw),
+        shape: isSliceShape(str(raw.shape))
+          ? (str(raw.shape) as typeof field.shape)
+          : field.shape,
+        unit: str(raw.unit, "m") || "m",
+        start: str(raw.start),
+        end: str(raw.end),
+        repetition: raw.repetition === "count" ? "count" : "spacing",
+        spacing: str(raw.spacing),
+        count: str(raw.count),
+      };
     case "cut": {
       const shape = str(raw.shape);
       return {
         ...field,
+        ...readBoundaries(raw),
         shape: isSliceShape(shape) ? shape : field.shape,
         // A cut position is always a length, so empty and omitted units both take the field's metre default.
         unit: str(raw.unit, field.unit) || field.unit,
@@ -189,6 +243,12 @@ function readField(raw: Record<string, unknown>, kind: FieldKind): Field {
   }
 }
 
+/** Accept the former feature name only at the persistence boundary. */
+function readFieldKind(raw: unknown): FieldKind | null {
+  const kind = raw === "footprint" ? "repetition" : str(raw);
+  return isFieldKind(kind) ? kind : null;
+}
+
 function readScope(raw: unknown): ViewScope | null {
   const s = dict(raw);
   switch (str(s.k)) {
@@ -196,10 +256,10 @@ function readScope(raw: unknown): ViewScope | null {
       return { k: "all" };
     case "item":
       return str(s.item) ? { k: "item", item: str(s.item) } : null;
-    case "fieldType":
-      return isFieldKind(str(s.type))
-        ? { k: "fieldType", type: str(s.type) as FieldKind }
-        : null;
+    case "fieldType": {
+      const kind = readFieldKind(s.type);
+      return kind ? { k: "fieldType", type: kind } : null;
+    }
     case "facet":
       return str(s.key) && str(s.value)
         ? { k: "facet", key: str(s.key), value: str(s.value) }
@@ -249,10 +309,10 @@ export function readDocument(raw: Record<string, unknown>): WeightBook {
       const fields: Record<string, Field> = {};
       for (const [key, value] of Object.entries(dict(s.fields))) {
         const f = dict(value);
-        const kind = str(f.k);
+        const kind = readFieldKind(f.k);
         // A field whose kind is unreadable is dropped, per the rule that anything unreadable goes and the
         // rest opens. There is no page to fall back on any more, so the kind has to be on the field.
-        if (!isFieldKind(kind)) continue;
+        if (!kind) continue;
         fields[key] = readField(f, kind);
       }
 

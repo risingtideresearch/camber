@@ -137,12 +137,13 @@ function WeightPanelContents() {
   } | null>(null);
 
   const hullSampling = sampling();
-  const { measurements, results } = useWeightBookResults(
-    book,
-    model,
-    hullSampling,
-    metrics,
-  );
+  const {
+    measurements,
+    repetitions,
+    results,
+    pending: geometryPending,
+    error: geometryError,
+  } = useWeightBookResults(book, model, hullSampling, metrics);
   const apply = (command: DocumentCommand) => {
     void dispatch(command).then((outcome) => {
       if (command.type !== "renameField" || "rejected" in outcome) return;
@@ -306,6 +307,13 @@ function WeightPanelContents() {
             problemCount={problems.length}
           />
 
+          {(geometryPending || geometryError) && (
+            <p className="wgeometryprogress" role="status">
+              {geometryError
+                ? `Section calculations unavailable: ${geometryError}`
+                : "Updating section geometry… You can keep editing."}
+            </p>
+          )}
           <ViewBody
             {...{
               book,
@@ -315,6 +323,7 @@ function WeightPanelContents() {
               rows,
               results,
               measurements,
+              repetitions,
               reading,
               focus,
               setFocus,
@@ -450,6 +459,7 @@ interface BodyProps {
   readonly columns: ReturnType<typeof viewColumns>;
   readonly rows: ReturnType<typeof viewRows>;
   readonly results: ReturnType<typeof useWeightBookResults>["results"];
+  readonly repetitions: ReturnType<typeof useWeightBookResults>["repetitions"];
   readonly measurements: ReturnType<
     typeof useWeightBookResults
   >["measurements"];
@@ -910,6 +920,7 @@ function ViewBody(props: BodyProps) {
           <ItemDetail
             book={book}
             item={detail}
+            repetitions={props.repetitions}
             results={results}
             measurements={props.measurements}
             reading={props.reading}

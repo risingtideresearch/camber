@@ -1,0 +1,312 @@
+import type { SectionLimits } from "../../core/sheet/boundaries";
+import type { SliceShape } from "../../core/sheet/book";
+import { useState, type PointerEvent, type ReactNode } from "react";
+import { GeometryDisclosure } from "./GeometryDisclosure";
+import type { RepetitionMeasurement } from "../../core/sheet/repetitions";
+import type { RawSliceMeasurement } from "../../core/sheet/slices";
+import { geometryValue } from "../../core/sheet/sectionMeasures";
+import type { Vec3 } from "../../core/math";
+import { sig } from "./weightFormat";
+import {
+  nearestSample,
+  samplePath,
+  type RepetitionView,
+  type Projection,
+} from "./repetitionPlots";
+
+export function RepetitionPreview({
+  measurement,
+  equivalentCount,
+  limits = {},
+  shape = "transverse",
+}: {
+  readonly measurement: RepetitionMeasurement | undefined;
+  readonly equivalentCount: ReactNode;
+  readonly limits?: SectionLimits;
+  readonly shape?: SliceShape;
+}) {
+  if (!measurement) return null;
+  return (
+    <MeasurePreview
+      samples={measurement.samples}
+      equivalentCount={equivalentCount}
+      repetition
+      limits={limits}
+      shape={shape}
+    />
+  );
+}
+
+export function CutPreview({
+  measurement,
+  limits = {},
+  shape = "transverse",
+}: {
+  readonly measurement: RawSliceMeasurement | undefined;
+  readonly limits?: SectionLimits;
+  readonly shape?: SliceShape;
+}) {
+  if (!measurement) return null;
+  return (
+    <MeasurePreview
+      samples={[measurement]}
+      repetition={false}
+      limits={limits}
+      shape={shape}
+    />
+  );
+}
+
+const VIEWS: readonly { value: RepetitionView; label: string; unit: string }[] =
+  [
+    { value: "area", label: "Area", unit: "m²" },
+    { value: "closedLength", label: "Closed length", unit: "m" },
+    { value: "openLength", label: "Open length", unit: "m" },
+  ];
+
+/** The profile provides context and selects a sample; the section keeps a stable
+ * scale and shows that sample using the selected geometric measure. */
+function MeasurePreview({
+  samples,
+  repetition,
+  equivalentCount,
+  limits = {},
+  shape = "transverse",
+}: {
+  samples: readonly RawSliceMeasurement[];
+  repetition: boolean;
+  equivalentCount?: ReactNode;
+  limits?: SectionLimits;
+  shape?: SliceShape;
+}) {
+  const topHeight = limits.topHeight;
+  const [view, setView] = useState<RepetitionView>("area");
+  const [picked, setPicked] = useState(Math.floor(samples.length / 2));
+  const [hover, setHover] = useState<number | null>(null);
+  const active = Math.min(hover ?? picked, Math.max(0, samples.length - 1));
+  const sample = samples[active];
+  const points = samples.flatMap((s) => s.sheetContours.flat());
+  if (!points.length || !sample)
+    return (
+      <p className="whint">No contours at the preview section positions.</p>
+    );
+  const spec = VIEWS.find((v) => v.value === view)!;
+  let centroid: Vec3 | null = null;
+  try {
+    centroid = ["x", "y", "z"].map((axis) =>
+      geometryValue(sample.measures, `${view}Cg.${axis}`),
+    ) as Vec3;
+  } catch {
+    /* A zero measure has no centroid. */
+  }
+  const fit = (axes: readonly [number, number]): Projection => {
+    const lo = axes.map((axis) => Math.min(...points.map((p) => p[axis])));
+    const hi = axes.map((axis) => Math.max(...points.map((p) => p[axis])));
+    const scale = Math.min(
+      268 / Math.max(hi[0] - lo[0], 0.01),
+      144 / Math.max(hi[1] - lo[1], 0.01),
+    );
+    return (p) => [
+      150 + (p[axes[0]] - (lo[0] + hi[0]) / 2) * scale,
+      92 - (p[axes[1]] - (lo[1] + hi[1]) / 2) * scale,
+    ];
+  };
+  const horizontal = shape === "plane";
+  const sectionLabel = horizontal ? "Plan x/y" : "Section y/z";
+  const profile = fit([0, 2]),
+    section = fit(horizontal ? [0, 1] : [1, 2]);
+  const hit = (event: PointerEvent<SVGSVGElement>) => {
+    // Inverse SVG transform accounts for aspect-ratio letterboxing and resizing.
+    const matrix = event.currentTarget.getScreenCTM();
+    if (!matrix) return null;
+    const p = event.currentTarget.createSVGPoint();
+    p.x = event.clientX;
+    p.y = event.clientY;
+    const local = p.matrixTransform(matrix.inverse());
+    return nearestSample(samples, [local.x, local.y], profile, active);
+  };
+  const draw = (at: Projection, isProfile: boolean) => (
+    <svg
+      viewBox="0 0 300 184"
+      role="img"
+      aria-label={`${isProfile ? "Profile x/z" : sectionLabel}, ${spec.label}, ${repetition ? `preview section ${active + 1} of ${samples.length}` : "cut"}`}
+      className={`wpreviewplot ${view}${isProfile && repetition ? " interactive" : ""}`}
+      onPointerMove={
+        isProfile && repetition ? (event) => setHover(hit(event)) : undefined
+      }
+      onPointerLeave={isProfile ? () => setHover(null) : undefined}
+      onPointerDown={
+        isProfile && repetition
+          ? (event) => {
+              const index = hit(event);
+              if (index !== null) setPicked(index);
+            }
+          : undefined
+      }
+    >
+      {samples.map(
+        (s, i) =>
+          i !== active && (
+            <path
+              key={i}
+              className="wpreviewcontext"
+              d={samplePath(s, view, at)}
+              fillRule="evenodd"
+            />
+          ),
+      )}
+      <path
+        className="wpreviewactive"
+        d={samplePath(sample, view, at)}
+        fillRule="evenodd"
+      />
+      {(isProfile || !horizontal) &&
+        topHeight !== undefined &&
+        at([0, 0, topHeight])[1] >= 0 &&
+        at([0, 0, topHeight])[1] <= 184 && (
+          <line
+            className="wpreviewtop"
+            x1="12"
+            x2="288"
+            y1={at([0, 0, topHeight])[1]}
+            y2={at([0, 0, topHeight])[1]}
+          >
+            <title>{`Top boundary: ${sig(topHeight)} m above keel baseline`}</title>
+          </line>
+        )}
+      {centroid && (
+        <g
+          className="wpreviewcentroid"
+          transform={`translate(${at(centroid).join(",")})`}
+        >
+          <circle r="4" />
+          <path d="M-7,0H7 M0,-7V7" />
+          <title>{`${repetition ? `Preview section ${active + 1}` : "Cut"} ${spec.label.toLowerCase()} centroid: ${centroid.map((v) => sig(v)).join(", ")} m`}</title>
+        </g>
+      )}
+    </svg>
+  );
+  return (
+    <div className="wrepetitionpreview">
+      <GeometryDisclosure
+        label={repetition ? "repetition preview" : "Cut preview"}
+        initiallyOpen={repetition}
+      >
+        {repetition && (
+          <>
+            <div className="wpreviewcount">
+              <span>Equivalent count</span>
+              {equivalentCount}
+            </div>
+            <p className="whint">
+              {samples.length} preview sections · visualization only. The
+              equivalent count scales estimated totals, not the number of
+              preview sections.
+            </p>
+          </>
+        )}
+        <div className="wpreviewmodes" role="group" aria-label="Geometry view">
+          {VIEWS.map((mode) => (
+            <button
+              type="button"
+              key={mode.value}
+              aria-pressed={view === mode.value}
+              onClick={() => setView(mode.value)}
+            >
+              {mode.label}
+            </button>
+          ))}
+        </div>
+        <div className="wrepetitionprojections">
+          <figure>
+            {draw(profile, true)}
+            <figcaption>Profile · x / z</figcaption>
+          </figure>
+          <figure>
+            {draw(section, false)}
+            <figcaption>
+              {horizontal ? "Plan · x / y" : "Section · y / z"} ·{" "}
+              {repetition ? `preview section ${active + 1}` : "cut"}
+            </figcaption>
+          </figure>
+        </div>
+        <div className="wpreviewsample">
+          {repetition && (
+            <label>
+              Preview section {active + 1} / {samples.length}
+              <input
+                type="range"
+                aria-label="Preview section"
+                min={1}
+                max={samples.length}
+                value={active + 1}
+                onChange={(event) => {
+                  setHover(null);
+                  setPicked(Number(event.target.value) - 1);
+                }}
+              />
+            </label>
+          )}
+          <span>
+            {spec.label}:{" "}
+            <strong>
+              {sig(sample.measures[view].amount)} {spec.unit}
+            </strong>
+          </span>
+        </div>
+        <p className="whint">
+          {view === "area"
+            ? "Filled section area"
+            : view === "closedLength"
+              ? "Complete boundary, including closure"
+              : "Hull-skin intersections only — no closing edges"}
+          . The marker is this {repetition ? "preview section’s" : "cut’s"}{" "}
+          {spec.label.toLowerCase()} centroid.
+        </p>
+        {repetition && (
+          <>
+            <p className="whint">
+              Hover the profile to inspect a preview section; click to keep it
+              selected, or use the preview section slider. These sections
+              illustrate the region, not individual member positions.
+            </p>
+            <GeometryDisclosure label="Preview section measurements">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Preview section</th>
+                    <th>Area · m²</th>
+                    <th>Open length · m</th>
+                    <th>Closed length · m</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {samples.map((s, i) => (
+                    <tr key={i} className={i === active ? "on" : ""}>
+                      <td>
+                        <button
+                          type="button"
+                          aria-label={`Select preview section ${i + 1}`}
+                          aria-pressed={i === active}
+                          onClick={() => {
+                            setHover(null);
+                            setPicked(i);
+                          }}
+                        >
+                          {i + 1}
+                        </button>
+                      </td>
+                      <td>{sig(s.area)}</td>
+                      <td>{sig(s.openPerimeter)}</td>
+                      <td>{sig(s.closedPerimeter)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </GeometryDisclosure>
+          </>
+        )}
+      </GeometryDisclosure>
+    </div>
+  );
+}

@@ -1727,7 +1727,8 @@ button.wtermgo:focus-visible {
   margin-bottom: 12px;
 }
 .wdetail input,
-.wdetail textarea {
+.wdetail textarea,
+.wdetail .wboundaryheading select {
   font: inherit;
   background: var(--bg);
   color: var(--fore);
@@ -1736,7 +1737,8 @@ button.wtermgo:focus-visible {
   padding: 3px 6px;
 }
 .wdetail input:focus,
-.wdetail textarea:focus {
+.wdetail textarea:focus,
+.wdetail .wboundaryheading select:focus {
   border-color: var(--accent);
   outline: none;
 }
@@ -2952,4 +2954,271 @@ button.wtermgo:focus-visible {
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+/* Geometry belongs to the field's content column, not the edge of the card.
+   Its nested disclosures use the same 14px caret and 8px gap as field headers. */
+.wgeometryinfo {
+  margin: 0 44px 12px 53px;
+  min-width: 0;
+}
+.wgeometryinfo .wmeasurelist {
+  padding: 6px 0;
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+.wgeometryinfo .wmeasurelist dd {
+  overflow-wrap: anywhere;
+}
+.wgeometryinfo > .whint,
+.wrepetitionpreview .whint {
+  margin: 8px 0;
+  padding: 0;
+}
+.wfieldblock.cut,
+.wfieldblock.repetition {
+  --wgeometry-label-width: 96px;
+}
+.wfieldblock.cut .wfieldcell,
+.wfieldblock.repetition .wfieldcell {
+  grid-template-columns: var(--wgeometry-label-width) minmax(130px, 1fr) minmax(
+      110px,
+      auto
+    );
+}
+.wrepetitionpreview {
+  margin: 4px 0 12px;
+}
+.wpreviewtoggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  margin-left: -22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fore);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.wpreviewtoggle .wexptwist {
+  flex: 0 0 14px;
+}
+.wpreviewtoggle:hover,
+.wpreviewtoggle:focus-visible {
+  color: var(--accent);
+}
+.wgeometryassumptions {
+  margin: 4px 0 12px;
+}
+.wgeometryassumptions p {
+  margin: 0;
+}
+.wgeometryassumptions p + p {
+  margin-top: 8px;
+}
+.wpreviewmodes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 6px 0 10px;
+}
+.wpreviewmodes button {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px 8px;
+  background: transparent;
+  color: var(--mut);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.wpreviewmodes button[aria-pressed="true"] {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+.wrepetitionprojections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.wrepetitionprojections figure {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.wpreviewplot {
+  display: block;
+  width: 100%;
+  color: var(--accent);
+}
+.wpreviewplot.interactive {
+  cursor: crosshair;
+}
+.wpreviewcontext,
+.wpreviewactive {
+  fill: none;
+  stroke: currentColor;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.wpreviewcontext {
+  opacity: 0.13;
+  stroke-width: 1;
+}
+.wpreviewactive {
+  stroke-width: 2;
+}
+.wpreviewplot.area .wpreviewactive {
+  fill: currentColor;
+  fill-opacity: 0.18;
+  stroke-width: 1;
+}
+.wpreviewcentroid circle {
+  fill: var(--bg);
+  stroke: currentColor;
+}
+.wpreviewcentroid path {
+  fill: none;
+  stroke: currentColor;
+}
+.wrepetitionprojections figcaption {
+  padding: 0 8px 6px;
+  color: var(--mut);
+  font-size: 10px;
+}
+.wpreviewsample {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--mut);
+  font-variant-numeric: tabular-nums;
+}
+.wpreviewsample label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wpreviewsample input {
+  width: 90px;
+  accent-color: var(--accent);
+}
+.wpreviewsample strong {
+  color: var(--fore);
+}
+.wrepetitionpreview table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.wrepetitionpreview td,
+.wrepetitionpreview th {
+  padding: 4px;
+  text-align: right;
+}
+.wrepetitionpreview tr.on {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.wrepetitionpreview td button {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+@container (max-width: 480px) {
+  .wgeometryinfo {
+    margin-right: 8px;
+  }
+  .wfieldblock.cut,
+  .wfieldblock.repetition {
+    --wgeometry-label-width: 80px;
+  }
+  .wfieldblock.cut .wfieldcell,
+  .wfieldblock.repetition .wfieldcell {
+    grid-template-columns: var(--wgeometry-label-width) minmax(0, 1fr);
+  }
+}
+@container (max-width: 340px) {
+  .wrepetitionprojections {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.wpreviewcount {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--fore);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Boundary removal is a small, local action beside its label, visually distinct
+   from deleting an item/field. Keep the formula and readout columns aligned. */
+.wboundaryheading select {
+  width: 100%;
+  min-width: 0;
+}
+.wboundaryrow {
+  position: relative;
+}
+.wboundaryrow .wfieldcell > span:first-child {
+  padding-right: 16px;
+}
+.wboundaryremove {
+  position: absolute;
+  left: calc(var(--wgeometry-label-width) - 16px);
+  top: 0;
+  width: 20px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--mut);
+  font: 14px/1 sans-serif;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.wboundaryremove:hover,
+.wboundaryremove:focus-visible {
+  opacity: 1;
+  color: var(--fore);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.wboundaryremove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.wboundaries > .whint {
+  margin: 3px 0;
+  padding: 0;
+}
+
+.wpreviewtop {
+  stroke: var(--mut);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+
+.wgeometryprogress {
+  margin: 6px 12px;
+  color: var(--mut);
+  font-size: 11px;
 }

@@ -1,3 +1,4 @@
+import { BOUNDARIES } from "./boundaries";
 import type { Field, Item, RenameCommand, WeightBook } from "./book";
 import { parseFormula, tokenize, type Node } from "./formula";
 
@@ -100,8 +101,30 @@ export function renameReferences(
               z: formula(field.z),
             };
             break;
+          case "repetition":
+            next = {
+              ...field,
+              ...Object.fromEntries(
+                BOUNDARIES.filter((b) => field[b.leaf] !== undefined).map(
+                  (b) => [b.leaf, formula(field[b.leaf]!)],
+                ),
+              ),
+              start: formula(field.start),
+              end: formula(field.end),
+              spacing: formula(field.spacing),
+              count: formula(field.count),
+            };
+            break;
           case "cut":
-            next = { ...field, pos: formula(field.pos) };
+            next = {
+              ...field,
+              pos: formula(field.pos),
+              ...Object.fromEntries(
+                BOUNDARIES.filter((b) => field[b.leaf] !== undefined).map(
+                  (b) => [b.leaf, formula(field[b.leaf]!)],
+                ),
+              ),
+            };
             break;
         }
         return [key, next];

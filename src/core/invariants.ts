@@ -1,3 +1,4 @@
+import { BOUNDARIES, isBoundaryLeaf } from "./sheet/boundaries";
 // ---------- what a hull promises, checked ----------
 //
 // Two different promises, and confusing them is how a loader ends up rejecting a file it could perfectly well
@@ -217,8 +218,32 @@ export function bookViolations(book: WeightBook): string[] {
         out.push(`items[${i}].${key} is not a name a formula can use`);
       if (!isFieldKind(field.k))
         out.push(`items[${i}].${key} has an unknown kind "${field.k}"`);
-      else if (field.k === "cut" && !isSliceShape(field.shape))
+      else if (
+        (field.k === "cut" || field.k === "repetition") &&
+        !isSliceShape(field.shape)
+      )
         out.push(`items[${i}].${key} cuts with an unknown "${field.shape}"`);
+      else if (
+        (field.k === "cut" || field.k === "repetition") &&
+        (BOUNDARIES.some(
+          (b) =>
+            field[b.leaf] !== undefined && typeof field[b.leaf] !== "string",
+        ) ||
+          (field.boundaryEnabled !== undefined &&
+            (!field.boundaryEnabled ||
+              typeof field.boundaryEnabled !== "object" ||
+              Object.entries(field.boundaryEnabled).some(
+                ([key, value]) =>
+                  !isBoundaryLeaf(key) || typeof value !== "boolean",
+              ))))
+      )
+        out.push(`items[${i}].${key} has invalid section boundaries`);
+      else if (
+        field.k === "repetition" &&
+        field.repetition !== "count" &&
+        field.repetition !== "spacing"
+      )
+        out.push(`items[${i}].${key} has an unknown repetition mode`);
     }
   });
 

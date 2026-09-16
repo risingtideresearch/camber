@@ -1,3 +1,10 @@
+import {
+  activeBoundaries,
+  isBoundaryLeaf,
+  relevantBoundaries,
+  type BoundaryFields,
+  type BoundaryLeaf,
+} from "./boundaries";
 // ---------- the weight book: items carrying fields, authored, plain and serializable ----------
 //
 // A weight estimate is a SCHEDULE, not a grid: named things, each carrying what is known about it. So a cell
@@ -45,10 +52,15 @@ import { renameReferences } from "./rename";
 
 // ---------- the authored shape ----------
 
-/** What a slice cuts with. A plane is horizontal; a station is normal to the sheer plan's heading. */
-export type SliceShape = "plane" | "station";
+/** Planar cuts in the floated world frame, or the original sweep-construction station. */
+export type SliceShape = "plane" | "station" | "transverse" | "longitudinal";
 
-export const SLICE_SHAPES: readonly SliceShape[] = ["plane", "station"];
+export const SLICE_SHAPES: readonly SliceShape[] = [
+  "plane",
+  "station",
+  "transverse",
+  "longitudinal",
+];
 
 export const isSliceShape = (shape: string): shape is SliceShape =>
   (SLICE_SHAPES as readonly string[]).includes(shape);
@@ -113,13 +125,14 @@ export interface PointField {
  * One cut through the hull, which reports its area, open and closed perimeters, and its centroid.
  *
  * `pos` is in the sheet's frame, as a point's coordinates are: a height above the keel baseline for a plane,
- * x from the transom for a station.
+ * x from the transom for a station, and y from the centreline for a longitudinal plane.
+ * A transverse vertical plane is positioned by its deck-flat z=0 axis intercept, x from the transom.
  */
 /*
  * A cut carries no role. See the note on `RoleSpec.kinds`: a role names one value, and a cut is a position
  * plus whatever is measured off it, so tagging one would have to name a leaf as well.
  */
-export interface CutField {
+export interface CutField extends BoundaryFields {
   readonly k: "cut";
   readonly shape: SliceShape;
   /** Unit used to author and display `pos`; blank derives metres from a dimensioned formula. */
@@ -127,11 +140,28 @@ export interface CutField {
   readonly pos: string;
 }
 
-export type Field = ScalarField | PointField | CutField;
+/** A section repetition: regularly spaced sections with unknown placement, not an authored member layout. */
+export interface RepetitionField extends BoundaryFields {
+  readonly k: "repetition";
+  readonly shape: SliceShape;
+  readonly unit: string;
+  readonly start: string;
+  readonly end: string;
+  readonly repetition: "spacing" | "count";
+  readonly spacing: string;
+  readonly count: string;
+}
+
+export type Field = ScalarField | PointField | CutField | RepetitionField;
 
 export type FieldKind = Field["k"];
 
-export const FIELD_KINDS: readonly FieldKind[] = ["scalar", "point", "cut"];
+export const FIELD_KINDS: readonly FieldKind[] = [
+  "scalar",
+  "point",
+  "cut",
+  "repetition",
+];
 
 export const isFieldKind = (kind: string): kind is FieldKind =>
   (FIELD_KINDS as readonly string[]).includes(kind);
@@ -162,7 +192,18 @@ export interface Item {
  * `from` is an address a command can write to, but it is NOT one of the cells a field evaluates to — see the
  * note on `leavesOf`, which is the list of those and deliberately does not include it.
  */
-export type FieldLeaf = "formula" | "x" | "y" | "z" | "pos" | "from";
+export type FieldLeaf =
+  | "formula"
+  | "x"
+  | "y"
+  | "z"
+  | "pos"
+  | BoundaryLeaf
+  | "from"
+  | "start"
+  | "end"
+  | "spacing"
+  | "count";
 
 /** Where a value lives: a field, on an item. */
 export interface CellRef {
@@ -498,6 +539,7 @@ export const DEFAULT_FIELD_KEY: Record<FieldKind, string> = {
   scalar: "value",
   point: "position",
   cut: "section",
+  repetition: "members",
 };
 
 /** The unit a field actually authors in, including the intrinsic default for positions. */
@@ -508,11 +550,11 @@ export const fieldUnit = (field: Field): string =>
 
 /** Which of the item's values this field is, or null. A cut is never one — see `roles.ts`. */
 export const roleOf = (field: Field): string | null =>
-  field.k === "cut" ? null : field.role;
+  field.k === "cut" || field.k === "repetition" ? null : field.role;
 
 /** The same field, tagged or untagged. A cut is returned as it was, because it cannot carry one. */
 export const withRole = (field: Field, role: string | null): Field =>
-  field.k === "cut" ? field : { ...field, role };
+  field.k === "cut" || field.k === "repetition" ? field : { ...field, role };
 
 /** Every field of the item carrying a role, in authored order. More than one is a book to complain about. */
 export const roleKeys = (item: Item, role: string): string[] =>
@@ -559,6 +601,17 @@ export function blankField(kind: FieldKind): Field {
         from: "",
         role: null,
       };
+    case "repetition":
+      return {
+        k: "repetition",
+        shape: "transverse",
+        unit: "m",
+        start: "",
+        end: "",
+        repetition: "spacing",
+        spacing: "",
+        count: "",
+      };
     case "cut":
       // A cut's authored position is a length just like a point's coordinates. Starting in metres makes a
       // freshly typed or dragged `0.4` a location on the hull rather than a dimensionless number.
@@ -582,12 +635,21 @@ export const blankItem = (id: string, name: string): Item => ({
  * one. `leavesOf` is the other list, and the two stopped mirroring each other for exactly that reason.
  */
 export function leafOf(field: Field, leaf: FieldLeaf): string | null {
+  if ((field.k === "cut" || field.k === "repetition") && isBoundaryLeaf(leaf))
+    return field[leaf] ?? "";
   switch (field.k) {
     case "scalar":
       return leaf === "formula" ? field.formula : null;
     case "point":
       if (leaf === "from") return field.from;
       return leaf === "x" || leaf === "y" || leaf === "z" ? field[leaf] : null;
+    case "repetition":
+      return leaf === "start" ||
+        leaf === "end" ||
+        leaf === "spacing" ||
+        leaf === "count"
+        ? field[leaf]
+        : null;
     case "cut":
       return leaf === "pos" ? field.pos : null;
   }
@@ -611,8 +673,15 @@ export function leavesOf(field: Field): FieldLeaf[] {
       return ["formula"];
     case "point":
       return ["x", "y", "z"];
+    case "repetition":
+      return [
+        "start",
+        "end",
+        field.repetition,
+        ...activeBoundaries(field).map((b) => b.leaf),
+      ];
     case "cut":
-      return ["pos"];
+      return ["pos", ...activeBoundaries(field).map((b) => b.leaf)];
   }
 }
 
@@ -673,6 +742,19 @@ export type SheetCommand =
    * chip in the detail card needs no dialogue — clicking the field you meant is the whole gesture.
    */
   | { type: "setFieldRole"; item: string; field: string; role: string | null }
+  | {
+      type: "setRepetitionMode";
+      item: string;
+      field: string;
+      repetition: "spacing" | "count";
+    }
+  | {
+      type: "setSectionBoundary";
+      item: string;
+      field: string;
+      leaf: BoundaryLeaf;
+      enabled: boolean;
+    }
   | { type: "setCutShape"; item: string; field: string; shape: SliceShape }
   /**
    * A point moved, as ONE edit.
@@ -720,6 +802,8 @@ export const SHEET_COMMAND_TYPES = {
   setFieldUnit: 1,
   setFieldRole: 1,
   setCutShape: 1,
+  setSectionBoundary: 1,
+  setRepetitionMode: 1,
   setPointPosition: 1,
   setOutput: 1,
   setSheetDensity: 1,
@@ -1051,9 +1135,46 @@ export function interpretSheetCommand(
       });
     }
 
+    case "setRepetitionMode":
+      return editField(book, command.item, command.field, (field) => {
+        if (field.k !== "repetition")
+          return {
+            rejected: "only a section repetition has a repetition mode",
+          };
+        if (command.repetition !== "count" && command.repetition !== "spacing")
+          return { rejected: "unknown repetition mode" };
+        return { ...field, repetition: command.repetition };
+      });
+    case "setSectionBoundary":
+      return editField(book, command.item, command.field, (field) => {
+        if (field.k !== "cut" && field.k !== "repetition")
+          return { rejected: "only geometry fields have boundaries" };
+        if (
+          !isBoundaryLeaf(command.leaf) ||
+          typeof command.enabled !== "boolean"
+        )
+          return { rejected: "invalid section boundary" };
+        if (
+          command.enabled &&
+          !relevantBoundaries(field.shape).some((b) => b.leaf === command.leaf)
+        )
+          return {
+            rejected: "this boundary is redundant for the section orientation",
+          };
+        return {
+          ...field,
+          boundaryEnabled: {
+            ...field.boundaryEnabled,
+            [command.leaf]: command.enabled,
+          },
+        };
+      });
     case "setCutShape":
       return editField(book, command.item, command.field, (field) => {
-        if (field.k !== "cut") return { rejected: "only a cut has a shape" };
+        if (field.k !== "cut" && field.k !== "repetition")
+          return { rejected: "only geometry fields have an orientation" };
+        if (!isSliceShape(command.shape))
+          return { rejected: "unknown orientation" };
         return { ...field, shape: command.shape };
       });
 

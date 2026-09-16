@@ -25,6 +25,7 @@
 // lets a view over items with different field kinds pose no problem at all: there is only ever one kind of
 // cell.
 
+import { GEOMETRY_LEAVES } from "./sectionMeasures";
 import {
   facetContains,
   leavesOf,
@@ -149,6 +150,18 @@ function columnsFor(key: string, kind: FieldKind): Column[] {
       return (["x", "y", "z"] as const).map((leaf) =>
         leafColumn(key, kind, leaf, leaf, key),
       );
+    case "repetition":
+      return [
+        leafColumn(key, kind, "start", "from", key),
+        leafColumn(key, kind, "end", "to", key),
+        {
+          fieldKey: key,
+          kind,
+          source: { k: "measure", measure: "area" },
+          label: "estimated area",
+          band: key,
+        },
+      ];
     case "cut":
       // The position is authored; the area is read off the hull. Area earns a column because it is what a
       // cut is usually taken for, and the other measurements stay reachable by formula rather than crowding
@@ -186,7 +199,10 @@ export function viewColumns(view: View, items: readonly Item[]): Column[] {
 }
 
 /** Every measurement a cut can be asked for, for the inspector and for autocomplete. */
-export const CUT_LEAVES: readonly string[] = ["pos", ...SLICE_VALUE_FIELDS];
+export const CUT_LEAVES: readonly string[] = [
+  "pos",
+  ...new Set([...SLICE_VALUE_FIELDS, ...GEOMETRY_LEAVES]),
+];
 
 // ---------- grouping ----------
 
@@ -470,7 +486,7 @@ export function problemsOf(
       }
     >;
   },
-  cellKey: (item: string, field: string, leaf: FieldLeaf) => string,
+  cellKey: (item: string, field: string, leaf: string) => string,
 ): Problem[] {
   const out: Problem[] = [];
   for (const item of book.items) {
@@ -484,6 +500,19 @@ export function problemsOf(
         else if (cell.unitWarning)
           out.push({ item, fieldKey, leaf, message: cell.unitWarning });
       }
+
+    // A geometry failure is a field problem even before another formula consumes
+    // it. Navigate to an authored input, never pretend its measured area is editable.
+    for (const [fieldKey, field] of Object.entries(item.fields)) {
+      if (field.k !== "cut" && field.k !== "repetition") continue;
+      const cell = results.cells.get(cellKey(item.id, fieldKey, "area"));
+      const message = cell?.error ?? cell?.unitWarning;
+      if (
+        message &&
+        !out.some((p) => p.item.id === item.id && p.fieldKey === fieldKey)
+      )
+        out.push({ item, fieldKey, leaf: leavesOf(field)[0], message });
+    }
 
     // Two fields of one item claiming the same role. Not authorable — `setFieldRole` moves the tag rather
     // than copying it — so this is a book that arrived saying it, and the reader deliberately does not repair

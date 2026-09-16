@@ -1,3 +1,10 @@
+import {
+  BOUNDARIES,
+  activeBoundaries,
+  isBoundaryLeaf,
+  relevantBoundaries,
+  type BoundaryLeaf,
+} from "../../core/sheet/boundaries";
 // ---------- one item, and everything it carries ----------
 //
 // The view the page model could not express at all. An engine has a mass, a position and perhaps a cost, and
@@ -23,6 +30,14 @@
 // field (`fieldUsers`), and the state of a move in progress (`useFieldReorder`). A block computing its own
 // would be quadratic in the size of a schedule, which is exactly the thing that grows.
 
+import type { RepetitionMeasurements } from "../../core/sheet/repetitions";
+import { RepetitionAssumptions } from "./RepetitionAssumptions";
+import { RepetitionPreview, CutPreview } from "./RepetitionPreview";
+import {
+  sliceMeasurementKey,
+  type SliceMeasurements,
+} from "../../core/sheet/slices";
+import { CG_NAMES, GEOMETRY_LEAVES } from "../../core/sheet/sectionMeasures";
 import {
   Fragment,
   useEffect,
@@ -46,19 +61,13 @@ import {
   type FieldLeaf,
   type Item,
   type WeightBook,
+  type SliceShape,
 } from "../../core/sheet/book";
 import {
   fieldUsers,
   resultAt,
   type BookResults,
 } from "../../core/sheet/evaluate";
-import {
-  SLICE_VALUE_FIELDS,
-  sliceMeasurementKey,
-  type SliceMeasurement,
-  type SliceMeasurements,
-  type SliceValueField,
-} from "../../core/sheet/slices";
 import { rolesForKind } from "../../core/sheet/roles";
 import { placementFor } from "./pointPlots";
 import {
@@ -80,6 +89,7 @@ export interface ItemDetailProps {
   readonly book: WeightBook;
   readonly item: Item;
   readonly results: BookResults;
+  readonly repetitions: RepetitionMeasurements;
   readonly measurements: SliceMeasurements;
   readonly reading: "worst" | "likely";
   readonly focus: Focus | null;
@@ -94,6 +104,7 @@ const KIND_LABEL: Record<FieldKind, string> = {
   scalar: "a value",
   point: "a position",
   cut: "a section through the hull",
+  repetition: "a section repetition",
 };
 
 // ---------- moving a field ----------
@@ -223,8 +234,17 @@ function useFieldReorder(
 // ---------- the card ----------
 
 export function ItemDetail(props: ItemDetailProps) {
-  const { book, item, results, measurements, reading, focus, setFocus, send } =
-    props;
+  const {
+    book,
+    item,
+    results,
+    measurements,
+    repetitions,
+    reading,
+    focus,
+    setFocus,
+    send,
+  } = props;
   // Folded blocks, and the field whose name is waiting for the caret. Both are keyed by (item, field) rather
   // than by field alone: this component is not remounted when the detail view moves to another item, so
   // anything held under a bare key would carry over to a field of the same name on the next one.
@@ -313,6 +333,7 @@ export function ItemDetail(props: ItemDetailProps) {
             index={index}
             results={results}
             measurements={measurements}
+            repetitions={repetitions}
             reading={reading}
             completions={completions}
             reorder={reorder}
@@ -329,7 +350,7 @@ export function ItemDetail(props: ItemDetailProps) {
       </div>
 
       <div className="wdetailadd">
-        {(["scalar", "point", "cut"] as const).map((kind) => (
+        {(["scalar", "point", "cut", "repetition"] as const).map((kind) => (
           <button
             key={kind}
             title={`Add ${KIND_LABEL[kind]}`}
@@ -383,6 +404,7 @@ interface FieldBlockProps {
   readonly field: Field;
   readonly index: number;
   readonly results: BookResults;
+  readonly repetitions: RepetitionMeasurements;
   readonly measurements: SliceMeasurements;
   readonly reading: "worst" | "likely";
   readonly completions: {
@@ -523,7 +545,9 @@ function FieldHeader({
           declared?.unitWarning ??
           (declared?.unitIsDerived
             ? "What the formula works out to. Type another unit of the same kind to show it in that instead."
-            : "What this field is written in — one unit covers all of its cells.")
+            : field.k === "repetition"
+              ? "Distance unit for bounds and spacing. Equivalent count is always dimensionless."
+              : "What this field is written in — one unit covers all of its cells.")
         }
         onCommit={(unit) =>
           send({ type: "setFieldUnit", item: item.id, field: fieldKey, unit })
@@ -552,21 +576,40 @@ function FieldHeader({
           {derived ? "Derived" : "Coordinates"}
         </button>
       )}
-      {field.k === "cut" && (
+      {(field.k === "cut" || field.k === "repetition") && (
         <select
           value={field.shape}
-          aria-label="Cut shape"
+          aria-label="Cut orientation"
           onChange={(event) =>
             send({
               type: "setCutShape",
               item: item.id,
               field: fieldKey,
-              shape: event.target.value as "plane" | "station",
+              shape: event.target.value as SliceShape,
             })
           }
         >
-          <option value="station">Station</option>
+          <option value="station">Sweep station</option>
+          <option value="transverse">Transverse vertical</option>
+          <option value="longitudinal">Longitudinal vertical</option>
           <option value="plane">Horizontal</option>
+        </select>
+      )}
+      {field.k === "repetition" && (
+        <select
+          aria-label="Repetition mode"
+          value={field.repetition}
+          onChange={(event) =>
+            send({
+              type: "setRepetitionMode",
+              item: item.id,
+              field: fieldKey,
+              repetition: event.target.value as "spacing" | "count",
+            })
+          }
+        >
+          <option value="spacing">Typical spacing</option>
+          <option value="count">Equivalent count</option>
         </select>
       )}
       {confirmRemove ? (
@@ -691,16 +734,28 @@ function RoleChips({
 }
 
 function FieldCells({
+  repetitions,
+  measurements,
   item,
   fieldKey,
   field,
   results,
-  measurements,
   reading,
   completions,
   onSelect,
   send,
 }: FieldBlockProps) {
+  const previewLimits =
+    field.k === "cut" || field.k === "repetition"
+      ? Object.fromEntries(
+          activeBoundaries(field).flatMap((boundary) => {
+            const result = resultAt(results, item.id, fieldKey, boundary.leaf);
+            return result?.reading && !result.error
+              ? [[boundary.leaf, result.reading.v]]
+              : [];
+          }),
+        )
+      : {};
   const derived = isDerived(field);
   const listFor = (leaf: FieldLeaf) =>
     isCoordinate(leaf) ? completions.coordinate : completions.plain;
@@ -737,47 +792,191 @@ function FieldCells({
         </div>
       ) : (
         <div className="wfieldcells">
-          {leavesOf(field).map((leaf) => {
-            const result = resultAt(results, item.id, fieldKey, leaf);
-            const text =
-              (field as unknown as Record<string, string>)[leaf] ?? "";
-            return (
-              <label key={leaf} className="wfieldcell">
-                <span>{leavesOf(field).length > 1 ? leaf : fieldKey}</span>
+          {leavesOf(field)
+            .filter((leaf) => !isBoundaryLeaf(leaf))
+            .map((leaf) => {
+              const result = resultAt(results, item.id, fieldKey, leaf);
+              const text =
+                (field as unknown as Record<string, string>)[leaf] ?? "";
+              return (
+                <label key={leaf} className="wfieldcell">
+                  <span>
+                    {field.k === "repetition"
+                      ? (
+                          {
+                            start: "From",
+                            end: "To",
+                            spacing: "Typical spacing",
+                            count: "Equivalent count",
+                          } as Record<string, string>
+                        )[leaf]
+                      : field.k === "cut"
+                        ? field.shape === "plane"
+                          ? "Height"
+                          : field.shape === "longitudinal"
+                            ? "Lateral offset"
+                            : "Longitudinal position"
+                        : leavesOf(field).length > 1
+                          ? leaf
+                          : fieldKey}
+                  </span>
+                  <FormulaField
+                    value={text}
+                    error={result?.error ?? null}
+                    completions={listFor(leaf)}
+                    onCommit={(formula) =>
+                      send({
+                        type: "setFieldFormula",
+                        item: item.id,
+                        field: fieldKey,
+                        leaf,
+                        formula,
+                      })
+                    }
+                    onFocus={() => onSelect(leaf)}
+                  />
+                  {field.k !== "scalar" && (
+                    <Readout
+                      {...{ results, item, fieldKey, reading }}
+                      leaf={leaf}
+                      placement={
+                        isCoordinate(leaf) ? placementFor(text, result) : null
+                      }
+                    />
+                  )}
+                </label>
+              );
+            })}
+        </div>
+      )}
+
+      {(field.k === "cut" || field.k === "repetition") && (
+        <div className="wfieldcells wboundaries">
+          <div className="wfieldcell wboundaryheading">
+            <span>Boundaries</span>
+            {relevantBoundaries(field.shape).some(
+              (b) => !activeBoundaries(field).includes(b),
+            ) && (
+              <select
+                aria-label="Add boundary"
+                value=""
+                onChange={(event) => {
+                  if (event.target.value)
+                    send({
+                      type: "setSectionBoundary",
+                      item: item.id,
+                      field: fieldKey,
+                      leaf: event.target.value as BoundaryLeaf,
+                      enabled: true,
+                    });
+                }}
+              >
+                <option value="">Add boundary…</option>
+                {relevantBoundaries(field.shape)
+                  .filter((b) => !activeBoundaries(field).includes(b))
+                  .map((b) => (
+                    <option key={b.leaf} value={b.leaf}>
+                      {b.label}
+                    </option>
+                  ))}
+              </select>
+            )}
+          </div>
+          {activeBoundaries(field).map((boundary) => (
+            <div className="wboundaryrow" key={boundary.leaf}>
+              <label className="wfieldcell" title={boundary.hint}>
+                <span>{boundary.label}</span>
                 <FormulaField
-                  value={text}
-                  error={result?.error ?? null}
-                  completions={listFor(leaf)}
+                  value={field[boundary.leaf] ?? ""}
+                  error={
+                    resultAt(results, item.id, fieldKey, boundary.leaf)
+                      ?.error ?? null
+                  }
+                  completions={listFor(boundary.leaf)}
                   onCommit={(formula) =>
                     send({
                       type: "setFieldFormula",
                       item: item.id,
                       field: fieldKey,
-                      leaf,
+                      leaf: boundary.leaf,
                       formula,
                     })
                   }
-                  onFocus={() => onSelect(leaf)}
+                  onFocus={() => onSelect(boundary.leaf)}
                 />
-                {field.k !== "scalar" && (
-                  <Readout
-                    {...{ results, item, fieldKey, reading }}
-                    leaf={leaf}
-                    placement={
-                      isCoordinate(leaf) ? placementFor(text, result) : null
-                    }
-                  />
-                )}
+                <Readout
+                  {...{ results, item, fieldKey, reading }}
+                  leaf={boundary.leaf}
+                />
               </label>
-            );
-          })}
+              <button
+                type="button"
+                className="wboundaryremove"
+                aria-label={`Remove ${boundary.label.toLowerCase()} boundary`}
+                title={`Remove ${boundary.label.toLowerCase()} boundary; keep its formula for later`}
+                onClick={() =>
+                  send({
+                    type: "setSectionBoundary",
+                    item: item.id,
+                    field: fieldKey,
+                    leaf: boundary.leaf,
+                    enabled: false,
+                  })
+                }
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          {activeBoundaries(field).length > 0 && (
+            <p className="whint">
+              All limits apply together, within the hull. Removing a limit
+              retains its formula.
+            </p>
+          )}
+          {BOUNDARIES.some(
+            (b) =>
+              field.boundaryEnabled?.[b.leaf] &&
+              !relevantBoundaries(field.shape).includes(b),
+          ) && (
+            <p className="whint">
+              Saved limits parallel to this section are paused; position or From
+              / To controls that direction.
+            </p>
+          )}
         </div>
       )}
 
-      {field.k === "cut" && (
-        <Measured
-          measurement={measurements.get(sliceMeasurementKey(item.id, fieldKey))}
-        />
+      {(field.k === "cut" || field.k === "repetition") && (
+        <div className="wgeometryinfo">
+          {field.k === "cut" && (
+            <CutPreview
+              shape={field.shape}
+              limits={previewLimits}
+              measurement={measurements.get(
+                sliceMeasurementKey(item.id, fieldKey),
+              )}
+            />
+          )}
+          {field.k === "repetition" && (
+            <RepetitionPreview
+              shape={field.shape}
+              limits={previewLimits}
+              equivalentCount={
+                <Readout
+                  {...{ results, item, fieldKey, reading }}
+                  leaf="equivalentCount"
+                />
+              }
+              measurement={
+                repetitions.get(sliceMeasurementKey(item.id, fieldKey))?.value
+              }
+            />
+          )}
+          {(field.k === "cut" || field.k === "repetition") && (
+            <GeometryReadout {...{ field, results, item, fieldKey, reading }} />
+          )}
+        </div>
       )}
     </>
   );
@@ -797,7 +996,13 @@ function FieldSummary({
   readonly reading: "worst" | "likely";
 }) {
   const leaves =
-    field.k === "point" ? (["x", "y", "z"] as const) : leavesOf(field);
+    field.k === "point"
+      ? (["x", "y", "z"] as const)
+      : field.k === "repetition"
+        ? ["area"]
+        : field.k === "cut"
+          ? ["pos"]
+          : leavesOf(field);
   const values = leaves.map((leaf) =>
     resultAt(results, item.id, fieldKey, leaf),
   );
@@ -865,44 +1070,63 @@ function Readout({
   );
 }
 
-/**
- * How each measured value is labelled and written.
- *
- * A `Record` over `SliceValueField` rather than a list spelled out here: a value added to
- * `SLICE_VALUE_FIELDS` becomes nameable in a formula the moment it exists, and this pane is where it would
- * otherwise go quietly missing. Now it cannot compile until it has been given a name and a unit.
- */
-const MEASURED: Record<SliceValueField, { label: string; unit: string }> = {
-  area: { label: "area", unit: "m²" },
-  closedPerimeter: { label: "closed perimeter", unit: "m" },
-  openPerimeter: { label: "open perimeter", unit: "m" },
-  x: { label: "centroid x", unit: "m" },
-  y: { label: "centroid y", unit: "m" },
-  z: { label: "centroid z", unit: "m" },
-};
-
-/** What a cut turned out to be. Measured off the hull, so read-only wherever it appears. */
-function Measured({
-  measurement,
+/** Geometry is read through the evaluator, including its shared uncertainty sources. */
+function GeometryReadout({
+  field,
+  results,
+  item,
+  fieldKey,
+  reading,
 }: {
-  readonly measurement: SliceMeasurement | undefined;
+  field: Field;
+  results: BookResults;
+  item: Item;
+  fieldKey: string;
+  reading: "worst" | "likely";
 }) {
-  if (!measurement)
-    return (
-      <p className="wcellval bad">
-        This has not produced a valid hull cut — check the position.
-      </p>
-    );
+  const failure = resultAt(results, item.id, fieldKey, "area")?.error;
   return (
-    <dl className="wmeasurelist">
-      {SLICE_VALUE_FIELDS.map((name) => (
-        <Fragment key={name}>
-          <dt>{MEASURED[name].label}</dt>
-          <dd>
-            {sig(measurement[name])} {MEASURED[name].unit}
-          </dd>
-        </Fragment>
-      ))}
-    </dl>
+    <>
+      {field.k === "repetition" && <RepetitionAssumptions />}
+      {(field.k === "repetition" || field.k === "cut") &&
+        field.shape === "transverse" && (
+          <p className="whint">
+            World-vertical planes. Longitudinal position and spacing are
+            measured along the deck-flat z = 0 axis, not perpendicular to the
+            planes. With rake, the centroid can have a different x.
+          </p>
+        )}
+      {failure ? (
+        <ResultIssue message={failure} severity="error" />
+      ) : (
+        <dl className="wmeasurelist">
+          {(field.k === "repetition"
+            ? ["equivalentCount", ...GEOMETRY_LEAVES]
+            : GEOMETRY_LEAVES
+          ).map((leaf) => (
+            <Fragment key={leaf}>
+              <dt>
+                {leaf === "equivalentCount" ? "Equivalent count" : leaf}
+                {field.k === "repetition" &&
+                !leaf.includes(".") &&
+                leaf !== "equivalentCount"
+                  ? " (estimated total)"
+                  : ""}
+              </dt>
+              <dd>
+                <Readout
+                  {...{ results, item, fieldKey, reading }}
+                  leaf={leaf}
+                />
+              </dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+      <p className="whint">
+        Open length follows hull skin only. Closed length includes deck/transom
+        closure. {CG_NAMES.join(", ")} are separate, measure-weighted positions.
+      </p>
+    </>
   );
 }

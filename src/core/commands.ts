@@ -824,6 +824,10 @@ export function describeCommand(cmd: DocumentCommand): string {
         .join(", ")})`;
     case "setFieldUnit":
       return cmd.unit ? `Write ${cmd.field} in ${cmd.unit}` : "Clear a unit";
+    case "setRepetitionMode":
+      return `Set section repetition mode to ${cmd.repetition}`;
+    case "setSectionBoundary":
+      return `${cmd.enabled ? "Add" : "Remove"} section ${cmd.leaf} boundary`;
     case "setCutShape":
       return `Cut with a ${cmd.shape}`;
     case "setFieldRole":

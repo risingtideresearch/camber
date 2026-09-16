@@ -603,8 +603,8 @@ export function withTolerance(
 //
 // So both regions below are built from the gradients:
 //
-//   • WORST is a zonotope — the exact first-order image of the box each source ranges over. One segment per
-//     source, summed. Independent sources give back the axis-aligned rectangle; a shared one tilts it.
+//   • WORST sums input-tolerance segments and convex hulls of mutually exclusive model samples.
+//     With only input tolerances this is a zonotope; sample hulls are not continuous bounds.
 //   • LIKELY is the one-sigma ellipse of the same generators taken as independent, which is the same
 //     quadrature the panel quotes: its extent along each axis is exactly that coordinate's `likely` figure.
 //
@@ -615,6 +615,7 @@ const generators = (
   a: Gradient,
   b: Gradient,
   sources: SourceTable,
+  mode: "worst" | "likely",
 ): { g: Vec2; lo: number; hi: number }[] => {
   const out: { g: Vec2; lo: number; hi: number }[] = [];
   for (const id of new Set([...Object.keys(a), ...Object.keys(b)])) {
@@ -623,13 +624,43 @@ const generators = (
     const g: Vec2 = [a[id] ?? 0, b[id] ?? 0];
     if (g[0] === 0 && g[1] === 0) continue;
     if (source.lo === 0 && source.hi === 0) continue;
-    out.push({ g, lo: source.lo, hi: source.hi });
+    if (source.sample) {
+      if (mode === "worst") continue;
+      const scale = Math.sqrt(source.sample.weight);
+      out.push({ g: [g[0] * scale, g[1] * scale], lo: 1, hi: 1 });
+    } else out.push({ g, lo: source.lo, hi: source.hi });
   }
   return out;
 };
 
+/** Monotone chain, retaining degenerate point and line hulls. */
+function convexHull(points: Vec2[]): Vec2[] {
+  const sorted = points
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1])
+    .filter(
+      (p, i, all) =>
+        i === 0 || p[0] !== all[i - 1][0] || p[1] !== all[i - 1][1],
+    );
+  if (sorted.length <= 2) return sorted;
+  const cross = (a: Vec2, b: Vec2, c: Vec2) =>
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const half = (items: Vec2[]) => {
+    const out: Vec2[] = [];
+    for (const p of items) {
+      while (
+        out.length >= 2 &&
+        cross(out[out.length - 2], out[out.length - 1], p) <= 0
+      )
+        out.pop();
+      out.push(p);
+    }
+    return out.slice(0, -1);
+  };
+  return [...half(sorted), ...half([...sorted].reverse())];
+}
+
 /**
- * The worst-case region: a convex polygon around the nominal, in (a, b).
+ * The linearized worst-case region: input bounds plus sampled discrepancy hulls.
  *
  * Empty where nothing can move the pair, and two points where everything moves it the same way — a point
  * uncertain along a line is a real answer and the caller draws it as one.
@@ -639,9 +670,7 @@ export function worstRegion(
   b: Quantity,
   sources: SourceTable,
 ): Vec2[] {
-  const gens = generators(a.d, b.d, sources);
-  if (!gens.length) return [];
-
+  const gens = generators(a.d, b.d, sources, "worst");
   // Each source contributes the segment from −lo·g to +hi·g. Split it into a centre and a half-vector, so
   // the sum is one translation plus a Minkowski sum of segments symmetric about the origin — which is a
   // zonotope, and a zonotope's boundary is its half-vectors walked in angle order.
@@ -663,7 +692,7 @@ export function worstRegion(
     x -= h[0];
     y -= h[1];
   }
-  const out: Vec2[] = [[x, y]];
+  let out: Vec2[] = [[x, y]];
   for (const h of halves) {
     x += 2 * h[0];
     y += 2 * h[1];
@@ -674,7 +703,21 @@ export function worstRegion(
     y -= 2 * h[1];
     out.push([x, y]);
   }
-  return out;
+  // Each phase group contributes a convex hull of mutually exclusive layouts,
+  // not independently movable generators. Independent groups add by Minkowski sum.
+  const groups = new Map<string, Vec2[]>();
+  for (const id of new Set([...Object.keys(a.d), ...Object.keys(b.d)])) {
+    const sample = sources.get(id)?.sample;
+    if (!sample) continue;
+    const points = groups.get(sample.group) ?? [[0, 0]];
+    points.push([a.d[id] ?? 0, b.d[id] ?? 0]);
+    groups.set(sample.group, points);
+  }
+  for (const points of groups.values())
+    out = convexHull(
+      out.flatMap(([x, y]) => points.map(([dx, dy]): Vec2 => [x + dx, y + dy])),
+    );
+  return !gens.length && !groups.size ? [] : out;
 }
 
 /**
@@ -690,7 +733,7 @@ export function likelyRegion(
   sources: SourceTable,
   steps = 48,
 ): Vec2[] {
-  const gens = generators(a.d, b.d, sources);
+  const gens = generators(a.d, b.d, sources, "likely");
   if (!gens.length) return [];
 
   // The covariance of the pair, treating every source as an independent one-sigma of its mean half-width.

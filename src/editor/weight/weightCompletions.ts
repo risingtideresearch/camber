@@ -1,3 +1,5 @@
+import { activeBoundaries } from "../../core/sheet/boundaries";
+import { CG_NAMES, GEOMETRY_LEAVES } from "../../core/sheet/sectionMeasures";
 import { FUNCTIONS } from "../../core/sheet/formula";
 import { HULL_METRICS, HULL_POINTS } from "../../core/hullMetrics";
 import {
@@ -65,6 +67,8 @@ export function globalCompletions(
     kind: Completion["kind"],
     fieldKind: string,
     where: string,
+    repetition?: string,
+    boundaries: readonly string[] = [],
   ): void => {
     const base = `${prefix}${key}`;
     if (fieldKind === "scalar") {
@@ -90,13 +94,26 @@ export function globalCompletions(
     }
     // A cut has a position of its own — the centroid of what it cuts — so in a coordinate cell it binds like
     // a point does, and an area-weighted centre of several sections is one expression.
-    if (coordinate)
+    if (coordinate && fieldKind === "cut")
       out.push({
         insert: base,
         kind,
         hint: `centroid of ${key}, in this cell's coordinate`,
       });
-    for (const measure of ["pos", ...SLICE_VALUE_FIELDS])
+    for (const measure of [
+      ...boundaries,
+      ...(fieldKind === "repetition"
+        ? [
+            "start",
+            "end",
+            ...(repetition ? [repetition] : []),
+            "equivalentCount",
+            "area",
+          ]
+        : ["pos", ...SLICE_VALUE_FIELDS]),
+      ...GEOMETRY_LEAVES.filter((leaf) => leaf !== "area"),
+      ...(coordinate ? CG_NAMES : []),
+    ])
       out.push({
         insert: `${base}.${measure}`,
         kind,
@@ -108,7 +125,17 @@ export function globalCompletions(
     if (!other.name) continue;
     const where = other.facets.system ? `in ${other.facets.system}` : "";
     for (const [key, field] of Object.entries(other.fields))
-      offer(`${other.name}.`, key, "item", field.k, where);
+      offer(
+        `${other.name}.`,
+        key,
+        "item",
+        field.k,
+        where,
+        field.k === "repetition" ? field.repetition : undefined,
+        field.k === "cut" || field.k === "repetition"
+          ? activeBoundaries(field).map((b) => b.leaf)
+          : [],
+      );
     // A role is offered only where it RESOLVES — one field tagged, not none and not two — which is the rule
     // this whole module keeps: what is offered exists, and what exists is offered.
     for (const spec of ROLES) {
@@ -218,14 +245,23 @@ export function siblingCompletions(
       out.push({ insert: key, kind: "sibling", hint: "on this item" });
       continue;
     }
-    if (coordinate)
+    if (coordinate && field.k !== "repetition")
       out.push({
         insert: key,
         kind: "sibling",
         hint: `${key}, in this cell's coordinate`,
       });
     const leaves =
-      field.k === "point" ? ["x", "y", "z"] : ["pos", ...SLICE_VALUE_FIELDS];
+      field.k === "point"
+        ? ["x", "y", "z"]
+        : [
+            ...activeBoundaries(field).map((b) => b.leaf),
+            ...(field.k === "repetition"
+              ? ["start", "end", field.repetition, "equivalentCount", "area"]
+              : ["pos", ...SLICE_VALUE_FIELDS]),
+            ...GEOMETRY_LEAVES.filter((leaf) => leaf !== "area"),
+            ...(coordinate ? CG_NAMES : []),
+          ];
     for (const leaf of leaves)
       out.push({
         insert: `${key}.${leaf}`,
