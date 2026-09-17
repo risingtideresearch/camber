@@ -245,8 +245,7 @@
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 12.5px;
   /* An expression that outgrows its cell WRAPS, and the box grows to hold what it wrapped — `field-sizing`
-     where the browser has it, the same bargain `.wfacetvalue` strikes, and a box that merely scrolls where it
-     does not. The width stays the cell's: content sizing claims both axes otherwise, and one long row would
+     where the browser has it, and a box that merely scrolls where it does not. The width stays the cell's: content sizing claims both axes otherwise, and one long row would
      drag its whole column wide. `rows="1"` is the floor without the property; with it, `rows` stops applying
      and `min-height` is the floor instead. */
   field-sizing: content;
@@ -1750,75 +1749,156 @@ button.wtermgo:focus-visible {
   font-size: 12px;
   color: var(--mut);
 }
-/* A facet reads as its path: the key, then a cell per level with the separator drawn between them, then the
-   two acts that are not typing — `+` for a level below, `×` for not filed here at all. The cells size to
-   what they hold, so the chip stays the width of the path rather than the width of the widest box. */
-.wfacets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 16px;
+/* One compact tag/value record; adding and editing use the same anchored picker. */
+.wtags {
+  margin-bottom: 12px;
+  font-size: 12px;
 }
-.wfacet {
+.wtaghead,
+.wtagrow,
+.wtagpickerhead {
   display: flex;
   align-items: center;
-  gap: 2px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 2px 4px 2px 8px;
-  font-size: 11px;
+  gap: 6px;
 }
-.wfacetkey {
-  color: var(--mut);
+.wtaghead {
+  justify-content: space-between;
+  margin-bottom: 2px;
 }
-.wfacetkey::after {
-  content: ":";
-}
-.wfacetsep {
-  color: var(--mut);
-}
-.wdetail input.wfacetvalue {
-  font-size: 11px;
-  /* `size` already fits the cell to the segment it holds; this grows it as it is TYPED, where the browser
-     has it, and is ignored where it does not. */
-  field-sizing: content;
-  min-width: 5ch;
-  padding: 1px 4px;
-}
-/* Quiet until wanted: a path being read should not look like a row of buttons. */
-.wfacetdeeper,
-.wfacetdrop {
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--mut);
-  font: inherit;
+.wtags h3 {
+  margin: 0;
   font-size: 12px;
-  line-height: 1;
-  padding: 2px 5px;
-  cursor: pointer;
+  font-weight: 600;
 }
-.wfacetdeeper:hover,
-.wfacetdeeper:focus-visible {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-  outline: none;
-}
-.wfacetdrop:hover,
-.wfacetdrop:focus-visible {
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-  color: var(--danger);
-  outline: none;
-}
-.wfacetadd input {
-  font: inherit;
-  font-size: 11px;
+.wtags button {
+  border: 0;
+  border-radius: 3px;
+  padding: 3px 6px;
   background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.wtags button:hover:not(:disabled),
+.wtags button:focus-visible {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+.wtags button:focus-visible {
+  outline: 1px solid var(--accent);
+}
+.wtags button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.wtagrow {
+  min-height: 26px;
+  border-top: 1px solid var(--line);
+}
+.wtagkey {
+  flex: 0 1 90px;
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--mut);
-  border: 1px dashed var(--line);
-  border-radius: 12px;
-  padding: 3px 8px;
-  width: 120px;
+}
+.wtaganchor {
+  position: relative;
+  min-width: 0;
+}
+.wtaganchorvalue {
+  flex: 1;
+}
+.wtagtrigger {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.wtags .wtagremove {
+  color: var(--mut);
+}
+.wtags .wtagremove:hover {
+  color: var(--danger);
+}
+.wtaghint {
+  margin: 4px 6px;
+  color: var(--mut);
+  font-size: 11px;
+}
+.wtagpicker {
+  position: absolute;
+  top: calc(100% + 3px);
+  right: 0;
+  z-index: 30;
+  width: 260px;
+  max-width: calc(100vw - 32px);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  box-shadow: 0 4px 16px #0003;
+  padding: 3px;
+  outline: none;
+}
+.wtagpickerhead {
+  border-bottom: 1px solid var(--line);
+  padding: 2px 0 4px;
+}
+.wtagpickerhead strong {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding-left: 6px;
+  font-weight: 500;
+}
+.wtagchoices {
+  max-height: 220px;
+  overflow-y: auto;
+}
+.wtagchoices button {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  overflow-wrap: anywhere;
+  padding: 5px 6px;
+}
+.wtagchoice {
+  display: flex;
+  align-items: stretch;
+}
+.wtagchoice .wtagselect {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+.wtagchoice .wtagexplore {
+  flex: 0 0 28px;
+  width: 28px;
+  justify-content: center;
+  border-left: 1px solid var(--line);
+  border-radius: 0 3px 3px 0;
+}
+.wtags .wtagnew {
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  width: 100%;
+  padding: 5px 6px;
+  color: var(--mut);
+}
+.wtagcreate {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 2px;
+  border-top: 1px solid var(--line);
+}
+.wtagcreate input {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+  font: inherit;
+}
+.wtagcreate .wtaghint {
+  width: 100%;
 }
 /* Fields read as compact records rather than cards with a toolbar. Name, declared unit, evaluated value
    and formula stay visible; ordering and removal occupy a quiet, stable gutter at either edge. */
