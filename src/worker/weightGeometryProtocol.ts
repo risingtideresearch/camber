@@ -36,6 +36,8 @@ export interface WeightGeometryHull {
   readonly sampling: HullSampling;
 }
 export interface WeightGeometryRequest {
+  /** Omitted by single-pass callers; the editor requests nominal first. */
+  readonly phase?: "nominal" | "complete";
   readonly key: string;
   readonly jobs: readonly WeightGeometryJob[];
 }
@@ -46,4 +48,10 @@ export interface WeightGeometryResponse {
     readonly result: WeightGeometryResult;
   }[];
   readonly error?: string;
+}
+
+export function uncertaintyPending(result: WeightGeometryResult): boolean {
+  return !!(result.kind === "cut"
+    ? result.value?.uncertaintyPending
+    : result.result.value?.uncertaintyPending);
 }

@@ -60,6 +60,7 @@ import {
 import {
   currentGroupMembers,
   facetView,
+  allItemsView,
   resolveView,
   scopeItems,
   standardViews,
@@ -83,6 +84,8 @@ import {
 } from "../documentStoreHooks";
 import { useEditorUi } from "../editorUi";
 import { useStabilityAnalysis } from "../useStabilityAnalysis";
+import { NavStatus } from "../NavStatus";
+import { useWeightPresentation } from "./weightPresentation";
 import { useWeightBookResults } from "../useWeightBookResults";
 import { Explorer, type NewItemFiling } from "./Explorer";
 import {
@@ -137,13 +140,29 @@ function WeightPanelContents() {
   } | null>(null);
 
   const hullSampling = sampling();
+  const computation = useWeightBookResults(book, model, hullSampling, metrics);
   const {
-    measurements,
-    repetitions,
-    results,
+    readout: { measurements, repetitions, results },
+    stale,
+  } = useWeightPresentation(
+    computation,
+    hullSampling,
+    snapshot.meta.design.currentId,
+  );
+  const {
     pending: geometryPending,
+    uncertaintyPending,
     error: geometryError,
-  } = useWeightBookResults(book, model, hullSampling, metrics);
+  } = computation;
+  const progress = geometryError
+    ? `Section calculations unavailable: ${geometryError}`
+    : geometryPending
+      ? stale
+        ? "Updating geometry… Previous values shown."
+        : "Updating section geometry…"
+      : uncertaintyPending
+        ? "Nominal values ready. Uncertainty updating…"
+        : "";
   const apply = (command: DocumentCommand) => {
     void dispatch(command).then((outcome) => {
       if (command.type !== "renameField" || "rejected" in outcome) return;
@@ -273,6 +292,11 @@ function WeightPanelContents() {
               setViewId(`item-${itemId}`);
               setFocus({ item: itemId, field: fieldKey, leaf: "formula" });
             }}
+            onOpenAll={(facet) => {
+              setViewId(allItemsView(facet).id);
+              setFocus(null);
+              setRollupSelection(null);
+            }}
             onOpenFacet={(key, value) => {
               // The explorer's funnel: a node you were looking at becomes the view you are editing in, with
               // the same scope it drew. No view-builder to learn, because there is nothing to build.
@@ -307,14 +331,9 @@ function WeightPanelContents() {
             problemCount={problems.length}
           />
 
-          {(geometryPending || geometryError) && (
-            <p className="wgeometryprogress" role="status">
-              {geometryError
-                ? `Section calculations unavailable: ${geometryError}`
-                : "Updating section geometry… You can keep editing."}
-            </p>
-          )}
+          <NavStatus message={progress} />
           <ViewBody
+            stale={stale}
             {...{
               book,
               view,
@@ -453,6 +472,8 @@ function ViewBar({
 // ---------- the body, per layout ----------
 
 interface BodyProps {
+  /** Retained display values must not drive geometry editing or snapping. */
+  readonly stale: boolean;
   readonly book: WeightBook;
   readonly view: View;
   readonly items: readonly Item[];
@@ -736,8 +757,12 @@ function ViewBody(props: BodyProps) {
               y: { value: gy.v, placement: null, factor: 1, empty: false },
               z: { value: gz.v, placement: null, factor: 1, empty: false },
             },
-            xz: spreadRegion(gx, gz, results.sources, props.reading),
-            yz: spreadRegion(gy, gz, results.sources, props.reading),
+            xz: results.uncertaintyPending
+              ? []
+              : spreadRegion(gx, gz, results.sources, props.reading),
+            yz: results.uncertaintyPending
+              ? []
+              : spreadRegion(gy, gz, results.sources, props.reading),
           }
         : null;
     const hasGeometry = geometryItems.length > 0 || !!geometryTotal;
@@ -1062,15 +1087,25 @@ function SummaryGeometry(props: BodyProps) {
         y: { value: 0, placement: null, factor: 1, empty: false },
         z: { value: z.reading.v, placement: null, factor: 1, empty: false },
       },
-      xz: spreadRegion(
-        x.quantity,
-        z.quantity,
-        props.results.sources,
-        props.reading,
-      ),
-      yz: spreadRegion(y, z.quantity, props.results.sources, props.reading),
+      xz: props.results.uncertaintyPending
+        ? []
+        : spreadRegion(
+            x.quantity,
+            z.quantity,
+            props.results.sources,
+            props.reading,
+          ),
+      yz: props.results.uncertaintyPending
+        ? []
+        : spreadRegion(y, z.quantity, props.results.sources, props.reading),
     };
-  }, [x, z, props.results.sources, props.reading]);
+  }, [
+    x,
+    z,
+    props.results.sources,
+    props.results.uncertaintyPending,
+    props.reading,
+  ]);
 
   if (!outlines || !props.hullSampling || !point)
     return (
@@ -1114,6 +1149,7 @@ function GeometryEditor({
   model,
   hullSampling,
   readOnly = false,
+  stale,
   extraPoints = [],
   activeId,
 }: BodyProps & {
@@ -1121,6 +1157,7 @@ function GeometryEditor({
   readonly extraPoints?: readonly PlottedPoint[];
   readonly activeId?: string;
 }) {
+  const displayOnly = readOnly || stale;
   const outlines = useMemo(
     () => (hullSampling ? hullOutlines(model, hullSampling) : null),
     [model, hullSampling],
@@ -1132,7 +1169,7 @@ function GeometryEditor({
   // A report may select a point but must not turn its drawing into a second editing surface.
   const shownPlots = useMemo(() => {
     const all = [...plots, ...extraPoints];
-    return readOnly
+    return displayOnly
       ? all.map((point) => ({
           ...point,
           axes: Object.fromEntries(
@@ -1143,7 +1180,7 @@ function GeometryEditor({
           ) as PlottedPoint["axes"],
         }))
       : all;
-  }, [plots, extraPoints, readOnly]);
+  }, [plots, extraPoints, displayOnly]);
   // The cuts need the hull as well as the book: a station's attitude is the outline the hull produced, not
   // anything the schedule knows. Without a sweep they fall back to the line their position names.
   const cuts = useMemo(
@@ -1161,6 +1198,7 @@ function GeometryEditor({
    * half-moved.
    */
   const movePoint = (id: string, move: Move) => {
+    if (displayOnly) return;
     const point = plots.find((candidate) => candidate.id === id);
     if (!point) return;
     send({
@@ -1185,7 +1223,7 @@ function GeometryEditor({
       outlines={outlines}
       points={shownPlots}
       cuts={cuts}
-      snaps={readOnly ? [] : snaps}
+      snaps={displayOnly ? [] : snaps}
       activeId={
         activeId ?? (focus?.field ? `${focus.item} ${focus.field}` : null)
       }

@@ -9,10 +9,13 @@ import type { Reading } from "../../core/sheet/quantity";
 
 // ---------- formatting ----------
 
+// Display-only tolerance: leave the values used by calculations untouched.
+const ZERO_TOLERANCE = 1e-12;
+
 export function sig(v: number): string {
   if (!isFinite(v)) return "—";
   const mag = Math.abs(v);
-  if (mag === 0) return "0";
+  if (mag < ZERO_TOLERANCE) return "0";
   if (mag >= 1000) return v.toFixed(0);
   if (mag >= 100) return v.toFixed(1);
   if (mag >= 10) return v.toFixed(2);
@@ -24,6 +27,11 @@ export function sig(v: number): string {
 export const inUnit = (value: number, factor: number): number =>
   factor && factor !== 0 ? value / factor : value;
 
+// Suppress numerical residue only in the readout, not in the quantities used by calculations.
+// Apply this in base units so changing the displayed unit cannot make uncertainty reappear.
+const cleanSpread = (value: number): number =>
+  Math.abs(value) < ZERO_TOLERANCE ? 0 : value;
+
 /**
  * A downward and an upward reach, as a person reads them: one number when the two sides agree, two when they
  * do not.
@@ -33,10 +41,11 @@ export const inUnit = (value: number, factor: number): number =>
  * range of its own position.
  */
 export function spreadText(lo: number, hi: number, factor: number): string {
-  const l = inUnit(lo, factor);
-  const h = inUnit(hi, factor);
-  if (l === 0 && h === 0) return "";
-  if (Math.abs(l - h) < 1e-12 * Math.max(1, Math.abs(h))) return `± ${sig(h)}`;
+  const l = inUnit(cleanSpread(lo), factor);
+  const h = inUnit(cleanSpread(hi), factor);
+  if (sig(l) === "0" && sig(h) === "0") return "";
+  if (Math.abs(l - h) <= 1e-12 * Math.max(Math.abs(l), Math.abs(h)))
+    return `± ${sig(h)}`;
   return `−${sig(l)} / +${sig(h)}`;
 }
 
@@ -45,7 +54,10 @@ export const showSpread = (
   reading: Reading,
   factor: number,
   which: "worst" | "likely",
-): string => spreadText(reading[which].lo, reading[which].hi, factor);
+): string =>
+  reading.uncertaintyPending
+    ? "…"
+    : spreadText(reading[which].lo, reading[which].hi, factor);
 
 export const pct = (v: number): string => `${Math.round(v * 100)}%`;
 
@@ -56,7 +68,8 @@ export const pct = (v: number): string => `${Math.round(v * 100)}%`;
  */
 export function relative(lo: number, hi: number, v: number): string | null {
   if (!isFinite(v) || v === 0) return null;
-  const half = (lo + hi) / 2 / Math.abs(v);
+  const half = (cleanSpread(lo) + cleanSpread(hi)) / 2 / Math.abs(v);
+  if (half === 0) return "0%";
   return half < 0.001
     ? "<0.1%"
     : `${(half * 100).toFixed(half < 0.1 ? 1 : 0)}%`;

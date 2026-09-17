@@ -5,8 +5,13 @@ import { computeHullSampling } from "../src/core/mesh";
 import {
   emptyBook,
   type CutField,
+  type RepetitionField,
   type WeightBook,
 } from "../src/core/sheet/book";
+import { roleTotals } from "../src/core/sheet/rollups";
+import { plotPoints } from "../src/editor/weight/pointPlots";
+import { showSpread } from "../src/editor/weight/weightFormat";
+import { uncertaintyPending } from "../src/worker/weightGeometryProtocol";
 import { evaluateBook, resultAt } from "../src/core/sheet/evaluate";
 import { createSectionMeasurer } from "../src/core/sheet/slices";
 import { measureRepetition } from "../src/core/sheet/repetitions";
@@ -303,3 +308,469 @@ nextFailsWorker.postMessage = () => {
 nextFailsWorker.reply(nextFailsWorker.posted[0]);
 assert.match(nextFails.getSnapshot().error!, /queued clone failed/);
 assert.equal(nextFailsWorker.terminated, true);
+
+// Two-pass geometry: publish nominal values before computing spreads. The
+// completion reuses integration/endpoints/previews, not just plane intersections.
+let stagedCalls = 0;
+const stagedMeasure = () => {
+  stagedCalls++;
+  return raw;
+};
+const nominalCore = measureRepetition(
+  stagedMeasure,
+  "transverse",
+  1,
+  3,
+  undefined,
+  limits,
+  [],
+);
+assert.ok(nominalCore.value);
+assert.equal(stagedCalls, 121);
+const completionCore = measureRepetition(
+  stagedMeasure,
+  "transverse",
+  1,
+  3,
+  0.5,
+  limits,
+  [],
+  nominalCore.value,
+);
+assert.deepEqual(completionCore, onlyNominal);
+assert.equal(stagedCalls, calls, "two passes do no extra section evaluations");
+
+const repetition: RepetitionField = {
+  k: "repetition",
+  shape: "transverse",
+  unit: "m",
+  start: "1",
+  end: "3",
+  repetition: "count",
+  count: "4",
+  spacing: "",
+  boundaryEnabled: { topHeight: true },
+  topHeight: "0.65 ± 0.01",
+};
+const densityBook: WeightBook = {
+  ...emptyBook(),
+  outputs: { DISPLACEMENT: "frames.weight" },
+  items: [
+    {
+      id: "i",
+      name: "frames",
+      note: "",
+      facets: {},
+      fields: {
+        section: repetition,
+        density: {
+          k: "scalar",
+          formula: "2 ± 0.1",
+          unit: "kg / m",
+          role: null,
+        },
+        weight: {
+          k: "scalar",
+          formula: "section.openLength * density",
+          unit: "kg",
+          role: "MASS",
+        },
+        cg: {
+          k: "point",
+          x: "",
+          y: "",
+          z: "",
+          from: "section.openLengthCg",
+          unit: "m",
+          role: "CG",
+        },
+      },
+    },
+  ],
+};
+const stagedPlan = planWeightGeometry(
+  densityBook,
+  evaluateBook(densityBook, null),
+);
+const stagedProcess = createWeightGeometryProcessor(model, sampling);
+const stage1 = stagedProcess({
+  key: "nominal",
+  phase: "nominal",
+  jobs: stagedPlan.jobs,
+});
+const nominalResult = stage1.results[0].result;
+assert.equal(uncertaintyPending(nominalResult), true);
+assert.ok(nominalResult.kind === "repetition" && nominalResult.result.value);
+assert.equal(nominalResult.result.value.phaseTotals, undefined);
+const nominalGeometry = resolveWeightGeometry(
+  stagedPlan,
+  new Map(stage1.results.map((r) => [r.key, r.result])),
+);
+assert.equal(nominalGeometry.pending, false);
+assert.equal(nominalGeometry.uncertaintyPending, true);
+const nominalBook = evaluateBook(
+  densityBook,
+  null,
+  nominalGeometry.measurements,
+  nominalGeometry.repetitions,
+);
+assert.equal(nominalBook.uncertaintyPending, true);
+assert.deepEqual(
+  plotPoints(densityBook.items, nominalBook, "worst")[0].xz,
+  [],
+  "no incomplete CG uncertainty band",
+);
+assert.ok(nominalBook.outputs.displacement);
+assert.equal(nominalBook.outputs.displacement.uncertaintyPending, true);
+assert.equal(showSpread(nominalBook.outputs.displacement, 1, "worst"), "…");
+assert.equal(resultAt(nominalBook, "i", "weight")!.error, null);
+assert.equal(resultAt(nominalBook, "i", "cg", "x")!.error, null);
+assert.equal(
+  roleTotals(densityBook.items, nominalBook).get("MASS")!.readings.value!
+    .uncertaintyPending,
+  true,
+);
+
+const stage2 = stagedProcess({
+  key: "complete",
+  phase: "complete",
+  jobs: stagedPlan.jobs,
+});
+const finalResult = stage2.results[0].result;
+assert.equal(uncertaintyPending(finalResult), false);
+const singlePass = createWeightGeometryProcessor(
+  model,
+  sampling,
+)({ key: "single", jobs: stagedPlan.jobs });
+assert.deepEqual(
+  stage2.results,
+  singlePass.results,
+  "two-pass final geometry exactly matches single-pass geometry",
+);
+const finalGeometry = resolveWeightGeometry(
+  stagedPlan,
+  new Map(stage2.results.map((r) => [r.key, r.result])),
+);
+const finalBook = evaluateBook(
+  densityBook,
+  null,
+  finalGeometry.measurements,
+  finalGeometry.repetitions,
+);
+assert.ok(finalBook.outputs.displacement);
+assert.equal(
+  finalBook.outputs.displacement.v,
+  nominalBook.outputs.displacement.v,
+);
+assert.equal(finalBook.uncertaintyPending, undefined);
+assert.ok(plotPoints(densityBook.items, finalBook, "worst")[0].xz.length > 0);
+assert.ok(finalBook.outputs.displacement.worst.hi > 0);
+assert.equal(
+  resultAt(finalBook, "i", "cg", "x")!.reading!.v,
+  resultAt(nominalBook, "i", "cg", "x")!.reading!.v,
+);
+assert.equal(
+  stagedProcess({ key: "undo", phase: "nominal", jobs: stagedPlan.jobs })
+    .results[0].result,
+  finalResult,
+  "a cached final answer bypasses both phases",
+);
+
+// Cuts with uncertain position/boundaries also produce usable nominal formulas.
+const cutBook = makeBook({
+  ...field,
+  pos: "2 ± 0.01",
+  topHeight: "0.65 ± 0.01",
+});
+const cutPlan = planWeightGeometry(cutBook, evaluateBook(cutBook, null));
+const cutProcess = createWeightGeometryProcessor(model, sampling);
+const cutNominal = cutProcess({
+  key: "cut-nominal",
+  phase: "nominal",
+  jobs: cutPlan.jobs,
+});
+const cutGeometry = resolveWeightGeometry(
+  cutPlan,
+  new Map(cutNominal.results.map((r) => [r.key, r.result])),
+);
+const cutReadings = evaluateBook(cutBook, null, cutGeometry.measurements);
+assert.equal(resultAt(cutReadings, "i", "section", "area")!.error, null);
+assert.equal(
+  resultAt(cutReadings, "i", "section", "area")!.reading!.uncertaintyPending,
+  true,
+);
+assert.deepEqual(
+  cutProcess({ key: "cut-complete", phase: "complete", jobs: cutPlan.jobs })
+    .results,
+  createWeightGeometryProcessor(
+    model,
+    sampling,
+  )({ key: "cut-single", jobs: cutPlan.jobs }).results,
+);
+
+class StagedWorker extends FakeWorker {
+  respond(
+    request: WeightGeometryRequest,
+    result = request.phase === "nominal" ? nominalResult : finalResult,
+  ) {
+    this.onmessage?.({
+      data: {
+        key: request.key,
+        results: request.jobs.map((job) => ({ key: job.key, result })),
+      },
+    } as unknown as MessageEvent<WeightGeometryResponse>);
+  }
+}
+const stagedWorker = new StagedWorker();
+const staged = createWeightGeometryResource(
+  () => stagedWorker as unknown as Worker,
+);
+const observed: boolean[] = [];
+const stopStaged = staged.subscribe(() =>
+  observed.push(
+    resolveWeightGeometry(stagedPlan, staged.getSnapshot().values)
+      .uncertaintyPending,
+  ),
+);
+staged.request(stagedPlan.jobs);
+assert.equal(stagedWorker.posted[0].phase, "nominal");
+stagedWorker.respond(stagedWorker.posted[0]);
+assert.deepEqual(
+  observed,
+  [true],
+  "nominal snapshot is published before completion arrives",
+);
+assert.equal(stagedWorker.posted[1].phase, "complete");
+staged.request(stagedPlan.jobs);
+assert.equal(
+  stagedWorker.posted.length,
+  2,
+  "re-render cannot duplicate completion",
+);
+stagedWorker.respond(stagedWorker.posted[1]);
+assert.deepEqual(observed, [true, false]);
+staged.request(stagedPlan.jobs);
+assert.equal(stagedWorker.posted.length, 2);
+stopStaged();
+
+// A changed input must get a new nominal pass, not completion of the obsolete
+// request. A late completion remains useful only under its original exact key.
+const editedJobs = stagedPlan.jobs.map((job) => ({
+  ...job,
+  key: `${job.key}:edited`,
+}));
+const editedPlan = {
+  jobs: editedJobs,
+  fields: [{ key: "i section", job: editedJobs[0] }],
+};
+const editWorker = new StagedWorker();
+const edits = createWeightGeometryResource(
+  () => editWorker as unknown as Worker,
+);
+edits.request(stagedPlan.jobs);
+edits.request(editedJobs);
+editWorker.respond(editWorker.posted[0]);
+assert.equal(editWorker.posted[1].phase, "nominal");
+assert.equal(editWorker.posted[1].jobs[0].key, editedJobs[0].key);
+assert.equal(
+  resolveWeightGeometry(editedPlan, edits.getSnapshot().values).pending,
+  true,
+);
+editWorker.respond(editWorker.posted[1]);
+assert.equal(editWorker.posted[2].phase, "complete");
+edits.request(stagedPlan.jobs); // undo while edited uncertainty is in flight
+editWorker.respond(editWorker.posted[2]);
+assert.equal(
+  resolveWeightGeometry(stagedPlan, edits.getSnapshot().values)
+    .uncertaintyPending,
+  true,
+);
+assert.equal(editWorker.posted[3].jobs[0].key, stagedPlan.jobs[0].key);
+editWorker.respond(editWorker.posted[3]);
+assert.equal(
+  resolveWeightGeometry(stagedPlan, edits.getSnapshot().values)
+    .uncertaintyPending,
+  false,
+);
+
+// Completion failure is terminal, not a perpetual spinner or an exact reading.
+const badJob = { ...stagedPlan.jobs[0], key: "invalid-pitch", pitch: 0 };
+const errorProcess = createWeightGeometryProcessor(model, sampling);
+assert.equal(
+  uncertaintyPending(
+    errorProcess({ key: "bad-nominal", phase: "nominal", jobs: [badJob] })
+      .results[0].result,
+  ),
+  true,
+);
+const badFinal = errorProcess({
+  key: "bad-complete",
+  phase: "complete",
+  jobs: [badJob],
+}).results[0].result;
+assert.ok(badFinal.kind === "repetition" && badFinal.result.error);
+assert.equal(uncertaintyPending(badFinal), false);
+const failureWorker = new StagedWorker();
+const failure = createWeightGeometryResource(
+  () => failureWorker as unknown as Worker,
+);
+failure.request(stagedPlan.jobs);
+failureWorker.respond(failureWorker.posted[0]);
+failureWorker.respond(failureWorker.posted[1], badFinal);
+assert.equal(
+  failureWorker.posted.length,
+  2,
+  "failed uncertainty is not automatically retried",
+);
+assert.equal(
+  resolveWeightGeometry(stagedPlan, failure.getSnapshot().values)
+    .uncertaintyPending,
+  false,
+);
+
+// A transport error after nominal retains the usable values, still explicitly
+// incomplete, and exposes an error instead of ever labelling their spread exact.
+const transportWorker = new StagedWorker();
+const transport = createWeightGeometryResource(
+  () => transportWorker as unknown as Worker,
+);
+transport.request(stagedPlan.jobs);
+transportWorker.postMessage = () => {
+  throw new Error("completion failed");
+};
+transportWorker.respond(transportWorker.posted[0]);
+assert.match(transport.getSnapshot().error!, /completion failed/);
+assert.equal(
+  resolveWeightGeometry(stagedPlan, transport.getSnapshot().values)
+    .uncertaintyPending,
+  true,
+);
+console.log(
+  "Two-phase geometry: nominal values, completion reuse, unchanged results, pending spreads, edits and failures passed",
+);
+
+// Closing a panel between phases disposes its worker, but leaves nominal data
+// reusable. Reopening must resume completion rather than mistake it for final.
+const lifecycleWorkers: StagedWorker[] = [];
+const lifecycle = createWeightGeometryResource(() => {
+  const worker = new StagedWorker();
+  lifecycleWorkers.push(worker);
+  return worker as unknown as Worker;
+});
+const closePanel = lifecycle.subscribe(() => {});
+lifecycle.request(stagedPlan.jobs);
+lifecycleWorkers[0].respond(lifecycleWorkers[0].posted[0]);
+closePanel();
+await new Promise((r) => setTimeout(r, 5));
+assert.equal(lifecycleWorkers[0].terminated, true);
+const closeAgain = lifecycle.subscribe(() => {});
+lifecycle.request(stagedPlan.jobs);
+assert.equal(lifecycleWorkers.length, 2);
+assert.equal(lifecycleWorkers[1].posted[0].phase, "complete");
+lifecycleWorkers[1].respond(lifecycleWorkers[1].posted[0]);
+assert.equal(
+  resolveWeightGeometry(stagedPlan, lifecycle.getSnapshot().values)
+    .uncertaintyPending,
+  false,
+);
+closeAgain();
+
+// UI retention is isolated from evaluation: only the presentation can use the
+// previous snapshot while a new nominal calculation is in flight.
+const { weightPresentation } =
+  await import("../src/editor/weight/weightPresentation");
+const completeComputation = {
+  positions: finalBook,
+  results: finalBook,
+  ...finalGeometry,
+  error: null,
+};
+const completeDisplay = weightPresentation(
+  null,
+  completeComputation,
+  sampling,
+  "design",
+);
+const missingGeometry = resolveWeightGeometry(stagedPlan, new Map());
+const waiting = {
+  positions: evaluateBook(densityBook, null),
+  results: evaluateBook(densityBook, null),
+  ...missingGeometry,
+  error: null,
+};
+const retained = weightPresentation(
+  completeDisplay,
+  waiting,
+  sampling,
+  "design",
+);
+assert.equal(retained.stale, true);
+assert.equal(retained.readout.results, finalBook);
+assert.equal(
+  waiting.results.outputs.displacement,
+  null,
+  "retention cannot change actual calculations",
+);
+assert.equal(
+  weightPresentation(retained, waiting, sampling, "design"),
+  retained,
+  "pending rerenders are stable",
+);
+const nominalDisplay = weightPresentation(
+  retained,
+  {
+    positions: nominalBook,
+    results: nominalBook,
+    ...nominalGeometry,
+    error: null,
+  },
+  sampling,
+  "design",
+);
+assert.equal(nominalDisplay.stale, false);
+assert.equal(
+  nominalDisplay.readout.results,
+  nominalBook,
+  "new nominal values appear immediately",
+);
+assert.equal(
+  weightPresentation(nominalDisplay, completeComputation, sampling, "design")
+    .readout.results,
+  finalBook,
+);
+assert.equal(
+  weightPresentation(retained, waiting, sampling, "different-design").stale,
+  false,
+);
+assert.equal(
+  weightPresentation(retained, waiting, { ...sampling }, "design").stale,
+  false,
+);
+assert.equal(
+  weightPresentation(
+    retained,
+    { ...waiting, error: "worker failed" },
+    sampling,
+    "design",
+  ).stale,
+  false,
+);
+const initialWaiting = weightPresentation(null, waiting, sampling, "design");
+assert.equal(
+  weightPresentation(initialWaiting, waiting, sampling, "design").stale,
+  false,
+  "an initial missing result is not a reusable nominal snapshot",
+);
+assert.equal(
+  weightPresentation(
+    retained,
+    { ...waiting, pending: false },
+    sampling,
+    "design",
+  ).stale,
+  false,
+  "real invalid-input errors replace the retained readout",
+);
+console.log(
+  "Weight presentation: stable pending snapshots, immediate nominal updates and scope/error invalidation passed",
+);

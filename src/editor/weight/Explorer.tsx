@@ -54,6 +54,7 @@ export interface ExplorerProps {
   readonly activeItem: string | null;
   readonly onOpenItem: (itemId: string) => void;
   readonly onOpenField: (itemId: string, fieldKey: string) => void;
+  readonly onOpenAll: (facet: string | null) => void;
   readonly onOpenFacet: (key: string, value: string) => void;
   /** Make an item, optionally already filed under the group the user chose it from. */
   readonly onAddItem: (filing?: NewItemFiling) => void;
@@ -88,6 +89,7 @@ export function Explorer({
   onOpenItem,
   onOpenField,
   onOpenFacet,
+  onOpenAll,
   onAddItem,
   send,
 }: ExplorerProps) {
@@ -429,6 +431,18 @@ export function Explorer({
         </button>
       </div>
 
+      <div className="wexprow wexpgroup wexpall">
+        <button
+          type="button"
+          className="wexplabel"
+          onClick={() => onOpenAll(facet || null)}
+          title="Open the rollup of all items, regardless of search"
+        >
+          All items
+        </button>
+        <span className="wexpcount">{book.items.length}</span>
+      </div>
+
       {!book.items.length ? (
         <p className="whint wexphint">
           Nothing here yet. Add an item — a thing the boat is made of — and give
@@ -444,9 +458,8 @@ export function Explorer({
 
       {!needle && !keys.length && book.items.length > 0 && (
         <p className="wexpnote">
-          Nothing is filed yet. Give an item a facet — <code>system</code>,{" "}
-          <code>status</code>, anything — and this becomes the tree of it. A
-          value may be a path, so <code>structure/hull/shell</code> nests.
+          Open All items to see the total. Add tags to items to break it down by
+          system, location, or another tag.
         </p>
       )}
     </div>

@@ -12,6 +12,7 @@ import { SelectionInfo } from "./SelectionInfo";
 import { StationsGrid } from "./StationsGrid";
 import { StabilityPanel } from "./StabilityPanel";
 import { Toolbar } from "./Toolbar";
+import { NavStatusProvider, NavStatusSlot } from "./NavStatus";
 import { WeightPanel } from "./weight/WeightPanel";
 import "./EditorApp.css";
 import "./PanelApp.css";
@@ -42,7 +43,9 @@ export function PanelApp() {
   return (
     <DocumentStoreProvider session={panelSession}>
       <EditorUiProvider>
-        <Panel kind={panelKind} />
+        <NavStatusProvider>
+          <Panel kind={panelKind} />
+        </NavStatusProvider>
       </EditorUiProvider>
     </DocumentStoreProvider>
   );
@@ -63,6 +66,7 @@ function Panel({ kind }: { readonly kind: PanelKind }) {
         <span className="panelcap">{spec.title}</span>
         <span className="paneldesign">{meta.name || "Untitled"}</span>
         <PanelControls kind={kind} />
+        {kind === "weights" && <NavStatusSlot />}
       </div>
       <div className="main">
         {meta.initialized && <PanelBody kind={kind} />}

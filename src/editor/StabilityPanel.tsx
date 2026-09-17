@@ -849,13 +849,19 @@ export function StabilityPanel() {
   // The sheet works in kilograms and metres; the plane works in tonnes and model units. Both readings are
   // taken at their WORST extent, because that is what this plane is for: the question is whether the design
   // still passes when the estimate is as wrong as it is allowed to be.
-  const { results: sheetResults } = useWeightBookResults(
+  const {
+    results: sheetResults,
+    uncertaintyPending: sheetUncertaintyPending,
+    error: sheetGeometryError,
+  } = useWeightBookResults(
     book,
     model,
     hullSampling,
     analysis?.metrics ?? null,
   );
   const fromSheet = useMemo(() => {
+    // Never use incomplete spreads as a safety/tolerance envelope.
+    if (sheetResults.uncertaintyPending) return null;
     const mass = sheetResults.outputs.displacement;
     if (!mass || !isFinite(mass.v) || mass.v <= 0) return null;
     const toTonnes = 1 / 1000;
@@ -2003,6 +2009,14 @@ export function StabilityPanel() {
             has — not "does this displacement pass" but "does my estimate pass, and how much of the margin is
             the estimate rather than the boat". Clicking the plane or typing a number below drops the link. */}
         <div className="sheetlink">
+          {sheetUncertaintyPending && (
+            <span className="sheetlinknote" role="status">
+              {sheetGeometryError
+                ? "Weight-sheet uncertainty unavailable."
+                : "Weight-sheet uncertainty updating…"}{" "}
+              Sheet link resumes when complete.
+            </span>
+          )}
           <Button
             active={linked}
             disabled={!fromSheet}

@@ -155,6 +155,8 @@ export interface CellResult {
 }
 
 export interface BookResults {
+  /** Conservatively suppress all sheet spreads until geometry uncertainty is complete. */
+  readonly uncertaintyPending?: boolean;
   /** Keyed by `cellKey`. Includes the book's answers, under `OUTPUT_ITEM`. */
   readonly cells: ReadonlyMap<string, CellResult>;
   readonly sources: ReadonlyMap<string, Source>;
@@ -344,6 +346,11 @@ export function evaluateBook(
   sliceMeasurements: SliceMeasurements = new Map(),
   repetitionMeasurements: RepetitionMeasurements = new Map(),
 ): BookResults {
+  const uncertaintyPending =
+    [...sliceMeasurements.values()].some((m) => m.uncertaintyPending) ||
+    [...repetitionMeasurements.values()].some(
+      (r) => r.value?.uncertaintyPending,
+    );
   const cells = new Map<string, Cell>();
   const sources = new Map<string, Source>();
   let sourceSeq = 0;
@@ -640,7 +647,11 @@ export function evaluateBook(
         let boundaryGradient = {};
         for (const { boundary, input } of boundaryInputs) {
           const slope = measured.boundaryDerivatives?.[boundary.leaf]?.[leaf];
-          if (!Number.isFinite(slope) && Object.keys(input.d).length)
+          if (
+            !measured.uncertaintyPending &&
+            !Number.isFinite(slope) &&
+            Object.keys(input.d).length
+          )
             fail(
               `${boundary.label} boundary uncertainty crosses an undefined centroid or geometry transition`,
               at,
@@ -654,7 +665,11 @@ export function evaluateBook(
         }
         currentCell!.unitWarning ??= measured.warning ?? null;
         const slope = measured.geometryDerivative[leaf];
-        if (!Number.isFinite(slope) && Object.keys(position.d).length)
+        if (
+          !measured.uncertaintyPending &&
+          !Number.isFinite(slope) &&
+          Object.keys(position.d).length
+        )
           fail(
             "Cut uncertainty crosses an undefined centroid or geometry transition",
             at,
@@ -707,7 +722,11 @@ export function evaluateBook(
       const measured = result.value;
       const boundaries = boundaryInputs.map(({ boundary, input }) => {
         const derivative = measured.boundaryDerivatives?.[boundary.leaf];
-        if (Object.keys(input.d).length && !derivative)
+        if (
+          !measured.uncertaintyPending &&
+          Object.keys(input.d).length &&
+          !derivative
+        )
           fail(
             `${boundary.label} boundary uncertainty has not produced a valid sensitivity`,
             at,
@@ -1222,7 +1241,9 @@ export function evaluateBook(
       fieldKey: cell.fieldKey,
       leaf: cell.leaf,
       empty: !cell.source,
-      reading: cell.value ? read(cell.value, sources) : null,
+      reading: cell.value
+        ? read(cell.value, sources, uncertaintyPending)
+        : null,
       quantity: cell.value,
       tree: cell.tree,
       error: cell.error?.message ?? null,
@@ -1235,10 +1256,11 @@ export function evaluateBook(
 
   const outputOf = (name: string): Reading | null => {
     const cell = cells.get(cellKey(OUTPUT_ITEM, name));
-    return cell?.value ? read(cell.value, sources) : null;
+    return cell?.value ? read(cell.value, sources, uncertaintyPending) : null;
   };
 
   return {
+    ...(uncertaintyPending ? { uncertaintyPending: true } : {}),
     cells: results,
     sources,
     outputs: {

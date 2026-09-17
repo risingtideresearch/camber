@@ -58,6 +58,104 @@ export function closedHullTriangles(sampling: HullSampling): CutTriangle[] {
   return out;
 }
 
+const PROJECTION_BINS = 128;
+
+function intersectionTolerance(triangles: readonly CutTriangle[]): number {
+  let extent = 1;
+  for (const t of triangles)
+    for (const p of t.points)
+      for (const v of p) extent = Math.max(extent, Math.abs(v));
+  return extent * 1e-8;
+}
+
+interface ProjectionIndex {
+  readonly low: number;
+  readonly high: number;
+  readonly width: number;
+  readonly bins: readonly (readonly CutTriangle[])[];
+}
+
+const projectionBin = (value: number, low: number, width: number): number =>
+  Math.max(0, Math.min(PROJECTION_BINS - 1, Math.floor((value - low) / width)));
+
+function indexProjection(
+  triangles: readonly CutTriangle[],
+  normal: Vec3,
+  eps: number,
+): ProjectionIndex {
+  let low = Infinity,
+    high = -Infinity;
+  const ranges = triangles.map(({ points }) => {
+    const values = points.map((p) => dot(p, normal));
+    // Conservative padding includes vertex/face contacts within the narrow
+    // phase's tolerance, with room for rounding at projection/bin boundaries.
+    const min = Math.min(...values) - 2 * eps;
+    const max = Math.max(...values) + 2 * eps;
+    low = Math.min(low, min);
+    high = Math.max(high, max);
+    return [min, max];
+  });
+  const width = (high - low) / PROJECTION_BINS || 1;
+  const bins: CutTriangle[][] = Array.from(
+    { length: PROJECTION_BINS },
+    () => [],
+  );
+  triangles.forEach((triangle, i) => {
+    const first = projectionBin(ranges[i][0], low, width);
+    const last = projectionBin(ranges[i][1], low, width);
+    // Preserve input order so contours and floating-point sums remain stable.
+    for (let bin = first; bin <= last; bin++) bins[bin].push(triangle);
+  });
+  return { low, high, width, bins };
+}
+
+/** Reuse for many cuts of one immutable mesh. Index only triangle candidates;
+ * intersection, clipping and tolerances are identical to the full scan below.
+ * The mesh-wide tolerance must not shrink to the selected bucket's extent. */
+export function createPlaneIntersector(triangles: readonly CutTriangle[]) {
+  const eps = intersectionTolerance(triangles);
+  const projections = new Map<string, ProjectionIndex>();
+  return (
+    normal: Vec3,
+    offset: number,
+    toSheet: (p: Vec3) => Vec3,
+    scale: number,
+    limits: SectionLimits = {},
+    toBoundary: (p: Vec3) => Vec3 = toSheet,
+  ): PlaneCut => {
+    let candidates = triangles;
+    if (
+      triangles.length &&
+      Number.isFinite(offset) &&
+      normal.every(Number.isFinite)
+    ) {
+      const key = normal.join(",");
+      let index = projections.get(key);
+      if (!index) {
+        index = indexProjection(triangles, normal, eps);
+        // Sheet cuts use three fixed orientations. Bound memory for other callers.
+        if (projections.size >= 4)
+          projections.delete(projections.keys().next().value!);
+        projections.set(key, index);
+      }
+      candidates =
+        offset < index.low || offset > index.high
+          ? []
+          : index.bins[projectionBin(offset, index.low, index.width)];
+    }
+    return intersectTriangles(
+      candidates,
+      normal,
+      offset,
+      toSheet,
+      scale,
+      limits,
+      toBoundary,
+      eps,
+    );
+  };
+}
+
 /** A valid non-intersection is empty; broken/non-manifold contours are errors.
  * `normal` is a unit vector in model coordinates; `toSheet` is affine. */
 export function intersectPlane(
@@ -69,11 +167,28 @@ export function intersectPlane(
   limits: SectionLimits = {},
   toBoundary: (p: Vec3) => Vec3 = toSheet,
 ): PlaneCut {
-  let extent = 1;
-  for (const t of triangles)
-    for (const p of t.points)
-      for (const v of p) extent = Math.max(extent, Math.abs(v));
-  const eps = extent * 1e-8;
+  return intersectTriangles(
+    triangles,
+    normal,
+    offset,
+    toSheet,
+    scale,
+    limits,
+    toBoundary,
+    intersectionTolerance(triangles),
+  );
+}
+
+function intersectTriangles(
+  triangles: readonly CutTriangle[],
+  normal: Vec3,
+  offset: number,
+  toSheet: (p: Vec3) => Vec3,
+  scale: number,
+  limits: SectionLimits,
+  toBoundary: (p: Vec3) => Vec3,
+  eps: number,
+): PlaneCut {
   const segments: CutSegment[] = [];
   for (const triangle of triangles) {
     const p = triangle.points,
@@ -194,7 +309,14 @@ function sectionFromSegmentsAt(
   const eps = extent * 1e-8;
   const nodes: Vec3[] = [];
   const buckets = new Map<string, number[]>();
+  // Shared endpoints recur during contour assembly and successive clips. Only
+  // cache actual nodes, not approximate matches: later insertions can change
+  // which neighbour the tolerance search finds for an approximate point.
+  const exactNodes = new Map<string, number>();
   const node = (p: Vec3) => {
+    const exactKey = p.join(",");
+    const known = exactNodes.get(exactKey);
+    if (known !== undefined) return known;
     const cell = p.map((v) => Math.floor(v / eps));
     for (let x = -1; x <= 1; x++)
       for (let y = -1; y <= 1; y++)
@@ -207,6 +329,7 @@ function sectionFromSegmentsAt(
     const key = cell.join(","),
       i = nodes.length;
     nodes.push(p);
+    exactNodes.set(exactKey, i);
     buckets.set(key, [...(buckets.get(key) ?? []), i]);
     return i;
   };

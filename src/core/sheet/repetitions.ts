@@ -17,6 +17,8 @@ import {
 } from "./sectionMeasures";
 
 export interface RepetitionMeasurement {
+  /** Nominal geometry is ready; placement/boundary uncertainty is not. */
+  readonly uncertaintyPending?: boolean;
   readonly integrals: SectionMeasures;
   readonly boundaryDerivatives?: Readonly<
     Partial<Record<BoundaryLeaf, SectionMeasures>>
@@ -81,6 +83,8 @@ export function measureRepetition(
   limits: SectionLimits = {},
   /** Compute only sensitivities that can contribute uncertainty; omitted means all. */
   boundarySensitivities?: readonly BoundaryLeaf[],
+  /** Reuse nominal geometry for exactly the same shape, extent and limits. */
+  nominal?: RepetitionMeasurement,
 ): RepetitionResult {
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)
     return {
@@ -91,43 +95,50 @@ export function measureRepetition(
     const atLimits = (shape: SliceShape, pos: number) =>
       measure(shape, pos, limits);
     const span = end - start;
-    let previous = zeroMeasures(),
-      integrals = previous,
-      converged = false;
-    for (let n = 16; n <= 512; n *= 2) {
-      const sections = Array.from(
-        { length: n },
-        (_, i) => atLimits(shape, start + ((i + 0.5) * span) / n).measures,
-      );
-      integrals = weighted(sections, span / n);
-      if (n >= 64 && close(previous, integrals, span)) {
-        converged = true;
-        break;
+    const nominalGeometry = (): RepetitionResult => {
+      let previous = zeroMeasures(),
+        integrals = previous,
+        converged = false;
+      for (let n = 16; n <= 512; n *= 2) {
+        const sections = Array.from(
+          { length: n },
+          (_, i) => atLimits(shape, start + ((i + 0.5) * span) / n).measures,
+        );
+        integrals = weighted(sections, span / n);
+        if (n >= 64 && close(previous, integrals, span)) {
+          converged = true;
+          break;
+        }
+        previous = integrals;
       }
-      previous = integrals;
-    }
-    if (!converged)
-      return {
-        error:
-          "repetition integration did not converge; split the region or refine the hull sampling",
+      if (!converged)
+        return {
+          error:
+            "repetition integration did not converge; split the region or refine the hull sampling",
+        };
+      // Evaluate just inside the extent if an endpoint coincides with a boundary
+      // face. This is one-sided and is explicitly surfaced as a warning.
+      let warning: string | undefined;
+      const boundary = (at: number, direction: number) => {
+        try {
+          return atLimits(shape, at).measures;
+        } catch {
+          warning =
+            "A bound coincides with a geometry transition. Bound uncertainty uses a one-sided local approximation; move the bound inside the hull for a smoother estimate.";
+          return atLimits(shape, at + direction * span * 1e-6).measures;
+        }
       };
-    // Evaluate just inside the extent if an endpoint coincides with a boundary
-    // face. This is one-sided and is explicitly surfaced as a warning.
-    let warning: string | undefined;
-    const boundary = (at: number, direction: number) => {
-      try {
-        return atLimits(shape, at).measures;
-      } catch {
-        warning =
-          "A bound coincides with a geometry transition. Bound uncertainty uses a one-sided local approximation; move the bound inside the hull for a smoother estimate.";
-        return atLimits(shape, at + direction * span * 1e-6).measures;
-      }
+      const a = boundary(start, 1),
+        b = boundary(end, -1);
+      const samples = Array.from({ length: 7 }, (_, i) =>
+        atLimits(shape, start + ((i + 0.5) * span) / 7),
+      );
+
+      return { value: { integrals, start: a, end: b, samples, warning } };
     };
-    const a = boundary(start, 1),
-      b = boundary(end, -1);
-    const samples = Array.from({ length: 7 }, (_, i) =>
-      atLimits(shape, start + ((i + 0.5) * span) / 7),
-    );
+    const base = nominal ? { value: nominal } : nominalGeometry();
+    if (!base.value) return base;
+    const { integrals, start: a, end: b, samples, warning } = base.value;
 
     // Stratify at the member-count transition. Even a very rare extra member
     // must receive its actual probability, rather than disappear between offsets.

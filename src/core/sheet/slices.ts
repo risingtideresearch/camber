@@ -19,7 +19,7 @@ import {
   closedHullTriangles,
   clipPlaneCut,
   type PlaneCut,
-  intersectPlane,
+  createPlaneIntersector,
   sectionFromSegments,
   type CutTriangle,
   type CutSegment,
@@ -44,6 +44,7 @@ export const SLICE_VALUE_FIELDS = [
 export type SliceValueField = (typeof SLICE_VALUE_FIELDS)[number];
 
 export interface SliceMeasurement {
+  readonly uncertaintyPending?: boolean;
   readonly measures: SectionMeasures;
   readonly geometryDerivative: Readonly<Record<string, number>>;
   readonly boundaryDerivatives?: Readonly<
@@ -120,6 +121,7 @@ export type RawSliceMeasurement = Omit<
  * planes. The expensive triangle intersection is independent of all limits. */
 function cachedIntersections(triangles: readonly CutTriangle[]) {
   const cache = new Map<string, PlaneCut>();
+  const intersect = createPlaneIntersector(triangles);
   return (
     normal: Vec3,
     offset: number,
@@ -129,7 +131,7 @@ function cachedIntersections(triangles: readonly CutTriangle[]) {
     const key = `${normal.join(",")}:${offset}`;
     let cut = cache.get(key);
     if (!cut) {
-      cut = intersectPlane(triangles, normal, offset, toSheet, scale);
+      cut = intersect(normal, offset, toSheet, scale);
       if (cache.size >= 512) cache.delete(cache.keys().next().value!);
       cache.set(key, cut);
     }
@@ -156,14 +158,15 @@ function measureSliceAt(
   if (!isFinite(positionMetres)) return null;
   validateLimits(limits);
   const s = unitScale(model.unit, "m");
+  const originX = model.plan.at(0)[0];
 
   const toSheet = (p: Vec3): Vec3 => [
-    (p[0] - model.plan.at(0)[0]) * s,
+    (p[0] - originX) * s,
     p[1] * s,
     (p[0] * geom.sinRake + p[2] * geom.cosRake - geom.keelZ) * s,
   ];
   const toBoundary = (p: Vec3): Vec3 => [
-    (p[0] - (p[2] * geom.sinRake) / geom.cosRake - model.plan.at(0)[0]) * s,
+    (p[0] - (p[2] * geom.sinRake) / geom.cosRake - originX) * s,
     p[1] * s,
     toSheet(p)[2],
   ];
@@ -180,7 +183,7 @@ function measureSliceAt(
       shape === "plane"
         ? geom.keelZ + positionMetres / s
         : shape === "transverse"
-          ? (model.plan.at(0)[0] + positionMetres / s) * geom.cosRake
+          ? (originX + positionMetres / s) * geom.cosRake
           : positionMetres / s;
     const result = clipPlaneCut(
       intersect(normal, offset, toSheet, s),
@@ -195,7 +198,7 @@ function measureSliceAt(
     const cg = m.area.amount
       ? (m.area.moment.map((v) => v / m.area.amount) as Vec3)
       : ([0, 0, 0] as Vec3);
-    const mx = cg[0] / s + model.plan.at(0)[0];
+    const mx = cg[0] / s + originX;
     const centroid: Vec3 = [
       mx,
       cg[1] / s,
@@ -222,7 +225,7 @@ function measureSliceAt(
 
   // A station is authored by x, but the sweep is parameterised by u. It is normal to the plan heading at
   // that u, exactly like every sampled station used by the hull integration.
-  const x0 = model.plan.at(0)[0],
+  const x0 = originX,
     x1 = model.plan.at(1)[0],
     modelX = x0 + positionMetres / s;
   if (modelX < x0 || modelX > x1) return null;

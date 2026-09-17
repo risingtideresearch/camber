@@ -395,6 +395,8 @@ export interface Contribution {
 }
 
 export interface Reading {
+  /** Nominal value only: do not display bounds, bands or drivers yet. */
+  readonly uncertaintyPending?: boolean;
   readonly v: number;
   readonly dim: Dim;
   /** Linearized input bounds plus sampled model-discrepancy envelopes, not a rigorous bound. */
@@ -416,7 +418,11 @@ export interface Reading {
  * bound at the very confidence the user was already thinking in. All that is required is that the sheet is
  * consistent with itself, which is a far easier thing to ask than a calibrated σ.
  */
-export function read(q: Quantity, sources: SourceTable): Reading {
+export function read(
+  q: Quantity,
+  sources: SourceTable,
+  uncertaintyPending = false,
+): Reading {
   let worstLo = 0,
     worstHi = 0,
     sqLo = 0,
@@ -497,6 +503,7 @@ export function read(q: Quantity, sources: SourceTable): Reading {
     .sort((a, b) => b.share - a.share);
 
   return {
+    ...(uncertaintyPending ? { uncertaintyPending: true } : {}),
     v: q.v,
     dim: q.dim,
     worst: { lo: worstLo, hi: worstHi },

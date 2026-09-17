@@ -186,7 +186,7 @@ export function roleTotals(
       readings: Object.fromEntries(
         Object.entries(values).map(([leaf, quantity]) => [
           leaf,
-          read(quantity, results.sources),
+          read(quantity, results.sources, results.uncertaintyPending),
         ]),
       ),
       contributors,
