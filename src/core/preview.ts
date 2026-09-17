@@ -13,6 +13,8 @@ import { mirrorRow, type Vec3 } from "./math";
 // a pleasing fixed 3/4 view (matches the editor's default 3D orientation)
 const YAW = -0.62,
   PITCH = 0.42;
+// the width of the canvas the drawing is fitted to (viewBox units; the <img> scales it)
+const PREVIEW_W = 1000;
 
 export function buildPreviewSvg(model: Model): string {
   const NS = 36;
@@ -88,7 +90,10 @@ export function buildPreviewSvg(model: Model): string {
     runsAlong(k === 0 ? (c) => c.pts[0].pos : (c) => rowAt(c, k));
   runsAlong((c) => c.pts[c.pts.length - 1].pos); // the keel / transom bottom edge
 
-  // fit a viewBox to all projected points
+  // fit the drawing to a fixed canvas. The projected coordinates are in the model's unit, so they are only
+  // normalised here: a metre hull spans a few units, a millimetre one thousands, and rounding them as-is
+  // would snap the metre hull's vertices to a handful of integer positions (a chain of unit squares). The
+  // fit maps the projected bounds onto a canvas PREVIEW_W wide, and the vertices are rounded after it.
   let minX = Infinity,
     minY = Infinity,
     maxX = -Infinity,
@@ -100,12 +105,23 @@ export function buildPreviewSvg(model: Model): string {
       if (py < minY) minY = py;
       if (py > maxY) maxY = py;
     }
-  const padX = (maxX - minX) * 0.04 || 1,
-    padY = (maxY - minY) * 0.06 || 1;
-  const vb = `${(minX - padX).toFixed(0)} ${(minY - padY).toFixed(0)} ${(maxX - minX + 2 * padX).toFixed(0)} ${(maxY - minY + 2 * padY).toFixed(0)}`;
+  const spanX = maxX - minX || 1,
+    spanY = maxY - minY || 1,
+    scale = PREVIEW_W / spanX;
+  const padX = PREVIEW_W * 0.04,
+    padY = spanY * scale * 0.06;
+  const fit = ([px, py]: [number, number]): [number, number] => [
+    (px - minX) * scale + padX,
+    (py - minY) * scale + padY,
+  ];
+  const vb = `0 0 ${Math.round(PREVIEW_W + 2 * padX)} ${Math.round(spanY * scale + 2 * padY)}`;
 
   const path = (line: [number, number][]): string =>
-    "M" + line.map(([x, y]) => `${Math.round(x)} ${Math.round(y)}`).join("L");
+    "M" +
+    line
+      .map(fit)
+      .map(([x, y]) => `${Math.round(x)} ${Math.round(y)}`)
+      .join("L");
   const grp = (
     lines: [number, number][][],
     stroke: string,
