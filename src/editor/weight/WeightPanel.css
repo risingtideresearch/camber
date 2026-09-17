@@ -2835,12 +2835,12 @@ button.wtermgo:focus-visible {
   text-align: left;
 }
 .wrollup tbody th,
-.wrollup tfoot th {
+.wrollup .wrolltotal th {
   text-align: left;
   white-space: nowrap;
 }
 .wrollup tbody td,
-.wrollup tfoot td {
+.wrollup .wrolltotal td {
   text-align: right;
   white-space: nowrap;
 }
@@ -2852,7 +2852,7 @@ button.wtermgo:focus-visible {
   font-weight: 700;
 }
 .wrollgroup th small,
-.wrollup tfoot th small {
+.wrollup .wrolltotal th small {
   margin-left: 7px;
   color: var(--mut);
   font-size: 10px;
@@ -2903,12 +2903,12 @@ button.wtermgo:focus-visible {
   font-size: 9px;
   font-weight: 700;
 }
-.wrollup tfoot {
+.wrollup .wrolltotal {
   background: var(--panel);
   font-weight: 700;
 }
-.wrollup tfoot th,
-.wrollup tfoot td {
+.wrollup .wrolltotal th,
+.wrollup .wrolltotal td {
   border-top: 2px solid var(--line);
 }
 .wrollnote {
@@ -3301,4 +3301,10 @@ button.wtermgo:focus-visible {
   margin: 6px 12px;
   color: var(--mut);
   font-size: 11px;
+}
+
+.wexpall {
+  margin: 0 6px 4px;
+  padding: 4px;
+  border-bottom: 1px solid var(--line);
 }

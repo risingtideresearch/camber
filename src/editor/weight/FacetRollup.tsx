@@ -4,6 +4,7 @@ import {
   isReserved,
   isValidName,
   leavesOf,
+  lookupRole,
   newId,
   rollupsOf,
   type FieldLeaf,
@@ -234,7 +235,14 @@ function TotalRoleCells({
             {issue && <span className="wrollwarn">!</span>}
           </button>
         ) : issue ? (
-          <span className="wrollwarn">!</span>
+          <button
+            aria-label={`Inspect ${spec.name} issues`}
+            onClick={() =>
+              onSelect({ ...selectionBase, role: spec.name, leaf })
+            }
+          >
+            <span className="wrollwarn">!</span>
+          </button>
         ) : (
           "—"
         )}
@@ -574,6 +582,14 @@ export function FacetRollup({
   return (
     <div className="wrollup">
       <RollupNames key={view.id} book={book} view={view} send={send} />
+      {view.scope.k === "all" && rollupsOf(book).length === 0 && (
+        <p className="wrollnote">
+          Want to reference a group’s total in a formula? Add tags to its items,
+          group the explorer by that tag, then open the group. Name its rollup
+          under “Use in formulas” to create references such as{" "}
+          <code>ROLLUP.structure.MASS</code>.
+        </p>
+      )}
       <table>
         <thead>
           <tr>
@@ -601,6 +617,24 @@ export function FacetRollup({
           </tr>
         </thead>
         <tbody>
+          <tr className="wrolltotal">
+            <th>
+              {view.scope.k === "all" ? "All items" : "Total"}{" "}
+              <small>{items.length} items</small>
+            </th>
+            <TotalCells
+              items={items}
+              results={results}
+              reading={reading}
+              selectionBase={{
+                viewId: view.id,
+                key: "all",
+                label: `${view.name} total`,
+              }}
+              selected={selectedTotal}
+              onSelect={onSelectTotal}
+            />
+          </tr>
           {groups.map((group) => (
             <GroupRows
               key={`${group.key}:${group.value}:${group.depth}`}
@@ -631,30 +665,23 @@ export function FacetRollup({
               />
             ))}
         </tbody>
-        <tfoot>
-          <tr>
-            <th>
-              Total <small>{items.length} items</small>
-            </th>
-            <TotalCells
-              items={items}
-              results={results}
-              reading={reading}
-              selectionBase={{
-                viewId: view.id,
-                key: "all",
-                label: `${view.name} total`,
-              }}
-              selected={selectedTotal}
-              onSelect={onSelectTotal}
-            />
-          </tr>
-        </tfoot>
       </table>
-      <p className="wrollnote">
-        Read-only. Facets choose what is included; role tags choose the values.
-        Open an item to edit it.
-      </p>
+      {items.some((item) => lookupRole(item, "MASS").k !== "none") ? (
+        items.some((item) => lookupRole(item, "MASS").k === "none") && (
+          <p className="wrollnote">
+            {
+              items.filter((item) => lookupRole(item, "MASS").k === "none")
+                .length
+            }{" "}
+            items have no mass role and do not contribute to the mass total.
+          </p>
+        )
+      ) : (
+        <p className="wrollnote">
+          Assign a mass role to a field to see the total. Open an item to edit
+          it.
+        </p>
+      )}
       {columnCount === 0 && <p className="whint">No roles are defined.</p>}
     </div>
   );

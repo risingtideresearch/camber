@@ -405,6 +405,15 @@ export function standardViews(book: WeightBook): View[] {
   ];
 }
 
+/** A derived whole-book roll-up, available even before the first tag exists. */
+export const allItemsView = (facet: string | null = null): View => ({
+  id: facet ? `all-items-${encodeURIComponent(facet)}` : "all-items",
+  name: "All items",
+  scope: { k: "all" },
+  groupBy: facet ? [facet] : [],
+  layout: "rollup",
+});
+
 /**
  * A view of one facet value and everything under it. Built on demand from an id, so clicking a node in the
  * explorer needs nothing stored: the id IS the query, and it round-trips through the panel's view state.
@@ -448,6 +457,14 @@ export function resolveView(book: WeightBook, id: string | null): View {
   if (id.startsWith("item-")) {
     const item = book.items.find((candidate) => `item-${candidate.id}` === id);
     if (item) return itemView(item);
+  }
+  if (id === "all-items") return allItemsView();
+  if (id.startsWith("all-items-")) {
+    try {
+      return allItemsView(decodeURIComponent(id.slice("all-items-".length)));
+    } catch {
+      return standard[0];
+    }
   }
   const facet = parseFacetView(id);
   if (facet) return facet;

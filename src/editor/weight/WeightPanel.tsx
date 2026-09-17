@@ -60,6 +60,7 @@ import {
 import {
   currentGroupMembers,
   facetView,
+  allItemsView,
   resolveView,
   scopeItems,
   standardViews,
@@ -272,6 +273,11 @@ function WeightPanelContents() {
               // tree node means: a field is not a place of its own, it is part of a thing.
               setViewId(`item-${itemId}`);
               setFocus({ item: itemId, field: fieldKey, leaf: "formula" });
+            }}
+            onOpenAll={(facet) => {
+              setViewId(allItemsView(facet).id);
+              setFocus(null);
+              setRollupSelection(null);
             }}
             onOpenFacet={(key, value) => {
               // The explorer's funnel: a node you were looking at becomes the view you are editing in, with

@@ -41,6 +41,7 @@ import {
   type WeightBook,
 } from "../src/core/sheet/book";
 import {
+  allItemsView,
   currentGroupMembers,
   facetView,
   fieldKeyOrder,
@@ -809,6 +810,39 @@ const problem = (
     resolveView(book, `item-${idOf(book, "ply")}`).layout === "detail",
     "a per-item view is built on demand rather than listed",
   );
+  const untagged = {
+    ...book,
+    items: book.items.map((item) => ({ ...item, facets: {} })),
+  };
+  const all = resolveView(untagged, allItemsView().id);
+  ok(
+    all.layout === "rollup" &&
+      all.scope.k === "all" &&
+      all.groupBy.length === 0 &&
+      scopeItems(untagged, all.scope).length === book.items.length,
+    "the whole-book rollup is available without tags or a saved view",
+  );
+  ok(
+    resolveView({ ...untagged, items: [] }, all.id).id === all.id,
+    "an empty book still has an all-items rollup",
+  );
+  const groupedAll = resolveView(book, allItemsView("system").id);
+  ok(
+    groupedAll.groupBy[0] === "system" &&
+      groupedAll.scope.k === "all" &&
+      scopeItems(book, groupedAll.scope).length === book.items.length,
+    "grouping the global rollup keeps every item, including untagged items",
+  );
+  ok(
+    resolveView(book, allItemsView("build phase").id).groupBy[0] ===
+      "build phase",
+    "the whole-book grouping round-trips multi-word tag names",
+  );
+  ok(
+    resolveView(book, "all-items-%").id === views[0].id,
+    "a malformed whole-book view id falls back safely",
+  );
+
   const fv = facetView("system", "structure/hull");
   ok(
     resolveView(book, fv.id).scope.k === "facet" &&
