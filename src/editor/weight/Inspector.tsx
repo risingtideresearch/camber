@@ -21,6 +21,7 @@
 //
 // All readings, including geometry outputs, come from the evaluator.
 
+import { UncertaintyReadout } from "./UncertaintyReadout";
 import { GEOMETRY_LEAVES } from "../../core/sheet/sectionMeasures";
 import { useState, type ReactElement } from "react";
 import {
@@ -46,7 +47,14 @@ import {
   type Reading,
 } from "../../core/sheet/quantity";
 import { type SliceMeasurements } from "../../core/sheet/slices";
-import { inUnit, pct, relative, sig, spreadText } from "./weightFormat";
+import {
+  inUnit,
+  pct,
+  relative,
+  sig,
+  spreadText,
+  showSpread,
+} from "./weightFormat";
 import type { Focus } from "./ItemTable";
 
 /** Put the caret in a cell — how every address in here is followed. */
@@ -90,6 +98,7 @@ export function ComputedInspector({
       {note && <p className="whint">{note}</p>}
       {value ? (
         <Detail
+          key={address}
           reading={value}
           factor={factor}
           unit={unit}
@@ -130,6 +139,7 @@ export function OutputInspector({
             <p className="winspwarn">{result.unitWarning}</p>
           )}
           <Detail
+            key={`OUT.${name}`}
             reading={result.reading}
             factor={result.unit?.factor ?? 1}
             unit={result.unit?.label ?? ""}
@@ -378,6 +388,7 @@ function GeometrySpread(props: CellProps) {
             <p className="winspbad">{result.unitWarning}</p>
           )}
           <Detail
+            key={`${item.id} ${fieldKey} ${selected}`}
             reading={result.reading}
             factor={1}
             unit={result.unit?.label ?? ""}
@@ -421,9 +432,7 @@ function cellRow(
     label,
     value: reading ? inUnit(reading.v, factor) : null,
     unit: result?.unit?.label ?? "",
-    spread: reading
-      ? spreadText(reading.worst.lo, reading.worst.hi, factor)
-      : "",
+    spread: reading ? showSpread(reading, factor, "worst") : "",
     note: result?.error ?? "nothing written yet",
     on,
     onPick,
@@ -518,6 +527,7 @@ function Authored({
             <p className="winspwarn">{result.unitWarning}</p>
           )}
           <Detail
+            key={`${item.id} ${fieldKey} ${leaf}`}
             reading={result.reading}
             factor={result.unit?.factor ?? 1}
             unit={result.unit?.label ?? ""}
@@ -555,18 +565,20 @@ function Detail({
         <span className="winspnumber">{sig(inUnit(reading.v, factor))}</span>
         {unit && <span className="winspunit">{unit}</span>}
       </div>
-      <Band reading={reading} factor={factor} />
-      <Readings reading={reading} factor={factor} unit={unit} which={which} />
-      <section className="winspsection">
-        <h4>What drives it</h4>
-        <Drivers
-          terms={reading.terms}
-          factor={factor}
-          unit={unit}
-          results={results}
-          onGo={onGo}
-        />
-      </section>
+      <UncertaintyReadout pending={!!reading.uncertaintyPending}>
+        <Band reading={reading} factor={factor} />
+        <Readings reading={reading} factor={factor} unit={unit} which={which} />
+        <section className="winspsection">
+          <h4>What drives it</h4>
+          <Drivers
+            terms={reading.terms}
+            factor={factor}
+            unit={unit}
+            results={results}
+            onGo={onGo}
+          />
+        </section>
+      </UncertaintyReadout>
     </>
   );
 }
@@ -770,11 +782,7 @@ function ItemSpread({
                           {result.unit?.label ?? ""}
                         </span>
                         <span className="winspspread">
-                          {spreadText(
-                            result.reading.worst.lo,
-                            result.reading.worst.hi,
-                            factor,
-                          )}
+                          {showSpread(result.reading, factor, "worst")}
                         </span>
                       </>
                     ) : (

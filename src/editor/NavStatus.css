@@ -1,0 +1,18 @@
+.navstatusslot {
+  /* Keep a stable slot in the persistent app bar through both phases and idle. */
+  flex: 0 1 42ch;
+  width: 42ch;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
+  height: 16px;
+  line-height: 16px;
+  font-size: 11px;
+  color: var(--mut);
+}
+.navstatus {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

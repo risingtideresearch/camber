@@ -3297,10 +3297,27 @@ button.wtermgo:focus-visible {
   pointer-events: none;
 }
 
-.wgeometryprogress {
-  margin: 6px 12px;
-  color: var(--mut);
-  font-size: 11px;
+.wuncertainty {
+  position: relative;
+}
+.wuncertaintycontent {
+  display: flow-root;
+}
+.wuncertainty.pending {
+  overflow: hidden;
+}
+.wuncertainty.pending .wuncertaintycontent {
+  visibility: hidden;
+}
+.wuncertaintystatus {
+  position: absolute;
+  inset: 0 0 auto;
+}
+/* A short pending marker must not wrap a cell or widen its table column. */
+.wrollspread {
+  display: inline-block;
+  min-width: 8ch;
+  white-space: nowrap;
 }
 
 .wexpall {

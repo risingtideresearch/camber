@@ -62,12 +62,14 @@ export interface WeightBookResults {
   readonly repetitions: RepetitionMeasurements;
   readonly results: BookResults;
   readonly pending: boolean;
+  readonly uncertaintyPending: boolean;
   readonly error: string | null;
 }
 
 /** Formulas resolve on the UI thread; geometry never does. A changed boundary
  * immediately edits the form, then its worker result arrives under that exact
- * input key. Old geometry is never fed to new formulas while a job is pending. */
+ * input key. Nominal measurements arrive first, then uncertainty replaces them.
+ * Old geometry is never fed to new formulas while a job is pending. */
 export function useWeightBookResults(
   book: WeightBook,
   model: Model,

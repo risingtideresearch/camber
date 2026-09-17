@@ -115,7 +115,9 @@ export function plotPoints(
         // Each region is the joint spread of the PAIR the view shows, not two independent bars: coordinates
         // that share an uncertain input are correlated, and the polygon leans to say so. See `points.ts`.
         xz:
-          x.result?.quantity && z.result?.quantity
+          !results.uncertaintyPending &&
+          x.result?.quantity &&
+          z.result?.quantity
             ? spreadRegion(
                 x.result.quantity,
                 z.result.quantity,
@@ -124,7 +126,9 @@ export function plotPoints(
               )
             : [],
         yz:
-          y.result?.quantity && z.result?.quantity
+          !results.uncertaintyPending &&
+          y.result?.quantity &&
+          z.result?.quantity
             ? spreadRegion(
                 y.result.quantity,
                 z.result.quantity,

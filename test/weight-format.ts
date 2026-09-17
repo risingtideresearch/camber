@@ -49,3 +49,11 @@ assert.equal(showSpread(reading, 1, "worst"), "");
 assert.equal(showSpread(reading, 1, "likely"), "");
 assert.equal(reading.worst.lo, 1e-17); // Formatting never changes the reading.
 console.log("Weight formatting tests passed");
+assert.equal(
+  showSpread({ ...reading, uncertaintyPending: true }, 1, "worst"),
+  "…",
+);
+assert.equal(
+  showSpread({ ...reading, uncertaintyPending: true }, 1000, "likely"),
+  "…",
+);

@@ -10,6 +10,7 @@ import type {
   RepetitionMeasurements,
   RepetitionResult,
 } from "../core/sheet/repetitions";
+import { uncertaintyPending } from "../worker/weightGeometryProtocol";
 import type {
   WeightGeometryJob,
   WeightGeometryResult,
@@ -112,19 +113,27 @@ export function resolveWeightGeometry(
   measurements: SliceMeasurements;
   repetitions: RepetitionMeasurements;
   pending: boolean;
+  uncertaintyPending: boolean;
 } {
   const measurements = new Map<string, SliceMeasurement>();
   const repetitions = new Map<string, RepetitionResult>();
   let pending = false;
+  let pendingUncertainty = false;
   for (const { key, job } of plan.fields) {
     const result = values.get(job.key);
     if (!result) {
       pending = true;
       continue;
     }
+    pendingUncertainty ||= uncertaintyPending(result);
     if (result.kind === "cut") {
       if (result.value) measurements.set(key, result.value);
     } else repetitions.set(key, result.result);
   }
-  return { measurements, repetitions, pending };
+  return {
+    measurements,
+    repetitions,
+    pending,
+    uncertaintyPending: pendingUncertainty,
+  };
 }

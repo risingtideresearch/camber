@@ -54,7 +54,10 @@ export const showSpread = (
   reading: Reading,
   factor: number,
   which: "worst" | "likely",
-): string => spreadText(reading[which].lo, reading[which].hi, factor);
+): string =>
+  reading.uncertaintyPending
+    ? "…"
+    : spreadText(reading[which].lo, reading[which].hi, factor);
 
 export const pct = (v: number): string => `${Math.round(v * 100)}%`;
 

@@ -44,6 +44,7 @@ export const SLICE_VALUE_FIELDS = [
 export type SliceValueField = (typeof SLICE_VALUE_FIELDS)[number];
 
 export interface SliceMeasurement {
+  readonly uncertaintyPending?: boolean;
   readonly measures: SectionMeasures;
   readonly geometryDerivative: Readonly<Record<string, number>>;
   readonly boundaryDerivatives?: Readonly<
