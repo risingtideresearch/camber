@@ -45,7 +45,12 @@ import { type Vec2 } from "./math";
 import { loa, type Model } from "./model";
 import { interpretHullCommand, rejected } from "./commands";
 import { assemble } from "./runtime";
-import type { Writable, HullState, StationCP } from "./hull";
+import {
+  stationKnuckle,
+  type Writable,
+  type HullState,
+  type StationCP,
+} from "./hull";
 import { clampedBSplineSamplerX, planCurve } from "./bspline";
 import { convertUnits, type HullData } from "./json";
 
@@ -430,7 +435,11 @@ function promoteStations(datas: HullData[], corr: Correspondence[]): void {
       return {
         u,
         keelK,
-        points: pts.map((p, i) => ({ n: p[0], z: p[1], k: ks[i] })),
+        points: pts.map((p, i) => ({
+          n: p[0],
+          z: p[1],
+          k: stationKnuckle(pts.length, i, ks[i]),
+        })),
       };
     });
     // the correspondence order is the hull order, but a remapped u can land on its neighbour; nudge apart

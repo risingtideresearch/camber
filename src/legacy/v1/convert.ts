@@ -38,6 +38,7 @@ import {
   type Station as V2Station,
 } from "../../core/document";
 import type { HullDocument as V1Doc } from "./document";
+import { stationKnuckle } from "../../core/hull";
 
 // ---------- decode: v1's increments → absolute ----------
 
@@ -208,7 +209,11 @@ export function convertV1ToV2(doc: V1Doc): V2Doc {
       stations.push({
         u: clamp(u, 0, 1),
         keelK: clamp(knuckle(doc.keelK?.[j]), 0, 1),
-        points: templates[j].map((p) => ({ z: -p.d, n: p.n, k: p.k })),
+        points: templates[j].map((p, i) => ({
+          z: -p.d,
+          n: p.n,
+          k: stationKnuckle(templates[j].length, i, p.k),
+        })),
       });
   }
 

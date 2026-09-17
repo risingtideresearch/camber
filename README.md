@@ -193,7 +193,7 @@ convex polytope, so a blend of two simplex weights is again a simplex weight.
 ```
 PlanPoint    { dx: number,  y: number,  w: number[] }   // dx > 0 (≥ 0 for point 0); y ≥ 0 (half-breadth at z = 0); w ∈ Δ^{K−1} (length K, wⱼ ≥ 0, Σ wⱼ = 1)
 TrimPoint    { dx: number,  depth: number }             // dx > 0 (≥ 0 for point 0); depth ≥ 0 (below the flat deck)
-SectionPoint { dd: number,  n: number,  k: number }     // dd > 0 (= 0 for pt 0, the sheer); n ∈ ℝ (n < 0 = tumblehome); k ∈ [0,1] (knuckle; the pinned sheer point at index 0 is left smooth)
+SectionPoint { dd: number,  n: number,  k: number }     // dd > 0 (= 0 for pt 0, the sheer); n ∈ ℝ (n < 0 = tumblehome); k ∈ [0,1] (knuckle; the first and last points are corners and always hold 1)
 ```
 
 The valid region of a hull is thus the product of: positive orthants (every later plan/trim

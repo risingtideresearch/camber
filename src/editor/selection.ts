@@ -8,6 +8,7 @@
 // dispatches that.
 
 import type { Model } from "../core/model";
+import { isStationEnd } from "../core/hull";
 import type { DocumentCommand } from "../core/commands";
 import type {
   ModelSelection,
@@ -52,13 +53,29 @@ export function canDelete(
   return len > 3 && s.idx > 0 && s.idx < len - 1;
 }
 
-// points that carry a knuckle (k): every sheer-trim point, and every station point but the pinned deck
-// point (idx 0). The plan / transom points do not.
-export function hasKnuckle(s: {
-  tgt: ModelSelectionTarget;
-  idx: number;
-}): boolean {
-  return s.tgt === "trim" || (s.tgt === "station" && s.idx > 0);
+// points whose knuckle (k) can be set: every sheer-trim point, and every interior station point. A station's
+// deck point and bottom point are corners by construction — the section curve is cut there — so their k is
+// pinned to 1 (see `stationKnuckle`) and the slider is disabled on them. The plan / transom points carry no
+// knuckle at all.
+export function hasKnuckle(
+  model: Model,
+  s: { tgt: ModelSelectionTarget; idx: number; si?: number },
+): boolean {
+  if (s.tgt === "trim") return true;
+  if (s.tgt !== "station") return false;
+  const arr = model.stations[s.si ?? 0]?.points;
+  return !!arr && !isStationEnd(arr.length, s.idx);
+}
+
+// the knuckle the readout shows for the selection: the point's own k, or the pinned 1 of a station's end
+// point. 0 where the selection carries no knuckle (or no longer resolves to a point).
+export function shownKnuckle(model: Model, selection: ModelSelection): number {
+  const point = selection
+    ? selArr(model, selection)?.[selection.idx]
+    : undefined;
+  if (!selection || !point) return 0;
+  if (selection.tgt === "station" && !hasKnuckle(model, selection)) return 1;
+  return point.k;
 }
 
 export function labelFor(s: {
@@ -81,7 +98,7 @@ export function knuckleCommand(
   selection: ModelSelection,
   k: number,
 ): DocumentCommand | null {
-  if (!selection || !selArr(model, selection) || !hasKnuckle(selection))
+  if (!selection || !selArr(model, selection) || !hasKnuckle(model, selection))
     return null;
   return selection.tgt === "trim"
     ? { type: "setTrimK", idx: selection.idx, k }

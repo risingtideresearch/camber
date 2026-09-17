@@ -23,7 +23,7 @@ import {
 } from "./document";
 import { convertV1ToV2 } from "../legacy/v1/convert";
 import type { HullDocument as V1Doc } from "../legacy/v1/document";
-import type { HullState, Writable } from "./hull";
+import { stationKnuckle, type HullState, type Writable } from "./hull";
 import { assertValidHull } from "./invariants";
 
 // ---------- a parsed hull in the model's coordinates ----------
@@ -168,7 +168,7 @@ function decodeHull(v: Record<string, unknown>): HullData {
         return {
           n: num(q.n, `${c}.stations[${j}].points[${i}].n`),
           z: num(q.z, `${c}.stations[${j}].points[${i}].z`),
-          k: knuckle(q.k),
+          k: stationKnuckle(pts.length, i, knuckle(q.k)),
         };
       }),
     };
