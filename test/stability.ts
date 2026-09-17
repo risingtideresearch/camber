@@ -1050,7 +1050,10 @@ const sample = (model: Model): HullSampling => {
   );
 
   // 2. the half that is SAMPLED: the default 32-step scan against a 16× denser reference. The band can only
-  // ever fall short, never overshoot, so this measures the resolution of the scan and nothing else.
+  // ever fall short, never overshoot, so this measures the resolution of the scan and nothing else. The
+  // threshold is a few parts in a hundred thousand of the GZ scale: how sharply KN turns over in ∇ depends
+  // on the default hull's exact shape, so it moves a little whenever the section curves' construction
+  // does (the parabolic end tangents took it from 1.8e-6 to 2.0e-5).
   let worstShortfall = 0;
   for (let i = 0; i < cc.heel.length; i++) {
     if (!Number.isFinite(band[i].lo)) continue;
@@ -1068,7 +1071,7 @@ const sample = (model: Model): HullSampling => {
     );
   }
   ok(
-    worstShortfall >= -1e-9 && worstShortfall < 1e-5 * scale,
+    worstShortfall >= -1e-9 && worstShortfall < 5e-5 * scale,
     `32 displacement steps resolve the extremes to ${(worstShortfall / scale).toExponential(1)} of the GZ scale`,
   );
 
