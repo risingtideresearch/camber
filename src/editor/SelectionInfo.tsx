@@ -6,6 +6,7 @@ import {
   knuckleCommand,
   labelFor,
   selArr,
+  shownKnuckle,
 } from "./selection";
 import { useDocumentDispatch, useDocumentRuntime } from "./documentStoreHooks";
 import { useEditorUi } from "./editorUi";
@@ -36,8 +37,9 @@ export function SelectionInfo() {
   // the readout simply falls back to "nothing to knuckle" until the selection is set again.
   const arr = selArr(model, selection);
   const point = selection && arr ? arr[selection.idx] : undefined;
-  const knuckle = !!(selection && point && hasKnuckle(selection));
-  const knuckleVal = point?.k ?? 0;
+  const knuckle = !!(selection && point && hasKnuckle(model, selection));
+  // a station's deck and bottom points read 1 — they are corners by construction, so the slider is pinned
+  const knuckleVal = shownKnuckle(model, selection);
   const deletable = !!selection && canDelete(model, selection);
 
   return (
@@ -52,7 +54,11 @@ export function SelectionInfo() {
           min="0"
           max="1"
           step="0.01"
-          title="0 = smooth · 1 = hard corner"
+          title={
+            selection?.tgt === "station" && point && !knuckle
+              ? "The first and last points of a station are always hard corners"
+              : "0 = smooth · 1 = hard corner"
+          }
           value={knuckleVal}
           disabled={!knuckle}
           onChange={(e) => onKnuckle(parseFloat(e.target.value))}

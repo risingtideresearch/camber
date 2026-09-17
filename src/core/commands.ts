@@ -29,6 +29,7 @@ import { UNIT_MM, type Unit } from "./document";
 import {
   loa,
   boundsOf,
+  stationKnuckle,
   U_GAP,
   type HullState,
   type PlanCP,
@@ -372,7 +373,11 @@ export function interpretHullCommand(
       sts.splice(k, 0, {
         u: uu,
         keelK,
-        points: pts.map((p, i) => ({ n: p[0], z: p[1], k: ks[i] })),
+        points: pts.map((p, i) => ({
+          n: p[0],
+          z: p[1],
+          k: stationKnuckle(pts.length, i, ks[i]),
+        })),
       });
       return d.commit(undefined, { result: k });
     }
@@ -470,11 +475,14 @@ export function interpretHullCommand(
       sts.forEach((st) => st.points.splice(cmd.idx, 1));
       return d.commit(undefined, { result: true });
     }
+    // The deck point and the bottom point are corners by construction (the section is cut there), so their
+    // k is pinned to 1 whatever is asked; the slider is disabled on them, and this backs it up.
     case "setStationK": {
       const sts = d.stations(),
-        p = sts[cmd.si]?.points[cmd.idx];
-      if (!p) return { rejected: "no such station point" };
-      p.k = clamp(cmd.k, 0, 1);
+        arr = sts[cmd.si]?.points,
+        p = arr?.[cmd.idx];
+      if (!arr || !p) return { rejected: "no such station point" };
+      p.k = stationKnuckle(arr.length, cmd.idx, clamp(cmd.k, 0, 1));
       return d.commit();
     }
 

@@ -369,6 +369,23 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
   ok(model.stations[0].keelK === 1, "setKeelK clamps to 1");
   run({ type: "setStationK", si: 0, idx: 1, k: -5 });
   ok(model.stations[0].points[1].k === 0, "setStationK clamps to 0");
+  // a station's deck and bottom points are corners by construction: their k is pinned to 1
+  {
+    const last = model.stations[0].points.length - 1;
+    run({ type: "setStationK", si: 0, idx: 0, k: 0 });
+    run({ type: "setStationK", si: 0, idx: last, k: 0.3 });
+    ok(
+      model.stations[0].points[0].k === 1 &&
+        model.stations[0].points[last].k === 1,
+      "setStationK keeps the end points at k = 1",
+    );
+    ok(
+      model.stations.every(
+        (s) => s.points[0].k === 1 && s.points[s.points.length - 1].k === 1,
+      ),
+      "every station (default and added) holds k = 1 at both ends",
+    );
+  }
   run({ type: "setTrimK", idx: 1, k: 0.5 });
   run({ type: "setWaterline", depth: 0.03 * L });
   run({ type: "setDeckRakeDeg", deg: 3 });

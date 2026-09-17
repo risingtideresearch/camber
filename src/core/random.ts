@@ -99,7 +99,7 @@
 import { boundsOf, loa, type Bounds, type Model } from "./model";
 import { VERSION, type HullDocument } from "./document";
 import { parseHullState } from "./json";
-import type { HullState } from "./hull";
+import { stationKnuckle, type HullState } from "./hull";
 
 const clamp = (v: number, lo: number, hi: number): number =>
   v < lo ? lo : v > hi ? hi : v;
@@ -371,7 +371,11 @@ function decodeDoc(model: Model, z: Coord): string {
   ): HullDocument["stations"][number] => ({
     u,
     keelK: 0,
-    points: pts.map((p) => ({ n: p.n, z: -p.d, k: p.k })),
+    points: pts.map((p, i) => ({
+      n: p.n,
+      z: -p.d,
+      k: stationKnuckle(pts.length, i, p.k),
+    })),
   });
 
   const doc: HullDocument = {

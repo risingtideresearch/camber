@@ -1,5 +1,6 @@
 import { SEL, HILITE, SELB, COL, KNOT_LONG, stationColor } from "./colors";
 import { startDrag } from "./drag";
+import { isStationEnd } from "./hull";
 import type { Vec2, Vec3 } from "./math";
 import {
   bounds,
@@ -1092,10 +1093,10 @@ export function drawStation(
   arr.forEach((p, idx) => {
     const end = idx === 0,
       s = end ? 4 : 6,
-      // knuckle applies to every point but the pinned deck point (idx 0) — including the keel point;
-      // the node morphs round (k=0) → square (k=1) via corner radius to show its sharpness
-      knuck = idx > 0,
-      k = knuck ? Math.min(Math.max(p.k, 0), 1) : 0,
+      // the node morphs round (k=0) → square (k=1) via corner radius to show its sharpness. The deck point
+      // (idx 0) and the bottom point are always square: the section curve is cut there, so they are corners
+      // whatever k they carry (see `stationKnuckle`).
+      k = isStationEnd(arr.length, idx) ? 1 : Math.min(Math.max(p.k, 0), 1),
       rad = (1 - k) * s,
       sel = isSelected(selection, "station", idx, si); // the selected node is drawn solid red
     fixed(svg, v.snX(p.n), v.snY(p.z), (g) => {

@@ -54,7 +54,7 @@ export interface TrimPoint {
 export interface StationPoint {
   z: number;
   n: number; // along the normal of the sheer plan
-  k?: number;
+  k?: number; // knuckle ∈ [0,1]; the first and last points are always corners and read 1 (see `stationKnuckle`)
 }
 
 // A station: one authored section, positioned at u along the sheer plan. Sections between stations are

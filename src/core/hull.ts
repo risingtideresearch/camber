@@ -122,7 +122,8 @@ const TRANSOM_DEF: readonly (readonly [number, number])[] = [
   [95, -180],
 ];
 // [n, z, k] per point, aft station then forward. The bilge (index 2) is a hard chine aft (k=1) fading to a
-// round bilge forward (k=0): a hard-chine planing stern blending into a soft bow along the one hull.
+// round bilge forward (k=0): a hard-chine planing stern blending into a soft bow along the one hull. The
+// deck and bottom points carry k=1, as every section's ends do (`stationKnuckle`).
 const STATION_DEFS: readonly {
   readonly u: number;
   readonly keelK: number;
@@ -132,22 +133,22 @@ const STATION_DEFS: readonly {
     u: 0,
     keelK: 0,
     pts: [
-      [0, 0, 0],
+      [0, 0, 1],
       [23, -80, 0],
       [65, -160, 1],
       [140, -220, 0],
-      [245, -250, 0],
+      [245, -250, 1],
     ],
   },
   {
     u: 1,
     keelK: 0,
     pts: [
-      [0, 0, 0],
+      [0, 0, 1],
       [38, -108, 0],
       [100, -210, 0],
       [180, -280, 0],
-      [255, -305, 0],
+      [255, -305, 1],
     ],
   },
 ];
@@ -222,6 +223,22 @@ export function withUnit(
 /** The knuckle clamp the authored schema promises, applied where a value is admitted from outside. */
 export const knuckleOf = (k: number): number =>
   isFinite(k) ? clamp(k, 0, 1) : 0;
+
+/** Is point `idx` of a `count`-point section its deck point or its bottom point? */
+export const isStationEnd = (count: number, idx: number): boolean =>
+  idx === 0 || idx === count - 1;
+
+/**
+ * The knuckle a station point holds: `k` for an interior point, 1 at either end. A section curve is cut at
+ * its ends, so those points are corners whatever was authored (see `crChain`); pinning the stored value to 1
+ * keeps the document, the slider and the drawn node saying the same thing. Applied wherever a station point
+ * is admitted — decoded, converted, generated, or set by a command.
+ */
+export const stationKnuckle = (
+  count: number,
+  idx: number,
+  k: number,
+): number => (isStationEnd(count, idx) ? 1 : k);
 
 /**
  * The same shape with every `readonly` stripped, recursively.
