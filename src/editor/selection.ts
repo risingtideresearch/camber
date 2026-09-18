@@ -16,7 +16,7 @@ import type {
 } from "../core/modelSelection";
 
 // the knuckle-carrying point array for the current selection (a station's section, or the sheer trim), or
-// null. Both StationPointCP and TrimCP carry `.k`, so the knuckle slider drives either.
+// null. Both StationPointCP and TrimCP carry `.k`, so the knuckle field drives either.
 export function selArr(
   model: Model,
   selection: ModelSelection,
@@ -55,7 +55,7 @@ export function canDelete(
 
 // points whose knuckle (k) can be set: every sheer-trim point, and every interior station point. A station's
 // deck point and bottom point are corners by construction — the section curve is cut there — so their k is
-// pinned to 1 (see `stationKnuckle`) and the slider is disabled on them. The plan / transom points carry no
+// pinned to 1 (see `stationKnuckle`) and the field is disabled on them. The plan / transom points carry no
 // knuckle at all.
 export function hasKnuckle(
   model: Model,
@@ -67,15 +67,121 @@ export function hasKnuckle(
   return !!arr && !isStationEnd(arr.length, s.idx);
 }
 
-// the knuckle the readout shows for the selection: the point's own k, or the pinned 1 of a station's end
-// point. 0 where the selection carries no knuckle (or no longer resolves to a point).
-export function shownKnuckle(model: Model, selection: ModelSelection): number {
-  const point = selection
-    ? selArr(model, selection)?.[selection.idx]
-    : undefined;
-  if (!selection || !point) return 0;
-  if (selection.tgt === "station" && !hasKnuckle(model, selection)) return 1;
-  return point.k;
+// One editable value of the selection, as the SelectionInfo readout shows it: a coordinate of the selected
+// point, or its knuckle. `command` resolves a typed (or scrubbed) value to the command that sets it — a move
+// carries both coordinates, so the one not being edited rides along unchanged. A `disabled` field is shown
+// but cannot be edited, and `title` says why.
+export interface SelectionField {
+  readonly key: string;
+  readonly label: string;
+  readonly value: number;
+  readonly min?: number;
+  readonly max?: number;
+  readonly disabled?: boolean;
+  readonly title?: string;
+  readonly command: (v: number) => DocumentCommand | null;
+}
+
+// The fields of the current selection — which depend only on WHAT is selected (plan: x y · trim: x z k ·
+// transom: x z · station: z n k), so the readout keeps its shape from one point to the next; a value that is
+// pinned by construction is disabled rather than dropped. Empty where nothing is selected, or where the
+// selection no longer resolves to a point (see SelectionInfo).
+export function selectionFields(
+  model: Model,
+  selection: ModelSelection,
+): SelectionField[] {
+  if (!selection) return [];
+  const { tgt, idx } = selection;
+  const knuckle = (k: number, pinned: boolean): SelectionField => ({
+    key: "k",
+    label: "k",
+    value: k,
+    min: 0,
+    max: 1,
+    disabled: pinned,
+    title: pinned
+      ? "The first and last points of a station are always hard corners"
+      : "Knuckle: 0 = smooth · 1 = hard corner",
+    command: (v) => knuckleCommand(model, selection, v),
+  });
+  if (tgt === "plan") {
+    const p = model.sheerPlan[idx];
+    if (!p) return [];
+    return [
+      {
+        key: "x",
+        label: "x",
+        value: p.x,
+        disabled: idx === 0,
+        title:
+          idx === 0 ? "The first sheer point is pinned along x" : undefined,
+        command: (x) => ({ type: "movePlanPoint", idx, x, y: p.y }),
+      },
+      {
+        key: "y",
+        label: "y",
+        value: p.y,
+        command: (y) => ({ type: "movePlanPoint", idx, x: p.x, y }),
+      },
+    ];
+  }
+  if (tgt === "trim") {
+    const p = model.sheerTrim[idx];
+    if (!p) return [];
+    return [
+      {
+        key: "x",
+        label: "x",
+        value: p.x,
+        command: (x) => ({ type: "moveTrim", idx, x, z: p.z }),
+      },
+      {
+        key: "z",
+        label: "z",
+        value: p.z,
+        command: (z) => ({ type: "moveTrim", idx, x: p.x, z }),
+      },
+      knuckle(p.k, false),
+    ];
+  }
+  if (tgt === "transom") {
+    const p = model.transom[idx];
+    if (!p) return [];
+    return [
+      {
+        key: "x",
+        label: "x",
+        value: p.x,
+        command: (x) => ({ type: "moveTransom", idx, x, z: p.z }),
+      },
+      {
+        key: "z",
+        label: "z",
+        value: p.z,
+        command: (z) => ({ type: "moveTransom", idx, x: p.x, z }),
+      },
+    ];
+  }
+  const si = selection.si ?? 0;
+  const p = model.stations[si]?.points[idx];
+  if (!p) return [];
+  // a station's deck and bottom points read 1 — they are corners by construction, so the field is pinned
+  const pinned = !hasKnuckle(model, selection);
+  return [
+    {
+      key: "z",
+      label: "z",
+      value: p.z,
+      command: (z) => ({ type: "moveStationPoint", si, idx, n: p.n, z }),
+    },
+    {
+      key: "n",
+      label: "n",
+      value: p.n,
+      command: (n) => ({ type: "moveStationPoint", si, idx, n, z: p.z }),
+    },
+    knuckle(pinned ? 1 : p.k, pinned),
+  ];
 }
 
 export function labelFor(s: {
