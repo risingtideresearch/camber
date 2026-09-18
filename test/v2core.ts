@@ -10,6 +10,9 @@
 //     control sections would mean the interpolation, not the author, decides the shape.
 //   - mesh: every kept point is inside all three trims; the converged top row sits ON the sheer trim and the
 //     keel row exactly on the centerline; every row has the same width (a quad grid the renderer can use).
+//   - sampling: each trimmed boundary curve walks the skin's own edge IN ORDER — every step of it is an edge
+//     of a mesh cell — even where the edge is not monotone in u (an inverted bow's centerline comes back aft
+//     up the stem) or in z (a transom across a flat bottom), so nothing downstream may re-sort it.
 //   - json: a build → parse → build round-trip reproduces the geometry exactly (v2 is absolute, so it must).
 //   - v1: increments become absolute, and each template lands at the u where its weight peaks — including
 //     the symmetric case, where ONE template peaking at both ends must become TWO stations.
@@ -22,6 +25,7 @@
 // Run with `npm run test:v2` (tsx runs this directly under node). Non-zero exit on any failure.
 import { loa, sectionAt, frameAt, bounds, type Model } from "../src/core/model";
 import {
+  computeHullSampling,
   hullGrid,
   sweptSection,
   forwardLimit,
@@ -40,6 +44,9 @@ import { crCurveAuto } from "../src/core/spline";
 import { convertV1ToV2 } from "../src/legacy/v1/convert";
 import { promoteFamily, autoCorrespondence } from "../src/core/promote";
 import { blendState } from "../src/interpolate/blend";
+import { examplesDir } from "./paths";
+import { readFileSync, readdirSync } from "fs";
+import { dirname, join } from "path";
 
 let fails = 0;
 const ok = (c: boolean, m: string): void => {
@@ -451,6 +458,62 @@ ok(m.stations.length === 2, "default has 2 stations");
     wellFormed,
     "every interior blend is strictly increasing in plan x, trim x and station u",
   );
+}
+
+// ---- sampling: the boundary curves keep the marched order ----
+{
+  const hulls: [string, string][] = readdirSync(examplesDir())
+    .filter((f) => f.endsWith(".json"))
+    .map((f): [string, string] => [f, join(examplesDir(), f)]);
+  hulls.push([
+    "inverted-bow",
+    join(
+      dirname(examplesDir()),
+      "test",
+      "fixtures",
+      "sampling",
+      "inverted-bow.json",
+    ),
+  ]);
+  for (const [name, path] of hulls) {
+    const s = computeHullSampling(
+      assemble(parseHullState(readFileSync(path, "utf8"))),
+      180,
+      16,
+    );
+    const edges = new Map<unknown, Set<unknown>>();
+    for (const cell of [...s.hullQuads, ...s.hullTris])
+      for (let j = 0; j < cell.length; j++) {
+        const a = cell[j],
+          b = cell[(j + 1) % cell.length];
+        (edges.get(a) ?? edges.set(a, new Set()).get(a)!).add(b);
+        (edges.get(b) ?? edges.set(b, new Set()).get(b)!).add(a);
+      }
+    for (const [label, curve] of [
+      ["hullSheer", s.hullSheer],
+      ["hullCenterline", s.hullCenterline],
+      ["hullTransom", s.hullTransom],
+    ] as const) {
+      let stray = 0;
+      for (let j = 1; j < curve.length; j++)
+        if (!edges.get(curve[j - 1])?.has(curve[j])) stray++;
+      ok(
+        stray === 0,
+        `${name}: every step of ${label} is an edge of the skin (${stray} are not)`,
+      );
+    }
+    if (name === "inverted-bow") {
+      const cl = s.hullCenterline;
+      ok(
+        cl.some((p, j) => j > 0 && p.u < cl[j - 1].u),
+        "inverted-bow: the centerline really does come back in u",
+      );
+      ok(
+        cl[cl.length - 1] === s.hullSheer[s.hullSheer.length - 1],
+        "inverted-bow: the centerline ends on the stem corner it shares with the sheer",
+      );
+    }
+  }
 }
 
 console.log(fails ? `\n${fails} FAILED` : "\nall passed");

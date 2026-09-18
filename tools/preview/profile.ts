@@ -9,7 +9,6 @@ import {
   computeHullSampling,
   forwardLimit,
   transomOutline,
-  type HullColumnV2,
 } from "../../src/core/mesh";
 import { parseHullState } from "../../src/core/json";
 import { assemble } from "../../src/core/runtime";
@@ -40,8 +39,7 @@ const path = (d: string, stroke: string, w: number, extra = ""): string =>
 const NSEC = 80,
   uFwd = forwardLimit(model),
   xFwd = model.plan.at(uFwd)[0],
-  sampling = computeHullSampling(model, NSEC, 4),
-  sections: HullColumnV2[] = sampling.columns;
+  sampling = computeHullSampling(model, NSEC, 4);
 
 let body = "";
 // deck reference z=0
@@ -53,23 +51,17 @@ const wlS = Math.sin(model.deckRake),
 const zWL = (x: number) => (-model.waterline - x * wlS) / wlC;
 body += `<line x1="${mapX(0)}" y1="${zScreenP(zWL(0))}" x2="${mapX(xFwd)}" y2="${zScreenP(zWL(xFwd))}" stroke="#0ea5e9" stroke-width="1.8"/>`;
 
-// keel + stem (green), matching the mesh: keel rises to the forefoot, then the diving top edge back to the
-// trim. The transom's foot is prepended — it lies between two columns, so no closing section carries it.
-const closing = sections.filter((s) => s.keel && s.pts.length > 1);
-const keel: Vec3[] = sampling.hullCenterline.map((s) => s.pos); // foot → rocker, aft to bow
+// keel + stem (green): the mesh's own centerline edge in marched order — foot, rocker, forefoot, then up the
+// stem to the corner it shares with the sheer. A bow that never closes onto the centerline has no such
+// corner, and the outline ends on the trim at the stem instead.
+const keel: Vec3[] = sampling.hullCenterline.map((s) => s.pos);
 const te = transomOutline(sampling);
-if (keel.length) {
-  // the tolerance is a fraction of the hull's own length (it was absolute against v1's fixed L = 1000)
-  const tol = 0.003 * L;
-  const dived = (s: HullColumnV2) =>
-    s.pts[0].pos[2] < model.trimZ(s.pts[0].pos[0]) - tol;
-  let b = closing.length;
-  while (b > 0 && dived(closing[b - 1])) b--;
-  const stem = closing.slice(b).map((s) => s.pts[0].pos);
-  if (stem.length)
-    for (let i = stem.length - 1; i >= 0; i--) keel.push(stem[i]);
-  else keel.push([xFwd, 0, model.trimZ(xFwd)]);
-}
+if (
+  keel.length &&
+  sampling.hullCenterline[keel.length - 1] !==
+    sampling.hullSheer[sampling.hullSheer.length - 1]
+)
+  keel.push([xFwd, 0, model.trimZ(xFwd)]);
 body += path(
   poly(keel.map((p) => [mapX(p[0]), zScreenP(p[2])])),
   "#0f766e",
