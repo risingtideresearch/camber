@@ -12,26 +12,73 @@
   color: var(--mut);
   font-weight: 400;
 }
-.selinfo .sel-knuckle {
+/* room for three fields — the most a selection has — whatever is selected, so the panel keeps its width */
+.selinfo .sel-fields {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
-  font-size: 12px;
+  flex: 0 0 auto;
+  width: 258px;
+}
+.selinfo .sel-field {
+  flex: 0 0 82px;
+  width: 82px;
+}
+/* The fields are polymorph-ui NumberInputs, whose colours and metrics come from custom properties that its
+   own dark base.css defines and this app does not — so they are supplied here (the recipe of StationView.css
+   .urow), sized and rounded to stand beside the app bar's buttons. */
+.selinfo .sel-fields {
+  --ui-font-size: 13px;
+  --ui-font-weight: 400;
+  --item-height: 33px;
+  --item-padding: 0 8px 0 6px;
+  --border-radius: 8px;
+  --input-background-color: #f1f5f9;
+  --primary-text-color: var(--ink);
+  --active-background-color: #bfdbfe;
+}
+/* the InputContainer, bordered like a button. content-box, against this app's global border-box: polymorph-ui
+   centers the value in the full --item-height, so under border-box the border would eat 2px of that height.
+   The fill says which of its two modes the field is in: tinted while it is a scrubber (drag across it, like
+   the hover of a button — it is something to press), white once a click has made it a text field, with the
+   accent border of a focused one. polymorph-ui marks the scrubbing <input> with its `scrubMode` class, a
+   CSS-module name and so matched by substring. */
+.selinfo .sel-field div:has(> [data-part="input"]) {
+  box-sizing: content-box;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px #bfdbfe;
+}
+.selinfo .sel-field div:has(> [class*="scrubMode"]) {
+  background: var(--input-background-color);
+  border-color: var(--line);
+  box-shadow: none;
+}
+.selinfo .sel-field:not(.disabled) div:has(> [class*="scrubMode"]):hover {
+  background: #e6ecf3;
+}
+.selinfo .sel-field [data-part="label"] {
   color: var(--mut);
 }
-.selinfo .sel-knuckle input {
-  flex: 1;
-  width: auto;
-  vertical-align: middle;
+.selinfo .sel-field [data-part="input"] {
+  font-weight: 600;
+  text-align: right;
+  /* the app disables text selection while drawing (.app in EditorApp.css); this field is text */
+  user-select: text;
+  -webkit-user-select: text;
 }
-.selinfo .sel-knuckle:has(input:disabled) {
+.selinfo .sel-field.disabled {
+  cursor: not-allowed;
+}
+.selinfo .sel-field.disabled > span {
+  display: block;
   opacity: 0.45;
 }
 .selinfo .sel-delete {
   align-self: flex-start;
 }
-.selinfo .sel-delete:disabled,
-.selinfo .sel-knuckle input:disabled {
+.selinfo .sel-delete:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }

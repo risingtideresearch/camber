@@ -92,14 +92,6 @@ svg {
 .appbar .sel-label {
   min-width: 92px;
 } /* reserve room for "No point selected" so the bar doesn't jump */
-.appbar .sel-knuckle {
-  flex: 0 0 auto;
-  min-width: 120px;
-}
-.appbar .sel-knuckle input {
-  flex: 0 0 66px;
-  width: 66px;
-}
 .appbar .ctl input[type="range"] {
   width: 84px;
 }
