@@ -16,6 +16,14 @@ import {
   updateRibbonCamera,
 } from "../../core/ribbonShader";
 import type { LinesPlanCurves, TrimPlanCurves } from "../../core/hullLines3d";
+import {
+  W_FAINT,
+  W_GUIDE,
+  W_HAIR,
+  W_MAIN,
+  W_RIBBON_MIN,
+  W_SECONDARY,
+} from "../../core/lineWidths";
 import { loa, type Model } from "../../core/model";
 import type { Vec3 } from "../../core/math";
 import {
@@ -27,22 +35,22 @@ import {
 } from "../../core/perf";
 
 // on-screen (CSS-px) HALF-widths of the ribbons below, so they read at a constant screen size regardless of
-// zoom / framing — like the old SVG overlay's non-scaling strokes. Matches its stroke weights (curve 2.2,
-// comb ~1.2 full; lines-plan bold 1.8, family 1, DWL 1.4 full).
-const SHEER_HALF_PX = 1.1,
-  COMB_HALF_PX = 0.6,
-  LINES_BOLD_HALF_PX = 0.9,
-  LINES_FAMILY_HALF_PX = 0.5,
-  LINES_DWL_HALF_PX = 0.7,
+// zoom / framing — like the 2D editors' non-scaling strokes, whose weight tiers (lineWidths.ts) they halve,
+// so a curve weighs the same in 3D as in the strips. The thin ones stop at the ribbons' floor.
+const SHEER_HALF_PX = W_MAIN / 2,
+  COMB_HALF_PX = Math.max(W_HAIR, W_RIBBON_MIN) / 2,
+  LINES_BOLD_HALF_PX = W_SECONDARY / 2,
+  LINES_FAMILY_HALF_PX = Math.max(W_FAINT, W_RIBBON_MIN) / 2,
+  LINES_DWL_HALF_PX = W_GUIDE / 2,
   KNOT_HALF_PX = 0.7, // half the knot rings' rim stroke…
   KNOT_RADIUS_PX = 2.6, // …and their screen radius — the 2D editors' fixed-size knot dots, read into 3D
-  LONGS_HALF_PX = 0.9, // the knot longitudinals — grey, so the bold weight, not the thin family one
+  LONGS_HALF_PX = W_SECONDARY / 2, // the knot longitudinals — grey, so the bold weight, not the thin family one
   LINES_BLACK = "#11181f";
 // The selected-station guide is sized in WORLD units instead: it marks a locus ON the hull rather than
 // annotating it, so it grows as you zoom into the surface it lies on. Both it and the biases below are
 // fractions of the hull's own length — model coordinates are absolute, so a fixed world number would read
 // differently on a 5 m hull and a 500 mm one.
-const GUIDE_HALF_F = 0.00125,
+const GUIDE_HALF_F = 0.0008,
   GUIDE_BIAS_F = 0.006,
   CURV_BIAS_F = 0.009, // the curvature overlay's nudge clear of the surface it rides
   // the knot markers' nudge — past the station lines' GUIDE_BIAS_F, so the markers sit on top of the very
