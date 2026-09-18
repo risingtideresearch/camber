@@ -8,7 +8,6 @@ import {
   keepAt,
   knotLongitudinalsSection,
   knotLongitudinalsWorld,
-  loa,
   sectionAt,
   stationWorld,
   type Bounds,
@@ -23,7 +22,6 @@ import {
   keptSpan,
   sweptSection,
   transomOutline,
-  type HullColumnV2,
   type HullSampling,
   type SectionRow,
 } from "./mesh";
@@ -650,8 +648,7 @@ export function drawProfile(
   knotLongs = false,
 ): void {
   perfBegin(PERF_PROFILE);
-  const cols = sampling.columns,
-    v = viewOf(model);
+  const v = viewOf(model);
   setMarkerScale(sc[0], sc[1]);
   svg.replaceChildren();
   gridX(v, svg, Ptop - 4, v.pzBase);
@@ -703,30 +700,21 @@ export function drawProfile(
     { "text-anchor": "end", "font-size": 10, fill: COL.wl },
     "DWL",
   );
-  // emergent keel + stem, drawn as one continuous outline from transom to bow so it MATCHES the 3D mesh:
-  //  • aft: the transom's foot, where the keel meets the cut — `hullCenterline` already carries it as its first
-  //    point (the corner computeHullSampling splices onto the keel's aft end), so the line starts on the plane;
-  //  • bottom: the keel/rocker — the deepest point of each closing section — rising to the bow;
-  //  • stem: at a tumblehome bow the deck tucks to the centerline, so the section TOP (col.pts[0]) dives below
-  //    the authored trim and meets the keel at the forefoot. Trace that diving top edge back from the forefoot
-  //    to where it rejoins the trim — the real raked leading edge, not a fabricated plumb line.
-  const closing = cols.filter((c) => c.keel && c.pts.length > 1);
-  const keel = sampling.hullCenterline.map((s) => s.pos); // foot → rocker, aft to bow
-  if (keel.length) {
-    // the bow stem: the CONTIGUOUS run of forwardmost sections whose top has dived below the authored trim
-    // (the tumblehome lens). Only the forward run — a section's top can also drop below the trim near the
-    // transom (the raked transom clip), and including those would draw a stray line back to the transom.
-    // The tolerance is a fraction of the hull's own length (it was an absolute number against v1's L=1000).
-    const tol = 0.003 * loa(model);
-    const dived = (c: HullColumnV2): boolean =>
-      c.pts[0].pos[2] < model.trimZ(c.pts[0].pos[0]) - tol;
-    let b = closing.length;
-    while (b > 0 && dived(closing[b - 1])) b--;
-    const stem = closing.slice(b).map((c) => c.pts[0].pos); // forward, increasing x
-    if (stem.length)
-      for (let i = stem.length - 1; i >= 0; i--) keel.push(stem[i]); // forefoot → back to the trim
-    else keel.push([xFwd, 0, model.trimZ(xFwd)]); // a fine bow closes straight onto the trim at the stem
-  }
+  // emergent keel + stem, drawn as one continuous outline from transom to bow so it MATCHES the 3D mesh: it
+  // IS the mesh's own centerline edge, `hullCenterline`, in the order the trim was marched —
+  //  • aft: the transom's foot, where the keel meets the cut (the corner spliced onto the keel's aft end);
+  //  • bottom: the keel/rocker, rising to the forefoot;
+  //  • stem: wherever the sheet crosses the centerline ABOVE the forefoot too (a tumblehome or inverted bow,
+  //    whose deck tucks across it), the edge carries on up that leading edge — coming back AFT on an inverted
+  //    bow — to the stem corner, where it meets the sheer.
+  const keel = sampling.hullCenterline.map((s) => s.pos);
+  // a bow that never closes onto the centerline has no stem corner: end the outline on the trim at the stem
+  if (
+    keel.length &&
+    sampling.hullCenterline[keel.length - 1] !==
+      sampling.hullSheer[sampling.hullSheer.length - 1]
+  )
+    keel.push([xFwd, 0, model.trimZ(xFwd)]);
   if (keel.length > 1)
     svg.append(
       el("path", {

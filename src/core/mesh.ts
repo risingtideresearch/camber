@@ -874,21 +874,6 @@ export function computeHullSampling(
       hullTris.push([poly[0], poly[t], poly[t + 1]]);
   phase("Fanning the polygons", () => hullTris.length, "tris");
 
-  // (6) the trimmed boundary curves, assembled from every boundary crossing the mesh actually used — the
-  // columns' ends AND the row-edge crossings that carry the aft edge near the head — plus the corners the skin
-  // was spliced through, each one an end of BOTH of the edges it joins, so every curve IS the skin's own edge,
-  // vertex for vertex, right into its corners. The sheer and keel run fore-aft (order by u); the transom runs
-  // head → foot, ordered down the plane by height z.
-  for (const c of corners)
-    for (const ci of [c.a, c.b])
-      (ci === 0 ? sheerB : ci === 1 ? keelB : transomB).push(c.s);
-  sheerB.sort((a, b) => a.uSheetIndex - b.uSheetIndex);
-  keelB.sort((a, b) => a.uSheetIndex - b.uSheetIndex);
-  transomB.sort((a, b) => b.pos[2] - a.pos[2]);
-  const hullSheer: TrimCurve = sheerB,
-    hullCenterline: TrimCurve = keelB,
-    hullTransom: TrimCurve = transomB;
-
   // and each corner spliced into the marched curves it lies on. The corner is a point OF both of its trims,
   // between two of the crossings the march found, so it goes into the run's segment nearest to it — nearest
   // by point-to-segment distance, since a marched run need not be monotone in u or in anything else. A trim
@@ -924,6 +909,27 @@ export function computeHullSampling(
         }
       if (into) into.splice(at, 0, c.s);
     }
+
+  // The trimmed boundary curves: every boundary crossing the mesh actually used — the columns' ends AND the
+  // row-edge crossings that carry the aft edge near the head — plus the corners the skin was spliced through,
+  // each one an end of BOTH of the edges it joins, so every curve IS the skin's own edge, vertex for vertex,
+  // right into its corners. They are read off the marched runs IN MARCHED ORDER, never re-sorted: an edge
+  // need not be monotone in u, in z, or in anything else — the centerline of an inverted bow runs forward
+  // along the keel, turns at the forefoot and comes back aft up the stem, so the same u holds two of its
+  // points — and the march is the one thing that knows which sample follows which. A sample of the march
+  // that is no vertex of the skin (cut away by another trim, or on a sliver thinner than a cell) is stepped
+  // over, so an edge cut in two comes out as its spans end to end, in the order the runs are held.
+  const cornersOn: Set<HullSample>[] = [new Set(), new Set(), new Set()];
+  for (const c of corners) for (const ci of [c.a, c.b]) cornersOn[ci].add(c.s);
+  const hullEdge = (ci: number): TrimCurve =>
+    trims[ci].flatMap((run) =>
+      run.filter(
+        (s) => cornersOn[ci].has(s) || (seenB.has(s) && ciOf.get(s) === ci),
+      ),
+    );
+  const hullSheer = hullEdge(0),
+    hullCenterline = hullEdge(1),
+    hullTransom = hullEdge(2);
   phase(
     "Boundary curves",
     () => hullSheer.length + hullCenterline.length + hullTransom.length,
