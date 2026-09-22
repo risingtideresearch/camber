@@ -334,30 +334,15 @@ interface Cell {
   usesSliceMeasurement: boolean;
 }
 
-/**
- * Evaluate a whole book.
- *
- * `metrics` may be null — the hull has not been measured yet, or does not float — in which case any formula
- * touching `HULL.*` reports that rather than the book failing wholesale.
- */
-export function evaluateBook(
-  book: WeightBook,
-  metrics: HullMetrics | null,
-  sliceMeasurements: SliceMeasurements = new Map(),
-  repetitionMeasurements: RepetitionMeasurements = new Map(),
-): BookResults {
-  const uncertaintyPending =
-    [...sliceMeasurements.values()].some((m) => m.uncertaintyPending) ||
-    [...repetitionMeasurements.values()].some(
-      (r) => r.value?.uncertaintyPending,
-    );
-  const cells = new Map<string, Cell>();
-  const sources = new Map<string, Source>();
-  let sourceSeq = 0;
-  // One component per sampled grid phase. Components share a group so `read`
-  // presents their covariance-preserving RMS as one approximation term.
-  const repetitionPhaseSources = new Map<string, readonly Source[]>();
+export interface PreparedBook {
+  readonly book: WeightBook;
+  readonly cells: ReadonlyMap<string, Readonly<Cell>>;
+  readonly itemsByName: ReadonlyMap<string, Item>;
+}
 
+/** Prepare one immutable book revision. All mutable evaluation state is copied per run. */
+export function prepareBook(book: WeightBook): PreparedBook {
+  const cells = new Map<string, Cell>();
   // Item names are globally unique, so ONE index serves the whole book — the page model needed one per page
   // because the same name could mean different things on two pages, and that is exactly the ambiguity items
   // removed.
@@ -470,6 +455,57 @@ export function evaluateBook(
   for (const spec of OUTPUTS)
     if ((book.outputs[spec.name] ?? "").trim())
       addCell(null, spec.name, null, "formula", book.outputs[spec.name], "");
+
+  return { book, cells, itemsByName };
+}
+
+export interface EvaluationOptions {
+  /** Experimental scalar mode: offsets in authored literal units, keyed by source identity.
+   * Callers must validate authored semantics in a nominal pass before sampling.
+   */
+  readonly inputOffsets?: ReadonlyMap<string, number>;
+}
+
+/**
+ * Evaluate a whole book.
+ *
+ * `metrics` may be null — the hull has not been measured yet, or does not float — in which case any formula
+ * touching `HULL.*` reports that rather than the book failing wholesale.
+ */
+export function evaluateBook(
+  book: WeightBook,
+  metrics: HullMetrics | null,
+  sliceMeasurements: SliceMeasurements = new Map(),
+  repetitionMeasurements: RepetitionMeasurements = new Map(),
+): BookResults {
+  return evaluatePreparedBook(
+    prepareBook(book),
+    metrics,
+    sliceMeasurements,
+    repetitionMeasurements,
+  );
+}
+
+export function evaluatePreparedBook(
+  prepared: PreparedBook,
+  metrics: HullMetrics | null,
+  sliceMeasurements: SliceMeasurements = new Map(),
+  repetitionMeasurements: RepetitionMeasurements = new Map(),
+  options: EvaluationOptions = {},
+): BookResults {
+  const { book, itemsByName } = prepared;
+  const cells = new Map<string, Cell>(
+    [...prepared.cells].map(([key, cell]) => [key, { ...cell }]),
+  );
+  const sources = new Map<string, Source>();
+  let sourceSeq = 0;
+  // Mutually exclusive placement samples retain the existing derivative-mode grouping.
+  const repetitionPhaseSources = new Map<string, readonly Source[]>();
+  const uncertaintyPending =
+    [...sliceMeasurements.values()].some((m) => m.uncertaintyPending) ||
+    [...repetitionMeasurements.values()].some(
+      (r) => r.value?.uncertaintyPending,
+    );
 
   // The path currently being resolved, so a cycle is reported as the loop it actually is.
   const visiting: string[] = [];
@@ -1089,6 +1125,16 @@ export function evaluateBook(
 
   const env = {
     resolve,
+    inputOffset: options.inputOffsets
+      ? (source: Source): number => {
+          const offset = options.inputOffsets!.get(source.id);
+          if (offset === undefined || !Number.isFinite(offset))
+            throw new FormulaError(
+              `Missing or invalid sampled input: ${source.id}`,
+            );
+          return offset;
+        }
+      : undefined,
     /**
      * What a bare term of the cell's outermost sum is written in.
      *
@@ -1102,14 +1148,14 @@ export function evaluateBook(
         ? { factor: unit.factor, dim: unit.dim }
         : null;
     },
-    source: (lo: number, hi: number): Source => {
+    source: (lo: number, hi: number, literalAt?: number): Source => {
       const cell = currentCell!;
       const at = cellKey(
         cell.item?.id ?? OUTPUT_ITEM,
         cell.fieldKey,
         cell.leaf,
       );
-      const id = `s${sourceSeq++}`;
+      const id = JSON.stringify([at, literalAt]);
       // The cell key rides along with the label so a ranking can be FOLLOWED and not merely read: the
       // inspector turns a driver into the cell it was typed in, which is the whole point of naming it.
       const source: Source = { id, label: describe(at), at, lo, hi };

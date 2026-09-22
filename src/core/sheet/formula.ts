@@ -54,6 +54,7 @@ import {
   add,
   cos,
   div,
+  DIMLESS,
   exact,
   exp,
   isDimless,
@@ -518,7 +519,9 @@ export interface EvalEnv {
    * Register a new independent uncertain input and return it. The env names it, because the useful name is
    * the ROW it was typed in — which is what makes the sensitivity list readable.
    */
-  source(lo: number, hi: number): Source;
+  source(lo: number, hi: number, literalAt?: number): Source;
+  /** When supplied, evaluate uncertain literals as exact scenario values. */
+  inputOffset?(source: Source): number;
   /**
    * What a bare number in a top-level term is written in, where the row declares a unit with a dimension.
    *
@@ -638,16 +641,13 @@ export function evaluate(node: Node, env: EvalEnv, topLevel = true): Quantity {
     case "num":
       return exact(node.v);
 
-    case "spread":
-      // A ± with no width is just a number. Not registering a source keeps the sensitivity list free of
-      // entries that can never contribute anything.
-      return node.lo === 0 && node.hi === 0
-        ? exact(node.v)
-        : {
-            v: node.v,
-            d: { [env.source(node.lo, node.hi).id]: 1 },
-            dim: { m: 0, l: 0 },
-          };
+    case "spread": {
+      if (node.lo === 0 && node.hi === 0) return exact(node.v);
+      const source = env.source(node.lo, node.hi, node.at);
+      return env.inputOffset
+        ? exact(node.v + env.inputOffset(source))
+        : { v: node.v, d: { [source.id]: 1 }, dim: DIMLESS };
+    }
 
     case "ref":
       return env.resolve(node.path, node.at);
