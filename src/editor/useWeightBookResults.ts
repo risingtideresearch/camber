@@ -15,6 +15,7 @@ import { createWeightGeometryResource } from "./weightGeometryResource";
 import {
   planWeightGeometry,
   resolveWeightGeometry,
+  type RepetitionPreviews,
 } from "./weightGeometryPlan";
 
 type GeometryResource = ReturnType<typeof createWeightGeometryResource>;
@@ -60,6 +61,7 @@ export interface WeightBookResults {
   readonly positions: BookResults;
   readonly measurements: SliceMeasurements;
   readonly repetitions: RepetitionMeasurements;
+  readonly repetitionPreviews: RepetitionPreviews;
   readonly results: BookResults;
   readonly pending: boolean;
   readonly uncertaintyPending: boolean;

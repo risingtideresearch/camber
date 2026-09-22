@@ -520,8 +520,9 @@ export interface EvalEnv {
    * the ROW it was typed in — which is what makes the sensitivity list readable.
    */
   source(lo: number, hi: number, literalAt?: number): Source;
-  /** When supplied, evaluate uncertain literals as exact scenario values. */
+  /** When supplied, substitute trial values. Gradients are normally omitted. */
   inputOffset?(source: Source): number;
+  retainInputGradients?: boolean;
   /**
    * What a bare number in a top-level term is written in, where the row declares a unit with a dimension.
    *
@@ -644,9 +645,10 @@ export function evaluate(node: Node, env: EvalEnv, topLevel = true): Quantity {
     case "spread": {
       if (node.lo === 0 && node.hi === 0) return exact(node.v);
       const source = env.source(node.lo, node.hi, node.at);
-      return env.inputOffset
-        ? exact(node.v + env.inputOffset(source))
-        : { v: node.v, d: { [source.id]: 1 }, dim: DIMLESS };
+      const v = node.v + (env.inputOffset ? env.inputOffset(source) : 0);
+      return env.inputOffset && !env.retainInputGradients
+        ? exact(v)
+        : { v, d: { [source.id]: 1 }, dim: DIMLESS };
     }
 
     case "ref":

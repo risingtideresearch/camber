@@ -30,7 +30,7 @@ import {
 // field (`fieldUsers`), and the state of a move in progress (`useFieldReorder`). A block computing its own
 // would be quadratic in the size of a schedule, which is exactly the thing that grows.
 
-import type { RepetitionMeasurements } from "../../core/sheet/repetitions";
+import type { RepetitionPreviews } from "../weightGeometryPlan";
 import { RepetitionAssumptions } from "./RepetitionAssumptions";
 import { RepetitionPreview, CutPreview } from "./RepetitionPreview";
 import {
@@ -89,7 +89,7 @@ export interface ItemDetailProps {
   readonly book: WeightBook;
   readonly item: Item;
   readonly results: BookResults;
-  readonly repetitions: RepetitionMeasurements;
+  readonly repetitionPreviews: RepetitionPreviews;
   readonly measurements: SliceMeasurements;
   readonly reading: "worst" | "likely";
   readonly focus: Focus | null;
@@ -234,17 +234,8 @@ function useFieldReorder(
 // ---------- the card ----------
 
 export function ItemDetail(props: ItemDetailProps) {
-  const {
-    book,
-    item,
-    results,
-    measurements,
-    repetitions,
-    reading,
-    focus,
-    setFocus,
-    send,
-  } = props;
+  const { book, item, results, measurements, reading, focus, setFocus, send } =
+    props;
   // Folded blocks, and the field whose name is waiting for the caret. Both are keyed by (item, field) rather
   // than by field alone: this component is not remounted when the detail view moves to another item, so
   // anything held under a bare key would carry over to a field of the same name on the next one.
@@ -333,7 +324,7 @@ export function ItemDetail(props: ItemDetailProps) {
             index={index}
             results={results}
             measurements={measurements}
-            repetitions={repetitions}
+            repetitionPreviews={props.repetitionPreviews}
             reading={reading}
             completions={completions}
             reorder={reorder}
@@ -404,7 +395,7 @@ interface FieldBlockProps {
   readonly field: Field;
   readonly index: number;
   readonly results: BookResults;
-  readonly repetitions: RepetitionMeasurements;
+  readonly repetitionPreviews: RepetitionPreviews;
   readonly measurements: SliceMeasurements;
   readonly reading: "worst" | "likely";
   readonly completions: {
@@ -734,7 +725,7 @@ function RoleChips({
 }
 
 function FieldCells({
-  repetitions,
+  repetitionPreviews,
   measurements,
   item,
   fieldKey,
@@ -968,9 +959,9 @@ function FieldCells({
                   leaf="equivalentCount"
                 />
               }
-              measurement={
-                repetitions.get(sliceMeasurementKey(item.id, fieldKey))?.value
-              }
+              samples={repetitionPreviews.get(
+                sliceMeasurementKey(item.id, fieldKey),
+              )}
             />
           )}
           {(field.k === "cut" || field.k === "repetition") && (

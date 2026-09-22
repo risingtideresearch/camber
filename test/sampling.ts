@@ -149,7 +149,7 @@ for (const fixture of comparisonFixtures()) {
   });
   assert.equal(result.targets.length, fixture.targets.length);
 }
-// Cross-item references and authored outputs use exactly the same scenario.
+// Cross-item references and authored outputs use exactly the same trial.
 const outputBook = {
   ...book,
   outputs: { DISPLACEMENT: "Experiment.result" },

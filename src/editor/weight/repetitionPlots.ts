@@ -4,6 +4,27 @@ import type { RawSliceMeasurement } from "../../core/sheet/slices";
 export type RepetitionView = "area" | "openLength" | "closedLength";
 export type Projection = (point: Vec3) => readonly [number, number];
 
+const DEFAULT_PREVIEW_SECTIONS = 7;
+
+/** Presentation sampling is deliberately separate from repetition integration.
+ * These sections illustrate the extent; they do not represent actual members or
+ * control numerical accuracy.
+ */
+export function repetitionPreviewPositions(
+  start: number,
+  end: number,
+  count = DEFAULT_PREVIEW_SECTIONS,
+): readonly number[] {
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)
+    return [];
+  if (!Number.isSafeInteger(count) || count < 1)
+    throw new Error("Preview section count must be a positive safe integer");
+  return Array.from(
+    { length: count },
+    (_, i) => start + ((i + 0.5) * (end - start)) / count,
+  );
+}
+
 /** One SVG subpath per contour preserves holes with even-odd fill. Open length
  * uses tagged skin segments, including disjoint runs, without closing them. */
 export function samplePath(

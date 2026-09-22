@@ -142,7 +142,7 @@ function WeightPanelContents() {
   const hullSampling = sampling();
   const computation = useWeightBookResults(book, model, hullSampling, metrics);
   const {
-    readout: { measurements, repetitions, results },
+    readout: { measurements, repetitionPreviews, results },
     stale,
   } = useWeightPresentation(
     computation,
@@ -342,7 +342,7 @@ function WeightPanelContents() {
               rows,
               results,
               measurements,
-              repetitions,
+              repetitionPreviews,
               reading,
               focus,
               setFocus,
@@ -480,7 +480,9 @@ interface BodyProps {
   readonly columns: ReturnType<typeof viewColumns>;
   readonly rows: ReturnType<typeof viewRows>;
   readonly results: ReturnType<typeof useWeightBookResults>["results"];
-  readonly repetitions: ReturnType<typeof useWeightBookResults>["repetitions"];
+  readonly repetitionPreviews: ReturnType<
+    typeof useWeightBookResults
+  >["repetitionPreviews"];
   readonly measurements: ReturnType<
     typeof useWeightBookResults
   >["measurements"];
@@ -945,7 +947,7 @@ function ViewBody(props: BodyProps) {
           <ItemDetail
             book={book}
             item={detail}
-            repetitions={props.repetitions}
+            repetitionPreviews={props.repetitionPreviews}
             results={results}
             measurements={props.measurements}
             reading={props.reading}

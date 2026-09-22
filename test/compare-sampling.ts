@@ -2,6 +2,9 @@
 import type { WeightBook } from "../src/core/sheet/book";
 import type { HullMetrics } from "../src/core/hullMetrics";
 import { evaluatePreparedBook, prepareBook } from "../src/core/sheet/evaluate";
+import { evaluateTrial, prepareTrials } from "../src/core/sheet/trial";
+import { generateTrial } from "./generate-trials";
+export { seededRandom } from "./generate-trials";
 
 export interface SampleStatistics {
   readonly count: number;
@@ -49,17 +52,6 @@ export function sampleStatistics(
   };
 }
 
-/** Mulberry32: reproducible unsigned 32-bit seed; no global random state. */
-export function seededRandom(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 export interface SamplingComparisonOptions {
   readonly samples: number;
   readonly seed: number;
@@ -90,6 +82,7 @@ export function compareSampling(
 
   const started = performance.now();
   const prepared = prepareBook(book);
+  const plan = prepareTrials(prepared);
   const preparedAt = performance.now();
   const nominal = evaluatePreparedBook(prepared, options.metrics ?? null);
   const nominalAt = performance.now();
@@ -119,23 +112,20 @@ export function compareSampling(
   );
   if (sources.some((s) => s.sample))
     throw new Error("Model-discrepancy sources are not supported");
-  const random = seededRandom(options.seed);
   let samplingMs = 0,
     directEvaluationMs = 0,
     linearEvaluationMs = 0;
   for (let i = 0; i < options.samples; i++) {
     let time = performance.now();
-    const offsets = new Map(
-      sources.map((s) => [s.id, -s.lo + random() * (s.lo + s.hi)]),
-    );
+    const trial = generateTrial(plan, options.seed, i);
+    const offsets = trial.inputOffsets;
     samplingMs += performance.now() - time;
     time = performance.now();
-    const result = evaluatePreparedBook(
-      prepared,
+    const result = evaluateTrial(
+      plan,
+      trial,
+      undefined,
       options.metrics ?? null,
-      undefined,
-      undefined,
-      { inputOffsets: offsets },
     );
     directEvaluationMs += performance.now() - time;
     time = performance.now();
@@ -143,14 +133,14 @@ export function compareSampling(
       ({ quantity }) =>
         quantity.v +
         Object.entries(quantity.d).reduce(
-          (sum, [id, g]) => sum + g * offsets.get(id)!,
+          (sum, [id, g]) => sum + g * offsets[id],
           0,
         ),
     );
     linearEvaluationMs += performance.now() - time;
     targets.forEach((target, j) => {
-      const cell = result.cells.get(target.key);
-      const value = cell?.quantity?.v;
+      const cell = result.values.get(target.key);
+      const value = cell?.value ?? undefined;
       const predicted = predictions[j];
       const error =
         cell?.error ??

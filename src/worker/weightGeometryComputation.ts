@@ -66,12 +66,24 @@ export function createWeightGeometryProcessor(
         ? cached.result.value
         : undefined,
     );
+    let preview = cached?.kind === "repetition" ? cached.preview : undefined;
+    if (preview === undefined && result.value) {
+      try {
+        preview = job.previewPositions.map((position) =>
+          section!(job.shape, position, job.limits),
+        );
+      } catch {
+        // A drawing aid must not turn an otherwise valid estimate into an error.
+        preview = null;
+      }
+    }
     return {
       kind: "repetition",
       result:
         nominal && result.value
           ? { value: { ...result.value, uncertaintyPending: true } }
           : result,
+      preview: preview ?? null,
     };
   };
   return (request: WeightGeometryRequest): WeightGeometryResponse => ({

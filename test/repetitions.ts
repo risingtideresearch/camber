@@ -9,6 +9,7 @@ import { RepetitionAssumptions } from "../src/editor/weight/RepetitionAssumption
 import { RepetitionPreview } from "../src/editor/weight/RepetitionPreview";
 import {
   nearestSample,
+  repetitionPreviewPositions,
   samplePath,
 } from "../src/editor/weight/repetitionPlots";
 import assert from "node:assert/strict";
@@ -764,6 +765,12 @@ near(
   ),
   previewSection.openPerimeter,
 );
+repetitionPreviewPositions(1, 3, 3).forEach((position, i) =>
+  near(position, [4 / 3, 2, 8 / 3][i]),
+);
+assert.equal(repetitionPreviewPositions(1, 3).length, 7);
+assert.deepEqual(repetitionPreviewPositions(3, 1), []);
+assert.throws(() => repetitionPreviewPositions(1, 3, 0), /positive/);
 const previewSamples = [1, 2, 3].map((x) => measure("transverse", x));
 assert.equal(
   nearestSample(previewSamples, [2.8, 0.6], previewProjection, 0),
@@ -795,7 +802,7 @@ console.log(
 // The preview section count is visualization, not the authored equivalent count.
 const previewMarkup = renderToStaticMarkup(
   createElement(RepetitionPreview, {
-    measurement: { ...measured.value!, samples: previewSamples },
+    samples: previewSamples,
     equivalentCount: createElement("span", null, "14 ± 2"),
   }),
 );
@@ -1028,7 +1035,7 @@ assert.ok("book" in resumedTop);
 assert.deepEqual(resumedTop.book, trimmedBook);
 const trimmedMarkup = renderToStaticMarkup(
   createElement(RepetitionPreview, {
-    measurement: { ...trimmedIntegral.value!, samples: [clippedSingle] },
+    samples: [clippedSingle],
     equivalentCount: "4",
     limits: { topHeight: 0.65 },
   }),
@@ -1275,7 +1282,7 @@ console.log(
 const horizontalPreview = renderToStaticMarkup(
   createElement(RepetitionPreview, {
     shape: "plane",
-    measurement: { ...measured.value!, samples: [measure("plane", 0.6)] },
+    samples: [measure("plane", 0.6)],
     equivalentCount: "1",
     limits: { topHeight: 0.6 },
   }),

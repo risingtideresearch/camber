@@ -7,7 +7,6 @@ import {
 // Uniform structural distributions. Integrals are independent of repetition and
 // materials; refining quadrature never creates or changes uncertainty sources.
 import type { SliceShape } from "./book";
-import type { RawSliceMeasurement } from "./slices";
 import {
   MEASURE_NAMES,
   sumMeasure,
@@ -26,11 +25,12 @@ export interface RepetitionMeasurement {
   /** Leibniz boundary derivatives: d integral / da = -q(a), d / db = q(b). */
   readonly start: SectionMeasures;
   readonly end: SectionMeasures;
-  readonly samples: readonly RawSliceMeasurement[];
   /** Discrete regular-grid totals at uniformly sampled offsets within one pitch. */
   readonly phaseTotals?: readonly {
     measures: SectionMeasures;
     weight: number;
+    /** Normalized offset for replay; absent on legacy/synthetic discrepancy data. */
+    phase?: number;
   }[];
   readonly warning?: string;
 }
@@ -38,6 +38,72 @@ export type RepetitionResult =
   | { readonly value: RepetitionMeasurement; readonly error?: never }
   | { readonly error: string; readonly value?: never };
 export type RepetitionMeasurements = ReadonlyMap<string, RepetitionResult>;
+
+/** One realized regular grid, not a continuous integral or an uncertainty estimate. */
+export interface RepetitionLayout {
+  readonly measures: SectionMeasures;
+  readonly count: number;
+}
+export interface RepetitionLayoutOptions {
+  readonly shape: SliceShape;
+  readonly start: number;
+  readonly end: number;
+  readonly pitch: number;
+  /** Fraction of one pitch, in [0, 1). Members occupy [start, end). */
+  readonly phase: number;
+  readonly limits?: SectionLimits;
+  readonly maxMembers?: number;
+}
+
+/** Deterministic: no quadrature, derivatives, random draws or placement allowance.
+ * Like the section measurer, throws on invalid geometry; empty layouts are valid.
+ */
+export function measureRepetitionLayout(
+  measure: (
+    shape: SliceShape,
+    pos: number,
+    limits?: SectionLimits,
+  ) => { readonly measures: SectionMeasures },
+  {
+    shape,
+    start,
+    end,
+    pitch,
+    phase,
+    limits = {},
+    maxMembers = 8192,
+  }: RepetitionLayoutOptions,
+): RepetitionLayout {
+  if (
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    !Number.isFinite(end - start) ||
+    end <= start
+  )
+    throw new Error(
+      "repetition bounds must be finite and From must be less than To",
+    );
+  if (!Number.isFinite(pitch) || pitch <= 0)
+    throw new Error("Layout needs a finite positive spacing");
+  if (!Number.isFinite(phase) || phase < 0 || phase >= 1)
+    throw new Error("Layout phase must be in [0, 1)");
+  if (!Number.isSafeInteger(maxMembers) || maxMembers < 0)
+    throw new Error("Layout member budget must be a non-negative safe integer");
+  validateLimits(limits);
+  const count = Math.max(0, Math.ceil((end - start) / pitch - phase));
+  if (!Number.isSafeInteger(count) || count > maxMembers)
+    throw new Error("Layout exceeded its member budget");
+  let measures = zeroMeasures(),
+    measuredCount = 0;
+  for (let k = 0; k < count; k++) {
+    const pos = start + (k + phase) * pitch;
+    // Integer indexing avoids accumulated error; rounding must not include the upper bound.
+    if (pos >= end) continue;
+    measures = weighted([measures, measure(shape, pos, limits).measures], 1);
+    measuredCount++;
+  }
+  return { measures, count: measuredCount };
+}
 
 const weighted = (
   values: readonly SectionMeasures[],
@@ -74,7 +140,7 @@ export function measureRepetition(
     shape: SliceShape,
     pos: number,
     limits?: SectionLimits,
-  ) => RawSliceMeasurement,
+  ) => { readonly measures: SectionMeasures },
   shape: SliceShape,
   start: number,
   end: number,
@@ -130,15 +196,12 @@ export function measureRepetition(
       };
       const a = boundary(start, 1),
         b = boundary(end, -1);
-      const samples = Array.from({ length: 7 }, (_, i) =>
-        atLimits(shape, start + ((i + 0.5) * span) / 7),
-      );
 
-      return { value: { integrals, start: a, end: b, samples, warning } };
+      return { value: { integrals, start: a, end: b, warning } };
     };
     const base = nominal ? { value: nominal } : nominalGeometry();
     if (!base.value) return base;
-    const { integrals, start: a, end: b, samples, warning } = base.value;
+    const { integrals, start: a, end: b, warning } = base.value;
 
     // Stratify at the member-count transition. Even a very rare extra member
     // must receive its actual probability, rather than disappear between offsets.
@@ -164,7 +227,6 @@ export function measureRepetition(
         for (let j = 1; j < edges.length; j++) {
           const width = edges[j] - edges[j - 1];
           for (let i = 0; i < n; i++) {
-            let total = zeroMeasures();
             const phase = edges[j - 1] + ((i + 0.5) * width) / n;
             // Integer indexing avoids accumulated position error.
             const count = Math.max(0, Math.ceil(members - phase));
@@ -173,11 +235,19 @@ export function measureRepetition(
                 "Placement uncertainty exceeded its sampling budget; increase spacing or reduce equivalent count",
               );
             work += count;
-            for (let k = 0; k < count; k++) {
-              const at = start + (k + phase) * pitch;
-              total = weighted([total, atLimits(shape, at).measures], 1);
-            }
-            totals.push({ measures: total, weight: width / n });
+            const layout = measureRepetitionLayout(measure, {
+              shape,
+              start,
+              end,
+              pitch,
+              phase,
+              limits,
+            });
+            totals.push({
+              measures: layout.measures,
+              weight: width / n,
+              phase,
+            });
           }
         }
         const spread = nominal.map((v, axis) =>
@@ -263,7 +333,6 @@ export function measureRepetition(
         integrals,
         start: a,
         end: b,
-        samples,
         phaseTotals,
         warning,
         boundaryDerivatives,

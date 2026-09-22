@@ -42,8 +42,9 @@ import {
   GEOMETRY_LEAVES,
   geometryValue,
   type Measure,
+  type SectionMeasures,
 } from "./sectionMeasures";
-import type { RepetitionMeasurements } from "./repetitions";
+import type { RepetitionMeasurements, RepetitionLayout } from "./repetitions";
 import {
   evaluate,
   FormulaError,
@@ -334,6 +335,10 @@ interface Cell {
   usesSliceMeasurement: boolean;
 }
 
+/** Stable within an authored formula revision; also used to enumerate trial inputs. */
+export const literalSourceId = (cell: string, literalAt?: number): string =>
+  JSON.stringify([cell, literalAt]);
+
 export interface PreparedBook {
   readonly book: WeightBook;
   readonly cells: ReadonlyMap<string, Readonly<Cell>>;
@@ -460,6 +465,20 @@ export function prepareBook(book: WeightBook): PreparedBook {
 }
 
 export interface EvaluationOptions {
+  /** Exact section results and failures supplied by deterministic trial geometry. */
+  readonly cutMeasures?: ReadonlyMap<string, SectionMeasures>;
+  readonly geometryErrors?: ReadonlyMap<string, string>;
+  /** Preserve algebraic exactness checks (e.g. uncertain dimensioned powers).
+   * Trial consumers read scalar values, never these internal gradients/readings.
+   */
+  readonly retainInputGradients?: boolean;
+  /** Realized totals for scalar trials, keyed by sliceMeasurementKey. No density
+   * scaling or placement discrepancy is applied to these already-summed measures.
+   */
+  readonly repetitionLayouts?: ReadonlyMap<
+    string,
+    Pick<RepetitionLayout, "measures">
+  >;
   /** Experimental scalar mode: offsets in authored literal units, keyed by source identity.
    * Callers must validate authored semantics in a nominal pass before sampling.
    */
@@ -670,7 +689,25 @@ export function evaluatePreparedBook(
       } catch (error) {
         fail(error instanceof Error ? error.message : String(error), at);
       }
+      const geometryError = options.geometryErrors?.get(
+        sliceMeasurementKey(item.id, key),
+      );
+      if (
+        geometryError &&
+        !(field.k === "repetition" && leaf === "equivalentCount")
+      )
+        fail(geometryError, at);
       if (field.k === "cut") {
+        const cutMeasures = options.cutMeasures?.get(
+          sliceMeasurementKey(item.id, key),
+        );
+        if (cutMeasures) {
+          valueAt(item.id, key, at, "pos");
+          return exact(
+            geometryValue(cutMeasures, leaf),
+            leaf === "area" ? AREA : LENGTH,
+          );
+        }
         const measured = sliceMeasurements.get(
           sliceMeasurementKey(item.id, key),
         );
@@ -746,6 +783,25 @@ export function evaluatePreparedBook(
           "The input uncertainty reaches zero spacing/count or reversed bounds; this local approximation is unreliable";
       if (leaf === "equivalentCount")
         return field.repetition === "count" ? repeat : div(span, repeat);
+      const layout = options.repetitionLayouts?.get(
+        sliceMeasurementKey(item.id, key),
+      );
+      if (layout) {
+        if (
+          !options.inputOffsets &&
+          [
+            start,
+            end,
+            repeat,
+            ...boundaryInputs.map(({ input }) => input),
+          ].some((q) => Object.keys(q.d).length)
+        )
+          fail("Realized layouts require exact trial geometry inputs", at);
+        return exact(
+          geometryValue(layout.measures, leaf),
+          leaf === "area" ? AREA : LENGTH,
+        );
+      }
       const result = repetitionMeasurements.get(
         sliceMeasurementKey(item.id, key),
       );
@@ -1125,6 +1181,7 @@ export function evaluatePreparedBook(
 
   const env = {
     resolve,
+    retainInputGradients: options.retainInputGradients,
     inputOffset: options.inputOffsets
       ? (source: Source): number => {
           const offset = options.inputOffsets!.get(source.id);
@@ -1155,7 +1212,7 @@ export function evaluatePreparedBook(
         cell.fieldKey,
         cell.leaf,
       );
-      const id = JSON.stringify([at, literalAt]);
+      const id = literalSourceId(at, literalAt);
       // The cell key rides along with the label so a ranking can be FOLLOWED and not merely read: the
       // inspector turns a driver into the cell it was typed in, which is the whole point of naming it.
       const source: Source = { id, label: describe(at), at, lo, hi };

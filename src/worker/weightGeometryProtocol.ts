@@ -3,7 +3,10 @@ import type { HullSampling } from "../core/mesh";
 import type { SliceShape } from "../core/sheet/book";
 import type { BoundaryLeaf, SectionLimits } from "../core/sheet/boundaries";
 import type { RepetitionResult } from "../core/sheet/repetitions";
-import type { SliceMeasurement } from "../core/sheet/slices";
+import type {
+  RawSliceMeasurement,
+  SliceMeasurement,
+} from "../core/sheet/slices";
 
 interface GeometryJob {
   readonly key: string;
@@ -23,11 +26,18 @@ export type WeightGeometryJob = GeometryJob &
         readonly start: number;
         readonly end: number;
         readonly pitch: number;
+        /** Presentation-owned positions to measure independently of quadrature. */
+        readonly previewPositions: readonly number[];
       }
   );
 export type WeightGeometryResult =
   | { readonly kind: "cut"; readonly value: SliceMeasurement | null }
-  | { readonly kind: "repetition"; readonly result: RepetitionResult };
+  | {
+      readonly kind: "repetition";
+      readonly result: RepetitionResult;
+      /** A preview failure never invalidates the numerical measurement. */
+      readonly preview: readonly RawSliceMeasurement[] | null;
+    };
 
 /** Send the sampled hull once per worker, not again for every boundary edit. */
 export interface WeightGeometryHull {

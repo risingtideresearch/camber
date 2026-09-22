@@ -4,7 +4,7 @@ import type { WeightBookResults } from "../useWeightBookResults";
 
 type Readout = Pick<
   WeightBookResults,
-  "results" | "measurements" | "repetitions"
+  "results" | "measurements" | "repetitionPreviews"
 >;
 export interface WeightPresentation {
   readonly sampling: HullSampling | null;
@@ -41,7 +41,7 @@ export function weightPresentation(
     previous.retainable === retainable &&
     previous.readout.results === readout.results &&
     previous.readout.measurements === readout.measurements &&
-    previous.readout.repetitions === readout.repetitions
+    previous.readout.repetitionPreviews === readout.repetitionPreviews
   )
     return previous;
   return { sampling, documentId, readout, stale, retainable };

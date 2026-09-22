@@ -2,7 +2,6 @@ import type { SectionLimits } from "../../core/sheet/boundaries";
 import type { SliceShape } from "../../core/sheet/book";
 import { useState, type PointerEvent, type ReactNode } from "react";
 import { GeometryDisclosure } from "./GeometryDisclosure";
-import type { RepetitionMeasurement } from "../../core/sheet/repetitions";
 import type { RawSliceMeasurement } from "../../core/sheet/slices";
 import { geometryValue } from "../../core/sheet/sectionMeasures";
 import type { Vec3 } from "../../core/math";
@@ -15,20 +14,20 @@ import {
 } from "./repetitionPlots";
 
 export function RepetitionPreview({
-  measurement,
+  samples,
   equivalentCount,
   limits = {},
   shape = "transverse",
 }: {
-  readonly measurement: RepetitionMeasurement | undefined;
+  readonly samples: readonly RawSliceMeasurement[] | undefined;
   readonly equivalentCount: ReactNode;
   readonly limits?: SectionLimits;
   readonly shape?: SliceShape;
 }) {
-  if (!measurement) return null;
+  if (!samples) return null;
   return (
     <MeasurePreview
-      samples={measurement.samples}
+      samples={samples}
       equivalentCount={equivalentCount}
       repetition
       limits={limits}

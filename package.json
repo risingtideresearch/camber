@@ -26,8 +26,11 @@
     "test": "npm run test:quantity && npm run test:sampling && npm run test:sheet && npm run test:hull && npm run test:history && npm run test:store && npm run test:worker && npm run test:v2 && npm run test:smooth && npm run test:centerline && npm run test:io && npm run test:stability",
     "test:quantity": "tsx test/quantity.ts",
     "test:sheet": "tsx test/sheet.ts && tsx test/repetitions.ts && tsx test/plane-index.ts && tsx test/weight-geometry.ts && tsx test/weight-format.ts",
-    "test:sampling": "tsx test/sampling.ts",
-    "compare:sampling": "tsx tools/compare-sheet-sampling.ts"
+    "test:sampling": "tsx test/sampling.ts && tsx test/repetition-sampling.ts && tsx test/trial.ts && tsx test/precomputed-slices.ts",
+    "compare:sampling": "tsx tools/compare-sheet-sampling.ts",
+    "compare:repetitions": "tsx tools/compare-repetition-sampling.ts",
+    "sample:trials": "tsx tools/sample-sheet-trials.ts",
+    "compare:slices": "tsx tools/compare-slice-backends.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
