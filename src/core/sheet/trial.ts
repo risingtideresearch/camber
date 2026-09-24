@@ -48,6 +48,7 @@ export function prepareTrials(prepared: PreparedBook): TrialPlan {
         at: key,
         lo: node.lo,
         hi: node.hi,
+        distribution: node.distribution,
       });
     if (node.k === "bin") {
       visit(node.a, key);

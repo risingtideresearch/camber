@@ -115,8 +115,8 @@ export function SampledResultsPanel({
         </button>
       )}
       <p>
-        Uniform authored bounds and independent repetition phases. Existing
-        uncertainty readings are unchanged.
+        Independent input draws and repetition phases. Existing uncertainty
+        readings are unchanged.
       </p>
       <div className="wsampled-status" role="status" aria-live="polite">
         {phase}

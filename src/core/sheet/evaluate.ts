@@ -979,7 +979,12 @@ export function createPreparedBookEvaluator(
         ? { factor: unit.factor, dim: unit.dim }
         : null;
     },
-    source: (lo: number, hi: number, literalAt?: number): Source => {
+    source: (
+      lo: number,
+      hi: number,
+      literalAt?: number,
+      distribution?: "triangular" | "normal",
+    ): Source => {
       const cell = currentCell!;
       const at = cellKey(
         cell.item?.id ?? OUTPUT_ITEM,
@@ -989,7 +994,14 @@ export function createPreparedBookEvaluator(
       const id = literalSourceId(at, literalAt);
       // The cell key rides along with the label so a ranking can be FOLLOWED and not merely read: the
       // inspector turns a driver into the cell it was typed in, which is the whole point of naming it.
-      const source: Source = { id, label: describe(at), at, lo, hi };
+      const source: Source = {
+        id,
+        label: describe(at),
+        at,
+        lo,
+        hi,
+        distribution,
+      };
       sources.set(id, source);
       return source;
     },

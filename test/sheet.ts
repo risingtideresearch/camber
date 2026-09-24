@@ -254,6 +254,39 @@ const problem = (
   );
   r = spread("4.2 +- 0.3");
   ok(near(r.worst.hi, 0.3, 1e-12), "the ASCII spelling of ± means the same");
+  r = spread("4.2 ± tri(0.3)");
+  ok(
+    near(r.worst.hi, 0.3, 1e-12),
+    "triangular literal retains its authored spread",
+  );
+  r = spread("10 ± tri(2, 5)");
+  ok(
+    r.v === 10 && near(r.worst.lo, 2, 1e-12) && near(r.worst.hi, 5, 1e-12),
+    "asymmetric triangle retains nominal mode and both sides",
+  );
+  r = spread("10 ± tri(0, 5)");
+  ok(
+    near(r.worst.lo, 0, 1e-12) && near(r.worst.hi, 5, 1e-12),
+    "a triangle may peak at its lower bound",
+  );
+  r = spread("4.2 ± normal(0.3)");
+  ok(
+    near(r.worst.hi, 0.3, 1e-12),
+    "normal literal retains its linearized spread",
+  );
+  for (const bad of [
+    "4.2 ± tri(0)",
+    "4.2 ± tri(0, 0)",
+    "4.2 ± tri(-1, 5)",
+    "4.2 ± tri(2, -5)",
+    "4.2 ± tri(1e308, 1e308)",
+    "4.2 ± normal(-1)",
+    "4.2 ± normal(1e999)",
+  ])
+    ok(
+      cellAt(build([{ name: "x", formula: bad }]), "x")!.error !== null,
+      `reject ${bad}`,
+    );
   r = spread("200 ± 5%");
   ok(near(r.worst.hi, 10, 1e-12), "a ± in percent is relative to the nominal");
   r = spread("100 ± [2, 9]");

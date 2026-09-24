@@ -18,7 +18,7 @@
 //            | range
 //            | name ('.' name)* ('(' args ')')?
 //            | '(' expr ')'
-//   spread  := ('±' | '+-') (amount | '[' amount ',' amount ']')
+//   spread  := ('±' | '+-') (amount | '[' amount ',' amount ']' | 'tri(' amount (',' amount)? ')' | 'normal(' amount ')')
 //   amount  := number '%'?
 //   range   := '[' number ',' number ']'
 //
@@ -33,6 +33,12 @@
 //   4.2 ± 5%           symmetric, relative to the 4.2
 //   4.2 ± [0.2, 0.5]   asymmetric: 0.2 below, 0.5 above (the lightship is known, the gear is not)
 //   [4.0, 4.5]         a bare range, whose nominal is the midpoint
+//   4.2 ± tri(0.3)    triangular, peaked at nominal, bounded by ±0.3
+//   10 ± tri(2, 5)   triangular from 8 to 15, mode 10 (mean 11)
+//   4.2 ± normal(0.3) normal, centred at nominal, with standard deviation 0.3 (unbounded)
+//
+// Shape annotations affect Monte Carlo draws; the first-order worst/likely readings still describe
+// authored bounds, not distribution-specific confidence intervals. normal(σ) has no hard bound.
 //
 // `%` outside a spread is an ordinary postfix meaning ÷100, so `7%` is 0.07 and a margin reads as
 // `total * 7%`. Inside a spread it means "of the nominal", which is the only place the two differ.
@@ -245,6 +251,7 @@ export type Node =
       readonly v: number;
       readonly lo: number;
       readonly hi: number;
+      readonly distribution?: "triangular" | "normal";
       readonly at: number;
       readonly end: number;
     }
@@ -398,6 +405,42 @@ class Parser {
     if (tok.kind === "num") {
       this.next();
       if (this.eat("plusminus")) {
+        const shape = this.peek();
+        if (
+          shape.kind === "name" &&
+          (shape.text === "tri" || shape.text === "normal")
+        ) {
+          this.next();
+          this.expect("lparen", "an opening ( after the distribution name");
+          const lo = this.amount(tok.value);
+          const hi =
+            shape.text === "tri" && this.eat("comma")
+              ? this.amount(tok.value)
+              : lo;
+          this.expect("rparen", "a closing )");
+          if (
+            !Number.isFinite(lo) ||
+            !Number.isFinite(hi) ||
+            lo < 0 ||
+            hi < 0 ||
+            (shape.text === "normal"
+              ? lo === 0
+              : lo + hi === 0 || !Number.isFinite(lo + hi))
+          )
+            throw new FormulaError(
+              "distribution spread must be non-negative and finite (and not both zero)",
+              shape.at,
+            );
+          return this.maybePercent({
+            k: "spread",
+            v: tok.value,
+            lo,
+            hi,
+            distribution: shape.text === "tri" ? "triangular" : "normal",
+            at: tok.at,
+            end: this.literalEnd(),
+          });
+        }
         if (this.eat("lbracket")) {
           const lo = this.amount(tok.value);
           this.expect("comma", "a comma between the two sides of the ±");
@@ -519,7 +562,12 @@ export interface EvalEnv {
    * Register a new independent uncertain input and return it. The env names it, because the useful name is
    * the ROW it was typed in — which is what makes the sensitivity list readable.
    */
-  source(lo: number, hi: number, literalAt?: number): Source;
+  source(
+    lo: number,
+    hi: number,
+    literalAt?: number,
+    distribution?: "triangular" | "normal",
+  ): Source;
   /** When supplied, substitute trial values. Gradients are normally omitted. */
   inputOffset?(source: Source): number;
   retainInputGradients?: boolean;
@@ -644,7 +692,7 @@ export function evaluate(node: Node, env: EvalEnv, topLevel = true): Quantity {
 
     case "spread": {
       if (node.lo === 0 && node.hi === 0) return exact(node.v);
-      const source = env.source(node.lo, node.hi, node.at);
+      const source = env.source(node.lo, node.hi, node.at, node.distribution);
       const v = node.v + (env.inputOffset ? env.inputOffset(source) : 0);
       return env.inputOffset && !env.retainInputGradients
         ? exact(v)

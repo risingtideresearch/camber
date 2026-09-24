@@ -10,7 +10,7 @@ export function seededRandom(seed: number): () => number {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-/** Version 1 keyed streams: trial order/batching and unrelated inputs do not shift
+/** Keyed streams: trial order/batching and unrelated inputs do not shift
  * existing draws. This is reproducible Monte Carlo, not a cryptographic generator.
  */
 export function generateTrial(
@@ -29,15 +29,29 @@ export function generateTrial(
       hash = Math.imul(hash ^ key.charCodeAt(i), 16777619);
     return seededRandom(hash)();
   };
+  const offset = (source: TrialPlan["sources"][number]): number => {
+    const u = draw("input", source.id);
+    if (source.distribution === "triangular") {
+      // Inverse CDF of a triangle on [-lo, hi] with its mode at zero.
+      // The one-argument form (lo === hi) is the same symmetric triangle.
+      const modeFraction = source.lo / (source.lo + source.hi);
+      return u < modeFraction
+        ? source.lo * (Math.sqrt(u / modeFraction) - 1)
+        : source.hi * (1 - Math.sqrt((1 - u) / (1 - modeFraction)));
+    }
+    if (source.distribution === "normal") {
+      // A second keyed variate does not disturb any other input or phase stream.
+      const v = draw("input-normal-angle", source.id);
+      return (
+        source.lo * Math.sqrt(-2 * Math.log(1 - u)) * Math.cos(2 * Math.PI * v)
+      );
+    }
+    return -source.lo + u * (source.lo + source.hi);
+  };
   return Object.freeze({
     index,
     inputOffsets: Object.freeze(
-      Object.fromEntries(
-        plan.sources.map((s) => [
-          s.id,
-          -s.lo + draw("input", s.id) * (s.lo + s.hi),
-        ]),
-      ),
+      Object.fromEntries(plan.sources.map((s) => [s.id, offset(s)])),
     ),
     repetitionPhases: Object.freeze(
       Object.fromEntries(

@@ -18,6 +18,72 @@ import { mixedTrialBook, mixedTrialGeometry } from "./trial-fixtures";
 import { formulaBook, target } from "./sampling-fixtures";
 const near = (a: number, b: number, tolerance = 1e-10) =>
   assert.ok(Math.abs(a - b) < tolerance, `${a} != ${b}`);
+
+// Shapes belong to literals: each gets an independent keyed draw, even in one cell.
+const shaped = prepareTrials(
+  prepareBook(
+    formulaBook({
+      mixed: "10 +- tri(2) + 10 ± normal(2) + 10 ± 2",
+    }),
+  ),
+);
+assert.deepEqual(
+  shaped.sources.map((s) => s.distribution),
+  ["triangular", "normal", undefined],
+);
+const draws = shaped.sources.map(() => [] as number[]);
+for (let i = 0; i < 4096; i++) {
+  const world = generateTrial(shaped, 12345, i);
+  shaped.sources.forEach((s, j) => draws[j].push(world.inputOffsets[s.id]));
+  assert.deepEqual(generateTrial(shaped, 12345, i), world);
+}
+assert.ok(draws[0].every((v) => v >= -2 && v <= 2));
+assert.ok(draws[2].every((v) => v >= -2 && v <= 2));
+assert.ok(draws[1].some((v) => Math.abs(v) > 2));
+for (const [j, expectedVariance] of [2 / 3, 4, 4 / 3].entries()) {
+  near(draws[j].reduce((sum, v) => sum + v, 0) / 4096, 0, 0.12);
+  near(
+    draws[j].reduce((sum, v) => sum + v * v, 0) / 4096,
+    expectedVariance,
+    0.3,
+  );
+}
+assert.equal(
+  prepareTrials(prepareBook(formulaBook({ x: "10 ± normal(5%)" }))).sources[0]
+    .lo,
+  0.5,
+);
+const asymmetricPlan = prepareTrials(
+  prepareBook(formulaBook({ x: "10 ± tri(2, 5)", edge: "10 ± tri(0, 5)" })),
+);
+const asymmetric = asymmetricPlan.sources.find((s) => s.at === target("x"))!;
+const edge = asymmetricPlan.sources.find((s) => s.at === target("edge"))!;
+assert.equal(asymmetric.distribution, "triangular");
+assert.deepEqual([asymmetric.lo, asymmetric.hi], [2, 5]);
+const asymmetricOffsets = Array.from({ length: 4096 }, (_, i) => {
+  const world = generateTrial(asymmetricPlan, 12345, i);
+  assert.ok(
+    world.inputOffsets[edge.id] >= 0 && world.inputOffsets[edge.id] <= 5,
+  );
+  return world.inputOffsets[asymmetric.id];
+});
+assert.ok(asymmetricOffsets.every((v) => v >= -2 && v <= 5));
+near(
+  asymmetricOffsets.reduce((sum, v) => sum + v, 0) / asymmetricOffsets.length,
+  1,
+  0.12,
+);
+near(
+  asymmetricOffsets.reduce((sum, v) => sum + v * v, 0) /
+    asymmetricOffsets.length,
+  19 / 6,
+  0.3,
+);
+const percentTriangle = prepareTrials(
+  prepareBook(formulaBook({ x: "10 ± tri(20%, 50%)" })),
+).sources[0];
+assert.deepEqual([percentTriangle.lo, percentTriangle.hi], [2, 5]);
+
 const book = mixedTrialBook(),
   plan = prepareTrials(prepareBook(book));
 const geometry = mixedTrialGeometry();

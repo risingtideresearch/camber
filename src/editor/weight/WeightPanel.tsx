@@ -1359,12 +1359,31 @@ function Reference({ book }: { readonly book: WeightBook }) {
           <dl>
             <Entry
               term="4.2 ± 0.3"
-              hint="give or take 0.3 — type +- for the ±"
+              hint="uniform between 3.9 and 4.5 in sampled trials — type +- for the ±"
             />
             <Entry term="160 ± 10%" hint="give or take a tenth of 160" />
             <Entry
               term="900 ± [50, 200]"
               hint="50 below, 200 above — a one-sided guess"
+            />
+            <Entry
+              term="4.2 ± tri(0.3)"
+              hint="triangular draws from 3.9 to 4.5, peaking at 4.2"
+              insert="4.2 ± tri(0.3)"
+            />
+            <Entry
+              term="10 ± tri(2, 5)"
+              hint="asymmetric triangle from 8 to 15, peaking at 10; mean is 11, not 10. Either side may be zero"
+              insert="10 ± tri(2, 5)"
+            />
+            <Entry
+              term="4.2 ± normal(0.3)"
+              hint="normal draws with mean 4.2 and standard deviation 0.3; unbounded, so ±0.3 is not a hard limit"
+              insert="4.2 ± normal(0.3)"
+            />
+            <Entry
+              term="Sampling shapes"
+              hint="shapes apply to individual ± literals in sampled trials, not the linearized Worst case and Likely readings; normal has no worst-case bound"
             />
             <Entry term="[4.0, 4.5]" hint="somewhere in that range" />
           </dl>

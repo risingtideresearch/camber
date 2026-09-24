@@ -54,9 +54,9 @@ export interface SampledResults {
   readonly sequence: number;
   readonly context: SamplingContext;
   readonly method: {
-    readonly sampler: "keyed-uniform-v1";
+    readonly sampler: "keyed-input-shapes-v2";
     readonly seed: number;
-    readonly inputDistribution: "uniform-authored-bounds";
+    readonly inputDistribution: "per-literal-uniform-triangular-or-normal";
     readonly repetitionPhases: "independent-uniform";
     readonly geometry: "direct";
   };
@@ -191,9 +191,9 @@ export function createSamplingRun(
         sequence: ++sequence,
         context: request.context,
         method: {
-          sampler: "keyed-uniform-v1",
+          sampler: "keyed-input-shapes-v2",
           seed: request.seed,
-          inputDistribution: "uniform-authored-bounds",
+          inputDistribution: "per-literal-uniform-triangular-or-normal",
           repetitionPhases: "independent-uniform",
           geometry: "direct",
         },
