@@ -180,6 +180,198 @@ assert.equal(
 );
 assert.equal(inputReads, 1, "the shared x cell was not re-evaluated");
 
+// Prepared cells contain definitions only and can be frozen while worlds run.
+for (const cell of sharedPlan.prepared.cells.values()) {
+  for (const key of [
+    "state",
+    "value",
+    "error",
+    "unitWarning",
+    "usesSliceMeasurement",
+  ])
+    assert.equal(key in cell, false, `prepared cells must not contain ${key}`);
+  Object.freeze(cell);
+}
+const sharedTrial = (offset: number): Trial => ({
+  index: 0,
+  inputOffsets: Object.fromEntries(
+    sharedPlan.sources.map((s) => [s.id, offset]),
+  ),
+  repetitionPhases: {},
+});
+const lowerWorld = createTrialEvaluator(sharedPlan, sharedTrial(-1));
+const upperWorld = createTrialEvaluator(sharedPlan, sharedTrial(1));
+assert.equal(
+  lowerWorld([target("first")]).values.get(target("first"))!.value,
+  2,
+);
+assert.equal(
+  upperWorld([target("first")]).values.get(target("first"))!.value,
+  4,
+);
+assert.equal(lowerWorld().values.get(target("second"))!.value, 3);
+assert.equal(upperWorld().values.get(target("second"))!.value, 9);
+assert.deepEqual(
+  lowerWorld().values,
+  evaluateTrial(sharedPlan, sharedTrial(-1)).values,
+);
+
+// Full-book evaluation is the same retained world expanded to all targets.
+sections = 0;
+layouts = 0;
+const expandingWorld = createTrialEvaluator(plan, trial, counted);
+assert.equal(expandingWorld([]).values.size, 0);
+assert.equal(sections + layouts, 0);
+expandingWorld([target("cutMass")]);
+assert.equal(sections, 1);
+const expanded = expandingWorld();
+assert.deepEqual(expanded.values, result.values);
+assert.deepEqual([...expanded.values.keys()], [...plan.prepared.cells.keys()]);
+assert.equal(sections, 1);
+assert.equal(layouts, 2);
+expandingWorld();
+assert.equal(
+  sections + layouts,
+  3,
+  "full-book replay reuses all visited geometry",
+);
+
+// Failed geometry is cached too, without poisoning independent cells.
+let failedSections = 0;
+const failingWorld = createTrialEvaluator(plan, trial, {
+  ...geometry,
+  section: () => {
+    failedSections++;
+    throw new Error("section backend failed");
+  },
+});
+assert.match(
+  failingWorld([cellKey("i0", "cut", "area")]).values.get(
+    cellKey("i0", "cut", "area"),
+  )!.error!,
+  /section backend failed/,
+);
+const withFailure = failingWorld();
+assert.equal(failedSections, 1);
+assert.equal(withFailure.values.get(target("density"))!.value, 12);
+assert.equal(withFailure.values.get(target("firstMass"))!.error, null);
+assert.equal(
+  withFailure.geometryErrors.get("i0 cut"),
+  "section backend failed",
+);
+assert.deepEqual(failingWorld().values, withFailure.values);
+assert.equal(failedSections, 1);
+
+// Invalid positions never reach a geometry backend, even in full-book replay.
+const nonfiniteBook = mixedTrialBook();
+const cut = nonfiniteBook.items[0].fields.cut;
+const nonfinitePlan = prepareTrials(
+  prepareBook({
+    ...nonfiniteBook,
+    items: [
+      {
+        ...nonfiniteBook.items[0],
+        fields: {
+          ...nonfiniteBook.items[0].fields,
+          cut: { ...cut, pos: "1e308 * 1e308" },
+        },
+      },
+    ],
+  }),
+);
+sections = 0;
+const nonfinite = evaluateTrial(
+  nonfinitePlan,
+  generateTrial(nonfinitePlan, 1, 0),
+  counted,
+);
+assert.equal(sections, 0);
+assert.match(
+  nonfinite.values.get(cellKey("i0", "cut", "area"))!.error!,
+  /Invalid geometry input pos/,
+);
+assert.equal(nonfinite.values.get(target("firstMass"))!.error, null);
+
+// Unification does not relax the geometry dependency policy, even for an
+// acyclic dependency on a cut already measured by this world.
+const dependentPlan = prepareTrials(
+  prepareBook({
+    ...book,
+    items: [
+      {
+        ...book.items[0],
+        fields: {
+          ...book.items[0].fields,
+          measuredPosition: {
+            k: "scalar",
+            formula: "sqrt(cut.area)",
+            unit: "m",
+            role: null,
+          },
+          dependentCut: {
+            ...book.items[0].fields.cut,
+            pos: "measuredPosition",
+          },
+        },
+      },
+    ],
+  }),
+);
+for (const warm of [false, true]) {
+  const world = createTrialEvaluator(
+    dependentPlan,
+    generateTrial(dependentPlan, 1, 0),
+    geometry,
+  );
+  if (warm) world([target("measuredPosition")]);
+  const values = world().values;
+  assert.match(
+    values.get(cellKey("i0", "dependentCut", "pos"))!.error!,
+    /cannot depend on measured/,
+  );
+  assert.ok(values.get(cellKey("i0", "dependentCut", "area"))!.error);
+  assert.equal(values.get(target("cutMass"))!.error, null);
+}
+
+// Cycles remain local errors; expanding a partial world still evaluates the
+// unrelated cells and preserves the diagnostic already attached to the cycle.
+const cyclePlan = prepareTrials(
+  prepareBook(
+    formulaBook({
+      a: "b + 1",
+      b: "a + 1",
+      good: "3",
+      empty: "",
+      broken: "1 +",
+    }),
+  ),
+);
+const cyclicWorld = createTrialEvaluator(
+  cyclePlan,
+  generateTrial(cyclePlan, 1, 0),
+);
+const cyclicPartial = cyclicWorld([target("a")]);
+assert.match(
+  cyclicPartial.values.get(target("a"))!.error!,
+  /refers back to itself/,
+);
+const cyclicFull = cyclicWorld();
+assert.deepEqual(
+  cyclicFull.values.get(target("a")),
+  cyclicPartial.values.get(target("a")),
+);
+assert.match(
+  cyclicFull.values.get(target("b"))!.error!,
+  /refers back to itself/,
+);
+assert.equal(cyclicFull.values.get(target("good"))!.value, 3);
+assert.deepEqual(cyclicFull.values.get(target("empty")), {
+  value: null,
+  dim: null,
+  error: null,
+});
+assert.ok(cyclicFull.values.get(target("broken"))!.error);
+
 // Generation is independent of evaluation order, batching and geometry caches.
 const ten = generateTrial(plan, 42, 10);
 generateTrial(plan, 42, 2);

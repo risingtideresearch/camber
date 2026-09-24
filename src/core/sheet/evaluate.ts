@@ -1,8 +1,18 @@
+import { cellKey, OUTPUT_ITEM } from "./addresses";
+export { cellKey, OUTPUT_ITEM } from "./addresses";
 import {
-  activeBoundaries,
-  validateLimits,
-  type SectionLimits,
-} from "./boundaries";
+  createOperationCompiler,
+  type GeometryOperation,
+  type MeasureOperation,
+  type ValueOperation,
+} from "./operations";
+import {
+  affectedCells,
+  buildDependencyGraph,
+  type DependencyGraph,
+} from "./dependencyGraph";
+import { createReferenceBinder, type BoundReference } from "./bindings";
+import { validateLimits, type SectionLimits } from "./boundaries";
 // ---------- evaluating a weight book ----------
 //
 // Takes the authored items and the hull's numbers, and produces a value, a spread and a sensitivity ranking
@@ -37,25 +47,18 @@ import {
 //
 // ---------- cycles ----------
 //
-// Resolution is depth-first with a visiting set, so a cycle is caught at the moment it closes and every cell
-// on it gets the same message naming the loop. There is no topological pre-pass: the graph is tiny, and doing
-// it lazily means a cell that references nothing is evaluated even when the rest of the book is tangled.
+// Preparation binds names and compiles value operations plus a dependency graph. Execution remains
+// depth-first with a visiting set: cycles are reported when reached, without preventing unrelated cells
+// from evaluating. The graph retains invalid cycles too, rather than rejecting the entire authored book.
 
 import {
-  CG_NAMES,
   GEOMETRY_LEAVES,
   geometryValue,
   type Measure,
   type SectionMeasures,
 } from "./sectionMeasures";
 import type { RepetitionMeasurements, RepetitionLayout } from "./repetitions";
-import {
-  evaluate,
-  FormulaError,
-  parseFormula,
-  referencesOf,
-  type Node,
-} from "./formula";
+import { evaluate, FormulaError, parseFormula, type Node } from "./formula";
 import {
   hullMetric,
   hullPoint,
@@ -82,41 +85,22 @@ import {
   type Source,
 } from "./quantity";
 import {
-  facetContains,
   fieldUnit,
   isDerived,
   leafOf,
   leavesOf,
-  lookupRole,
   roleOf,
-  rollupsOf,
   symbolsOf,
   type Field,
-  type CutField,
-  type RepetitionField,
   type FieldLeaf,
   type Item,
   type CellRef,
-  type Rollup,
   type WeightBook,
 } from "./book";
-import { isOutputName, OUTPUTS, outputSpec } from "./outputs";
-import { isRoleName, roleSpec } from "./roles";
+import { OUTPUTS, outputSpec } from "./outputs";
+import { roleSpec } from "./roles";
 import { naturalUnit, parseUnit, UnitError, type UnitSpec } from "./units";
-import {
-  SLICE_VALUE_FIELDS,
-  sliceMeasurementKey,
-  type SliceMeasurements,
-} from "./slices";
-
-/**
- * The pseudo item the book's own answers are evaluated under.
- *
- * They are cells like any other — they parse, they can fail, they can join a cycle — and giving them a home
- * in the same map is what lets `OUT.DISPLACEMENT` appear in the middle of a loop and be named in the message
- * along with everything else. Not a real id: `newId` mints `i`-prefixed ids, so nothing can collide with it.
- */
-export const OUTPUT_ITEM = "OUT";
+import { sliceMeasurementKey, type SliceMeasurements } from "./slices";
 
 /** One evaluated cell. */
 export interface CellResult {
@@ -143,6 +127,8 @@ export interface CellResult {
    * the tree (`formula.ts`). Null where the cell is empty or would not parse.
    */
   readonly tree: Node | null;
+  /** Revision-local name bindings, including authored occurrence locations. */
+  readonly references: ReadonlyMap<number, BoundReference>;
   /** What went wrong, in a sentence a person can act on. */
   readonly error: string | null;
   /** Where in the formula, for a caret. −1 when the message is not about a position. */
@@ -162,7 +148,8 @@ export interface CellResult {
 }
 
 export interface BookResults {
-  /** Conservatively suppress all sheet spreads until geometry uncertainty is complete. */
+  /** At least one returned reading is waiting for geometry uncertainty.
+   * Presentation must use each reading's flag, not suppress the entire book. */
   readonly uncertaintyPending?: boolean;
   /** Keyed by `cellKey`. Includes the book's answers, under `OUTPUT_ITEM`. */
   readonly cells: ReadonlyMap<string, CellResult>;
@@ -174,18 +161,6 @@ export interface BookResults {
     readonly lcg: Reading | null;
   };
 }
-
-/**
- * Where a result lives.
- *
- * The leaf defaults to `"formula"`, which is the only cell a scalar has. A point occupies three keys under
- * this scheme, one per coordinate.
- */
-export const cellKey = (
-  itemId: string,
-  fieldKey: string,
-  leaf: string = "formula",
-): string => `${itemId} ${fieldKey} ${leaf}`;
 
 export const resultAt = (
   results: BookResults,
@@ -204,13 +179,12 @@ export const resultFor = (
  * What names each field of one item, by the address a person would recognise.
  *
  * The reverse of the dependency edge the evaluator follows, and the answer to "what does removing this
- * break". Read off the parse trees the evaluation already built rather than by re-parsing: a formula that
- * would not lex contributes nothing, which is the right answer, because it resolves to nothing either.
+ * break". Read off the bindings preparation already built rather than by re-parsing.
+ * Unparseable formulas and unresolved names contribute no direct field references.
  *
- * The two ways to name a field are the two `resolve` accepts — bare from a formula on the same item, where a
- * sibling wins, and `item.field` from anywhere else, where a sibling of the SAME name on the naming item
- * would shadow it and so does not count. One pass over every cell answers for every field at once, and a
- * point that names one in two of its three coordinates counts once: it is one thing to go and edit.
+ * Uses the same revision-local bindings as evaluation, including role aliases and
+ * local shadowing. These are direct field references, not transitive dependencies
+ * or rollup membership edges. Multiple coordinates count once per using field.
  */
 export function fieldUsers(
   book: WeightBook,
@@ -226,16 +200,11 @@ export function fieldUsers(
   for (const cell of results.cells.values()) {
     if (!cell.tree) continue;
     const from = byId.get(cell.itemId);
-    for (const path of referencesOf(cell.tree)) {
+    for (const { binding } of cell.references.values()) {
       const key =
-        cell.itemId === itemId && found.has(path[0])
-          ? path[0]
-          : owner.name &&
-              path[0] === owner.name &&
-              found.has(path[1]) &&
-              !from?.fields[path[0]]
-            ? path[1]
-            : null;
+        binding.k === "field" && binding.item.id === itemId
+          ? binding.key
+          : null;
       // A cell of the field itself is not a user of it — that is a cycle, and `evaluate` already says so.
       if (!key || (cell.itemId === itemId && cell.fieldKey === key)) continue;
       found
@@ -280,13 +249,11 @@ export function fieldUses(
   for (const cell of results.cells.values()) {
     if (!cell.tree) continue;
     const from = byId.get(cell.itemId);
-    const namesTarget = referencesOf(cell.tree).some((path) =>
-      cell.itemId === itemId && owner.fields[path[0]]
-        ? path[0] === fieldKey
-        : !!owner.name &&
-          path[0] === owner.name &&
-          path[1] === fieldKey &&
-          !from?.fields[path[0]],
+    const namesTarget = [...cell.references.values()].some(
+      ({ binding }) =>
+        binding.k === "field" &&
+        binding.item.id === itemId &&
+        binding.key === fieldKey,
     );
     if (!namesTarget || (cell.itemId === itemId && cell.fieldKey === fieldKey))
       continue;
@@ -320,7 +287,8 @@ export const outputResult = (
 
 // ---------- the evaluator ----------
 
-interface Cell {
+/** Immutable definition shared by every evaluation of one book revision. */
+export interface PreparedCell {
   /** Null on one of the book's answers, which belongs to no item and has no siblings. */
   readonly item: Item | null;
   readonly fieldKey: string;
@@ -328,15 +296,22 @@ interface Cell {
   readonly leaf: string;
   readonly source: string;
   /** Parsed once, whatever it is referenced from. */
-  tree: Node | null;
-  parseError: FormulaError | null;
-  declared: UnitSpec | null;
-  unitError: string | null;
+  readonly tree: Node | null;
+  readonly parseError: FormulaError | null;
+  readonly declared: UnitSpec | null;
+  readonly unitError: string | null;
+  readonly measuredLeaf?: string;
+  readonly references: ReadonlyMap<number, BoundReference>;
+  readonly operations: ReadonlyMap<number, ValueOperation>;
+  readonly measurement?: MeasureOperation;
+}
+
+/** Mutable state belongs to one world, never to the prepared book. */
+interface Cell extends PreparedCell {
   state: "fresh" | "running" | "done";
   value: Quantity | null;
   error: { message: string; at: number } | null;
   unitWarning: string | null;
-  readonly measuredLeaf?: string;
   /** This cell's dependency graph reaches a geometry-derived cut leaf. */
   usesSliceMeasurement: boolean;
 }
@@ -347,20 +322,16 @@ export const literalSourceId = (cell: string, literalAt?: number): string =>
 
 export interface PreparedBook {
   readonly book: WeightBook;
-  readonly cells: ReadonlyMap<string, Readonly<Cell>>;
-  readonly itemsByName: ReadonlyMap<string, Item>;
+  readonly cells: ReadonlyMap<string, PreparedCell>;
+  readonly graph: DependencyGraph;
 }
 
-/** Prepare one immutable book revision. All mutable evaluation state is copied per run. */
+/** Prepare one immutable book revision, without allocating runtime evaluation state. */
 export function prepareBook(book: WeightBook): PreparedBook {
-  const cells = new Map<string, Cell>();
-  // Item names are globally unique, so ONE index serves the whole book — the page model needed one per page
-  // because the same name could mean different things on two pages, and that is exactly the ambiguity items
-  // removed.
-  const itemsByName = new Map<string, Item>();
-  for (const item of book.items)
-    if (item.name) itemsByName.set(item.name, item);
+  const cells = new Map<string, PreparedCell>();
   const symbols = symbolsOf(book);
+  const bindReferences = createReferenceBinder(book);
+  const compiler = createOperationCompiler(book);
 
   const declare = (
     unit: string,
@@ -415,6 +386,7 @@ export function prepareBook(book: WeightBook): PreparedBook {
             : new FormulaError(String(error));
       }
     }
+    const references = bindReferences(tree, item);
     cells.set(cellKey(item?.id ?? OUTPUT_ITEM, fieldKey, leaf), {
       item,
       fieldKey,
@@ -423,14 +395,22 @@ export function prepareBook(book: WeightBook): PreparedBook {
       measuredLeaf,
       source: trimmed,
       tree,
+      references,
+      operations: new Map(
+        [...references].map(([at, reference]) => [
+          at,
+          compiler.reference(reference.binding, leaf),
+        ]),
+      ),
+      measurement:
+        measuredLeaf &&
+        item &&
+        (field?.k === "cut" || field?.k === "repetition")
+          ? compiler.measure(item, fieldKey, field, measuredLeaf)
+          : undefined,
       parseError,
       declared,
       unitError,
-      state: "fresh",
-      value: null,
-      error: null,
-      unitWarning: null,
-      usesSliceMeasurement: false,
     });
   };
 
@@ -439,7 +419,7 @@ export function prepareBook(book: WeightBook): PreparedBook {
     for (const [key, field] of Object.entries(item.fields)) {
       // A derived point states its three coordinates once. It still produces THREE cells — the same three
       // keys everything downstream reads — and they simply all read from the one expression, evaluated once
-      // per axis under the rule in `bareFieldValue`. Nothing but this line knows.
+      // per axis by the operation compiler, keeping implicit coordinates explicit at runtime.
       const derivation = isDerived(field)
         ? (field as { from: string }).from
         : null;
@@ -467,7 +447,7 @@ export function prepareBook(book: WeightBook): PreparedBook {
     if ((book.outputs[spec.name] ?? "").trim())
       addCell(null, spec.name, null, "formula", book.outputs[spec.name], "");
 
-  return { book, cells, itemsByName };
+  return { book, cells, graph: buildDependencyGraph(cells) };
 }
 
 export interface EvaluationOptions {
@@ -493,9 +473,7 @@ export interface EvaluationOptions {
   readonly targets?: readonly string[];
   /** Trial geometry is requested only when a measured leaf is reached. */
   readonly ensureGeometry?: (
-    item: Item,
-    key: string,
-    field: CutField | RepetitionField,
+    geometry: GeometryOperation,
     input: (leaf: string) => number,
     limits: SectionLimits,
   ) => void;
@@ -546,8 +524,7 @@ export function createPreparedBookEvaluator(
   repetitionMeasurements: RepetitionMeasurements = new Map(),
   options: EvaluationOptions = {},
 ): (targets?: readonly string[]) => BookResults {
-  const { book, itemsByName } = prepared;
-  // A targeted world clones a cell only on first use. Retained trial maps
+  // A world allocates runtime state for a cell only on first use. Retained trial maps
   // therefore cost proportional to visited dependencies, not sheet size.
   const cells = new Map<string, Cell>();
   const getCell = (key: string): Cell | undefined => {
@@ -555,7 +532,14 @@ export function createPreparedBookEvaluator(
     if (!cell) {
       const source = prepared.cells.get(key);
       if (!source) return undefined;
-      cell = { ...source };
+      cell = {
+        ...source,
+        state: "fresh",
+        value: null,
+        error: null,
+        unitWarning: null,
+        usesSliceMeasurement: false,
+      };
       cells.set(key, cell);
     }
     return cell;
@@ -564,11 +548,30 @@ export function createPreparedBookEvaluator(
   let sourceSeq = 0;
   // Mutually exclusive placement samples retain the existing derivative-mode grouping.
   const repetitionPhaseSources = new Map<string, readonly Source[]>();
-  const uncertaintyPending =
+  // Pending geometry taints only its downstream cells, not its authored inputs
+  // or unrelated outputs. The graph is conservative across algebraic cancellation.
+  const pendingGeometry: string[] = [];
+  if (
     [...sliceMeasurements.values()].some((m) => m.uncertaintyPending) ||
     [...repetitionMeasurements.values()].some(
       (r) => r.value?.uncertaintyPending,
-    );
+    )
+  ) {
+    for (const [id, node] of prepared.graph.nodes) {
+      if (node.k !== "geometry") continue;
+      const { item, key, field } = node.operation;
+      const measurementKey = sliceMeasurementKey(item.id, key);
+      const pending =
+        field.k === "cut"
+          ? !options.cutMeasures?.has(measurementKey) &&
+            sliceMeasurements.get(measurementKey)?.uncertaintyPending
+          : !options.repetitionLayouts?.has(measurementKey) &&
+            repetitionMeasurements.get(measurementKey)?.value
+              ?.uncertaintyPending;
+      if (pending) pendingGeometry.push(id);
+    }
+  }
+  const pendingCells = affectedCells(prepared.graph, pendingGeometry);
 
   // The path currently being resolved, so a cycle is reported as the loop it actually is.
   const visiting: string[] = [];
@@ -595,19 +598,17 @@ export function createPreparedBookEvaluator(
   };
 
   // Which item the cell being evaluated belongs to, so a bare reference means "a sibling field".
-  let currentItem: Item | null = null;
   let currentCell: Cell | null = null;
-  // Geometry is evaluated after authored formulas have produced cut positions. Letting a position depend on
-  // any measured leaf would require solving an implicit geometry system, not another evaluation pass. Track
-  // the root computation so an indirect dependency through scalar fields is refused just as clearly as a
-  // direct `other.area` reference.
+  // Preserve the authored geometry-input policy: no geometry-to-geometry inputs,
+  // even when the compiled graph is acyclic. Track indirect and cached reads too;
+  // accepting acyclic geometry chaining is a separate language change.
   let cutPositionDepth = 0;
 
   const valueAt = (
     itemId: string,
     fieldKey: string,
     at: number,
-    leaf: FieldLeaf = "formula",
+    leaf: string = "formula",
   ): Quantity => {
     const key = cellKey(itemId, fieldKey, leaf);
     const cell = getCell(key);
@@ -635,621 +636,325 @@ export function createPreparedBookEvaluator(
     return cell!.value!;
   };
 
-  /**
-   * A field named with no leaf after it.
-   *
-   * A scalar IS its value. A point is not — it is three of them — so naming one bare is a mistake with an
-   * obvious fix, and saying so beats "there is no such name", which is what a lexer-level answer would be.
-   */
-  const bareFieldValue = (
-    item: Item,
-    key: string,
-    field: Field,
-    at: number,
-  ): Quantity => {
-    if (field.k === "scalar") return valueAt(item.id, key, at);
-    // Anything with a POSITION, named in a coordinate cell, means that coordinate of it. `engine.cg` in an x
-    // cell is `engine.cg.x`, in a z cell `engine.cg.z` — which is what lets one expression stand for a whole
-    // place: a centre of gravity is `(m1 * a + m2 * b) / (m1 + m2)` whichever axis you read it along, and
-    // writing it out three times with three different leaves would be writing one statement three times.
-    //
-    // A CUT has a position too — the centroid of what it cuts — so it binds the same way, and the
-    // area-weighted centre of a set of sections is that same expression with areas where the masses were.
-    const axis = currentCell?.leaf;
-    if (
-      field.k !== "repetition" &&
-      (axis === "x" || axis === "y" || axis === "z")
-    ) {
-      if (field.k === "point") return valueAt(item.id, key, at, axis);
-      return leafValue(item, key, field, axis, at);
-    }
-    const leaves =
-      field.k === "cut" ? ["pos", ...SLICE_VALUE_FIELDS] : leavesOf(field);
-    fail(
-      `${item.name}.${key} is a ${field.k} — write ${item.name}.${key}.${leaves[0]}${
-        leaves.length > 1 ? ` (or .${leaves.slice(1).join(", .")})` : ""
-      }`,
-      at,
-    );
-    return null!;
-  };
-
-  const leafValue = (
-    item: Item,
-    key: string,
-    field: Field,
-    leaf: string,
-    at: number,
-  ): Quantity => {
-    if (field.k === "scalar")
+  /** Execute one normalized measured projection. Names, aliases, and geometry
+   * input schemas were resolved during preparation, independently of this world. */
+  const measureValue = (operation: MeasureOperation, at: number): Quantity => {
+    const { geometry, leaf } = operation;
+    const { item, key, field } = geometry;
+    currentCell!.usesSliceMeasurement = true;
+    if (cutPositionDepth > 0)
       fail(
-        `${item.name}.${key} is a single value — .${leaf} is one dot too deep`,
+        "a cut position or repetition input cannot depend on measured cut values or repetitions",
         at,
       );
-    if (field.k === "cut" || field.k === "repetition") {
-      if ((leavesOf(field) as string[]).includes(leaf))
-        return valueAt(item.id, key, at, leaf as FieldLeaf);
-      if ((CG_NAMES as readonly string[]).includes(leaf)) {
-        const axis = currentCell?.leaf;
-        if (axis !== "x" && axis !== "y" && axis !== "z")
-          fail(`${leaf} is a point — write .x, .y, or .z`, at);
-        leaf += `.${axis}`;
-      }
-      const aliases: Record<string, string> = {
-        openPerimeter: "openLength",
-        closedPerimeter: "closedLength",
-        x: "areaCg.x",
-        y: "areaCg.y",
-        z: "areaCg.z",
-      };
-      if (field.k === "cut") leaf = aliases[leaf] ?? leaf;
-      if (
-        !GEOMETRY_LEAVES.includes(leaf) &&
-        !(field.k === "repetition" && leaf === "equivalentCount")
-      )
-        fail(
-          `a ${field.k} has no ${leaf} — choose area, openLength, closedLength, or their Cg coordinates`,
-          at,
-        );
-      currentCell!.usesSliceMeasurement = true;
-      if (cutPositionDepth > 0)
-        fail(
-          "a cut position or repetition input cannot depend on measured cut values or repetitions",
-          at,
-        );
-      const boundaryInputs = activeBoundaries(field).map((boundary) => ({
-        boundary,
-        input: valueAt(item.id, key, at, boundary.leaf),
-      }));
-      try {
-        validateLimits(
-          Object.fromEntries(
-            boundaryInputs.map(({ boundary, input }) => [
-              boundary.leaf,
-              input.v,
-            ]),
-          ),
-        );
-      } catch (error) {
-        fail(error instanceof Error ? error.message : String(error), at);
-      }
-      const limits = Object.fromEntries(
-        boundaryInputs.map(({ boundary, input }) => [boundary.leaf, input.v]),
+    const boundaryInputs = geometry.boundaries.map((boundary) => ({
+      boundary,
+      input: valueAt(item.id, key, at, boundary.leaf),
+    }));
+    try {
+      validateLimits(
+        Object.fromEntries(
+          boundaryInputs.map(({ boundary, input }) => [boundary.leaf, input.v]),
+        ),
       );
-      if (field.k === "cut" && options.ensureGeometry)
-        options.ensureGeometry(
-          item,
-          key,
-          field,
-          (inputLeaf) => valueAt(item.id, key, at, inputLeaf as FieldLeaf).v,
-          limits,
-        );
-      const geometryError = options.geometryErrors?.get(
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error), at);
+    }
+    const limits = Object.fromEntries(
+      boundaryInputs.map(({ boundary, input }) => [boundary.leaf, input.v]),
+    );
+    if (field.k === "cut" && options.ensureGeometry)
+      options.ensureGeometry(
+        geometry,
+        (inputLeaf) => valueAt(item.id, key, at, inputLeaf).v,
+        limits,
+      );
+    const geometryError = options.geometryErrors?.get(
+      sliceMeasurementKey(item.id, key),
+    );
+    if (
+      geometryError &&
+      !(field.k === "repetition" && leaf === "equivalentCount")
+    )
+      fail(geometryError, at);
+    if (field.k === "cut") {
+      const cutMeasures = options.cutMeasures?.get(
         sliceMeasurementKey(item.id, key),
       );
-      if (
-        geometryError &&
-        !(field.k === "repetition" && leaf === "equivalentCount")
-      )
-        fail(geometryError, at);
-      if (field.k === "cut") {
-        const cutMeasures = options.cutMeasures?.get(
-          sliceMeasurementKey(item.id, key),
-        );
-        if (cutMeasures) {
-          valueAt(item.id, key, at, "pos");
-          return exact(
-            geometryValue(cutMeasures, leaf),
-            leaf === "area" ? AREA : LENGTH,
-          );
-        }
-        const measured = sliceMeasurements.get(
-          sliceMeasurementKey(item.id, key),
-        );
-        if (!measured)
-          return fail(
-            `${item.name}.${key} has not produced a valid hull cut`,
-            at,
-          );
-        const position = valueAt(item.id, key, at, "pos");
-        let boundaryGradient = {};
-        for (const { boundary, input } of boundaryInputs) {
-          const slope = measured.boundaryDerivatives?.[boundary.leaf]?.[leaf];
-          if (
-            !measured.uncertaintyPending &&
-            !Number.isFinite(slope) &&
-            Object.keys(input.d).length
-          )
-            fail(
-              `${boundary.label} boundary uncertainty crosses an undefined centroid or geometry transition`,
-              at,
-            );
-          boundaryGradient = combine(
-            boundaryGradient,
-            1,
-            input.d,
-            Number.isFinite(slope) ? slope! : 0,
-          );
-        }
-        currentCell!.unitWarning ??= measured.warning ?? null;
-        const slope = measured.geometryDerivative[leaf];
-        if (
-          !measured.uncertaintyPending &&
-          !Number.isFinite(slope) &&
-          Object.keys(position.d).length
-        )
-          fail(
-            "Cut uncertainty crosses an undefined centroid or geometry transition",
-            at,
-          );
-        return {
-          v: geometryValue(measured.measures, leaf),
-          d: combine(
-            position.d,
-            Number.isFinite(slope) ? slope : 0,
-            boundaryGradient,
-            1,
-          ),
-          dim: leaf === "area" ? AREA : LENGTH,
-        };
-      }
-      const start = valueAt(item.id, key, at, "start"),
-        end = valueAt(item.id, key, at, "end");
-      const repeat = valueAt(item.id, key, at, field.repetition);
-      if (!sameDim(repeat.dim, field.repetition === "count" ? DIMLESS : LENGTH))
-        fail(
-          "Equivalent count must be dimensionless and spacing must be a distance",
-          at,
-        );
-      if (!Number.isFinite(repeat.v) || repeat.v <= 0 || end.v <= start.v)
-        fail(
-          options.inputOffsets
-            ? "Trial repetition needs positive spacing/count and From less than To"
-            : "section repetition needs positive spacing/count and From less than To",
-          at,
-        );
-      const span = sub(end, start);
-      const density =
-        field.repetition === "count"
-          ? div(repeat, span)
-          : div(exact(1), repeat);
-      const reach = read(repeat, sources).worst;
-      const spanReach = read(span, sources).worst;
-      if (repeat.v - reach.lo <= 0 || span.v - spanReach.lo <= 0)
-        currentCell!.unitWarning ??=
-          "The input uncertainty reaches zero spacing/count or reversed bounds; this local approximation is unreliable";
-      if (leaf === "equivalentCount")
-        return field.repetition === "count" ? repeat : div(span, repeat);
-      if (options.ensureGeometry)
-        options.ensureGeometry(
-          item,
-          key,
-          field,
-          (inputLeaf) => valueAt(item.id, key, at, inputLeaf as FieldLeaf).v,
-          limits,
-        );
-      const trialGeometryError = options.geometryErrors?.get(
-        sliceMeasurementKey(item.id, key),
-      );
-      if (trialGeometryError) fail(trialGeometryError, at);
-      const layout = options.repetitionLayouts?.get(
-        sliceMeasurementKey(item.id, key),
-      );
-      if (layout) {
-        if (
-          !options.inputOffsets &&
-          [
-            start,
-            end,
-            repeat,
-            ...boundaryInputs.map(({ input }) => input),
-          ].some((q) => Object.keys(q.d).length)
-        )
-          fail("Realized layouts require exact trial geometry inputs", at);
+      if (cutMeasures) {
+        valueAt(item.id, key, at, "pos");
         return exact(
-          geometryValue(layout.measures, leaf),
+          geometryValue(cutMeasures, leaf),
           leaf === "area" ? AREA : LENGTH,
         );
       }
-      const result = repetitionMeasurements.get(
-        sliceMeasurementKey(item.id, key),
-      );
-      if (!result?.value)
+      const measured = sliceMeasurements.get(sliceMeasurementKey(item.id, key));
+      if (!measured)
         return fail(
-          result?.error ??
-            `${item.name}.${key} has not produced a valid repetition`,
+          `${item.name}.${key} has not produced a valid hull cut`,
           at,
         );
-      const measured = result.value;
-      const boundaries = boundaryInputs.map(({ boundary, input }) => {
-        const derivative = measured.boundaryDerivatives?.[boundary.leaf];
+      const position = valueAt(item.id, key, at, "pos");
+      let boundaryGradient = {};
+      for (const { boundary, input } of boundaryInputs) {
+        const slope = measured.boundaryDerivatives?.[boundary.leaf]?.[leaf];
         if (
           !measured.uncertaintyPending &&
-          Object.keys(input.d).length &&
-          !derivative
+          !Number.isFinite(slope) &&
+          Object.keys(input.d).length
         )
           fail(
-            `${boundary.label} boundary uncertainty has not produced a valid sensitivity`,
+            `${boundary.label} boundary uncertainty crosses an undefined centroid or geometry transition`,
             at,
           );
-        return { input, derivative };
-      });
-      currentCell!.unitWarning ??= measured.warning ?? null;
-      const name = leaf.split(".")[0].replace(/Cg$/, "") as
-        "area" | "openLength" | "closedLength";
-      const integral = measured.integrals[name],
-        a = measured.start[name],
-        b = measured.end[name];
-      const lift = (get: (m: Measure) => number, dim: Dim): Quantity => ({
-        v: get(integral),
-        d: boundaries.reduce(
-          (gradient, { input, derivative }) =>
-            combine(
-              gradient,
-              1,
-              input.d,
-              derivative ? get(derivative[name]) : 0,
-            ),
-          combine(start.d, -get(a), end.d, get(b)),
-        ),
-        dim,
-      });
-      const amountDim = name === "area" ? { m: 0, l: 3 } : AREA;
-      const amount = lift((m) => m.amount, amountDim);
-      let nominal: Quantity;
-      if (!leaf.includes(".")) nominal = mul(density, amount);
-      else {
-        if (amount.v === 0)
-          fail(
-            `${leaf.split(".")[0]} is undefined because its measure is zero`,
-            at,
-          );
-        const axis = ["x", "y", "z"].indexOf(leaf.split(".")[1]);
-        // Density cancels analytically: shared spacing/count uncertainty cannot move CG.
-        nominal = div(
-          lift((m) => m.moment[axis], { m: 0, l: amountDim.l + 1 }),
-          amount,
+        boundaryGradient = combine(
+          boundaryGradient,
+          1,
+          input.d,
+          Number.isFinite(slope) ? slope! : 0,
         );
       }
-
-      const phases = measured.phaseTotals;
-      if (!phases?.length) return nominal;
-      const phaseKey = sliceMeasurementKey(item.id, key);
-      let phaseSources = repetitionPhaseSources.get(phaseKey);
-      if (!phaseSources) {
-        const group = `repetition-phase:${phaseKey}`;
-        const target = cellKey(item.id, key, field.repetition);
-        phaseSources = phases.map((phase) => {
-          const source: Source = {
-            id: `s${sourceSeq++}`,
-            sample: { group, weight: phase.weight },
-            label: `${item.name}.${key} — placement uncertainty`,
-            at: target,
-            lo: 1,
-            hi: 1,
-          };
-          sources.set(source.id, source);
-          return source;
-        });
-        repetitionPhaseSources.set(phaseKey, phaseSources);
-      }
-      // Linearize the centroid from amount and moment together. This makes
-      // amount * centroid recover the same first-order moment deviations.
+      currentCell!.unitWarning ??= measured.warning ?? null;
+      const slope = measured.geometryDerivative[leaf];
       if (
-        leaf.includes(".") &&
-        phases.some((p) => p.measures[name].amount === 0)
+        !measured.uncertaintyPending &&
+        !Number.isFinite(slope) &&
+        Object.keys(position.d).length
       )
         fail(
-          "Placement centroid is undefined for an empty sampled layout; increase the repetition extent or repetition density",
+          "Cut uncertainty crosses an undefined centroid or geometry transition",
           at,
         );
-      const approximation = Object.fromEntries(
-        phases.map((phase, i) => {
-          const m = phase.measures[name];
-          const delta = !leaf.includes(".")
-            ? m.amount - nominal.v
-            : (m.moment[["x", "y", "z"].indexOf(leaf.split(".")[1])] -
-                nominal.v * m.amount) /
-              (amount.v * density.v);
-          return [phaseSources![i].id, delta];
-        }),
-      );
       return {
-        ...nominal,
-        d: combine(nominal.d, 1, approximation, 1),
+        v: geometryValue(measured.measures, leaf),
+        d: combine(
+          position.d,
+          Number.isFinite(slope) ? slope : 0,
+          boundaryGradient,
+          1,
+        ),
+        dim: leaf === "area" ? AREA : LENGTH,
       };
     }
-    const leaves = leavesOf(field);
-    if (!(leaves as string[]).includes(leaf))
-      fail(`a point has no ${leaf} — try .${leaves.join(", .")}`, at);
-    return valueAt(item.id, key, at, leaf as FieldLeaf);
-  };
-
-  /**
-   * A role, on one item: `MASS`, `engine.CG`, `engine.CG.z`.
-   *
-   * It resolves to the tagged FIELD and then hands off to the ordinary field paths, so everything a field
-   * does a role does too. In particular a bare `CG` in a coordinate cell means that coordinate of it — which
-   * is what lets a centre of gravity be one expression rather than three, over items that need not agree on
-   * what they call the position it reads.
-   */
-  const roleValue = (
-    item: Item,
-    role: string,
-    after: readonly string[],
-    at: number,
-  ): Quantity => {
-    const spec = roleSpec(role)!;
-    const who = item.name || "this item";
-    const found = lookupRole(item, role);
-    if (found.k === "none")
-      fail(`${who} does not say which of its fields is its ${spec.label}`, at);
-    // Two fields claiming one role cannot be authored — `setFieldRole` moves the tag rather than copying it —
-    // so this is a book that arrived saying it. Picking one would answer with a number that looks right.
-    if (found.k === "many")
+    const start = valueAt(item.id, key, at, "start"),
+      end = valueAt(item.id, key, at, "end");
+    const repeat = valueAt(item.id, key, at, field.repetition);
+    if (!sameDim(repeat.dim, field.repetition === "count" ? DIMLESS : LENGTH))
       fail(
-        `${who} tags ${found.keys.join(" and ")} as its ${spec.label} — only one of them can be`,
+        "Equivalent count must be dimensionless and spacing must be a distance",
         at,
       );
-    const { key, field } = found as { key: string; field: Field };
-    if (after.length === 0) return bareFieldValue(item, key, field, at);
-    if (after.length === 1) return leafValue(item, key, field, after[0], at);
-    fail(`${role}.${after.join(".")} is one dot too deep`, at);
-    return null!;
-  };
-
-  /** Resolve a named facet aggregate inside the ordinary cell dependency graph. */
-  const rollupValue = (
-    rollup: Rollup,
-    role: string,
-    leaf: string | undefined,
-    at: number,
-  ): Quantity => {
-    const spec = roleSpec(role);
-    if (!spec) fail(`there is no role called ${role}`, at);
-    const members = book.items.filter((item) =>
-      facetContains(rollup.facetValue, item.facets[rollup.facetKey] ?? ""),
+    if (!Number.isFinite(repeat.v) || repeat.v <= 0 || end.v <= start.v)
+      fail(
+        options.inputOffsets
+          ? "Trial repetition needs positive spacing/count and From less than To"
+          : "section repetition needs positive spacing/count and From less than To",
+        at,
+      );
+    const span = sub(end, start);
+    const density =
+      field.repetition === "count" ? div(repeat, span) : div(exact(1), repeat);
+    const reach = read(repeat, sources).worst;
+    const spanReach = read(span, sources).worst;
+    if (repeat.v - reach.lo <= 0 || span.v - spanReach.lo <= 0)
+      currentCell!.unitWarning ??=
+        "The input uncertainty reaches zero spacing/count or reversed bounds; this local approximation is unreliable";
+    if (leaf === "equivalentCount")
+      return field.repetition === "count" ? repeat : div(span, repeat);
+    if (options.ensureGeometry)
+      options.ensureGeometry(
+        geometry,
+        (inputLeaf) => valueAt(item.id, key, at, inputLeaf).v,
+        limits,
+      );
+    const trialGeometryError = options.geometryErrors?.get(
+      sliceMeasurementKey(item.id, key),
     );
-    const claimed = (item: Item, name: string) => {
-      const found = lookupRole(item, name);
-      if (found.k === "many")
-        fail(
-          `${item.name || "an unnamed item"} tags ${found.keys.join(" and ")} as ${name}`,
-          at,
-        );
-      return found.k === "one" ? found : null;
-    };
-
-    const aggregation = spec!.aggregation;
-    if (aggregation.k === "sum") {
-      if (leaf) fail(`${rollup.name}.${role} is a single value`, at);
-      const values = members.flatMap((item) => {
-        const found = claimed(item, role);
-        if (!found) return [];
-        if (found.field.k !== "scalar")
-          fail(`${item.name}.${found.key} cannot be summed as ${role}`, at);
-        return [valueAt(item.id, found.key, at)];
-      });
-      if (!values.length)
-        fail(`${rollup.name}.${role} has no contributors`, at);
-      return values.reduce(add, exact(0, spec!.dim));
-    }
-
-    if (aggregation.k !== "weightedMean")
-      return fail(`${role} has no roll-up aggregation`, at);
-    const explicitAxis =
-      leaf === "x" || leaf === "y" || leaf === "z" ? leaf : undefined;
-    if (leaf !== undefined && explicitAxis === undefined)
-      fail(`${rollup.name}.${role} has no ${leaf} — write .x, .y, or .z`, at);
-    // Only a BARE point binds to the coordinate being evaluated. An explicit leaf must be honoured or
-    // refused; silently treating `.MASS` as `.x` would turn a typo into a plausible position.
-    const axis = explicitAxis ?? currentCell?.leaf;
-    if (axis !== "x" && axis !== "y" && axis !== "z")
-      fail(`${rollup.name}.${role} is a place — write .x, .y, or .z`, at);
-    const weightName = aggregation.weight;
-    const weightSpec = roleSpec(weightName)!;
-    const entries = members.flatMap((item) => {
-      const weight = claimed(item, weightName);
-      if (!weight) return [];
-      if (weight.field.k !== "scalar")
-        fail(`${item.name}.${weight.key} cannot weight ${role}`, at);
-      const target = claimed(item, role);
-      if (!target)
-        return fail(
-          `${rollup.name}.${role} is incomplete: ${item.name || "an unnamed item"} has ${weightName} but no ${role}`,
-          at,
-        );
-      if (target.field.k !== "point")
-        fail(`${item.name}.${target.key} is not a point`, at);
-      return [
-        {
-          weight: valueAt(item.id, weight.key, at),
-          value: valueAt(item.id, target.key, at, axis as "x" | "y" | "z"),
-        },
-      ];
-    });
-    if (!entries.length) fail(`${rollup.name}.${role} has no contributors`, at);
-    const totalWeight = entries
-      .map((entry) => entry.weight)
-      .reduce(add, exact(0, weightSpec.dim));
-    if (totalWeight.v === 0)
-      fail(`${rollup.name}.${role} has zero total ${weightName}`, at);
-    const moments = entries.map((entry) => mul(entry.weight, entry.value));
-    return div(moments.slice(1).reduce(add, moments[0]), totalWeight);
-  };
-
-  /** `item.field`, `item.field.leaf` — the two shapes that start from a named item. */
-  const fromItem = (
-    item: Item,
-    rest: readonly string[],
-    path: readonly string[],
-    at: number,
-  ): Quantity => {
-    const key = rest[0];
-    // `engine.MASS` asks the item which of its fields that is. Ahead of the key lookup because a role name is
-    // reserved, so no field can be answering to it.
-    if (isRoleName(key)) return roleValue(item, key, rest.slice(1), at);
-    const field = item.fields[key];
-    if (!field) {
-      const near = Object.keys(item.fields).find(
-        (candidate) => candidate.toLowerCase() === key.toLowerCase(),
-      );
-      fail(
-        `${item.name} has nothing called ${key}${
-          near
-            ? ` — did you mean ${near}?`
-            : Object.keys(item.fields).length
-              ? ` — it has ${Object.keys(item.fields).join(", ")}`
-              : " — it has no fields yet"
-        }`,
-        at,
-      );
-    }
-    if (rest.length === 1) return bareFieldValue(item, key, field!, at);
-    if (rest.length > 2 && field!.k !== "cut" && field!.k !== "repetition")
-      fail(`${path.join(".")} is one dot too deep`, at);
-    return leafValue(item, key, field!, rest.slice(1).join("."), at);
-  };
-
-  const resolve = (path: readonly string[], at: number): Quantity => {
-    const [head, ...rest] = path;
-
-    if (head === "ROLLUP") {
-      if (rest.length < 2 || rest.length > 3)
-        fail(`ROLLUP.${rest.join(".") || "?"} is not a roll-up value`, at);
-      const rollup = rollupsOf(book).find(
-        (candidate) => candidate.name === rest[0],
-      );
-      if (!rollup) fail(`there is no roll-up called ${rest[0]}`, at);
-      return rollupValue(rollup!, rest[1], rest[2], at);
-    }
-
-    if (head === "HULL") {
-      // One segment for a measurement, and optionally a second for a coordinate of one that is a PLACE:
-      // `HULL.SHELL_CG.z` is a height, and `HULL.SHELL_CG` in a coordinate cell is that cell's own
-      // coordinate — the same binding a point field and a cut's centroid get, so the hull's own shell weighs
-      // into a centre of gravity in the same expression as everything else.
-      if (rest.length < 1 || rest.length > 2)
-        fail(`HULL.${rest.join(".") || "?"} is not a hull measurement`, at);
-      if (!metrics)
-        fail(
-          "the hull has not been measured yet — it may not float at its own waterline",
-          at,
-        );
-      if (isHullPointName(rest[0])) {
-        const axis = rest.length === 2 ? rest[1] : currentCell?.leaf;
-        if (axis === "x" || axis === "y" || axis === "z")
-          return hullPoint(metrics!, rest[0], axis)!;
-        fail(
-          `HULL.${rest[0]} is a place — write HULL.${rest[0]}.x (or .y, .z), or name it in a coordinate`,
-          at,
-        );
-      }
-      if (rest.length !== 1)
-        fail(`HULL.${rest.join(".") || "?"} is not a hull measurement`, at);
-      const value = hullMetric(metrics!, rest[0]);
-      if (!value)
-        fail(
-          `the hull has no measurement called ${rest[0]}${isHullMetricName(rest[0].toUpperCase()) ? ` — did you mean HULL.${rest[0].toUpperCase()}?` : ""}`,
-          at,
-        );
-      return value!;
-    }
-
-    // What the book itself answers. An ordinary cell, so it can fail, and can be named in a cycle.
-    if (head === "OUT") {
-      if (rest.length !== 1)
-        fail(
-          `OUT.${rest.join(".") || "?"} is not one of the book's answers`,
-          at,
-        );
-      if (!isOutputName(rest[0]))
-        fail(
-          `the book has no answer called ${rest[0]} — it has ${OUTPUTS.map((spec) => spec.name).join(", ")}`,
-          at,
-        );
-      if (!prepared.cells.has(cellKey(OUTPUT_ITEM, rest[0])))
-        fail(`nothing answers ${rest[0]} yet`, at);
-      return valueAt(OUTPUT_ITEM, rest[0], at);
-    }
-
-    // A bare ROLE means this item's. Alongside HULL and OUT rather than after the siblings, because these are
-    // the language's own names and `isReserved` keeps a field from taking one — so there is nothing to shadow.
-    if (isRoleName(head)) {
-      if (!currentItem)
-        fail(
-          `${head} means "this item's ${roleSpec(head)!.label}", and an answer belongs to no item — name the item, as in engine.${head}`,
-          at,
-        );
-      return roleValue(currentItem!, head, rest, at);
-    }
-
-    // A SIBLING field is tried first, at both lengths it could have: `area`, and `cg.z`. The scope you are
-    // standing in wins, and the alternative is always reachable by writing the item's name.
-    if (currentItem) {
-      const sibling = currentItem.fields[head];
-      if (sibling) {
-        if (rest.length === 0)
-          return bareFieldValue(currentItem, head, sibling, at);
-        if (
-          rest.length === 1 ||
-          sibling.k === "cut" ||
-          sibling.k === "repetition"
+    if (trialGeometryError) fail(trialGeometryError, at);
+    const layout = options.repetitionLayouts?.get(
+      sliceMeasurementKey(item.id, key),
+    );
+    if (layout) {
+      if (
+        !options.inputOffsets &&
+        [start, end, repeat, ...boundaryInputs.map(({ input }) => input)].some(
+          (q) => Object.keys(q.d).length,
         )
-          return leafValue(currentItem, head, sibling, rest.join("."), at);
-        fail(`${path.join(".")} is one dot too deep`, at);
-      }
+      )
+        fail("Realized layouts require exact trial geometry inputs", at);
+      return exact(
+        geometryValue(layout.measures, leaf),
+        leaf === "area" ? AREA : LENGTH,
+      );
     }
-
-    if (rest.length === 0) {
-      const item = itemsByName.get(head);
-      if (item)
+    const result = repetitionMeasurements.get(
+      sliceMeasurementKey(item.id, key),
+    );
+    if (!result?.value)
+      return fail(
+        result?.error ??
+          `${item.name}.${key} has not produced a valid repetition`,
+        at,
+      );
+    const measured = result.value;
+    const boundaries = boundaryInputs.map(({ boundary, input }) => {
+      const derivative = measured.boundaryDerivatives?.[boundary.leaf];
+      if (
+        !measured.uncertaintyPending &&
+        Object.keys(input.d).length &&
+        !derivative
+      )
         fail(
-          `${head} is an item — write ${head}.something${
-            Object.keys(item.fields).length
-              ? ` (it has ${Object.keys(item.fields).join(", ")})`
-              : ""
-          }`,
+          `${boundary.label} boundary uncertainty has not produced a valid sensitivity`,
           at,
         );
-      const near = currentItem
-        ? Object.keys(currentItem.fields).find(
-            (candidate) => candidate.toLowerCase() === head.toLowerCase(),
-          )
-        : undefined;
-      fail(
-        `nothing here is called ${head}${near ? ` — did you mean ${near}?` : ""}`,
-        at,
+      return { input, derivative };
+    });
+    currentCell!.unitWarning ??= measured.warning ?? null;
+    const name = leaf.split(".")[0].replace(/Cg$/, "") as
+      "area" | "openLength" | "closedLength";
+    const integral = measured.integrals[name],
+      a = measured.start[name],
+      b = measured.end[name];
+    const lift = (get: (m: Measure) => number, dim: Dim): Quantity => ({
+      v: get(integral),
+      d: boundaries.reduce(
+        (gradient, { input, derivative }) =>
+          combine(gradient, 1, input.d, derivative ? get(derivative[name]) : 0),
+        combine(start.d, -get(a), end.d, get(b)),
+      ),
+      dim,
+    });
+    const amountDim = name === "area" ? { m: 0, l: 3 } : AREA;
+    const amount = lift((m) => m.amount, amountDim);
+    let nominal: Quantity;
+    if (!leaf.includes(".")) nominal = mul(density, amount);
+    else {
+      if (amount.v === 0)
+        fail(
+          `${leaf.split(".")[0]} is undefined because its measure is zero`,
+          at,
+        );
+      const axis = ["x", "y", "z"].indexOf(leaf.split(".")[1]);
+      // Density cancels analytically: shared spacing/count uncertainty cannot move CG.
+      nominal = div(
+        lift((m) => m.moment[axis], { m: 0, l: amountDim.l + 1 }),
+        amount,
       );
     }
 
-    const item = itemsByName.get(head);
-    if (!item) fail(`there is no item called ${head}`, at);
-    return fromItem(item!, rest, path, at);
+    const phases = measured.phaseTotals;
+    if (!phases?.length) return nominal;
+    const phaseKey = sliceMeasurementKey(item.id, key);
+    let phaseSources = repetitionPhaseSources.get(phaseKey);
+    if (!phaseSources) {
+      const group = `repetition-phase:${phaseKey}`;
+      const target = cellKey(item.id, key, field.repetition);
+      phaseSources = phases.map((phase) => {
+        const source: Source = {
+          id: `s${sourceSeq++}`,
+          sample: { group, weight: phase.weight },
+          label: `${item.name}.${key} — placement uncertainty`,
+          at: target,
+          lo: 1,
+          hi: 1,
+        };
+        sources.set(source.id, source);
+        return source;
+      });
+      repetitionPhaseSources.set(phaseKey, phaseSources);
+    }
+    // Linearize the centroid from amount and moment together. This makes
+    // amount * centroid recover the same first-order moment deviations.
+    if (leaf.includes(".") && phases.some((p) => p.measures[name].amount === 0))
+      fail(
+        "Placement centroid is undefined for an empty sampled layout; increase the repetition extent or repetition density",
+        at,
+      );
+    const approximation = Object.fromEntries(
+      phases.map((phase, i) => {
+        const m = phase.measures[name];
+        const delta = !leaf.includes(".")
+          ? m.amount - nominal.v
+          : (m.moment[["x", "y", "z"].indexOf(leaf.split(".")[1])] -
+              nominal.v * m.amount) /
+            (amount.v * density.v);
+        return [phaseSources![i].id, delta];
+      }),
+    );
+    return {
+      ...nominal,
+      d: combine(nominal.d, 1, approximation, 1),
+    };
+  };
+
+  const operationValue = (operation: ValueOperation, at: number): Quantity => {
+    switch (operation.k) {
+      case "error":
+        return fail(operation.message, at);
+      case "cell":
+        return valueAt(
+          operation.itemId,
+          operation.fieldKey,
+          at,
+          operation.leaf,
+        );
+      case "measure":
+        return measureValue(operation, at);
+      case "sum": {
+        const values = operation.terms.map((term) => operationValue(term, at));
+        return values.reduce(add, exact(0, operation.dim));
+      }
+      case "weightedMean": {
+        const entries = operation.entries.map((entry) => {
+          if (entry.k === "error") return fail(entry.message, at);
+          return {
+            weight: operationValue(entry.weight, at),
+            value: operationValue(entry.value, at),
+          };
+        });
+        const total = entries
+          .map((entry) => entry.weight)
+          .reduce(add, exact(0, operation.weightDim));
+        if (total.v === 0) return fail(operation.zeroMessage, at);
+        const moments = entries.map((entry) => mul(entry.weight, entry.value));
+        return div(moments.slice(1).reduce(add, moments[0]), total);
+      }
+      case "hull": {
+        const rest = operation.path;
+        if (!metrics)
+          fail(
+            "the hull has not been measured yet — it may not float at its own waterline",
+            at,
+          );
+        if (isHullPointName(rest[0])) {
+          const axis = rest.length === 2 ? rest[1] : currentCell?.leaf;
+          if (axis === "x" || axis === "y" || axis === "z")
+            return hullPoint(metrics!, rest[0], axis)!;
+          fail(
+            `HULL.${rest[0]} is a place — write HULL.${rest[0]}.x (or .y, .z), or name it in a coordinate`,
+            at,
+          );
+        }
+        if (rest.length !== 1)
+          fail(`HULL.${rest.join(".") || "?"} is not a hull measurement`, at);
+        const value = hullMetric(metrics!, rest[0]);
+        if (!value)
+          fail(
+            `the hull has no measurement called ${rest[0]}${isHullMetricName(rest[0].toUpperCase()) ? ` — did you mean HULL.${rest[0].toUpperCase()}?` : ""}`,
+            at,
+          );
+        return value!;
+      }
+    }
   };
 
   const env = {
-    resolve,
+    resolve: (_path: readonly string[], at: number): Quantity => {
+      const operation = currentCell!.operations.get(at);
+      if (!operation) throw new Error(`Missing prepared operation at ${at}`);
+      return operationValue(operation, at);
+    },
     retainInputGradients: options.retainInputGradients,
     inputOffset: options.inputOffsets
       ? (source: Source): number => {
@@ -1323,9 +1028,7 @@ export function createPreparedBookEvaluator(
       (cell.field?.k === "cut" || cell.field?.k === "repetition");
     cell.state = "running";
     visiting.push(key);
-    const savedItem = currentItem;
     const savedCell = currentCell;
-    currentItem = cell.item;
     currentCell = cell;
     if (isCutPosition) cutPositionDepth++;
     try {
@@ -1335,14 +1038,8 @@ export function createPreparedBookEvaluator(
           message: cell.parseError.message,
           at: cell.parseError.at,
         };
-      else if (cell.measuredLeaf)
-        cell.value = leafValue(
-          cell.item!,
-          cell.fieldKey,
-          cell.field!,
-          cell.measuredLeaf,
-          -1,
-        );
+      else if (cell.measurement)
+        cell.value = measureValue(cell.measurement, -1);
       else if (cell.tree) {
         const value = stamp(evaluate(cell.tree, env), cell);
         const position =
@@ -1377,7 +1074,6 @@ export function createPreparedBookEvaluator(
       }
     } finally {
       if (isCutPosition) cutPositionDepth--;
-      currentItem = savedItem;
       currentCell = savedCell;
       visiting.pop();
       cell.state = "done";
@@ -1427,10 +1123,11 @@ export function createPreparedBookEvaluator(
         leaf: cell.leaf,
         empty: !cell.source,
         reading: cell.value
-          ? read(cell.value, sources, uncertaintyPending)
+          ? read(cell.value, sources, pendingCells.has(key))
           : null,
         quantity: cell.value,
         tree: cell.tree,
+        references: cell.references,
         error: cell.error?.message ?? null,
         errorAt: cell.error?.at ?? -1,
         unit,
@@ -1439,11 +1136,11 @@ export function createPreparedBookEvaluator(
       });
     }
 
-    const outputOf = (name: string): Reading | null => {
-      if (targets && !targets.includes(cellKey(OUTPUT_ITEM, name))) return null;
-      const cell = getCell(cellKey(OUTPUT_ITEM, name));
-      return cell?.value ? read(cell.value, sources, uncertaintyPending) : null;
-    };
+    const outputOf = (name: string): Reading | null =>
+      results.get(cellKey(OUTPUT_ITEM, name))?.reading ?? null;
+    const uncertaintyPending = [...results.values()].some(
+      (cell) => cell.reading?.uncertaintyPending,
+    );
 
     return {
       ...(uncertaintyPending ? { uncertaintyPending: true } : {}),

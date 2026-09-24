@@ -732,19 +732,16 @@ export function evaluate(node: Node, env: EvalEnv, topLevel = true): Quantity {
   }
 }
 
-/**
- * Every dotted path a formula mentions, in source order.
- *
- * This is what the sheet builds its dependency graph from, and it is deliberately a walk of the TREE rather
- * than of the text: a name inside a string or a comment could not be told apart otherwise, and a reference
- * the evaluator would never reach must not create an edge.
+/** Every reference occurrence in syntax order, retaining its source location.
+ * Includes occurrences after a failing subexpression: preparation must not depend
+ * on the values or errors encountered in one particular evaluation.
  */
-export function referencesOf(node: Node): string[][] {
-  const out: string[][] = [];
+export function referenceNodesOf(node: Node): Extract<Node, { k: "ref" }>[] {
+  const out: Extract<Node, { k: "ref" }>[] = [];
   const walk = (n: Node): void => {
     switch (n.k) {
       case "ref":
-        out.push([...n.path]);
+        out.push(n);
         return;
       case "neg":
       case "pct":
@@ -764,4 +761,9 @@ export function referencesOf(node: Node): string[][] {
   };
   walk(node);
   return out;
+}
+
+/** Paths only, for callers that do not need occurrence locations. */
+export function referencesOf(node: Node): string[][] {
+  return referenceNodesOf(node).map((node) => [...node.path]);
 }

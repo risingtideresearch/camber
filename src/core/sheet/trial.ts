@@ -1,12 +1,7 @@
-import {
-  activeBoundaries,
-  validateLimits,
-  type SectionLimits,
-} from "./boundaries";
+import type { GeometryOperation } from "./operations";
+import { validateLimits, type SectionLimits } from "./boundaries";
 import type { CutField, RepetitionField, SliceShape } from "./book";
 import {
-  cellKey,
-  evaluatePreparedBook,
   createPreparedBookEvaluator,
   literalSourceId,
   type PreparedBook,
@@ -159,9 +154,10 @@ function validateTrial(plan: TrialPlan, trial: Trial): void {
   check(trial.repetitionPhases, plan.repetitionIds, true);
 }
 
-/** No randomness, quadrature weights or statistics. Targeted sampling computes
- * only requested cells and measures geometry on demand. Full-book replay retains
- * the original two-pass route; both reject geometry-to-geometry dependencies.
+/** No randomness, quadrature weights or statistics. Full-book replay and targeted
+ * sampling use the same lazy world; omitting targets requests every prepared cell.
+ * Geometry is measured once on demand, and geometry-to-geometry dependencies
+ * remain forbidden in both modes.
  */
 export function evaluateTrial(
   plan: TrialPlan,
@@ -170,100 +166,12 @@ export function evaluateTrial(
   metrics: HullMetrics | null = null,
   targets?: readonly string[],
 ) {
-  validateTrial(plan, trial);
-  if (targets)
-    return createTrialEvaluator(plan, trial, geometry, metrics)(targets);
-  const options = {
-    inputOffsets: new Map(Object.entries(trial.inputOffsets)),
-    retainInputGradients: true,
-  };
-  const inputs = evaluatePreparedBook(
-    plan.prepared,
-    metrics,
-    undefined,
-    undefined,
-    options,
-  );
-  const cutMeasures = new Map<string, SectionMeasures>();
-  const repetitionLayouts = new Map<string, LayoutMeasures>();
-  const geometryErrors = new Map<string, string>();
-  const requests = new Map<string, SectionRequest | LayoutRequest>();
-  for (const { field, itemId, key, id } of plan.geometryFields) {
-    try {
-      if (!geometry) throw new Error("Trial geometry backend is unavailable");
-      const input = (leaf: string) => {
-        const cell = inputs.cells.get(cellKey(itemId, key, leaf));
-        if (cell?.error || !cell?.quantity || !Number.isFinite(cell.quantity.v))
-          throw new Error(cell?.error ?? `Invalid geometry input ${leaf}`);
-        return cell.quantity.v;
-      };
-      const limits = Object.fromEntries(
-        activeBoundaries(field).map((b) => [b.leaf, input(b.leaf)]),
-      );
-      validateLimits(limits);
-      if (field.k === "cut") {
-        const request = { shape: field.shape, position: input("pos"), limits };
-        requests.set(id, request);
-        cutMeasures.set(id, geometry.section(request));
-      } else {
-        const start = input("start"),
-          end = input("end"),
-          repeat = input(field.repetition);
-        if (!(end > start) || !(repeat > 0))
-          throw new Error(
-            "Trial repetition needs positive spacing/count and From less than To",
-          );
-        const request = {
-          shape: field.shape,
-          start,
-          end,
-          pitch:
-            field.repetition === "spacing" ? repeat : (end - start) / repeat,
-          phase: trial.repetitionPhases[id],
-          limits,
-        };
-        if (!Number.isFinite(request.pitch) || request.pitch <= 0)
-          throw new Error("Invalid trial pitch");
-        requests.set(id, request);
-        repetitionLayouts.set(id, geometry.layout(request));
-      }
-    } catch (error) {
-      geometryErrors.set(
-        id,
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  }
-  const results = plan.geometryFields.length
-    ? evaluatePreparedBook(plan.prepared, metrics, undefined, undefined, {
-        ...options,
-        cutMeasures,
-        repetitionLayouts,
-        geometryErrors,
-      })
-    : inputs;
-  // Derivatives are retained internally solely to preserve existing algebraic
-  // validity checks. A trial reports scalar values, NOT uncertainty readings.
-  const values = new Map<string, TrialValue>(
-    [...results.cells].map(([key, cell]) => {
-      const v = cell.quantity?.v;
-      const error =
-        cell.error ??
-        (v !== undefined && !Number.isFinite(v) ? "non-finite value" : null);
-      return [
-        key,
-        {
-          value: error ? null : (v ?? null),
-          dim: cell.quantity?.dim ?? null,
-          error,
-        },
-      ];
-    }),
-  );
-  return { values, requests, cutMeasures, repetitionLayouts, geometryErrors };
+  return createTrialEvaluator(plan, trial, geometry, metrics)(targets);
 }
 
-/** Keep the mapped cells of one immutable trial alive across requested reductions. */
+/** Keep the mapped cells of one immutable trial alive across requested reductions.
+ * Omit targets to request all cells; an empty list requests none.
+ */
 export function createTrialEvaluator(
   plan: TrialPlan,
   trial: Trial,
@@ -276,17 +184,22 @@ export function createTrialEvaluator(
   const geometryErrors = new Map<string, string>();
   const requests = new Map<string, SectionRequest | LayoutRequest>();
   const ensureGeometry = (
-    item: { readonly id: string },
-    key: string,
-    field: CutField | RepetitionField,
-    input: (leaf: string) => number,
+    operation: GeometryOperation,
+    readInput: (leaf: string) => number,
     limits: SectionLimits,
   ) => {
+    const { item, key, field } = operation;
     const id = sliceMeasurementKey(item.id, key);
     if (requests.has(id) || geometryErrors.has(id)) return;
     try {
       if (!geometry) throw new Error("Trial geometry backend is unavailable");
       validateLimits(limits);
+      const input = (leaf: string): number => {
+        const value = readInput(leaf);
+        if (!Number.isFinite(value))
+          throw new Error(`Invalid geometry input ${leaf}`);
+        return value;
+      };
       if (field.k === "cut") {
         const request = {
           shape: field.shape,
@@ -331,28 +244,28 @@ export function createTrialEvaluator(
     undefined,
     {
       inputOffsets: new Map(Object.entries(trial.inputOffsets)),
+      // Preserve authored algebraic validity checks (e.g. uncertain powers).
+      // Trials report scalar values, never these internal gradients/readings.
       retainInputGradients: true,
-      targets: [],
       cutMeasures,
       repetitionLayouts,
       geometryErrors,
       ensureGeometry,
     },
   );
-  return (targets: readonly string[]) => {
+  return (targets?: readonly string[]) => {
     const results = evaluate(targets);
     const values = new Map<string, TrialValue>(
-      targets.map((key) => {
-        const cell = results.cells.get(key);
-        const v = cell?.quantity?.v;
+      [...results.cells].map(([key, cell]) => {
+        const v = cell.quantity?.v;
         const error =
-          cell?.error ??
+          cell.error ??
           (v !== undefined && !Number.isFinite(v) ? "non-finite value" : null);
         return [
           key,
           {
             value: error ? null : (v ?? null),
-            dim: cell?.quantity?.dim ?? null,
+            dim: cell.quantity?.dim ?? null,
             error,
           },
         ];

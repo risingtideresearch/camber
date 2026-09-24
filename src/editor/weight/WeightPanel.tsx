@@ -827,12 +827,16 @@ function ViewBody(props: BodyProps) {
               y: { value: gy.v, placement: null, factor: 1, empty: false },
               z: { value: gz.v, placement: null, factor: 1, empty: false },
             },
-            xz: results.uncertaintyPending
-              ? []
-              : spreadRegion(gx, gz, results.sources, props.reading),
-            yz: results.uncertaintyPending
-              ? []
-              : spreadRegion(gy, gz, results.sources, props.reading),
+            xz:
+              geometryCg?.readings.x?.uncertaintyPending ||
+              geometryCg?.readings.z?.uncertaintyPending
+                ? []
+                : spreadRegion(gx, gz, results.sources, props.reading),
+            yz:
+              geometryCg?.readings.y?.uncertaintyPending ||
+              geometryCg?.readings.z?.uncertaintyPending
+                ? []
+                : spreadRegion(gy, gz, results.sources, props.reading),
           }
         : null;
     const hasGeometry = geometryItems.length > 0 || !!geometryTotal;
@@ -1170,25 +1174,20 @@ function SummaryGeometry(props: BodyProps) {
         y: { value: 0, placement: null, factor: 1, empty: false },
         z: { value: z.reading.v, placement: null, factor: 1, empty: false },
       },
-      xz: props.results.uncertaintyPending
-        ? []
-        : spreadRegion(
-            x.quantity,
-            z.quantity,
-            props.results.sources,
-            props.reading,
-          ),
-      yz: props.results.uncertaintyPending
+      xz:
+        x.reading.uncertaintyPending || z.reading.uncertaintyPending
+          ? []
+          : spreadRegion(
+              x.quantity,
+              z.quantity,
+              props.results.sources,
+              props.reading,
+            ),
+      yz: z.reading.uncertaintyPending
         ? []
         : spreadRegion(y, z.quantity, props.results.sources, props.reading),
     };
-  }, [
-    x,
-    z,
-    props.results.sources,
-    props.results.uncertaintyPending,
-    props.reading,
-  ]);
+  }, [x, z, props.results.sources, props.reading]);
 
   if (!outlines || !props.hullSampling || !point)
     return (

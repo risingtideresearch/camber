@@ -126,12 +126,17 @@ export function roleTotals(
         : [],
     );
     const values: Partial<Record<RollupLeaf, Quantity>> = {};
+    const pendingLeaves = new Set<string>();
     let contributors = 0;
     let coverage: RoleTotal["coverage"] = null;
 
     if (spec.aggregation.k === "sum") {
       const valid = resolved.flatMap(({ value }) => {
         const quantities = quantitiesOf(value, leaves);
+        if (quantities && value.k === "value")
+          for (const leaf of leaves)
+            if (value.cells[leaf].reading?.uncertaintyPending)
+              pendingLeaves.add(leaf);
         return quantities ? [quantities] : [];
       });
       contributors = valid.length;
@@ -158,7 +163,16 @@ export function roleTotals(
           const scalarWeight = weightQuantities[0];
           allWeights.push(scalarWeight);
           const target = quantitiesOf(value, leaves);
-          if (target) weighted.push({ target, weight: scalarWeight });
+          if (target) {
+            weighted.push({ target, weight: scalarWeight });
+            if (value.k === "value" && weight.k === "value")
+              for (const leaf of leaves)
+                if (
+                  weight.cells.value.reading?.uncertaintyPending ||
+                  value.cells[leaf].reading?.uncertaintyPending
+                )
+                  pendingLeaves.add(leaf);
+          }
         }
         contributors = weighted.length;
         const totalWeight = sum(allWeights, weightSpec.dim);
@@ -186,7 +200,7 @@ export function roleTotals(
       readings: Object.fromEntries(
         Object.entries(values).map(([leaf, quantity]) => [
           leaf,
-          read(quantity, results.sources, results.uncertaintyPending),
+          read(quantity, results.sources, pendingLeaves.has(leaf)),
         ]),
       ),
       contributors,
