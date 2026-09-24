@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
-import { cellKey, prepareBook } from "../src/core/sheet/evaluate";
+import {
+  cellKey,
+  createPreparedBookEvaluator,
+  prepareBook,
+} from "../src/core/sheet/evaluate";
 import {
   evaluateTrial,
+  createTrialEvaluator,
   prepareTrials,
   type Trial,
   type TrialGeometry,
 } from "../src/core/sheet/trial";
 import { generateTrial, existingPhaseTrials } from "./generate-trials";
+import { createTrialValueCache } from "../src/core/sheet/trialCache";
+import { sampledFieldKeys } from "../src/editor/weight/sampledFieldKeys";
 import { mixedTrialBook, mixedTrialGeometry } from "./trial-fixtures";
 import { formulaBook, target } from "./sampling-fixtures";
 const near = (a: number, b: number, tolerance = 1e-10) =>
@@ -14,6 +21,26 @@ const near = (a: number, b: number, tolerance = 1e-10) =>
 const book = mixedTrialBook(),
   plan = prepareTrials(prepareBook(book));
 const geometry = mixedTrialGeometry();
+const cutKeys = sampledFieldKeys(book, "i0", "cut");
+const repetitionKeys = sampledFieldKeys(book, "i0", "first");
+assert.equal(cutKeys[0], cellKey("i0", "cut", "pos"));
+assert.ok(cutKeys.includes(cellKey("i0", "cut", "areaCg.x")));
+assert.ok(repetitionKeys.includes(cellKey("i0", "first", "equivalentCount")));
+assert.ok(repetitionKeys.includes(cellKey("i0", "first", "area")));
+assert.ok(repetitionKeys.includes(cellKey("i0", "first", "topHeight")));
+assert.ok(repetitionKeys.length <= 32);
+assert.deepEqual(
+  [
+    ...evaluateTrial(
+      plan,
+      generateTrial(plan, 12345, 0),
+      geometry,
+      null,
+      repetitionKeys,
+    ).values.keys(),
+  ],
+  repetitionKeys,
+);
 assert.equal(plan.sources.length, 5);
 assert.equal(plan.repetitionIds.length, 2);
 const offsets = Object.fromEntries(
@@ -61,6 +88,97 @@ assert.deepEqual(
   evaluateTrial(plan, JSON.parse(JSON.stringify(trial)), geometry),
   result,
 );
+
+// Demand evaluation agrees with the full-book trial, including failures and measured leaves.
+for (const world of [
+  trial,
+  {
+    ...trial,
+    inputOffsets: {
+      ...offsets,
+      [plan.sources.find((s) => s.at === target("pitch"))!.id]: -2,
+    },
+  },
+]) {
+  const full = evaluateTrial(plan, world, geometry);
+  const mapped = createTrialEvaluator(plan, world, geometry);
+  for (const key of [...plan.prepared.cells.keys()].reverse()) {
+    const partial = mapped([key]);
+    assert.deepEqual(
+      partial.values.get(key),
+      full.values.get(key),
+      `selected ${key}`,
+    );
+    assert.deepEqual(mapped([key]).values.get(key), full.values.get(key));
+  }
+}
+let sections = 0,
+  layouts = 0;
+const counted: TrialGeometry = {
+  section: (request) => {
+    sections++;
+    return geometry.section(request);
+  },
+  layout: (request) => {
+    layouts++;
+    return geometry.layout(request);
+  },
+};
+const reuse = createTrialValueCache(plan, counted, null);
+assert.deepEqual(
+  reuse(trial, [target("density")]).get(target("density")),
+  result.values.get(target("density")),
+);
+assert.equal(sections + layouts, 0, "plain fields need no geometry");
+assert.deepEqual(
+  reuse(trial, [target("cutMass")]).get(target("cutMass")),
+  result.values.get(target("cutMass")),
+);
+assert.equal(sections, 1);
+reuse(trial, [target("cutMass")]);
+assert.equal(sections, 1, "a repeated field reuses its trial value");
+assert.deepEqual(
+  reuse(trial, [target("firstMass")]).get(target("firstMass")),
+  result.values.get(target("firstMass")),
+);
+assert.equal(layouts, 1);
+reuse(trial, [target("total")]);
+assert.equal(sections, 1);
+assert.equal(layouts, 2, "shared geometry is measured once across targets");
+
+// A mapped world retains the formula cell as well as its measured geometry.
+const shared = formulaBook({ x: "2 ± 1", first: "x + 1", second: "x * 3" });
+const sharedPlan = prepareTrials(prepareBook(shared));
+const offsetsForWorld = new Map(
+  sharedPlan.sources.map((source) => [source.id, 0]),
+);
+const originalGet = offsetsForWorld.get.bind(offsetsForWorld);
+let inputReads = 0;
+offsetsForWorld.get = (id) => {
+  inputReads++;
+  return originalGet(id);
+};
+const mappedWorld = createPreparedBookEvaluator(
+  sharedPlan.prepared,
+  null,
+  undefined,
+  undefined,
+  {
+    inputOffsets: offsetsForWorld,
+    retainInputGradients: true,
+    targets: [],
+  },
+);
+assert.equal(
+  mappedWorld([target("first")]).cells.get(target("first"))?.quantity?.v,
+  3,
+);
+assert.equal(inputReads, 1);
+assert.equal(
+  mappedWorld([target("second")]).cells.get(target("second"))?.quantity?.v,
+  6,
+);
+assert.equal(inputReads, 1, "the shared x cell was not re-evaluated");
 
 // Generation is independent of evaluation order, batching and geometry caches.
 const ten = generateTrial(plan, 42, 10);

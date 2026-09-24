@@ -351,6 +351,7 @@ near(
   reference.targets[1].direct!.standardDeviation,
   0.015,
 );
+
 console.log(
   "Repetition layout, weighted phases and paired sampling tests passed",
 );

@@ -3,7 +3,7 @@
   // `npm run typecheck` runs `tsc -p test` with the app's real compiler options plus node types.
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "types": ["node"],
+    "types": ["node", "vite/client"],
     "noEmit": true
   },
   "include": ["*.ts"]

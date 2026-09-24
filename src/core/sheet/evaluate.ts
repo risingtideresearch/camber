@@ -1,4 +1,8 @@
-import { activeBoundaries, validateLimits } from "./boundaries";
+import {
+  activeBoundaries,
+  validateLimits,
+  type SectionLimits,
+} from "./boundaries";
 // ---------- evaluating a weight book ----------
 //
 // Takes the authored items and the hull's numbers, and produces a value, a spread and a sensitivity ranking
@@ -88,6 +92,8 @@ import {
   rollupsOf,
   symbolsOf,
   type Field,
+  type CutField,
+  type RepetitionField,
   type FieldLeaf,
   type Item,
   type CellRef,
@@ -483,6 +489,16 @@ export interface EvaluationOptions {
    * Callers must validate authored semantics in a nominal pass before sampling.
    */
   readonly inputOffsets?: ReadonlyMap<string, number>;
+  /** Evaluate only these cells and their transitive dependencies. Omit for the full book. */
+  readonly targets?: readonly string[];
+  /** Trial geometry is requested only when a measured leaf is reached. */
+  readonly ensureGeometry?: (
+    item: Item,
+    key: string,
+    field: CutField | RepetitionField,
+    input: (leaf: string) => number,
+    limits: SectionLimits,
+  ) => void;
 }
 
 /**
@@ -512,10 +528,38 @@ export function evaluatePreparedBook(
   repetitionMeasurements: RepetitionMeasurements = new Map(),
   options: EvaluationOptions = {},
 ): BookResults {
+  return createPreparedBookEvaluator(
+    prepared,
+    metrics,
+    sliceMeasurements,
+    repetitionMeasurements,
+    options,
+  )(options.targets);
+}
+
+/** One mapped world. Its computed cells and geometry-derived sources survive
+ * subsequent requests; each reduction reports only the requested cells. */
+export function createPreparedBookEvaluator(
+  prepared: PreparedBook,
+  metrics: HullMetrics | null,
+  sliceMeasurements: SliceMeasurements = new Map(),
+  repetitionMeasurements: RepetitionMeasurements = new Map(),
+  options: EvaluationOptions = {},
+): (targets?: readonly string[]) => BookResults {
   const { book, itemsByName } = prepared;
-  const cells = new Map<string, Cell>(
-    [...prepared.cells].map(([key, cell]) => [key, { ...cell }]),
-  );
+  // A targeted world clones a cell only on first use. Retained trial maps
+  // therefore cost proportional to visited dependencies, not sheet size.
+  const cells = new Map<string, Cell>();
+  const getCell = (key: string): Cell | undefined => {
+    let cell = cells.get(key);
+    if (!cell) {
+      const source = prepared.cells.get(key);
+      if (!source) return undefined;
+      cell = { ...source };
+      cells.set(key, cell);
+    }
+    return cell;
+  };
   const sources = new Map<string, Source>();
   let sourceSeq = 0;
   // Mutually exclusive placement samples retain the existing derivative-mode grouping.
@@ -539,7 +583,7 @@ export function evaluatePreparedBook(
 
   /** How a cell is named in a cycle message and in the sensitivity ranking. */
   const describe = (key: string): string => {
-    const cell = cells.get(key);
+    const cell = getCell(key);
     if (!cell) return "a missing value";
     if (!cell.item) return `OUT.${cell.fieldKey}`;
     const item = cell.item.name || "an unnamed item";
@@ -566,14 +610,14 @@ export function evaluatePreparedBook(
     leaf: FieldLeaf = "formula",
   ): Quantity => {
     const key = cellKey(itemId, fieldKey, leaf);
-    const cell = cells.get(key);
+    const cell = getCell(key);
     if (!cell) fail("no such value", at);
     if (cell!.state === "running") {
       const loop = visiting.slice(visiting.indexOf(key));
       const text = `this refers back to itself: ${[...loop, key].map(describe).join(" → ")}`;
       for (const member of loop) {
         cycled.add(member);
-        const onLoop = cells.get(member)!;
+        const onLoop = getCell(member)!;
         onLoop.error = { message: text, at: -1 };
         onLoop.value = null;
       }
@@ -689,6 +733,17 @@ export function evaluatePreparedBook(
       } catch (error) {
         fail(error instanceof Error ? error.message : String(error), at);
       }
+      const limits = Object.fromEntries(
+        boundaryInputs.map(({ boundary, input }) => [boundary.leaf, input.v]),
+      );
+      if (field.k === "cut" && options.ensureGeometry)
+        options.ensureGeometry(
+          item,
+          key,
+          field,
+          (inputLeaf) => valueAt(item.id, key, at, inputLeaf as FieldLeaf).v,
+          limits,
+        );
       const geometryError = options.geometryErrors?.get(
         sliceMeasurementKey(item.id, key),
       );
@@ -768,7 +823,9 @@ export function evaluatePreparedBook(
         );
       if (!Number.isFinite(repeat.v) || repeat.v <= 0 || end.v <= start.v)
         fail(
-          "section repetition needs positive spacing/count and From less than To",
+          options.inputOffsets
+            ? "Trial repetition needs positive spacing/count and From less than To"
+            : "section repetition needs positive spacing/count and From less than To",
           at,
         );
       const span = sub(end, start);
@@ -783,6 +840,18 @@ export function evaluatePreparedBook(
           "The input uncertainty reaches zero spacing/count or reversed bounds; this local approximation is unreliable";
       if (leaf === "equivalentCount")
         return field.repetition === "count" ? repeat : div(span, repeat);
+      if (options.ensureGeometry)
+        options.ensureGeometry(
+          item,
+          key,
+          field,
+          (inputLeaf) => valueAt(item.id, key, at, inputLeaf as FieldLeaf).v,
+          limits,
+        );
+      const trialGeometryError = options.geometryErrors?.get(
+        sliceMeasurementKey(item.id, key),
+      );
+      if (trialGeometryError) fail(trialGeometryError, at);
       const layout = options.repetitionLayouts?.get(
         sliceMeasurementKey(item.id, key),
       );
@@ -1119,7 +1188,7 @@ export function evaluatePreparedBook(
           `the book has no answer called ${rest[0]} — it has ${OUTPUTS.map((spec) => spec.name).join(", ")}`,
           at,
         );
-      if (!cells.has(cellKey(OUTPUT_ITEM, rest[0])))
+      if (!prepared.cells.has(cellKey(OUTPUT_ITEM, rest[0])))
         fail(`nothing answers ${rest[0]} yet`, at);
       return valueAt(OUTPUT_ITEM, rest[0], at);
     }
@@ -1315,61 +1384,76 @@ export function evaluatePreparedBook(
     }
   };
 
-  for (const cell of cells.values()) if (cell.state === "fresh") compute(cell);
+  return (targets?: readonly string[]): BookResults => {
+    if (targets) {
+      for (const key of targets) {
+        const cell = getCell(key);
+        if (!cell) throw new Error(`Unknown target: ${key}`);
+        if (cell.state === "fresh") compute(cell);
+      }
+    } else {
+      for (const key of prepared.cells.keys()) {
+        const cell = getCell(key)!;
+        if (cell.state === "fresh") compute(cell);
+      }
+    }
 
-  // ---------- the reported shape ----------
+    // ---------- the reported shape ----------
 
-  const results = new Map<string, CellResult>();
-  for (const [key, cell] of cells) {
-    // With nothing declared, the unit shown is the one the formula worked out to — which is why units appear
-    // on their own the moment a value acquires a dimension, and why a plain number shows none.
-    const derived = cell.value ? naturalUnit(cell.value.dim) : null;
-    const unit = cell.declared ?? (derived && derived.label ? derived : null);
-    // An answer that is not the kind of thing it claims to be. A warning and not a refusal, exactly as a
-    // declared unit that disagrees with its formula is: the number is reported as written and flagged.
-    const spec = cell.item ? undefined : outputSpec(cell.fieldKey);
-    const outputWarning =
-      spec && cell.value && !sameDim(cell.value.dim, spec.dim)
-        ? `${spec.name} should be ${naturalUnit(spec.dim).label || "a plain number"}, and this works out to ${naturalUnit(cell.value.dim).label || "a plain number"}`
-        : null;
-    // The same test, for a field that has been tagged as one of the item's own values. A point's coordinates
-    // are already refused unless they are lengths, so in practice this is what catches a mass that is not one.
-    const role = cell.field ? roleSpec(roleOf(cell.field) ?? "") : undefined;
-    const roleWarning =
-      role && cell.value && !sameDim(cell.value.dim, role.dim)
-        ? `an item's ${role.label} should be ${naturalUnit(role.dim).label || "a plain number"}, and this works out to ${naturalUnit(cell.value.dim).label || "a plain number"}`
-        : null;
-    results.set(key, {
-      itemId: cell.item?.id ?? OUTPUT_ITEM,
-      fieldKey: cell.fieldKey,
-      leaf: cell.leaf,
-      empty: !cell.source,
-      reading: cell.value
-        ? read(cell.value, sources, uncertaintyPending)
-        : null,
-      quantity: cell.value,
-      tree: cell.tree,
-      error: cell.error?.message ?? null,
-      errorAt: cell.error?.at ?? -1,
-      unit,
-      unitIsDerived: !cell.declared && !!unit,
-      unitWarning: cell.unitWarning ?? outputWarning ?? roleWarning,
-    });
-  }
+    const results = new Map<string, CellResult>();
+    for (const key of targets ?? prepared.cells.keys()) {
+      const cell = getCell(key)!;
+      // With nothing declared, the unit shown is the one the formula worked out to — which is why units appear
+      // on their own the moment a value acquires a dimension, and why a plain number shows none.
+      const derived = cell.value ? naturalUnit(cell.value.dim) : null;
+      const unit = cell.declared ?? (derived && derived.label ? derived : null);
+      // An answer that is not the kind of thing it claims to be. A warning and not a refusal, exactly as a
+      // declared unit that disagrees with its formula is: the number is reported as written and flagged.
+      const spec = cell.item ? undefined : outputSpec(cell.fieldKey);
+      const outputWarning =
+        spec && cell.value && !sameDim(cell.value.dim, spec.dim)
+          ? `${spec.name} should be ${naturalUnit(spec.dim).label || "a plain number"}, and this works out to ${naturalUnit(cell.value.dim).label || "a plain number"}`
+          : null;
+      // The same test, for a field that has been tagged as one of the item's own values. A point's coordinates
+      // are already refused unless they are lengths, so in practice this is what catches a mass that is not one.
+      const role = cell.field ? roleSpec(roleOf(cell.field) ?? "") : undefined;
+      const roleWarning =
+        role && cell.value && !sameDim(cell.value.dim, role.dim)
+          ? `an item's ${role.label} should be ${naturalUnit(role.dim).label || "a plain number"}, and this works out to ${naturalUnit(cell.value.dim).label || "a plain number"}`
+          : null;
+      results.set(key, {
+        itemId: cell.item?.id ?? OUTPUT_ITEM,
+        fieldKey: cell.fieldKey,
+        leaf: cell.leaf,
+        empty: !cell.source,
+        reading: cell.value
+          ? read(cell.value, sources, uncertaintyPending)
+          : null,
+        quantity: cell.value,
+        tree: cell.tree,
+        error: cell.error?.message ?? null,
+        errorAt: cell.error?.at ?? -1,
+        unit,
+        unitIsDerived: !cell.declared && !!unit,
+        unitWarning: cell.unitWarning ?? outputWarning ?? roleWarning,
+      });
+    }
 
-  const outputOf = (name: string): Reading | null => {
-    const cell = cells.get(cellKey(OUTPUT_ITEM, name));
-    return cell?.value ? read(cell.value, sources, uncertaintyPending) : null;
-  };
+    const outputOf = (name: string): Reading | null => {
+      if (targets && !targets.includes(cellKey(OUTPUT_ITEM, name))) return null;
+      const cell = getCell(cellKey(OUTPUT_ITEM, name));
+      return cell?.value ? read(cell.value, sources, uncertaintyPending) : null;
+    };
 
-  return {
-    ...(uncertaintyPending ? { uncertaintyPending: true } : {}),
-    cells: results,
-    sources,
-    outputs: {
-      displacement: outputOf("DISPLACEMENT"),
-      vcg: outputOf("VCG"),
-      lcg: outputOf("LCG"),
-    },
+    return {
+      ...(uncertaintyPending ? { uncertaintyPending: true } : {}),
+      cells: results,
+      sources,
+      outputs: {
+        displacement: outputOf("DISPLACEMENT"),
+        vcg: outputOf("VCG"),
+        lcg: outputOf("LCG"),
+      },
+    };
   };
 }

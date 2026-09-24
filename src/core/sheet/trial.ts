@@ -7,6 +7,7 @@ import type { CutField, RepetitionField, SliceShape } from "./book";
 import {
   cellKey,
   evaluatePreparedBook,
+  createPreparedBookEvaluator,
   literalSourceId,
   type PreparedBook,
 } from "./evaluate";
@@ -158,17 +159,20 @@ function validateTrial(plan: TrialPlan, trial: Trial): void {
   check(trial.repetitionPhases, plan.repetitionIds, true);
 }
 
-/** No randomness, quadrature weights or statistics. Geometry inputs are evaluated
- * first; the same offsets are used again for final formulas. Geometry-to-geometry
- * dependencies remain disallowed, as in the ordinary sheet evaluator.
+/** No randomness, quadrature weights or statistics. Targeted sampling computes
+ * only requested cells and measures geometry on demand. Full-book replay retains
+ * the original two-pass route; both reject geometry-to-geometry dependencies.
  */
 export function evaluateTrial(
   plan: TrialPlan,
   trial: Trial,
   geometry?: TrialGeometry,
   metrics: HullMetrics | null = null,
+  targets?: readonly string[],
 ) {
   validateTrial(plan, trial);
+  if (targets)
+    return createTrialEvaluator(plan, trial, geometry, metrics)(targets);
   const options = {
     inputOffsets: new Map(Object.entries(trial.inputOffsets)),
     retainInputGradients: true,
@@ -257,4 +261,103 @@ export function evaluateTrial(
     }),
   );
   return { values, requests, cutMeasures, repetitionLayouts, geometryErrors };
+}
+
+/** Keep the mapped cells of one immutable trial alive across requested reductions. */
+export function createTrialEvaluator(
+  plan: TrialPlan,
+  trial: Trial,
+  geometry?: TrialGeometry,
+  metrics: HullMetrics | null = null,
+) {
+  validateTrial(plan, trial);
+  const cutMeasures = new Map<string, SectionMeasures>();
+  const repetitionLayouts = new Map<string, LayoutMeasures>();
+  const geometryErrors = new Map<string, string>();
+  const requests = new Map<string, SectionRequest | LayoutRequest>();
+  const ensureGeometry = (
+    item: { readonly id: string },
+    key: string,
+    field: CutField | RepetitionField,
+    input: (leaf: string) => number,
+    limits: SectionLimits,
+  ) => {
+    const id = sliceMeasurementKey(item.id, key);
+    if (requests.has(id) || geometryErrors.has(id)) return;
+    try {
+      if (!geometry) throw new Error("Trial geometry backend is unavailable");
+      validateLimits(limits);
+      if (field.k === "cut") {
+        const request = {
+          shape: field.shape,
+          position: input("pos"),
+          limits,
+        };
+        requests.set(id, request);
+        cutMeasures.set(id, geometry.section(request));
+      } else {
+        const start = input("start"),
+          end = input("end"),
+          repeat = input(field.repetition);
+        if (!(end > start) || !(repeat > 0))
+          throw new Error(
+            "Trial repetition needs positive spacing/count and From less than To",
+          );
+        const request = {
+          shape: field.shape,
+          start,
+          end,
+          pitch:
+            field.repetition === "spacing" ? repeat : (end - start) / repeat,
+          phase: trial.repetitionPhases[id],
+          limits,
+        };
+        if (!Number.isFinite(request.pitch) || request.pitch <= 0)
+          throw new Error("Invalid trial pitch");
+        requests.set(id, request);
+        repetitionLayouts.set(id, geometry.layout(request));
+      }
+    } catch (error) {
+      geometryErrors.set(
+        id,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  };
+  const evaluate = createPreparedBookEvaluator(
+    plan.prepared,
+    metrics,
+    undefined,
+    undefined,
+    {
+      inputOffsets: new Map(Object.entries(trial.inputOffsets)),
+      retainInputGradients: true,
+      targets: [],
+      cutMeasures,
+      repetitionLayouts,
+      geometryErrors,
+      ensureGeometry,
+    },
+  );
+  return (targets: readonly string[]) => {
+    const results = evaluate(targets);
+    const values = new Map<string, TrialValue>(
+      targets.map((key) => {
+        const cell = results.cells.get(key);
+        const v = cell?.quantity?.v;
+        const error =
+          cell?.error ??
+          (v !== undefined && !Number.isFinite(v) ? "non-finite value" : null);
+        return [
+          key,
+          {
+            value: error ? null : (v ?? null),
+            dim: cell?.quantity?.dim ?? null,
+            error,
+          },
+        ];
+      }),
+    );
+    return { values, requests, cutMeasures, repetitionLayouts, geometryErrors };
+  };
 }

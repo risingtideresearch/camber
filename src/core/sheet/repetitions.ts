@@ -15,6 +15,12 @@ import {
   type SectionMeasures,
 } from "./sectionMeasures";
 
+export interface RepetitionPhaseTotal {
+  readonly measures: SectionMeasures;
+  readonly weight: number;
+  /** Normalized offset for replay; absent on legacy/synthetic discrepancy data. */
+  readonly phase?: number;
+}
 export interface RepetitionMeasurement {
   /** Nominal geometry is ready; placement/boundary uncertainty is not. */
   readonly uncertaintyPending?: boolean;
@@ -25,13 +31,8 @@ export interface RepetitionMeasurement {
   /** Leibniz boundary derivatives: d integral / da = -q(a), d / db = q(b). */
   readonly start: SectionMeasures;
   readonly end: SectionMeasures;
-  /** Discrete regular-grid totals at uniformly sampled offsets within one pitch. */
-  readonly phaseTotals?: readonly {
-    measures: SectionMeasures;
-    weight: number;
-    /** Normalized offset for replay; absent on legacy/synthetic discrepancy data. */
-    phase?: number;
-  }[];
+  /** Final discrete regular-grid totals at sampled offsets within one pitch. */
+  readonly phaseTotals?: readonly RepetitionPhaseTotal[];
   readonly warning?: string;
 }
 export type RepetitionResult =

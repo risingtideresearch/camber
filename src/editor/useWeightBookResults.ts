@@ -104,11 +104,12 @@ export function useWeightBookResults(
       evaluateBook(book, metrics, geometry.measurements, geometry.repetitions),
     [book, metrics, geometry],
   );
+  const pending = !!resource && geometry.pending && !snapshot.error;
   return {
     positions,
     ...geometry,
     results,
-    pending: !!resource && geometry.pending && !snapshot.error,
+    pending,
     error: snapshot.error,
   };
 }
