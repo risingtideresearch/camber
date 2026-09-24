@@ -60,13 +60,15 @@ const markup = renderToStaticMarkup(
     keys: [sampledKey],
     onPick: () => {},
     run: {
-      result: sample.snapshot(),
-      targetKeys: [sampledKey],
-      cachedResult: () => null,
-      completed: 1,
-      error: null,
-      starting: false,
+      getRun: () => ({
+        result: sample.snapshot(),
+        completed: 1,
+        error: null,
+        starting: false,
+        runId: "test",
+      }),
       start: () => {},
+      prioritize: () => {},
       cancel: () => {},
       refine: () => {},
     },
@@ -91,14 +93,18 @@ const revisited = renderToStaticMarkup(
     keys: [sampledKey],
     onPick: () => {},
     run: {
-      result: null,
-      cachedResult: (keys) =>
-        keys[0] === sampledKey ? sample.snapshot() : null,
-      targetKeys: [target("other")],
-      completed: 0,
-      error: null,
-      starting: false,
+      getRun: (keys) =>
+        keys[0] === sampledKey
+          ? {
+              result: sample.snapshot(),
+              completed: 1,
+              error: null,
+              starting: false,
+              runId: "test",
+            }
+          : null,
       start: () => {},
+      prioritize: () => {},
       cancel: () => {},
       refine: () => {},
     },
@@ -106,6 +112,63 @@ const revisited = renderToStaticMarkup(
 );
 assert.match(revisited, /<td>1250<\/td>/);
 assert.match(revisited, /<progress[^>]*value="1"[^>]*max="1"/);
+const preliminary = renderToStaticMarkup(
+  createElement(SampledResultsPanel, {
+    book: sampledBook,
+    sampling: null,
+    results: sampledResults,
+    ready: true,
+    selectedKey: sampledKey,
+    keys: [sampledKey],
+    onPick: () => {},
+    run: {
+      getRun: () => ({
+        result: {
+          ...sample.snapshot(),
+          execution: { status: "running" as const },
+          progress: { ...sample.snapshot().progress, requestedTrials: 1024 },
+        },
+        completed: 1,
+        error: null,
+        starting: false,
+        runId: "background",
+      }),
+      start: () => {},
+      prioritize: () => {},
+      cancel: () => {},
+      refine: () => {},
+    },
+  }),
+);
+assert.match(preliminary, /preliminary estimates/);
+assert.match(preliminary, /<td>1250<\/td>/);
+assert.match(preliminary, /<progress[^>]*value="1"[^>]*max="1024"/);
+const queued = renderToStaticMarkup(
+  createElement(SampledResultsPanel, {
+    book: sampledBook,
+    sampling: null,
+    results: sampledResults,
+    ready: true,
+    selectedKey: sampledKey,
+    keys: [sampledKey],
+    onPick: () => {},
+    run: {
+      getRun: () => ({
+        result: null,
+        completed: 0,
+        error: null,
+        starting: true,
+        runId: "queued",
+      }),
+      start: () => {},
+      prioritize: () => {},
+      cancel: () => {},
+      refine: () => {},
+    },
+  }),
+);
+assert.match(queued, /Queued for sampling/);
+assert.match(queued, /<progress[^>]*value="0"[^>]*max="1024"/);
 
 // Invalidity is an exception badge in the overview and a count with reasons
 // in the selected detail, rather than a column of mostly zeroes.
@@ -146,13 +209,15 @@ const renderReport = (selectedKey: string) =>
       keys: [sampledKey, otherKey],
       onPick: () => {},
       run: {
-        result: report,
-        targetKeys: [sampledKey, otherKey],
-        cachedResult: () => null,
-        completed: 1024,
-        error: null,
-        starting: false,
+        getRun: () => ({
+          result: report,
+          completed: 1024,
+          error: null,
+          starting: false,
+          runId: "test",
+        }),
         start: () => {},
+        prioritize: () => {},
         cancel: () => {},
         refine: () => {},
       },

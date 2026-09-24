@@ -41,21 +41,22 @@ export function SampledResultsPanel({
     const cell = results.cells.get(key);
     return cell && !cell.empty;
   });
-  const currentRun =
-    targets.length > 0 &&
-    run.targetKeys.length === targets.length &&
-    targets.every((key) => run.targetKeys.includes(key));
+  const current = targets.length ? run.getRun(targets) : null;
   const start = run.start;
-  const cached = targets.length ? run.cachedResult(targets) : null;
-  const result = currentRun ? run.result : cached;
-  const error = currentRun ? run.error : null;
+  const prioritize = run.prioritize;
+  const result = current?.result ?? null;
+  const error = current?.error ?? null;
   const running =
     !error &&
-    currentRun &&
-    (run.starting || result?.execution.status === "running");
+    !!current &&
+    (current.starting || result?.execution.status === "running");
   const signature = targets.join("\0");
   useEffect(() => {
-    if (!ready || !sampling || !signature || currentRun || cached) return;
+    if (!ready || !sampling || !signature) return;
+    if (current) {
+      if (current.starting) prioritize(signature.split("\0"));
+      return;
+    }
     const requested: SamplingTarget[] = signature.split("\0").map((key) => {
       const cell = results.cells.get(key)!;
       return {
@@ -68,7 +69,7 @@ export function SampledResultsPanel({
       };
     });
     start(requested);
-  }, [ready, sampling, signature, currentRun, cached, results, start]);
+  }, [ready, sampling, signature, current, results, start, prioritize]);
   const chosen = result?.outputs.find((output) => output.cellKey === selected);
   const unitFor = (key: string, dim?: SamplingTarget["dim"]) =>
     results.cells.get(key)?.unit ?? (dim ? naturalUnit(dim) : null);
@@ -81,16 +82,14 @@ export function SampledResultsPanel({
     return percent < 0.1 ? "<0.1% invalid" : `${percent.toFixed(1)}% invalid`;
   };
   const requested = result?.progress.requestedTrials ?? 1024;
-  const completed = currentRun
-    ? run.completed
-    : (cached?.progress.completedTrials ?? 0);
+  const completed = current?.completed ?? 0;
   const phase = !keys.length
     ? "Select a field or summary value to sample."
     : !targets.length
       ? "No authored values to sample."
       : !ready
         ? "Waiting for nominal geometry…"
-        : !sampling
+        : !sampling && !current
           ? "Waiting for hull sampling…"
           : error || result?.execution.status === "failed"
             ? "Sampling failed"
@@ -98,14 +97,20 @@ export function SampledResultsPanel({
               ? "Sampling cancelled"
               : result?.execution.status === "finished"
                 ? "Sampled"
-                : completed > 0
-                  ? "Sampling · preliminary estimates"
-                  : "Sampling…";
+                : current?.starting
+                  ? "Queued for sampling…"
+                  : result?.progress.completedTrials
+                    ? "Sampling · preliminary estimates"
+                    : "Sampling…";
   return (
     <div className="wsampled">
       <h3>Sampled results</h3>
       {running && (
-        <button className="wsampled-cancel" type="button" onClick={run.cancel}>
+        <button
+          className="wsampled-cancel"
+          type="button"
+          onClick={() => run.cancel(targets)}
+        >
           Cancel
         </button>
       )}

@@ -1,4 +1,5 @@
 import { assemble } from "../core/runtime";
+import type { HullMetrics } from "../core/hullMetrics";
 import { prepareBook } from "../core/sheet/evaluate";
 import { createSamplingRun } from "../core/sheet/sampling";
 import { createSectionMeasurer } from "../core/sheet/slices";
@@ -12,10 +13,14 @@ import type { SamplingCommand, SamplingEvent } from "./samplingProtocol";
 let prepared: ReturnType<typeof prepareTrials> | null = null;
 let geometry: ReturnType<typeof directTrialGeometry> | null = null;
 let seed: number | null = null;
+let workerMetrics: HullMetrics | null = null;
 let evaluateCached: ReturnType<typeof createTrialValueCache> | null = null;
 const process = createSamplingController(
   (command) => {
     if (!prepared) {
+      if (!command.book || !command.hull || !command.sampling)
+        throw new Error("First sampling request needs the document and hull");
+      workerMetrics = command.metrics ?? null;
       prepared = prepareTrials(prepareBook(command.book));
       const section = createSectionMeasurer(
         assemble(command.hull),
@@ -31,14 +36,14 @@ const process = createSamplingController(
       evaluateCached = createTrialValueCache(
         prepared,
         geometry!,
-        command.metrics,
+        workerMetrics,
       );
     }
     return createSamplingRun(
       command.request,
       prepared,
       geometry!,
-      command.metrics,
+      workerMetrics,
       evaluateCached,
     );
   },

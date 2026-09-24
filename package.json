@@ -30,6 +30,7 @@
     "compare:sampling": "tsx tools/compare-sheet-sampling.ts",
     "compare:repetitions": "tsx tools/compare-repetition-sampling.ts",
     "sample:trials": "tsx tools/sample-sheet-trials.ts",
+    "bench:sampled-views": "node --expose-gc --import tsx tools/benchmark-sampled-views.ts",
     "compare:slices": "tsx tools/compare-slice-backends.ts"
   },
   "devDependencies": {

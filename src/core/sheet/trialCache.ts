@@ -15,6 +15,7 @@ export function createTrialValueCache(
   geometry: TrialGeometry,
   metrics: HullMetrics | null,
   maxWorlds = 1024,
+  onCacheSize?: (size: number) => void,
 ) {
   const worlds = new Map<number, ReturnType<typeof createTrialEvaluator>>();
   return (
@@ -31,6 +32,7 @@ export function createTrialValueCache(
       worlds.delete(trial.index);
       worlds.set(trial.index, evaluate);
     }
+    onCacheSize?.(worlds.size);
     return evaluate(targets).values;
   };
 }

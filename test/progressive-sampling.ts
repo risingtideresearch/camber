@@ -192,20 +192,89 @@ const eventCount = events.length;
 while (queue.length) queue.shift()!();
 assert.equal(events.length, eventCount, "cancel invalidates queued turns");
 controller(start("old"));
+queue.shift()!(); // Incomplete when the view changes.
+const oldPrefix = snapshots().filter((s) => s.runId === "old");
 controller(start("new"));
-controller({ type: "cancel", runId: "old" });
-const beforeDrain = events.length;
+assert.equal(creations, 3, "the visible field starts without waiting");
 while (queue.length) queue.shift()!();
-assert.ok(
-  events
-    .slice(beforeDrain)
-    .every(
-      (event) =>
-        (event.kind === "snapshot" ? event.result.runId : event.runId) ===
-        "new",
-    ),
+const finishedOld = snapshots().findIndex(
+  (s) => s.runId === "old" && s.execution.status === "finished",
 );
-assert.equal(snapshots()[snapshots().length - 1].execution.status, "finished");
+const firstNew = snapshots().findIndex((s) => s.runId === "new");
+assert.ok(oldPrefix.length && firstNew >= 0 && finishedOld > firstNew);
+assert.equal(creations, 3, "resuming a suspended run keeps its accumulator");
+assert.equal(snapshots()[snapshots().length - 1].runId, "old");
+// A run that was no longer visible can still be refined after another run.
+controller({ type: "extend", runId: "old", checkpoints: [4096] });
+while (queue.length) queue.shift()!();
+assert.equal(snapshots()[snapshots().length - 1].runId, "old");
+// Returning to a partially sampled field preempts the newer one, without
+// resetting either trial prefix or creating either run twice.
+controller(start("back"));
+queue.shift()!();
+const backCount = events.find(
+  (e) => e.kind === "progress" && e.runId === "back",
+);
+assert.ok(backCount?.kind === "progress" && backCount.completedTrials > 0);
+controller(start("other"));
+queue.shift()!();
+const createdBeforeReturn = creations;
+controller({ type: "prioritize", runId: "back" });
+const resumed = snapshots().filter((s) => s.runId === "back");
+assert.ok(
+  resumed[resumed.length - 1].progress.completedTrials >=
+    backCount.completedTrials,
+);
+while (queue.length) queue.shift()!();
+assert.equal(creations, createdBeforeReturn);
+assert.ok(
+  snapshots().some(
+    (s) => s.runId === "other" && s.execution.status === "finished",
+  ),
+);
+// Cancelling a queued view does not interrupt view work already in progress.
+controller(start("in-flight"));
+controller(start("waiting"));
+controller({ type: "cancel", runId: "waiting" });
+assert.ok(
+  snapshots().some(
+    (s) => s.runId === "waiting" && s.execution.status === "cancelled",
+  ),
+);
+while (queue.length) queue.shift()!();
+assert.equal(snapshots()[snapshots().length - 1]?.runId, "in-flight");
+controller(start("first"));
+controller(start("middle"));
+controller(start("latest"));
+while (queue.length) queue.shift()!();
+const order = snapshots()
+  .filter(
+    (s) =>
+      s.execution.status === "finished" &&
+      ["first", "middle", "latest"].includes(s.runId),
+  )
+  .map((s) => s.runId);
+assert.deepEqual(
+  order,
+  ["latest", "middle", "first"],
+  "the visible target takes priority",
+);
+controller(start("active-again"));
+controller(start("queued-earlier"));
+controller(start("queued-later"));
+controller({ type: "prioritize", runId: "queued-earlier" });
+while (queue.length) queue.shift()!();
+assert.deepEqual(
+  snapshots()
+    .filter(
+      (s) =>
+        s.execution.status === "finished" &&
+        ["active-again", "queued-earlier", "queued-later"].includes(s.runId),
+    )
+    .map((s) => s.runId),
+  ["queued-earlier", "queued-later", "active-again"],
+  "returning to a queued view moves it to the front",
+);
 const beforeRefine = creations;
 controller({ type: "extend", runId: "new", checkpoints: [4096] });
 while (queue.length) queue.shift()!();
@@ -254,13 +323,26 @@ const failingRuntime = createSamplingController(
   (callback) => runtimeQueue.push(callback),
 );
 failingRuntime(start("runtime"));
+failingRuntime(start("after-runtime"));
 while (runtimeQueue.length) runtimeQueue.shift()!();
-const lastEvent = runtimeEvents[runtimeEvents.length - 1];
-assert.ok(lastEvent.kind === "snapshot");
-assert.equal(lastEvent.result.execution.status, "failed");
-assert.equal(lastEvent.result.progress.completedTrials, 1);
-for (const output of lastEvent.result.outputs)
+const runtimeSnapshots = runtimeEvents.flatMap((event) =>
+  event.kind === "snapshot" ? [event.result] : [],
+);
+const failed = runtimeSnapshots.find(
+  (result) =>
+    result.runId === "runtime" && result.execution.status === "failed",
+);
+assert.ok(failed);
+assert.equal(failed.progress.completedTrials, 1);
+for (const output of failed.outputs)
   assert.equal(output.validTrials + output.invalidTrials, 1);
+assert.ok(
+  runtimeSnapshots.some(
+    (result) =>
+      result.runId === "after-runtime" && result.execution.status === "failed",
+  ),
+  "later jobs are still visited after failure",
+);
 
 const unknownDimension = createSamplingRun(
   {

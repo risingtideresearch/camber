@@ -8,12 +8,14 @@ export type SamplingCommand =
   | {
       readonly type: "start";
       readonly request: SamplingRequest;
-      readonly book: WeightBook;
-      readonly hull: HullState;
-      readonly sampling: HullSampling;
-      readonly metrics: HullMetrics | null;
+      /** Only the first request in a worker needs the immutable context. */
+      readonly book?: WeightBook;
+      readonly hull?: HullState;
+      readonly sampling?: HullSampling;
+      readonly metrics?: HullMetrics | null;
     }
   | { readonly type: "cancel"; readonly runId: string }
+  | { readonly type: "prioritize"; readonly runId: string }
   | {
       readonly type: "extend";
       readonly runId: string;
