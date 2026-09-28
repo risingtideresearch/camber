@@ -310,7 +310,7 @@ assert.match(nextFails.getSnapshot().error!, /queued clone failed/);
 assert.equal(nextFailsWorker.terminated, true);
 
 // Two-pass geometry: publish nominal values before computing spreads. The
-// completion reuses integration/endpoints/previews, not just plane intersections.
+// numerical core reuses integration and endpoints; previews are a separate job concern.
 let stagedCalls = 0;
 const stagedMeasure = () => {
   stagedCalls++;
@@ -326,7 +326,7 @@ const nominalCore = measureRepetition(
   [],
 );
 assert.ok(nominalCore.value);
-assert.equal(stagedCalls, 121);
+assert.equal(stagedCalls, 114);
 const completionCore = measureRepetition(
   stagedMeasure,
   "transverse",
@@ -392,6 +392,11 @@ const stagedPlan = planWeightGeometry(
   densityBook,
   evaluateBook(densityBook, null),
 );
+assert.equal(
+  stagedPlan.jobs[0].kind === "repetition" &&
+    stagedPlan.jobs[0].previewPositions.length,
+  7,
+);
 const stagedProcess = createWeightGeometryProcessor(model, sampling);
 const stage1 = stagedProcess({
   key: "nominal",
@@ -402,6 +407,13 @@ const nominalResult = stage1.results[0].result;
 assert.equal(uncertaintyPending(nominalResult), true);
 assert.ok(nominalResult.kind === "repetition" && nominalResult.result.value);
 assert.equal(nominalResult.result.value.phaseTotals, undefined);
+assert.equal(nominalResult.preview?.length, 7);
+assert.ok(
+  nominalResult.preview!.every(
+    (sample) =>
+      sample.sheetContours.length > 0 && sample.sheetSkinSegments.length > 0,
+  ),
+);
 const nominalGeometry = resolveWeightGeometry(
   stagedPlan,
   new Map(stage1.results.map((r) => [r.key, r.result])),

@@ -66,12 +66,30 @@ export function createWeightGeometryProcessor(
         ? cached.result.value
         : undefined,
     );
+    let preview = cached?.kind === "repetition" ? cached.preview : undefined;
+    if (preview === undefined && result.value) {
+      try {
+        cut ??= createSliceMeasurer(model, sampling);
+        preview = job.previewPositions.map((position) => {
+          const value = cut!(job.shape, position, job.limits, {
+            position: false,
+            boundaries: [],
+          });
+          if (!value) throw new Error("Preview section is unavailable");
+          return value;
+        });
+      } catch {
+        // A drawing aid must not turn an otherwise valid estimate into an error.
+        preview = null;
+      }
+    }
     return {
       kind: "repetition",
       result:
         nominal && result.value
           ? { value: { ...result.value, uncertaintyPending: true } }
           : result,
+      preview: preview ?? null,
     };
   };
   return (request: WeightGeometryRequest): WeightGeometryResponse => ({

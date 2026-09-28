@@ -45,6 +45,7 @@ import { FUNCTIONS } from "../../core/sheet/formula";
 import { HULL_METRICS, HULL_POINTS } from "../../core/hullMetrics";
 import {
   findItem,
+  leavesOf,
   interpretSheetCommand,
   newId,
   primaryFacet,
@@ -53,6 +54,7 @@ import {
   rollupsOf,
   tidyName,
   type Item,
+  type FieldLeaf,
   type RenameCommand,
   type View,
   type WeightBook,
@@ -105,6 +107,9 @@ import {
   useFormulaInsertion,
 } from "./FormulaInsertion";
 import { problemItems, problemsOf } from "../../core/sheet/views";
+import { SampledResultsPanel } from "./SampledResultsPanel";
+import { sampledFieldKeys } from "./sampledFieldKeys";
+import { useSampledResults } from "../useSampledResults";
 import "./WeightPanel.css";
 
 export function WeightPanel() {
@@ -140,9 +145,11 @@ function WeightPanelContents() {
   } | null>(null);
 
   const hullSampling = sampling();
+  // Keep the run and its controls alive while switching inspector tabs and views.
+  const sampledRun = useSampledResults(book, model, hullSampling, metrics);
   const computation = useWeightBookResults(book, model, hullSampling, metrics);
   const {
-    readout: { measurements, repetitions, results },
+    readout: { measurements, repetitionPreviews, results },
     stale,
   } = useWeightPresentation(
     computation,
@@ -322,7 +329,13 @@ function WeightPanelContents() {
             onAddItem={addItem}
             inspectorShown={sidePanel !== "none"}
             onToggleInspector={() =>
-              setSidePanel(sidePanel === "none" ? "auto" : "none")
+              setSidePanel(
+                sidePanel === "none"
+                  ? view.layout === "problems"
+                    ? "sampled"
+                    : "auto"
+                  : "none",
+              )
             }
             referenceShown={sidePanel === "reference"}
             onToggleReference={() =>
@@ -342,7 +355,7 @@ function WeightPanelContents() {
               rows,
               results,
               measurements,
-              repetitions,
+              repetitionPreviews,
               reading,
               focus,
               setFocus,
@@ -366,6 +379,8 @@ function WeightPanelContents() {
               model,
               hullSampling,
               metrics,
+              sampledRun,
+              sampledReady: !geometryPending && !geometryError,
             }}
           />
         </div>
@@ -455,13 +470,10 @@ function ViewBar({
       >
         +
       </button>
-      {/* Problems has no selection for an inspector to describe. Everywhere else this is the inspector's
-          only show/hide control, so opening and closing it do not compete with a second ×. */}
-      {active.layout !== "problems" && (
-        <button className="wviewtool" onClick={onToggleInspector}>
-          {inspectorShown ? "Hide inspector" : "Show inspector"}
-        </button>
-      )}
+      {/* Sampling and the reference remain available even without a selected problem. */}
+      <button className="wviewtool" onClick={onToggleInspector}>
+        {inspectorShown ? "Hide inspector" : "Show inspector"}
+      </button>
       <button className="wviewtool" onClick={onToggleReference}>
         {referenceShown ? "Hide reference" : "What can I write?"}
       </button>
@@ -480,7 +492,9 @@ interface BodyProps {
   readonly columns: ReturnType<typeof viewColumns>;
   readonly rows: ReturnType<typeof viewRows>;
   readonly results: ReturnType<typeof useWeightBookResults>["results"];
-  readonly repetitions: ReturnType<typeof useWeightBookResults>["repetitions"];
+  readonly repetitionPreviews: ReturnType<
+    typeof useWeightBookResults
+  >["repetitionPreviews"];
   readonly measurements: ReturnType<
     typeof useWeightBookResults
   >["measurements"];
@@ -503,6 +517,8 @@ interface BodyProps {
   readonly model: ReturnType<typeof useDocumentRuntime>;
   readonly hullSampling: ReturnType<ReturnType<typeof useEditorUi>["sampling"]>;
   readonly metrics: unknown;
+  readonly sampledRun: ReturnType<typeof useSampledResults>;
+  readonly sampledReady: boolean;
 }
 
 /**
@@ -513,15 +529,16 @@ interface BodyProps {
  * the pane is no longer on offer at all.
  */
 export type SidePanel =
-  "auto" | "spread" | "uses" | "geometry" | "reference" | "none";
+  "auto" | "spread" | "uses" | "geometry" | "reference" | "sampled" | "none";
 
-type Shown = "spread" | "uses" | "geometry" | "reference";
+type Shown = "spread" | "uses" | "geometry" | "reference" | "sampled";
 
 const PANEL_LABEL: Record<Shown, string> = {
   spread: "Spread",
   uses: "Uses",
   geometry: "Geometry",
   reference: "Reference",
+  sampled: "Sampled",
 };
 
 /** Keep the existing narrow-window stacking while handing both arrangements to the resizable layout. */
@@ -678,13 +695,62 @@ function ResizableBody({
   );
 }
 
+function SampledInspector(props: BodyProps) {
+  const focus = props.view.layout === "summary" ? null : props.focus;
+  const keys =
+    props.view.layout === "summary"
+      ? [cellKey(OUTPUT_ITEM, props.selectedOutput)]
+      : focus?.field
+        ? sampledFieldKeys(props.book, focus.item, focus.field)
+        : [];
+  const selectedKey =
+    props.view.layout === "summary"
+      ? keys[0]
+      : focus?.field
+        ? cellKey(
+            focus.item,
+            focus.field,
+            focus.leaf === "from" ? "x" : focus.leaf,
+          )
+        : null;
+  return (
+    <SampledResultsPanel
+      key={
+        focus?.field
+          ? `${focus.item} ${focus.field}`
+          : `OUT ${props.view.layout} ${props.selectedOutput}`
+      }
+      book={props.book}
+      sampling={props.hullSampling}
+      results={props.results}
+      ready={props.sampledReady}
+      run={props.sampledRun}
+      keys={keys}
+      selectedKey={selectedKey}
+      onPick={(key) => {
+        if (!focus?.field) return;
+        const field = findItem(props.book, focus.item)?.fields[focus.field];
+        const leaf = props.results.cells.get(key)?.leaf;
+        if (field && leaf && leavesOf(field).includes(leaf as FieldLeaf))
+          props.go(focus.item, focus.field, leaf as FieldLeaf);
+      }}
+    />
+  );
+}
+
 function ViewBody(props: BodyProps) {
   const { book, view, items, results, problems, openItem, send } = props;
 
   if (view.layout === "summary") return <SummaryBody {...props} />;
 
   if (view.layout === "problems") {
-    const shown = props.sidePanel === "reference" ? "reference" : null;
+    const offers: Shown[] = ["sampled", "reference"];
+    const shown: Shown | null =
+      props.sidePanel === "none"
+        ? null
+        : props.sidePanel === "reference"
+          ? "reference"
+          : "sampled";
     return (
       <ResizableBody
         main={<Problems problems={problems} onOpenItem={openItem} />}
@@ -693,12 +759,16 @@ function ViewBody(props: BodyProps) {
           shown ? (
             <>
               <SideTabs
-                offers={["reference"]}
+                offers={offers}
                 shown={shown}
                 onPick={props.setSidePanel}
               />
               <div className="wsidebody">
-                <Reference book={book} />
+                {shown === "sampled" ? (
+                  <SampledInspector {...props} />
+                ) : (
+                  <Reference book={book} />
+                )}
               </div>
             </>
           ) : null
@@ -757,17 +827,22 @@ function ViewBody(props: BodyProps) {
               y: { value: gy.v, placement: null, factor: 1, empty: false },
               z: { value: gz.v, placement: null, factor: 1, empty: false },
             },
-            xz: results.uncertaintyPending
-              ? []
-              : spreadRegion(gx, gz, results.sources, props.reading),
-            yz: results.uncertaintyPending
-              ? []
-              : spreadRegion(gy, gz, results.sources, props.reading),
+            xz:
+              geometryCg?.readings.x?.uncertaintyPending ||
+              geometryCg?.readings.z?.uncertaintyPending
+                ? []
+                : spreadRegion(gx, gz, results.sources, props.reading),
+            yz:
+              geometryCg?.readings.y?.uncertaintyPending ||
+              geometryCg?.readings.z?.uncertaintyPending
+                ? []
+                : spreadRegion(gy, gz, results.sources, props.reading),
           }
         : null;
     const hasGeometry = geometryItems.length > 0 || !!geometryTotal;
     const offers: Shown[] = [
       "spread",
+      "sampled",
       ...(!selectedTotal && focusedField ? (["uses"] as const) : []),
       ...(hasGeometry ? (["geometry"] as const) : []),
       "reference",
@@ -824,7 +899,9 @@ function ViewBody(props: BodyProps) {
                 onPick={props.setSidePanel}
               />
               <div className="wsidebody">
-                {shown === "reference" ? (
+                {shown === "sampled" ? (
+                  <SampledInspector {...props} />
+                ) : shown === "reference" ? (
                   <Reference book={book} />
                 ) : shown === "geometry" ? (
                   <GeometryEditor
@@ -911,11 +988,17 @@ function ViewBody(props: BodyProps) {
   const offers: Shown[] = focusedField
     ? [
         "spread",
+        "sampled",
         "uses",
         ...baseOffers.filter((offer) => offer !== "spread"),
         "reference",
       ]
-    : [...baseOffers, "reference"];
+    : [
+        "spread",
+        "sampled",
+        ...baseOffers.filter((offer) => offer !== "spread"),
+        "reference",
+      ];
 
   // The caret wins where it is in a cell: editing a coordinate or a station wants the drawing beside it,
   // editing a mass wants to know what the mass rests on. With no cell selected the view's own kind decides,
@@ -945,7 +1028,7 @@ function ViewBody(props: BodyProps) {
           <ItemDetail
             book={book}
             item={detail}
-            repetitions={props.repetitions}
+            repetitionPreviews={props.repetitionPreviews}
             results={results}
             measurements={props.measurements}
             reading={props.reading}
@@ -981,7 +1064,9 @@ function ViewBody(props: BodyProps) {
               onPick={props.setSidePanel}
             />
             <div className="wsidebody">
-              {shown === "reference" ? (
+              {shown === "sampled" ? (
+                <SampledInspector {...props} />
+              ) : shown === "reference" ? (
                 <Reference book={book} />
               ) : shown === "spread" ? (
                 <Inspector
@@ -1014,7 +1099,7 @@ function ViewBody(props: BodyProps) {
 function SummaryBody(props: BodyProps) {
   // Geometry remains available even before both coordinates work out, so the pane can explain what is
   // missing instead of making the capability itself appear and disappear while formulas are edited.
-  const offers: Shown[] = ["spread", "geometry", "reference"];
+  const offers: Shown[] = ["spread", "sampled", "geometry", "reference"];
   const shown: Shown | null =
     props.sidePanel === "none"
       ? null
@@ -1044,7 +1129,9 @@ function SummaryBody(props: BodyProps) {
               onPick={props.setSidePanel}
             />
             <div className="wsidebody">
-              {shown === "reference" ? (
+              {shown === "sampled" ? (
+                <SampledInspector {...props} />
+              ) : shown === "reference" ? (
                 <Reference book={props.book} />
               ) : shown === "spread" ? (
                 <OutputInspector
@@ -1087,25 +1174,20 @@ function SummaryGeometry(props: BodyProps) {
         y: { value: 0, placement: null, factor: 1, empty: false },
         z: { value: z.reading.v, placement: null, factor: 1, empty: false },
       },
-      xz: props.results.uncertaintyPending
-        ? []
-        : spreadRegion(
-            x.quantity,
-            z.quantity,
-            props.results.sources,
-            props.reading,
-          ),
-      yz: props.results.uncertaintyPending
+      xz:
+        x.reading.uncertaintyPending || z.reading.uncertaintyPending
+          ? []
+          : spreadRegion(
+              x.quantity,
+              z.quantity,
+              props.results.sources,
+              props.reading,
+            ),
+      yz: z.reading.uncertaintyPending
         ? []
         : spreadRegion(y, z.quantity, props.results.sources, props.reading),
     };
-  }, [
-    x,
-    z,
-    props.results.sources,
-    props.results.uncertaintyPending,
-    props.reading,
-  ]);
+  }, [x, z, props.results.sources, props.reading]);
 
   if (!outlines || !props.hullSampling || !point)
     return (
@@ -1277,12 +1359,31 @@ function Reference({ book }: { readonly book: WeightBook }) {
           <dl>
             <Entry
               term="4.2 ± 0.3"
-              hint="give or take 0.3 — type +- for the ±"
+              hint="uniform between 3.9 and 4.5 in sampled trials — type +- for the ±"
             />
             <Entry term="160 ± 10%" hint="give or take a tenth of 160" />
             <Entry
               term="900 ± [50, 200]"
               hint="50 below, 200 above — a one-sided guess"
+            />
+            <Entry
+              term="4.2 ± tri(0.3)"
+              hint="triangular draws from 3.9 to 4.5, peaking at 4.2"
+              insert="4.2 ± tri(0.3)"
+            />
+            <Entry
+              term="10 ± tri(2, 5)"
+              hint="asymmetric triangle from 8 to 15, peaking at 10; mean is 11, not 10. Either side may be zero"
+              insert="10 ± tri(2, 5)"
+            />
+            <Entry
+              term="4.2 ± normal(0.3)"
+              hint="normal draws with mean 4.2 and standard deviation 0.3; unbounded, so ±0.3 is not a hard limit"
+              insert="4.2 ± normal(0.3)"
+            />
+            <Entry
+              term="Sampling shapes"
+              hint="shapes apply to individual ± literals in sampled trials, not the linearized Worst case and Likely readings; normal has no worst-case bound"
             />
             <Entry term="[4.0, 4.5]" hint="somewhere in that range" />
           </dl>

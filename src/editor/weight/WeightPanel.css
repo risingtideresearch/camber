@@ -96,6 +96,7 @@
   display: flex;
   align-items: stretch;
   flex: 0 0 auto;
+  overflow-x: auto;
   padding: 0 4px 0 6px;
   border-bottom: 1px solid var(--line);
 }
@@ -3313,6 +3314,7 @@ button.wtermgo:focus-visible {
   position: absolute;
   inset: 0 0 auto;
 }
+
 /* A short pending marker must not wrap a cell or widen its table column. */
 .wrollspread {
   display: inline-block;
@@ -3324,4 +3326,141 @@ button.wtermgo:focus-visible {
   margin: 0 6px 4px;
   padding: 4px;
   border-bottom: 1px solid var(--line);
+}
+
+.wsampled {
+  position: relative;
+  padding: 12px;
+  font-size: 12px;
+  min-width: 0;
+  width: 100%;
+}
+.wsampled h3 {
+  margin: 0 0 8px;
+  padding-right: 62px;
+}
+.wsampled-cancel {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+}
+.wsampled p {
+  color: var(--mut);
+  margin: 8px 0;
+}
+.wsampled-status {
+  min-height: 1.5em;
+  color: var(--mut);
+  margin: 8px 0 4px;
+}
+.wsampled-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 10px;
+}
+.wsampled-progress progress {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 8px;
+  accent-color: var(--accent);
+}
+.wsampled-progress-count {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--mut);
+}
+.wsampled-progress-count span {
+  display: inline-block;
+  text-align: right;
+}
+.wsampled-table {
+  overflow-x: auto;
+}
+.wsampled table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.wsampled th,
+.wsampled td {
+  text-align: left;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.wsampled-summary th,
+.wsampled-summary td {
+  white-space: nowrap;
+}
+.wsampled-summary tbody tr {
+  cursor: pointer;
+}
+.wsampled-summary tr.on {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.wsampled-summary button {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  padding: 2px;
+  text-align: left;
+}
+.wsampled-summary button:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.wsampled-invalid-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--mut);
+  font-size: 10px;
+  font-weight: normal;
+  white-space: nowrap;
+}
+.wsampled-invalid-badge.all {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  font-weight: 600;
+}
+.wsampled .wsampled-invalid-all,
+.wsampled-validity.all {
+  color: var(--danger);
+  font-weight: 600;
+}
+.wsampled-validity {
+  margin: 10px 0;
+  color: var(--mut);
+}
+.wsampled-validity details {
+  margin-top: 4px;
+}
+.wsampled-validity summary {
+  cursor: pointer;
+}
+
+.wsampled-distribution {
+  margin: 12px 0;
+  min-width: 0;
+}
+.wsampled-distribution figcaption {
+  font-weight: 600;
+}
+.wsampled-distribution svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-size: 12px;
+  fill: var(--mut);
+}
+.wsampled-distribution .wsampled-bar {
+  fill: var(--accent);
+  opacity: 0.5;
+}
+.wsampled-distribution .wsampled-interval {
+  fill: var(--ink);
 }

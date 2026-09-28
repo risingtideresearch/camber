@@ -849,23 +849,20 @@ export function StabilityPanel() {
   // The sheet works in kilograms and metres; the plane works in tonnes and model units. Both readings are
   // taken at their WORST extent, because that is what this plane is for: the question is whether the design
   // still passes when the estimate is as wrong as it is allowed to be.
-  const {
-    results: sheetResults,
-    uncertaintyPending: sheetUncertaintyPending,
-    error: sheetGeometryError,
-  } = useWeightBookResults(
-    book,
-    model,
-    hullSampling,
-    analysis?.metrics ?? null,
+  const { results: sheetResults, error: sheetGeometryError } =
+    useWeightBookResults(book, model, hullSampling, analysis?.metrics ?? null);
+  const sheetUncertaintyPending = !!(
+    sheetResults.outputs.displacement?.uncertaintyPending ||
+    sheetResults.outputs.vcg?.uncertaintyPending
   );
   const fromSheet = useMemo(() => {
-    // Never use incomplete spreads as a safety/tolerance envelope.
-    if (sheetResults.uncertaintyPending) return null;
     const mass = sheetResults.outputs.displacement;
     if (!mass || !isFinite(mass.v) || mass.v <= 0) return null;
     const toTonnes = 1 / 1000;
     const vcg = sheetResults.outputs.vcg;
+    // Only these two outputs define the safety/tolerance envelope. Unrelated
+    // geometry may still be pending, but neither of these spreads may be.
+    if (mass.uncertaintyPending || vcg?.uncertaintyPending) return null;
     return {
       // kilograms → tonnes → volume in model units, through the same density the axis is drawn in.
       vol: (mass.v * toTonnes) / book.density / metres ** 3,

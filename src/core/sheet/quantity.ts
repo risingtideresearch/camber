@@ -77,7 +77,8 @@ export function dimLabel(dim: Dim): string {
  * rather than a ±, because a real tolerance is often one-sided — the lightship is known and the gear piled on
  * top of it is not — and because the stability panel's own tolerance is already shaped that way.
  *
- * Nothing here says what confidence the numbers describe, and nothing needs to: see `read`.
+ * For authored bounds there is no confidence level: see `read`. A normal-shaped literal
+ * instead interprets its symmetric spread as one standard deviation during sampling.
  */
 export interface Source {
   readonly id: string;
@@ -96,6 +97,8 @@ export interface Source {
   readonly at?: string;
   readonly lo: number;
   readonly hi: number;
+  /** Sampling shape; absent means uniform over authored bounds. normal uses lo as σ. */
+  readonly distribution?: "triangular" | "normal";
 }
 
 export type SourceTable = ReadonlyMap<string, Source>;

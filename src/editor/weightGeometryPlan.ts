@@ -3,6 +3,7 @@ import { activeBoundaries, validateLimits } from "../core/sheet/boundaries";
 import { resultAt, type BookResults } from "../core/sheet/evaluate";
 import {
   sliceMeasurementKey,
+  type RawSliceMeasurement,
   type SliceMeasurements,
   type SliceMeasurement,
 } from "../core/sheet/slices";
@@ -15,11 +16,16 @@ import type {
   WeightGeometryJob,
   WeightGeometryResult,
 } from "../worker/weightGeometryProtocol";
+import { repetitionPreviewPositions } from "./weight/repetitionPlots";
 
 export interface WeightGeometryPlan {
   readonly jobs: readonly WeightGeometryJob[];
   readonly fields: readonly { key: string; job: WeightGeometryJob }[];
 }
+export type RepetitionPreviews = ReadonlyMap<
+  string,
+  readonly RawSliceMeasurement[]
+>;
 
 /** Resolve only authored inputs here. No hull intersections or quadrature in
  * render. Uncertainty source identities do not enter geometry cache keys. */
@@ -97,6 +103,10 @@ export function planWeightGeometry(
           start: start.quantity.v,
           end: end.quantity.v,
           pitch,
+          previewPositions: repetitionPreviewPositions(
+            start.quantity.v,
+            end.quantity.v,
+          ),
         };
         job = { ...data, key: JSON.stringify(data) };
       }
@@ -112,11 +122,13 @@ export function resolveWeightGeometry(
 ): {
   measurements: SliceMeasurements;
   repetitions: RepetitionMeasurements;
+  repetitionPreviews: RepetitionPreviews;
   pending: boolean;
   uncertaintyPending: boolean;
 } {
   const measurements = new Map<string, SliceMeasurement>();
   const repetitions = new Map<string, RepetitionResult>();
+  const repetitionPreviews = new Map<string, readonly RawSliceMeasurement[]>();
   let pending = false;
   let pendingUncertainty = false;
   for (const { key, job } of plan.fields) {
@@ -128,11 +140,15 @@ export function resolveWeightGeometry(
     pendingUncertainty ||= uncertaintyPending(result);
     if (result.kind === "cut") {
       if (result.value) measurements.set(key, result.value);
-    } else repetitions.set(key, result.result);
+    } else {
+      repetitions.set(key, result.result);
+      if (result.preview) repetitionPreviews.set(key, result.preview);
+    }
   }
   return {
     measurements,
     repetitions,
+    repetitionPreviews,
     pending,
     uncertaintyPending: pendingUncertainty,
   };

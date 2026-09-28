@@ -4,7 +4,11 @@ import type { HullMetrics } from "../core/hullMetrics";
 import type { HullSampling } from "../core/mesh";
 import type { Model } from "../core/model";
 import type { WeightBook } from "../core/sheet/book";
-import { evaluateBook, type BookResults } from "../core/sheet/evaluate";
+import {
+  evaluatePreparedBook,
+  prepareBook,
+  type BookResults,
+} from "../core/sheet/evaluate";
 import type { SliceMeasurements } from "../core/sheet/slices";
 import type { RepetitionMeasurements } from "../core/sheet/repetitions";
 import type {
@@ -15,6 +19,7 @@ import { createWeightGeometryResource } from "./weightGeometryResource";
 import {
   planWeightGeometry,
   resolveWeightGeometry,
+  type RepetitionPreviews,
 } from "./weightGeometryPlan";
 
 type GeometryResource = ReturnType<typeof createWeightGeometryResource>;
@@ -60,6 +65,7 @@ export interface WeightBookResults {
   readonly positions: BookResults;
   readonly measurements: SliceMeasurements;
   readonly repetitions: RepetitionMeasurements;
+  readonly repetitionPreviews: RepetitionPreviews;
   readonly results: BookResults;
   readonly pending: boolean;
   readonly uncertaintyPending: boolean;
@@ -76,7 +82,13 @@ export function useWeightBookResults(
   sampling: HullSampling | null,
   metrics: HullMetrics | null,
 ): WeightBookResults {
-  const positions = useMemo(() => evaluateBook(book, metrics), [book, metrics]);
+  // Compile once per authored revision. Geometry completion replaces the world,
+  // not its bindings/operations/dependency graph.
+  const prepared = useMemo(() => prepareBook(book), [book]);
+  const positions = useMemo(
+    () => evaluatePreparedBook(prepared, metrics),
+    [prepared, metrics],
+  );
   const plan = useMemo(
     () => planWeightGeometry(book, positions),
     [book, positions],
@@ -99,14 +111,20 @@ export function useWeightBookResults(
   );
   const results = useMemo(
     () =>
-      evaluateBook(book, metrics, geometry.measurements, geometry.repetitions),
-    [book, metrics, geometry],
+      evaluatePreparedBook(
+        prepared,
+        metrics,
+        geometry.measurements,
+        geometry.repetitions,
+      ),
+    [prepared, metrics, geometry],
   );
+  const pending = !!resource && geometry.pending && !snapshot.error;
   return {
     positions,
     ...geometry,
     results,
-    pending: !!resource && geometry.pending && !snapshot.error,
+    pending,
     error: snapshot.error,
   };
 }
