@@ -1,3 +1,4 @@
+import { scenarioViolations } from "./sheet/scenarios";
 import { BOUNDARIES, isBoundaryLeaf } from "./sheet/boundaries";
 // ---------- what a hull promises, checked ----------
 //
@@ -176,7 +177,7 @@ export function assertValidHull(
 // is that a value has to be something a tree can split on.
 
 export function bookViolations(book: WeightBook): string[] {
-  const out: string[] = [];
+  const out: string[] = scenarioViolations(book);
 
   if (!finite(book.density) || book.density <= 0)
     out.push("density must be a positive number");

@@ -45,7 +45,13 @@ import {
   interpretSheetCommand,
   isSheetCommand,
   type SheetCommand,
+  type WeightBook,
 } from "./sheet/book";
+import {
+  SHARED_WORKSPACE,
+  scenariosOf,
+  isScenarioLocalCommand,
+} from "./sheet/scenarios";
 import { roleSpec } from "./sheet/roles";
 
 // ---------- the command set ----------
@@ -680,6 +686,13 @@ export function commandSlices(cmd: DocumentCommand): SliceMask {
 // scalar the user typed rather than dragged.
 export function sameGesture(a: DocumentCommand, b: DocumentCommand): boolean {
   if (a.type !== b.type) return false;
+  if (
+    isSheetCommand(a) &&
+    isSheetCommand(b) &&
+    JSON.stringify(a.scope ?? { k: "shared" }) !==
+      JSON.stringify(b.scope ?? { k: "shared" })
+  )
+    return false;
   switch (a.type) {
     // The book's text cells, held open while the user types. Coalesced per CELL, so tabbing to the next one
     // starts a new step rather than absorbing the last one — a point carries three formula cells, and
@@ -736,7 +749,22 @@ export function sameGesture(a: DocumentCommand, b: DocumentCommand): boolean {
 // and there can be 200 entries).
 //
 // Points are named from 1 to match what the editors label them; a station is "S1" as its tab reads.
-export function describeCommand(cmd: DocumentCommand): string {
+export function describeCommand(
+  cmd: DocumentCommand,
+  book?: WeightBook,
+): string {
+  const scenarioName = (id: string) =>
+    id === SHARED_WORKSPACE
+      ? "Shared"
+      : (book && scenariosOf(book).find((s) => s.id === id)?.name) || id;
+  if (isSheetCommand(cmd) && cmd.scope?.k === "scenario")
+    return `${describeCommand({ ...cmd, scope: undefined }, book)} [${scenarioName(cmd.scope.scenarioId)}]`;
+  if (
+    isSheetCommand(cmd) &&
+    cmd.scope?.k === "shared" &&
+    isScenarioLocalCommand(cmd)
+  )
+    return `${describeCommand({ ...cmd, scope: undefined }, book)} [Shared]`;
   switch (cmd.type) {
     case "addPlanPoint":
       return "Add a sheer point";
@@ -850,6 +878,18 @@ export function describeCommand(cmd: DocumentCommand): string {
       return "Set the water density";
     case "installSheet":
       return "Replace the whole weight estimate";
+    case "addScenario":
+      return `Add scenario "${cmd.name}"`;
+    case "renameScenario":
+      return `Rename scenario to "${cmd.name}"`;
+    case "removeScenario":
+      return "Remove a scenario";
+    case "setApplicability":
+      return "Change scenario membership";
+    case "setScenarioPatch":
+      return `Edit scenario ${scenarioName(cmd.scenarioId)}`;
+    case "resetScenarioOverrides":
+      return `Reset overrides in ${scenarioName(cmd.scenarioId)}`;
   }
 }
 

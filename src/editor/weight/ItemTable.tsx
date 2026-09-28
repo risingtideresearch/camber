@@ -326,7 +326,11 @@ function ItemRow(props: ItemRowProps) {
         </button>
         <button
           className="wremove"
-          title="Remove this item"
+          title={
+            props.book.scenarioContext && !props.book.scenarioContext.shared
+              ? "Exclude this item from this scenario"
+              : "Delete this item everywhere"
+          }
           onClick={() => send({ type: "removeItem", item: item.id })}
         >
           ×
@@ -339,6 +343,7 @@ function ItemRow(props: ItemRowProps) {
 // ---------- one cell ----------
 
 function Cell({
+  book,
   item,
   column,
   results,
@@ -351,25 +356,56 @@ function Cell({
 
   // A blank cell is not dead space. The column is a question, and giving the item the field it asks for is
   // the answer — so clicking here fills the schedule out sideways the way the add-line fills it downwards.
-  if (!field || field.k !== column.kind)
+  if (!field || field.k !== column.kind) {
+    const sourceItem = book.scenarioContext?.authoredItems.find(
+      (i) => i.id === item.id,
+    );
+    const excluded = !field ? sourceItem?.fields[column.fieldKey] : undefined;
     return (
       <td className="wcell wblank">
         <button
           className="wfill"
-          title={`Give ${item.name || "this item"} a ${column.fieldKey}`}
-          onClick={() =>
-            send({
-              type: "addField",
-              item: item.id,
-              key: column.fieldKey,
-              kind: column.kind,
-            })
+          title={
+            excluded
+              ? `Include ${column.fieldKey} in this scenario`
+              : `Give ${item.name || "this item"} a ${column.fieldKey}`
           }
+          onClick={() => {
+            if (excluded && sourceItem && book.scenarioContext) {
+              const ids =
+                excluded.applicability?.k === "only"
+                  ? excluded.applicability.scenarios
+                  : [];
+              send({
+                type: "setApplicability",
+                item: item.id,
+                fieldKey: column.fieldKey,
+                applicability: {
+                  k: "only",
+                  scenarios: book.scenarioContext.shared
+                    ? ids
+                    : [...new Set([...ids, book.scenarioContext.id])],
+                  ...(book.scenarioContext.shared ||
+                  (excluded.applicability?.k === "only" &&
+                    excluded.applicability.shared)
+                    ? { shared: true }
+                    : {}),
+                },
+              });
+            } else
+              send({
+                type: "addField",
+                item: item.id,
+                key: column.fieldKey,
+                kind: column.kind,
+              });
+          }}
         >
           +
         </button>
       </td>
     );
+  }
 
   if (column.source.k === "measure") {
     const result = resultAt(
@@ -394,6 +430,12 @@ function Cell({
   }
 
   const leaf = column.source.leaf;
+  const patch =
+    book.scenarioContext && !book.scenarioContext.shared
+      ? field.overrides?.[book.scenarioContext.id]
+      : undefined;
+  const overridden =
+    !!patch && Object.prototype.hasOwnProperty.call(patch, leaf);
   const result = resultAt(results, item.id, column.fieldKey, leaf);
   const text = (field as unknown as Record<string, string>)[leaf] ?? "";
   const factor = result?.unit?.factor ?? 1;
@@ -407,7 +449,16 @@ function Cell({
   const firstLeaf = field.k === "point" ? "x" : leaf;
 
   return (
-    <td className={`wcell${column.kind === "scalar" ? " wcellscalar" : ""}`}>
+    <td
+      className={`wcell${column.kind === "scalar" ? " wcellscalar" : ""}${overridden ? " wscenario-override" : ""}`}
+      title={
+        book.scenarioContext && !book.scenarioContext.shared
+          ? overridden
+            ? `Override in ${book.scenarioContext.name}`
+            : "Shared assumption; editing creates an override here"
+          : undefined
+      }
+    >
       <div className="wcellrow">
         <FormulaField
           value={text}

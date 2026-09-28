@@ -1,0 +1,405 @@
+/* Compact workspace picker and comparison inspector; management has its own view. */
+.wviewbar-shell {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.wviewbar-shell > .wviewbar {
+  flex: 1;
+  min-width: 0;
+  border-bottom: 0;
+}
+.wscenario-picker {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border-left: 1px solid var(--line);
+  max-width: 45%;
+}
+.wscenario-picker .dropdown {
+  min-width: 0;
+}
+.wscenario-picker .dropdown > .btn {
+  padding: 4px 7px;
+  font-size: 11px;
+  border-color: transparent;
+  background: transparent;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wscenario-picker-label {
+  color: var(--mut);
+  margin-right: 4px;
+}
+.wscenario-picker .dropdown-panel {
+  width: min(260px, calc(100vw - 40px));
+}
+.wscenario-menu {
+  font-size: 12px;
+}
+.wscenario-menu label,
+.wscenario-menu form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wscenario-menu label {
+  margin: 8px 0;
+}
+.wscenario-menu input,
+.wscenario-inputs input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+.wscenario-choices,
+.wscenario-menu-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wscenario-menu-actions,
+.wscenario-menu details {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.wscenario-choices button,
+.wscenario-menu-actions button {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 4px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.wscenario-choices button[aria-pressed="true"] {
+  background: var(--bg);
+  box-shadow: inset 2px 0 var(--accent);
+  font-weight: 600;
+}
+.wscenario-choices button:hover,
+.wscenario-menu-actions button:hover {
+  background: var(--bg);
+}
+.wscenario-choices small {
+  display: block;
+  color: var(--mut);
+  font-weight: normal;
+  margin-top: 2px;
+}
+.wscenario-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+.wscenario-inspector {
+  padding: 12px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font-size: 12px;
+}
+.wscenario-inspector h3 {
+  font-size: 13px;
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+}
+.wscenario-inspector h4 {
+  font-size: 12px;
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+.wscenario-inspector .whint {
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 6px 0 10px;
+}
+.wscenario-section {
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.wscenario-section summary,
+.wscenario-menu summary {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+}
+.wscenario-section[open] > summary {
+  margin-bottom: 10px;
+}
+.wscenario-membership label,
+.wscenario-differences {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.wscenario-membership-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0 0 18px;
+}
+.wscenario-link,
+.wscenario-address {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.wscenario-link {
+  font-size: 11px;
+}
+.wscenario-link:hover,
+.wscenario-address:hover {
+  text-decoration: underline;
+}
+.wscenario-changes {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+.wscenario-changes li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.wscenario-address {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.wscenario-changes small {
+  display: block;
+  color: var(--mut);
+  margin-top: 4px;
+}
+.wscenario-change-values {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 8px;
+  margin: 6px 0;
+  font-family: monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.wscenario-excluded-list {
+  list-style: none;
+  padding: 0;
+}
+.wscenario-excluded-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  overflow-wrap: anywhere;
+}
+.wscenario-compare-pickers {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.wscenario-compare-pickers label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--mut);
+}
+.wscenario-compare-pickers select {
+  min-width: 0;
+  width: 100%;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px;
+}
+.wscenario-selection {
+  margin-bottom: 10px;
+}
+.wscenario-result {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.wscenario-result dl {
+  margin: 0;
+}
+.wscenario-result dl > div {
+  display: grid;
+  grid-template-columns: minmax(65px, 1fr) minmax(0, 2fr);
+  gap: 8px;
+  padding: 4px 0;
+}
+.wscenario-result dt {
+  color: var(--mut);
+  overflow-wrap: anywhere;
+}
+.wscenario-result dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.wscenario-delta dd {
+  font-weight: 600;
+}
+.wscenario-inputs {
+  margin-top: 12px;
+}
+.wscenario-inputs label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+.wscenario-inputs small {
+  font-weight: normal;
+  color: var(--mut);
+}
+.wscenario-inputs .wscenario-link {
+  align-self: flex-end;
+}
+.wscenario-override {
+  box-shadow: inset 2px 0 var(--accent);
+}
+.wscenario-error {
+  margin: 0;
+  padding: 6px 12px;
+  color: var(--err, #b3261e);
+  font-size: 12px;
+}
+.wscenario-origin {
+  font-size: 10px;
+  color: var(--mut);
+  white-space: nowrap;
+}
+
+/* Whole-estimate management replaces the sheet, not its value inspector. */
+.wscenarios-view {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--panel);
+}
+.wscenarios-nav {
+  padding: 20px 16px;
+  border-right: 1px solid var(--line);
+}
+.wscenarios-nav h2,
+.wscenarios-detail h2 {
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+.wscenarios-nav > .btn {
+  margin-top: 16px;
+}
+.wscenarios-detail {
+  padding: 24px;
+  max-width: 860px;
+}
+.wscenarios-settings {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+.wscenarios-settings label,
+.wscenarios-create label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wscenarios-create {
+  margin-top: 14px;
+}
+.wscenarios-create input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.wscenarios-create .wscenario-actions {
+  margin-top: 8px;
+}
+.wscenarios-member {
+  border-bottom: 1px solid var(--line);
+  padding: 10px 0;
+}
+.wscenarios-member summary {
+  cursor: pointer;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.wscenarios-member summary > span {
+  float: right;
+  color: var(--mut);
+  font-weight: normal;
+  margin-left: 12px;
+  font-size: 11px;
+}
+.wscenarios-member .wscenario-membership {
+  padding: 10px 16px;
+}
+.wscenarios-field {
+  margin: 8px 0 8px 20px;
+}
+.wscenario-address:disabled {
+  color: var(--mut);
+  cursor: default;
+  text-decoration: none;
+}
+@media (max-width: 600px) {
+  .wscenarios-view {
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+  }
+  .wscenarios-nav {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .wscenarios-detail {
+    padding: 16px;
+  }
+}
+
+/* The workspace belongs to the window, alongside its stable destinations. */
+.weight-navigation-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.weight-navigation-tools .wscenario-picker {
+  max-width: none;
+}
+.wscenario-current {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.wscenario-current > span {
+  font-size: 10px;
+  color: var(--mut);
+}
+.wscenario-current strong {
+  font-size: 12px;
+  padding: 5px 0;
+  overflow-wrap: anywhere;
+}

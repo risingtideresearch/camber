@@ -1,4 +1,16 @@
 import {
+  interpretScenarioCommand,
+  interpretScopedCommand,
+  isScenarioCommand,
+  appliesTo,
+  scenariosOf,
+  type Scenario,
+  type Applicability,
+  type ScenarioFieldMetadata,
+  type ScenarioCommand,
+  type SheetEditScope,
+} from "./scenarios";
+import {
   activeBoundaries,
   isBoundaryLeaf,
   relevantBoundaries,
@@ -152,7 +164,8 @@ export interface RepetitionField extends BoundaryFields {
   readonly count: string;
 }
 
-export type Field = ScalarField | PointField | CutField | RepetitionField;
+export type Field = (ScalarField | PointField | CutField | RepetitionField) &
+  ScenarioFieldMetadata;
 
 export type FieldKind = Field["k"];
 
@@ -178,6 +191,7 @@ export const isFieldKind = (kind: string): kind is FieldKind =>
  * path, and that is what makes a facet tree. Only an explicitly named roll-up exposes membership to formulas.
  */
 export interface Item {
+  readonly applicability?: Applicability;
   readonly id: string;
   /** What formulas call it. Globally unique among items — see the note on `symbolsOf`. */
   readonly name: string;
@@ -219,6 +233,14 @@ export interface Rollup {
 }
 
 export interface WeightBook {
+  readonly scenarios?: readonly Scenario[];
+  /** Resolution-only context, never persisted. Keeps excluded names diagnosable. */
+  readonly scenarioContext?: {
+    readonly id: string;
+    readonly name: string;
+    readonly shared?: boolean;
+    readonly authoredItems: readonly Item[];
+  };
   readonly items: readonly Item[];
   /** Named facet aggregates exposed to formulas as ROLLUP.name.ROLE. */
   readonly rollups: readonly Rollup[];
@@ -275,6 +297,7 @@ export const rollupsOf = (book: WeightBook): readonly Rollup[] =>
 export const SEAWATER_DENSITY = 1.025;
 
 export const emptyBook = (): WeightBook => ({
+  scenarios: [],
   items: [],
   rollups: [],
   views: [],
@@ -282,19 +305,8 @@ export const emptyBook = (): WeightBook => ({
   density: SEAWATER_DENSITY,
 });
 
-export const cloneBook = (book: WeightBook): WeightBook => ({
-  items: book.items.map((item) => ({
-    ...item,
-    facets: { ...item.facets },
-    fields: Object.fromEntries(
-      Object.entries(item.fields).map(([key, field]) => [key, { ...field }]),
-    ),
-  })),
-  rollups: rollupsOf(book).map((rollup) => ({ ...rollup })),
-  views: book.views.map((view) => ({ ...view, groupBy: [...view.groupBy] })),
-  outputs: { ...book.outputs },
-  density: book.density,
-});
+export const cloneBook = (book: WeightBook): WeightBook =>
+  structuredClone(book);
 
 // ---------- names ----------
 
@@ -493,7 +505,7 @@ export function symbolsOf(book: WeightBook): string[] {
   const names = new Set<string>(RESERVED);
   names.add("ROLLUP");
   for (const rollup of rollupsOf(book)) names.add(rollup.name);
-  for (const item of book.items) {
+  for (const item of book.scenarioContext?.authoredItems ?? book.items) {
     if (item.name) names.add(item.name);
     for (const key of Object.keys(item.fields)) names.add(key);
   }
@@ -701,7 +713,8 @@ export type RenameCommand = (
 export const renameImpact = (book: WeightBook, command: RenameCommand) =>
   renameReferences(book, command, symbolsOf(book));
 
-export type SheetCommand =
+export type SheetCommand = (
+  | ScenarioCommand
   | RenameCommand
   | { type: "addItem"; id: string; name: string; after: number }
   | { type: "removeItem"; item: string }
@@ -723,7 +736,12 @@ export type SheetCommand =
       facetValue: string;
     }
   | { type: "removeRollup"; id: string }
-  | { type: "addField"; item: string; key: string; kind: FieldKind }
+  | {
+      type: "addField";
+      item: string;
+      key: string;
+      kind: FieldKind;
+    }
   | { type: "removeField"; item: string; key: string }
   | { type: "moveField"; item: string; key: string; to: number }
   | {
@@ -777,7 +795,8 @@ export type SheetCommand =
   /** One of the book's answers. An empty formula clears it — the book then answers nothing for that name. */
   | { type: "setOutput"; name: string; formula: string }
   | { type: "setSheetDensity"; density: number }
-  | { type: "installSheet"; book: WeightBook };
+  | { type: "installSheet"; book: WeightBook }
+) & { readonly scope?: SheetEditScope };
 
 /**
  * The command types above, as a value the compiler checks for completeness. This is what lets `commands.ts`
@@ -785,6 +804,12 @@ export type SheetCommand =
  * `SheetCommand` without listing it here stops compiling.
  */
 export const SHEET_COMMAND_TYPES = {
+  addScenario: 1,
+  renameScenario: 1,
+  removeScenario: 1,
+  setApplicability: 1,
+  setScenarioPatch: 1,
+  resetScenarioOverrides: 1,
   addItem: 1,
   removeItem: 1,
   renameItem: 1,
@@ -861,6 +886,10 @@ export function interpretSheetCommand(
   book: WeightBook,
   command: SheetCommand,
 ): SheetOutcome {
+  if (isScenarioCommand(command))
+    return interpretScenarioCommand(book, command);
+  if (command.scope?.k === "scenario")
+    return interpretScopedCommand(book, command, command.scope.scenarioId);
   if (
     (command.type === "renameItem" ||
       command.type === "renameField" ||
@@ -1032,7 +1061,10 @@ export function interpretSheetCommand(
           };
         return {
           ...item,
-          fields: { ...item.fields, [key]: blankField(command.kind) },
+          fields: {
+            ...item.fields,
+            [key]: blankField(command.kind),
+          },
         };
       });
     }
@@ -1118,15 +1150,23 @@ export function interpretSheetCommand(
           return {
             rejected: `a ${field.k} cannot be an item's ${roleSpec(role)!.label}`,
           };
-        // Rebuilt in order, and only where something actually changes, so tagging a field neither reorders
-        // the card nor gives every untouched field a new identity.
+        // Move a role only from fields that coexist with this one. Disjoint
+        // scenario-only alternatives may each provide the same role.
+        // Rebuild in order, preserving untouched field identities.
         const fields: Record<string, Field> = {};
         for (const [key, value] of Object.entries(item.fields)) {
           const held = roleOf(value);
           const next =
             key === command.field
               ? role
-              : role !== null && held === role
+              : role !== null &&
+                  held === role &&
+                  [null, ...scenariosOf(book).map((s) => s.id)].some(
+                    (id) =>
+                      appliesTo(item.applicability, id) &&
+                      appliesTo(field.applicability, id) &&
+                      appliesTo(value.applicability, id),
+                  )
                 ? null
                 : held;
           fields[key] = next === held ? value : withRole(value, next);
@@ -1203,6 +1243,10 @@ export function interpretSheetCommand(
       return { book: { ...book, density: command.density } };
 
     case "installSheet":
+      if (command.book.scenarioContext)
+        return {
+          rejected: "cannot install an effective scenario as the authored book",
+        };
       return { book: cloneBook(command.book) };
   }
 }

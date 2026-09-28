@@ -22,3 +22,12 @@
   color: var(--mut);
   text-align: center;
 }
+
+/* Keep status in the available app-bar space rather than reserving an empty row
+   beneath navigation in narrow weights windows. Its tooltip retains the full text. */
+@media (max-width: 900px) {
+  .appbar:has(.weight-navigation-slot) .navstatusslot {
+    flex: 1 1 0;
+    width: 0;
+  }
+}

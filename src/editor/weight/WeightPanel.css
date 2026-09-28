@@ -1528,21 +1528,6 @@ button.wtermgo:focus-visible {
   flex: 0 0 auto;
   overflow-x: auto;
 }
-.wview {
-  border: 0;
-  background: transparent;
-  color: var(--mut);
-  font: inherit;
-  font-size: 12px;
-  padding: 8px 10px;
-  cursor: pointer;
-  white-space: nowrap;
-  border-bottom: 2px solid transparent;
-}
-.wview.on {
-  color: var(--fore);
-  border-bottom-color: var(--accent);
-}
 /* Always reserve the badge's room, including when the book is clean. Problems appearing or disappearing
    must not move the tabs or the controls to their right. */
 .wproblembadge {
@@ -1563,8 +1548,7 @@ button.wtermgo:focus-visible {
 .wproblembadge.empty {
   visibility: hidden;
 }
-/* The view choices and their few global actions share this one bar. These are quieter than the tabs, so they
-   do not turn the right end back into a second toolbar. */
+/* Local inspector/reference tools are quieter than the location heading. */
 .wviewtool {
   flex: 0 0 auto;
   border: 0;
@@ -1583,17 +1567,6 @@ button.wtermgo:focus-visible {
 .wviewtool:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
-}
-.wviewadd {
-  font-size: 18px;
-  line-height: 1;
-  padding-inline: 10px;
-}
-/* A per-item or per-facet view is not on the list — there would be hundreds — so it appears beside it while
-   you are in it, and leaving is clicking anything else. */
-.wviewad {
-  font-style: italic;
-  cursor: default;
 }
 
 /* ---------- table cells ---------- */
@@ -3463,4 +3436,49 @@ button.wtermgo:focus-visible {
 }
 .wsampled-distribution .wsampled-interval {
   fill: var(--ink);
+}
+
+/* Window-wide destinations; the sheet itself has locations, not nested tabs. */
+.weight-navigation {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.weight-navigation button {
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mut);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.weight-navigation button[aria-current="page"] {
+  background: var(--bg);
+  color: var(--accent);
+  box-shadow: inset 0 -2px var(--accent);
+}
+.weight-navigation button:hover {
+  background: var(--bg);
+}
+.wsheet-heading {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+  padding: 8px 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wproblems-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--panel);
+}
+.wexpall.active {
+  background: var(--bg);
+  box-shadow: inset 2px 0 var(--accent);
 }

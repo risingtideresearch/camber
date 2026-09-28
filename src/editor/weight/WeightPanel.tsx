@@ -1,3 +1,14 @@
+import { isSheetCommand, type SheetCommand } from "../../core/sheet/book";
+import { resolveScenario } from "../../core/sheet/resolveScenario";
+import {
+  scenariosOf,
+  isScenarioLocalCommand,
+  isScenarioCommand,
+} from "../../core/sheet/scenarios";
+import { ScenarioPicker, ScenariosView } from "./ScenarioTools";
+import { WeightNavigation, type WeightDestination } from "./WeightNavigation";
+import { ScenarioComparison } from "./ScenarioComparison";
+import "./Scenarios.css";
 // The weight estimate, as a panel.
 //
 // A SCHEDULE rather than a grid: every line has a name, and formulas refer to those names. What that buys is
@@ -42,7 +53,11 @@ import {
 import { Area, AreaGroup, AreaSeparator } from "polymorph-ui";
 import type { DocumentCommand } from "../../core/commands";
 import { FUNCTIONS } from "../../core/sheet/formula";
-import { HULL_METRICS, HULL_POINTS } from "../../core/hullMetrics";
+import {
+  HULL_METRICS,
+  HULL_POINTS,
+  type HullMetrics,
+} from "../../core/hullMetrics";
 import {
   findItem,
   leavesOf,
@@ -65,7 +80,6 @@ import {
   allItemsView,
   resolveView,
   scopeItems,
-  standardViews,
   SUMMARY_VIEW,
   viewColumns,
   viewRows,
@@ -78,7 +92,6 @@ import { roleTotals } from "../../core/sheet/rollups";
 import { roleSpec } from "../../core/sheet/roles";
 import { PointViews, type Move, type PlottedPoint } from "./PointViews";
 import { plotCuts, plotPoints, snapTargets } from "./pointPlots";
-import { Button } from "../../components/Button";
 import {
   useDocumentDispatch,
   useDocumentRuntime,
@@ -126,11 +139,33 @@ function WeightPanelContents() {
   const dispatch = useDocumentDispatch();
   const { perf, sampling } = useEditorUi();
   const { analysis } = useStabilityAnalysis(snapshot, perf);
-  const book = snapshot.state.weights;
+  const authoredBook = snapshot.state.weights;
+  // Shared is the default on opening a sheet, including older books with a Main scenario.
+  // Workspace choice is local UI state; switching documents must not carry it across.
+  const documentId = snapshot.meta.design.currentId;
+  const [workspace, setWorkspace] = useState<{
+    documentId: string | null;
+    id: string | null;
+  } | null>(null);
+  const activeScenario =
+    workspace?.documentId === documentId &&
+    scenariosOf(authoredBook).some((s) => s.id === workspace.id)
+      ? workspace.id
+      : null;
+  const [commandError, setCommandError] = useState<string | null>(null);
+  const book = useMemo(
+    () => resolveScenario(authoredBook, activeScenario),
+    [authoredBook, activeScenario],
+  );
+  const pickWorkspace = (id: string | null) => {
+    setWorkspace({ documentId, id });
+    setCommandError(null);
+  };
   const metrics = analysis?.metrics ?? null;
 
   // The schedule keeps one quiet, consistent reading; both interpretations are explained in the inspector.
   const reading = "worst" as const;
+  const [destination, setDestination] = useState<WeightDestination>("sheet");
   const [viewId, setViewId] = useState<string | null>(null);
   const [focus, setFocus] = useState<Focus | null>(null);
   const [sidePanel, setSidePanel] = useState<SidePanel>("auto");
@@ -154,7 +189,7 @@ function WeightPanelContents() {
   } = useWeightPresentation(
     computation,
     hullSampling,
-    snapshot.meta.design.currentId,
+    JSON.stringify([snapshot.meta.design.currentId, activeScenario]),
   );
   const {
     pending: geometryPending,
@@ -170,8 +205,56 @@ function WeightPanelContents() {
       : uncertaintyPending
         ? "Nominal values ready. Uncertainty updating…"
         : "";
-  const apply = (command: DocumentCommand) => {
-    void dispatch(command).then((outcome) => {
+  const apply = (incoming: DocumentCommand) => {
+    // The sheet's order is filtered by membership; structural commands address
+    // the canonical order. Never install a resolved book just to reorder it.
+    let input = incoming;
+    if (isSheetCommand(input) && !input.scope) {
+      if (input.type === "addItem") {
+        const afterId = book.items[input.after]?.id;
+        input = {
+          ...input,
+          after:
+            input.after < 0
+              ? -1
+              : afterId
+                ? authoredBook.items.findIndex((i) => i.id === afterId)
+                : authoredBook.items.length - 1,
+        };
+      } else if (input.type === "moveItem") {
+        const targetId = book.items[input.to]?.id;
+        if (targetId)
+          input = {
+            ...input,
+            to: authoredBook.items.findIndex((i) => i.id === targetId),
+          };
+      } else if (input.type === "moveField") {
+        const itemId = input.item;
+        const effective = book.items.find((i) => i.id === itemId);
+        const authored = authoredBook.items.find((i) => i.id === itemId);
+        const targetKey = effective && Object.keys(effective.fields)[input.to];
+        if (authored && targetKey)
+          input = {
+            ...input,
+            to: Object.keys(authored.fields).indexOf(targetKey),
+          };
+      }
+    }
+    const command = input;
+    const scoped =
+      isSheetCommand(command) && !command.scope && !isScenarioCommand(command)
+        ? {
+            ...command,
+            scope:
+              activeScenario && isScenarioLocalCommand(command)
+                ? { k: "scenario" as const, scenarioId: activeScenario }
+                : { k: "shared" as const },
+          }
+        : command;
+    void dispatch(scoped).then((outcome) => {
+      setCommandError("rejected" in outcome ? String(outcome.rejected) : null);
+      if (command.type === "addScenario" && !("rejected" in outcome))
+        pickWorkspace(command.id);
       if (command.type !== "renameField" || "rejected" in outcome) return;
       setFocus((current) =>
         current?.item === command.item && current.field === command.key
@@ -187,8 +270,8 @@ function WeightPanelContents() {
       command.type === "renameRollup"
     ) {
       // Invalid edits still go through the store's normal rejection reporting.
-      if (!("rejected" in interpretSheetCommand(book, command))) {
-        const { dependents } = renameImpact(book, command);
+      if (!("rejected" in interpretSheetCommand(authoredBook, command))) {
+        const { dependents } = renameImpact(authoredBook, command);
         if (dependents.length) {
           setRename({ command, dependents });
           return;
@@ -198,7 +281,6 @@ function WeightPanelContents() {
     apply(command);
   };
 
-  const views = useMemo(() => standardViews(book), [book]);
   const view = resolveView(book, viewId);
   const items = useMemo(() => scopeItems(book, view.scope), [book, view]);
   const columns = useMemo(() => viewColumns(view, items), [view, items]);
@@ -214,10 +296,11 @@ function WeightPanelContents() {
   const groupFacet = view.groupBy.length === 1 ? view.groupBy[0] : null;
 
   const openItem = (itemId: string, focusName = false) => {
+    setDestination("sheet");
     setViewId(`item-${itemId}`);
     setFocus({ item: itemId, field: null, leaf: "formula" });
     setNewItemName(focusName ? itemId : null);
-    setSidePanel("auto");
+    setSidePanel((current) => (current === "compare" ? current : "auto"));
     setRollupSelection(null);
   };
 
@@ -231,11 +314,13 @@ function WeightPanelContents() {
   const go: Go = (itemId, fieldKey, leaf) => {
     setRollupSelection(null);
     if (itemId === OUTPUT_ITEM) {
+      setDestination("sheet");
       setViewId(SUMMARY_VIEW);
       setSelectedOutput(fieldKey);
       return;
     }
-    if (!items.some((item) => item.id === itemId)) openItem(itemId);
+    if (destination !== "sheet" || !items.some((item) => item.id === itemId))
+      openItem(itemId);
     setFocus({ item: itemId, field: fieldKey, leaf });
   };
 
@@ -251,30 +336,34 @@ function WeightPanelContents() {
       });
     openItem(id, true);
   };
-  const addItem = () => createItem();
 
-  if (!book.items.length && !Object.keys(book.outputs).length)
-    return (
-      <div className="weightpanel">
-        <div className="wempty">
-          <p>This design has no weight estimate yet.</p>
-          <p className="whint">
-            An estimate is a list of <b>items</b> — the things the boat is made
-            of — each carrying what is known about it: a mass, a position, a
-            section through the hull. A formula names another item's field, as{" "}
-            <code>ply.density * HULL.SHELL_AREA</code>, and how an item is{" "}
-            <b>filed</b> is a separate matter that no formula mentions, so you
-            can reorganise the whole estimate without rewriting a line of it.
-          </p>
-          <Button variant="primary" onClick={addItem}>
-            Start an estimate
-          </Button>
-        </div>
-      </div>
-    );
+  const workspaceControl = (
+    <ScenarioPicker
+      book={authoredBook}
+      active={activeScenario}
+      onPick={pickWorkspace}
+      onInspect={() => setDestination("scenarios")}
+      send={apply}
+    />
+  );
+  const errorNotice = commandError && (
+    <p role="alert" className="wscenario-error">
+      {commandError}
+    </p>
+  );
+  const scenarioSend = (command: SheetCommand) =>
+    apply({ ...command, scope: command.scope ?? { k: "shared" } });
 
   return (
     <div className="weightpanel">
+      <WeightNavigation
+        destination={destination}
+        onPick={setDestination}
+        problemCount={problems.length}
+        workspaceControl={workspaceControl}
+      />
+      <NavStatus message={progress} />
+      {errorNotice}
       {rename && (
         <RenamePrompt
           name={tidyName(rename.command.name)}
@@ -286,197 +375,177 @@ function WeightPanelContents() {
           }}
         />
       )}
-      <div className="wpanes">
-        <aside className="wsidebar">
-          <Explorer
-            book={book}
-            flagged={flagged}
-            activeItem={focus?.item ?? null}
-            onOpenItem={openItem}
-            onOpenField={(itemId, fieldKey) => {
-              // Opening a field is opening its item with the caret already in that cell, which is what the
-              // tree node means: a field is not a place of its own, it is part of a thing.
-              setViewId(`item-${itemId}`);
-              setFocus({ item: itemId, field: fieldKey, leaf: "formula" });
-            }}
-            onOpenAll={(facet) => {
-              setViewId(allItemsView(facet).id);
-              setFocus(null);
-              setRollupSelection(null);
-            }}
-            onOpenFacet={(key, value) => {
-              // The explorer's funnel: a node you were looking at becomes the view you are editing in, with
-              // the same scope it drew. No view-builder to learn, because there is nothing to build.
-              setViewId(facetView(key, value).id);
-              setFocus(null);
-              setRollupSelection(null);
-            }}
-            onAddItem={createItem}
-            send={send}
-          />
-        </aside>
+      <div className="wpanes" key={activeScenario ?? "shared"}>
+        {destination === "sheet" && (
+          <aside className="wsidebar">
+            <Explorer
+              book={book}
+              flagged={flagged}
+              summarySelected={view.layout === "summary"}
+              allSelected={view.scope.k === "all" && view.layout === "rollup"}
+              onOpenSummary={() => {
+                setViewId(SUMMARY_VIEW);
+                setFocus(null);
+                setRollupSelection(null);
+              }}
+              activeItem={focus?.item ?? null}
+              onOpenItem={openItem}
+              onOpenField={(itemId, fieldKey) => {
+                // Opening a field is opening its item with the caret already in that cell, which is what the
+                // tree node means: a field is not a place of its own, it is part of a thing.
+                setViewId(`item-${itemId}`);
+                setFocus({ item: itemId, field: fieldKey, leaf: "formula" });
+              }}
+              onOpenAll={(facet) => {
+                setViewId(allItemsView(facet).id);
+                setFocus(null);
+                setRollupSelection(null);
+              }}
+              onOpenFacet={(key, value) => {
+                // The explorer's funnel: a node you were looking at becomes the view you are editing in, with
+                // the same scope it drew. No view-builder to learn, because there is nothing to build.
+                setViewId(facetView(key, value).id);
+                setFocus(null);
+                setRollupSelection(null);
+              }}
+              onAddItem={createItem}
+              send={send}
+            />
+          </aside>
+        )}
 
         <div className="wmain">
-          <ViewBar
-            views={views}
-            active={view}
-            book={book}
-            onPick={(id) => {
-              setViewId(id);
-              setFocus(null);
-              setRollupSelection(null);
-            }}
-            onAddItem={addItem}
-            inspectorShown={sidePanel !== "none"}
-            onToggleInspector={() =>
-              setSidePanel(
-                sidePanel === "none"
-                  ? view.layout === "problems"
-                    ? "sampled"
-                    : "auto"
-                  : "none",
-              )
-            }
-            referenceShown={sidePanel === "reference"}
-            onToggleReference={() =>
-              setSidePanel(sidePanel === "reference" ? "auto" : "reference")
-            }
-            problemCount={problems.length}
-          />
+          {destination !== "scenarios" && (
+            <SheetHeading
+              title={
+                destination === "problems"
+                  ? "Problems"
+                  : view.scope.k === "item"
+                    ? findItem(book, view.scope.item)?.name || "Unnamed item"
+                    : view.scope.k === "facet"
+                      ? `${view.scope.key}: ${view.scope.value}`
+                      : view.name
+              }
+              showInspectorControls={destination === "sheet"}
+              inspectorShown={sidePanel !== "none"}
+              onToggleInspector={() =>
+                setSidePanel(sidePanel === "none" ? "auto" : "none")
+              }
+              referenceShown={sidePanel === "reference"}
+              onToggleReference={() =>
+                setSidePanel(sidePanel === "reference" ? "auto" : "reference")
+              }
+            />
+          )}
 
-          <NavStatus message={progress} />
-          <ViewBody
-            stale={stale}
-            {...{
-              book,
-              view,
-              items,
-              columns,
-              rows,
-              results,
-              measurements,
-              repetitionPreviews,
-              reading,
-              focus,
-              setFocus,
-              openItem,
-              onDeleteItem: (itemId: string) => {
-                send({ type: "removeItem", item: itemId });
-                setViewId(null);
-                setFocus(null);
-              },
-              sidePanel,
-              setSidePanel,
-              selectedOutput,
-              setSelectedOutput,
-              newItemName,
-              rollupSelection,
-              setRollupSelection,
-              go,
-              send,
-              groupFacet,
-              problems,
-              model,
-              hullSampling,
-              metrics,
-              sampledRun,
-              sampledReady: !geometryPending && !geometryError,
-            }}
-          />
+          {destination === "scenarios" ? (
+            <ScenariosView
+              key={documentId}
+              onEdit={(workspace) => {
+                pickWorkspace(workspace);
+                setDestination("sheet");
+              }}
+              book={authoredBook}
+              active={activeScenario}
+              send={scenarioSend}
+              onOpen={(item, field, workspace) => {
+                pickWorkspace(workspace);
+                openItem(item);
+                setFocus({ item, field, leaf: "formula" });
+              }}
+            />
+          ) : destination === "problems" ? (
+            <div className="wproblems-view">
+              <Problems
+                problems={problems}
+                onOpen={(item, field, leaf) => {
+                  openItem(item);
+                  setFocus({ item, field, leaf });
+                }}
+              />
+            </div>
+          ) : (
+            <>
+              <ViewBody
+                stale={stale}
+                {...{
+                  book,
+                  authoredBook,
+                  activeScenario,
+                  scenarioSend,
+                  view,
+                  items,
+                  columns,
+                  rows,
+                  results,
+                  measurements,
+                  repetitionPreviews,
+                  reading,
+                  focus,
+                  setFocus,
+                  openItem,
+                  onDeleteItem: (itemId: string) => {
+                    send({ type: "removeItem", item: itemId });
+                    setViewId(null);
+                    setFocus(null);
+                  },
+                  sidePanel,
+                  setSidePanel,
+                  selectedOutput,
+                  setSelectedOutput,
+                  newItemName,
+                  rollupSelection,
+                  setRollupSelection,
+                  go,
+                  send,
+                  groupFacet,
+                  model,
+                  hullSampling,
+                  metrics,
+                  sampledRun,
+                  sampledReady: !geometryPending && !geometryError,
+                }}
+              />
+            </>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-// ---------- the views on offer ----------
-
-/**
- * Standard views only, for now.
- *
- * They are DERIVED — from which field kinds the book uses, which facets it uses, and what it answers — so a
- * `cost` field on three items produces a cost schedule with nothing declared anywhere, and the last one
- * deleted takes the schedule with it. Saved views, and the fork-on-edit that makes one, arrive with custom
- * columns; until then there is nothing here that could be edited into a stale copy of a generated thing.
- */
-function ViewBar({
-  views,
-  active,
-  book,
-  onPick,
-  onAddItem,
+/** A location heading and local tools, never another navigation tab bar. */
+function SheetHeading({
+  title,
+  showInspectorControls,
   inspectorShown,
   onToggleInspector,
   referenceShown,
   onToggleReference,
-  problemCount,
 }: {
-  readonly views: readonly View[];
-  readonly active: View;
-  readonly book: WeightBook;
-  readonly onPick: (id: string) => void;
-  readonly onAddItem: () => void;
+  readonly title: string;
+  readonly showInspectorControls: boolean;
   readonly inspectorShown: boolean;
   readonly onToggleInspector: () => void;
   readonly referenceShown: boolean;
   readonly onToggleReference: () => void;
-  readonly problemCount: number;
 }) {
-  const item =
-    active.scope.k === "item" ? findItem(book, active.scope.item) : undefined;
   return (
-    <div className="wviewbar" role="tablist">
-      {views.map((view) => (
-        <button
-          key={view.id}
-          role="tab"
-          aria-selected={view.id === active.id}
-          className={`wview${view.id === active.id ? " on" : ""}`}
-          onClick={() => onPick(view.id)}
-        >
-          {view.name}
-          {view.layout === "problems" && (
-            <span
-              className={`wproblembadge${problemCount ? "" : " empty"}`}
-              title={
-                problemCount
-                  ? `${problemCount} thing${problemCount === 1 ? "" : "s"} to look at`
-                  : undefined
-              }
-              aria-label={problemCount ? `${problemCount} problems` : undefined}
-              aria-hidden={!problemCount}
-            >
-              {problemCount > 99 ? "99+" : problemCount}
-            </span>
-          )}
-        </button>
-      ))}
-      {/* A view of one item, or of one facet value, is not on the list — there would be hundreds — so it
-          appears beside it while you are in it, and leaving is clicking anything else. */}
-      {active.scope.k === "item" && (
-        <span className="wview on wviewad">{item?.name || "unnamed item"}</span>
-      )}
-      {active.scope.k === "facet" && (
-        <span className="wview on wviewad">
-          {active.scope.key}: {active.scope.value}
-        </span>
-      )}
-      <span className="wspacer" />
-      <button
-        className="wviewtool wviewadd"
-        onClick={onAddItem}
-        title="Add an item"
-        aria-label="Add an item"
-      >
-        +
-      </button>
-      {/* Sampling and the reference remain available even without a selected problem. */}
-      <button className="wviewtool" onClick={onToggleInspector}>
-        {inspectorShown ? "Hide inspector" : "Show inspector"}
-      </button>
-      <button className="wviewtool" onClick={onToggleReference}>
-        {referenceShown ? "Hide reference" : "What can I write?"}
-      </button>
+    <div className="wviewbar-shell">
+      <div className="wviewbar">
+        <h2 className="wsheet-heading">{title}</h2>
+        <span className="wspacer" />
+        {showInspectorControls && (
+          <>
+            <button className="wviewtool" onClick={onToggleInspector}>
+              {inspectorShown ? "Hide inspector" : "Show inspector"}
+            </button>
+            <button className="wviewtool" onClick={onToggleReference}>
+              {referenceShown ? "Hide reference" : "What can I write?"}
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -484,6 +553,9 @@ function ViewBar({
 // ---------- the body, per layout ----------
 
 interface BodyProps {
+  readonly authoredBook: WeightBook;
+  readonly activeScenario: string | null;
+  readonly scenarioSend: (command: SheetCommand) => void;
   /** Retained display values must not drive geometry editing or snapping. */
   readonly stale: boolean;
   readonly book: WeightBook;
@@ -513,10 +585,9 @@ interface BodyProps {
   readonly go: Go;
   readonly send: (command: DocumentCommand) => void;
   readonly groupFacet: string | null;
-  readonly problems: ReturnType<typeof problemsOf>;
   readonly model: ReturnType<typeof useDocumentRuntime>;
   readonly hullSampling: ReturnType<ReturnType<typeof useEditorUi>["sampling"]>;
-  readonly metrics: unknown;
+  readonly metrics: HullMetrics | null;
   readonly sampledRun: ReturnType<typeof useSampledResults>;
   readonly sampledReady: boolean;
 }
@@ -529,9 +600,17 @@ interface BodyProps {
  * the pane is no longer on offer at all.
  */
 export type SidePanel =
-  "auto" | "spread" | "uses" | "geometry" | "reference" | "sampled" | "none";
+  | "auto"
+  | "spread"
+  | "uses"
+  | "geometry"
+  | "reference"
+  | "sampled"
+  | "compare"
+  | "none";
 
-type Shown = "spread" | "uses" | "geometry" | "reference" | "sampled";
+type Shown =
+  "spread" | "uses" | "geometry" | "reference" | "sampled" | "compare";
 
 const PANEL_LABEL: Record<Shown, string> = {
   spread: "Spread",
@@ -539,6 +618,7 @@ const PANEL_LABEL: Record<Shown, string> = {
   geometry: "Geometry",
   reference: "Reference",
   sampled: "Sampled",
+  compare: "Compare",
 };
 
 /** Keep the existing narrow-window stacking while handing both arrangements to the resizable layout. */
@@ -738,44 +818,35 @@ function SampledInspector(props: BodyProps) {
   );
 }
 
+/** Comparison follows the current sheet selection in the inspector. */
+function WorkspaceInspector(props: BodyProps & { shown: "compare" }) {
+  const focus = props.view.layout === "summary" ? null : props.focus;
+  return (
+    <ScenarioComparison
+      book={props.authoredBook}
+      active={props.activeScenario}
+      focus={focus}
+      output={props.view.layout === "summary" ? props.selectedOutput : null}
+      scope={props.view.scope}
+      totals={props.view.layout === "rollup"}
+      rollup={
+        props.rollupSelection?.viewId === props.view.id
+          ? props.rollupSelection
+          : null
+      }
+      groupBy={props.view.groupBy}
+      model={props.model}
+      sampling={props.hullSampling}
+      metrics={props.metrics}
+      send={props.scenarioSend}
+    />
+  );
+}
+
 function ViewBody(props: BodyProps) {
-  const { book, view, items, results, problems, openItem, send } = props;
+  const { book, view, items, results, openItem, send } = props;
 
   if (view.layout === "summary") return <SummaryBody {...props} />;
-
-  if (view.layout === "problems") {
-    const offers: Shown[] = ["sampled", "reference"];
-    const shown: Shown | null =
-      props.sidePanel === "none"
-        ? null
-        : props.sidePanel === "reference"
-          ? "reference"
-          : "sampled";
-    return (
-      <ResizableBody
-        main={<Problems problems={problems} onOpenItem={openItem} />}
-        shown={shown}
-        side={
-          shown ? (
-            <>
-              <SideTabs
-                offers={offers}
-                shown={shown}
-                onPick={props.setSidePanel}
-              />
-              <div className="wsidebody">
-                {shown === "sampled" ? (
-                  <SampledInspector {...props} />
-                ) : (
-                  <Reference book={book} />
-                )}
-              </div>
-            </>
-          ) : null
-        }
-      />
-    );
-  }
 
   if (view.layout === "rollup") {
     const selection =
@@ -845,6 +916,7 @@ function ViewBody(props: BodyProps) {
       "sampled",
       ...(!selectedTotal && focusedField ? (["uses"] as const) : []),
       ...(hasGeometry ? (["geometry"] as const) : []),
+      "compare",
       "reference",
     ];
     const auto: Shown =
@@ -899,7 +971,9 @@ function ViewBody(props: BodyProps) {
                 onPick={props.setSidePanel}
               />
               <div className="wsidebody">
-                {shown === "sampled" ? (
+                {shown === "compare" ? (
+                  <WorkspaceInspector {...props} shown={shown} />
+                ) : shown === "sampled" ? (
                   <SampledInspector {...props} />
                 ) : shown === "reference" ? (
                   <Reference book={book} />
@@ -991,12 +1065,14 @@ function ViewBody(props: BodyProps) {
         "sampled",
         "uses",
         ...baseOffers.filter((offer) => offer !== "spread"),
+        "compare",
         "reference",
       ]
     : [
         "spread",
         "sampled",
         ...baseOffers.filter((offer) => offer !== "spread"),
+        "compare",
         "reference",
       ];
 
@@ -1064,7 +1140,9 @@ function ViewBody(props: BodyProps) {
               onPick={props.setSidePanel}
             />
             <div className="wsidebody">
-              {shown === "sampled" ? (
+              {shown === "compare" ? (
+                <WorkspaceInspector {...props} shown={shown} />
+              ) : shown === "sampled" ? (
                 <SampledInspector {...props} />
               ) : shown === "reference" ? (
                 <Reference book={book} />
@@ -1099,7 +1177,13 @@ function ViewBody(props: BodyProps) {
 function SummaryBody(props: BodyProps) {
   // Geometry remains available even before both coordinates work out, so the pane can explain what is
   // missing instead of making the capability itself appear and disappear while formulas are edited.
-  const offers: Shown[] = ["spread", "sampled", "geometry", "reference"];
+  const offers: Shown[] = [
+    "spread",
+    "sampled",
+    "geometry",
+    "compare",
+    "reference",
+  ];
   const shown: Shown | null =
     props.sidePanel === "none"
       ? null
@@ -1129,7 +1213,9 @@ function SummaryBody(props: BodyProps) {
               onPick={props.setSidePanel}
             />
             <div className="wsidebody">
-              {shown === "sampled" ? (
+              {shown === "compare" ? (
+                <WorkspaceInspector {...props} shown={shown} />
+              ) : shown === "sampled" ? (
                 <SampledInspector {...props} />
               ) : shown === "reference" ? (
                 <Reference book={props.book} />

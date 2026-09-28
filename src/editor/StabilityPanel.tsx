@@ -1,3 +1,5 @@
+import { scenariosOf } from "../core/sheet/scenarios";
+import { resolveScenario } from "../core/sheet/resolveScenario";
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import { NumberInput } from "polymorph-ui";
 import { unitScale } from "../core/json";
@@ -787,7 +789,17 @@ export function StabilityPanel() {
   // defaulting to seawater's 1.025 t/m³ — so a design worked in fresh water reports its displacement in the
   // same water the estimate was made in, and the sheet's mass and this axis cannot disagree.
   const unit = snapshot.state.hull.unit;
-  const book = snapshot.state.weights;
+  const authoredBook = snapshot.state.weights;
+  const [sheetScenario, setSheetScenario] = useState<string | null>(null);
+  const scenarioId = scenariosOf(authoredBook).some(
+    (s) => s.id === sheetScenario,
+  )
+    ? sheetScenario
+    : null;
+  const book = useMemo(
+    () => resolveScenario(authoredBook, scenarioId),
+    [authoredBook, scenarioId],
+  );
   const metres = unitScale(unit, "m");
   const tonsPerVolume = metres ** 3 * book.density;
   const volumeDomain = useMemo<readonly [number, number]>(() => {
@@ -2006,6 +2018,20 @@ export function StabilityPanel() {
             has — not "does this displacement pass" but "does my estimate pass, and how much of the margin is
             the estimate rather than the boat". Clicking the plane or typing a number below drops the link. */}
         <div className="sheetlink">
+          <label>
+            Scenario{" "}
+            <select
+              value={scenarioId ?? ""}
+              onChange={(event) => setSheetScenario(event.target.value || null)}
+            >
+              <option value="">Shared</option>
+              {scenariosOf(authoredBook).map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
           {sheetUncertaintyPending && (
             <span className="sheetlinknote" role="status">
               {sheetGeometryError
