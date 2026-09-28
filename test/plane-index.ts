@@ -5,12 +5,14 @@ import { computeHullSampling } from "../src/core/mesh";
 import type { Vec3 } from "../src/core/math";
 import type { SectionLimits } from "../src/core/sheet/boundaries";
 import {
-  closedHullTriangles,
-  createPlaneIntersector,
-  intersectPlane,
   sectionFromSegments,
   type CutTriangle,
 } from "../src/core/sheet/planeCuts";
+import {
+  closedHullTriangles,
+  createPlaneIntersector,
+  intersectPlane,
+} from "./legacyPlaneCuts";
 
 const identity = (p: Vec3) => p;
 function box(x = 0, y = 0, size = 1): CutTriangle[] {

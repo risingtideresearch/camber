@@ -27,7 +27,8 @@ import {
 } from "../src/core/sheet/book";
 import { evaluateBook, resultAt, fieldUsers } from "../src/core/sheet/evaluate";
 import { buildSheetJson, parseSheet } from "../src/core/sheet/json";
-import { intersectPlane, type CutTriangle } from "../src/core/sheet/planeCuts";
+import type { CutTriangle } from "../src/core/sheet/planeCuts";
+import { intersectPlane } from "./legacyPlaneCuts";
 import {
   measureRepetition,
   type RepetitionResult,
@@ -714,7 +715,8 @@ console.log(
 const raked = assemble({ ...hull, deckRake: 0.12 });
 const rakedSampling = computeHullSampling(raked, 80, 6);
 const rakedMeasure = createSectionMeasurer(raked, rakedSampling);
-const transverse = rakedMeasure("transverse", 2);
+const rakedCut = createSliceMeasurer(raked, rakedSampling);
+const transverse = rakedCut("transverse", 2)!;
 assert.ok(transverse.curve.length > 2);
 for (const p of transverse.curve)
   near(
@@ -726,7 +728,7 @@ assert.ok(
   Math.abs(transverse.x - 2) > 0.001,
   "true vertical is not constant deck-frame x with rake",
 );
-const horizontal = rakedMeasure("plane", 0.6);
+const horizontal = rakedCut("plane", 0.6)!;
 for (const p of horizontal.sheetContours.flat()) near(p[2], 0.6);
 near(rakedMeasure("station", 2).area, measure("station", 2).area);
 let sequence = 0;
@@ -749,7 +751,7 @@ console.log(
 );
 
 // Preview geometry must follow the measure, not draw artificial closing edges.
-const previewSection = measure("transverse", 2);
+const previewSection = cut("transverse", 2)!;
 const previewProjection = (p: Vec3): [number, number] => [p[0], p[2]];
 assert.ok(samplePath(previewSection, "area", previewProjection).endsWith("Z"));
 assert.ok(
@@ -771,7 +773,7 @@ repetitionPreviewPositions(1, 3, 3).forEach((position, i) =>
 assert.equal(repetitionPreviewPositions(1, 3).length, 7);
 assert.deepEqual(repetitionPreviewPositions(3, 1), []);
 assert.throws(() => repetitionPreviewPositions(1, 3, 0), /positive/);
-const previewSamples = [1, 2, 3].map((x) => measure("transverse", x));
+const previewSamples = [1, 2, 3].map((x) => cut("transverse", x)!);
 assert.equal(
   nearestSample(previewSamples, [2.8, 0.6], previewProjection, 0),
   2,
@@ -780,7 +782,7 @@ assert.equal(
   nearestSample(previewSamples, [1.1, 0.6], previewProjection, 2),
   0,
 );
-const levels = [0.3, 0.5, 0.7].map((z) => measure("plane", z));
+const levels = [0.3, 0.5, 0.7].map((z) => cut("plane", z)!);
 assert.equal(nearestSample(levels, [2, 0.68], previewProjection, 0), 2);
 assert.equal(
   nearestSample(
@@ -1282,7 +1284,7 @@ console.log(
 const horizontalPreview = renderToStaticMarkup(
   createElement(RepetitionPreview, {
     shape: "plane",
-    samples: [measure("plane", 0.6)],
+    samples: [cut("plane", 0.6)!],
     equivalentCount: "1",
     limits: { topHeight: 0.6 },
   }),

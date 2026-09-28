@@ -9,21 +9,15 @@ import {
 // over the hull in the existing 3D scene.
 
 import { unitScale } from "../json";
+import { createDirectedPlaneCuts } from "./directedPlaneCuts";
+import { orientedHullTriangles } from "./orientedMesh";
 import type { Vec3 } from "../math";
 import type { HullSampling } from "../mesh";
 import { sweptSection } from "../mesh";
 import type { Model } from "../model";
 import { heightSpan, stationGeometry, type StationGeom } from "../sweep";
 import type { SliceShape } from "./book";
-import {
-  closedHullTriangles,
-  clipPlaneCut,
-  type PlaneCut,
-  createPlaneIntersector,
-  sectionFromSegments,
-  type CutTriangle,
-  type CutSegment,
-} from "./planeCuts";
+import { sectionFromSegments, type CutSegment } from "./planeCuts";
 import {
   GEOMETRY_LEAVES,
   geometryValue,
@@ -117,26 +111,32 @@ export type RawSliceMeasurement = Omit<
   "derivative" | "geometryDerivative" | "boundaryDerivatives"
 >;
 
-/** Bounded per-hull cache: boundary sensitivities and edits revisit the same
- * planes. The expensive triangle intersection is independent of all limits. */
-function cachedIntersections(triangles: readonly CutTriangle[]) {
-  const cache = new Map<string, PlaneCut>();
-  const intersect = createPlaneIntersector(triangles);
-  return (
-    normal: Vec3,
-    offset: number,
-    toSheet: (p: Vec3) => Vec3,
-    scale: number,
-  ) => {
-    const key = `${normal.join(",")}:${offset}`;
-    let cut = cache.get(key);
-    if (!cut) {
-      cut = intersect(normal, offset, toSheet, scale);
-      if (cache.size >= 512) cache.delete(cache.keys().next().value!);
-      cache.set(key, cut);
-    }
-    return cut;
-  };
+type PlaneIntersector = ReturnType<typeof createDirectedPlaneCuts>["intersect"];
+
+// A hull can have both integration and preview clients. Retain one directed
+// topology/index/cache while that sampling is alive, without pinning old hulls.
+const hullCutters = new WeakMap<
+  HullSampling,
+  ReturnType<typeof createDirectedPlaneCuts>
+>();
+function cuttersFor(sampling: HullSampling) {
+  let cutters = hullCutters.get(sampling);
+  if (!cutters) {
+    cutters = createDirectedPlaneCuts(orientedHullTriangles(sampling));
+    hullCutters.set(sampling, cutters);
+  }
+  return cutters;
+}
+
+/** Numerical cuts share the directed intersection/clipping path but do not
+ * build or copy drawing geometry for every integration or derivative query. */
+function numericalIntersections(sampling: HullSampling): PlaneIntersector {
+  return (...query) => ({
+    measures: cuttersFor(sampling).measure(...query),
+    segments: [],
+    skinSegments: [],
+    contours: [],
+  });
 }
 
 export interface SliceSensitivities {
@@ -152,7 +152,7 @@ function measureSliceAt(
   geom: StationGeom,
   shape: SliceShape,
   positionMetres: number,
-  intersect: ReturnType<typeof cachedIntersections>,
+  intersect: PlaneIntersector,
   limits: SectionLimits = {},
 ): RawSliceMeasurement | null {
   if (!isFinite(positionMetres)) return null;
@@ -185,15 +185,7 @@ function measureSliceAt(
         : shape === "transverse"
           ? (originX + positionMetres / s) * geom.cosRake
           : positionMetres / s;
-    const result = clipPlaneCut(
-      intersect(normal, offset, toSheet, s),
-      normal,
-      offset,
-      toSheet,
-      s,
-      limits,
-      toBoundary,
-    );
+    const result = intersect(normal, offset, toSheet, s, limits, toBoundary);
     const m = result.measures;
     const cg = m.area.amount
       ? (m.area.moment.map((v) => v / m.area.amount) as Vec3)
@@ -391,15 +383,15 @@ export function createSliceMeasurer(
 ) => SliceMeasurement | null {
   const geom = stationGeometry(model, sampling);
   if (!geom) return () => null;
-  const triangles = closedHullTriangles(sampling);
-  const intersect = cachedIntersections(triangles);
+  const intersect: PlaneIntersector = (...query) =>
+    cuttersFor(sampling).intersect(...query);
   const s = unitScale(model.unit, "m");
   const longitudinalSpan = (model.plan.at(1)[0] - model.plan.at(0)[0]) * s;
   const [zLo, zHi] = heightSpan(geom, 0);
   const verticalSpan = (zHi - zLo) * s;
   let lateralSpan = 0;
-  for (const triangle of triangles)
-    for (const p of triangle.points)
+  for (const triangle of sampling.hullQuads)
+    for (const { pos: p } of triangle)
       lateralSpan = Math.max(lateralSpan, 2 * Math.abs(p[1]) * s);
 
   const safeAt = (
@@ -531,8 +523,7 @@ export function measureSlice(
 /** Raw measurements for integration: preserve geometry errors, distinguish empty sections. */
 export function createSectionMeasurer(model: Model, sampling: HullSampling) {
   const geom = stationGeometry(model, sampling);
-  const triangles = closedHullTriangles(sampling);
-  const intersect = cachedIntersections(triangles);
+  const intersect = numericalIntersections(sampling);
   return (
     shape: SliceShape,
     position: number,

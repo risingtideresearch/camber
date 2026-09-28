@@ -69,9 +69,15 @@ export function createWeightGeometryProcessor(
     let preview = cached?.kind === "repetition" ? cached.preview : undefined;
     if (preview === undefined && result.value) {
       try {
-        preview = job.previewPositions.map((position) =>
-          section!(job.shape, position, job.limits),
-        );
+        cut ??= createSliceMeasurer(model, sampling);
+        preview = job.previewPositions.map((position) => {
+          const value = cut!(job.shape, position, job.limits, {
+            position: false,
+            boundaries: [],
+          });
+          if (!value) throw new Error("Preview section is unavailable");
+          return value;
+        });
       } catch {
         // A drawing aid must not turn an otherwise valid estimate into an error.
         preview = null;

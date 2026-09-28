@@ -408,6 +408,12 @@ assert.equal(uncertaintyPending(nominalResult), true);
 assert.ok(nominalResult.kind === "repetition" && nominalResult.result.value);
 assert.equal(nominalResult.result.value.phaseTotals, undefined);
 assert.equal(nominalResult.preview?.length, 7);
+assert.ok(
+  nominalResult.preview!.every(
+    (sample) =>
+      sample.sheetContours.length > 0 && sample.sheetSkinSegments.length > 0,
+  ),
+);
 const nominalGeometry = resolveWeightGeometry(
   stagedPlan,
   new Map(stage1.results.map((r) => [r.key, r.result])),
