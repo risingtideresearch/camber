@@ -22,6 +22,7 @@ import { useWeightBookResults } from "../useWeightBookResults";
 import { showSpread, sig } from "./weightFormat";
 import type { RollupSelection } from "./FacetRollup";
 import type { Focus } from "./ItemTable";
+import { ScenarioGeometry } from "./ScenarioGeometry";
 import { ScenarioInputs } from "./ScenarioTools";
 
 type Value = { reading?: Reading; dim?: Dim; status?: string };
@@ -62,6 +63,7 @@ interface ComparisonProps {
   readonly output: string | null;
   readonly scope: ViewScope;
   readonly totals?: boolean;
+  readonly summary?: boolean;
   readonly rollup?: RollupSelection | null;
   readonly groupBy?: readonly string[];
   readonly model: Model;
@@ -92,6 +94,7 @@ function Comparison({
   output,
   scope,
   totals = false,
+  summary = false,
   rollup = null,
   groupBy = [],
   model,
@@ -122,6 +125,15 @@ function Comparison({
   const item = book.items.find((i) => i.id === focus?.item);
   const fieldKey =
     focus?.field && item?.fields[focus.field] ? focus.field : null;
+  const geometryItems = (world: WeightBook) => {
+    const scoped = scopeItems(
+      world,
+      item ? { k: "item", item: item.id } : scope,
+    );
+    return !item && rollup && rollup.key !== "all"
+      ? (currentGroupMembers(scoped, groupBy, rollup.key) ?? [])
+      : scoped;
+  };
   const rows: { id: string; label: string; a: Value; b: Value }[] = [];
   let title: string;
   if (item) {
@@ -271,6 +283,32 @@ function Comparison({
         Difference = other − current. Differences are nominal; each value
         retains its own uncertainty.
       </p>
+      <ScenarioGeometry
+        key={
+          summary
+            ? "summary"
+            : JSON.stringify([item?.id, fieldKey, scope, rollup?.key])
+        }
+        contextual={!!fieldKey && item?.fields[fieldKey].k !== "point"}
+        summary={summary}
+        current={{
+          name: aName,
+          items: geometryItems(aBook),
+          results: a.results,
+          pending: a.pending,
+        }}
+        other={{
+          name: bName,
+          items: geometryItems(bBook),
+          results: b.results,
+          pending: b.pending,
+        }}
+        fieldKey={
+          fieldKey && item?.fields[fieldKey].k === "point" ? fieldKey : null
+        }
+        model={model}
+        sampling={sampling}
+      />
       {item && fieldKey && (
         <ScenarioInputs
           book={book}

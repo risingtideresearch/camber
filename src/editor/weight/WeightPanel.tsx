@@ -823,6 +823,7 @@ function WorkspaceInspector(props: BodyProps & { shown: "compare" }) {
   const focus = props.view.layout === "summary" ? null : props.focus;
   return (
     <ScenarioComparison
+      summary={props.view.layout === "summary"}
       book={props.authoredBook}
       active={props.activeScenario}
       focus={focus}

@@ -965,6 +965,235 @@ assert.match(compare, /Difference/);
 assert.match(compare, /220/);
 assert.match(compare, /230/);
 assert.doesNotMatch(compare, /Inspect item|wscenario-table/);
+// Comparison geometry uses each resolved world's membership and SI coordinates.
+const { comparisonPoints } = await import("../src/editor/weight/pointPlots");
+const { ScenarioGeometry } =
+  await import("../src/editor/weight/ScenarioGeometry");
+let pointBook = run(book, {
+  type: "addField",
+  item: "engine",
+  key: "cg",
+  kind: "point",
+});
+pointBook = run(pointBook, {
+  type: "setPointPosition",
+  item: "engine",
+  field: "cg",
+  x: "1 ± 0.1",
+  y: "0",
+  z: "2",
+});
+pointBook = run(pointBook, {
+  type: "setPointPosition",
+  item: "engine",
+  field: "cg",
+  x: "3",
+  y: "-1",
+  z: "4",
+  scope: scoped(alternate),
+});
+const currentPointWorld = resolveScenario(pointBook, null);
+const otherPointWorld = resolveScenario(pointBook, alternate);
+const currentPointResults = result(pointBook, null);
+const otherPointResults = result(pointBook, alternate);
+assert.deepEqual(
+  comparisonPoints(currentPointWorld.items, currentPointResults)[0].position,
+  [1, 0, 2],
+);
+assert.deepEqual(
+  comparisonPoints(otherPointWorld.items, otherPointResults)[0].position,
+  [3, -1, 4],
+);
+assert.deepEqual(
+  comparisonPoints(currentPointWorld.items, currentPointResults, "mass"),
+  [],
+);
+const millimetres = run(pointBook, {
+  type: "setFieldUnit",
+  item: "engine",
+  field: "cg",
+  unit: "mm",
+});
+assert.deepEqual(
+  comparisonPoints(
+    resolveScenario(millimetres, null).items,
+    result(millimetres, null),
+  )[0].position,
+  [0.001, 0, 0.002],
+);
+for (const z of ["", "missing_coordinate"]) {
+  const invalid = run(pointBook, {
+    type: "setPointPosition",
+    item: "engine",
+    field: "cg",
+    z,
+  });
+  assert.deepEqual(
+    comparisonPoints(
+      resolveScenario(invalid, null).items,
+      result(invalid, null),
+    ),
+    [],
+  );
+}
+const excludedPoint = run(pointBook, {
+  type: "setApplicability",
+  item: "engine",
+  fieldKey: "cg",
+  applicability: { k: "only", scenarios: [alternate] },
+});
+assert.deepEqual(
+  comparisonPoints(
+    resolveScenario(excludedPoint, null).items,
+    result(excludedPoint, null),
+  ),
+  [],
+);
+assert.equal(
+  comparisonPoints(
+    resolveScenario(excludedPoint, alternate).items,
+    result(excludedPoint, alternate),
+  ).length,
+  1,
+);
+const geometryProps = {
+  current: {
+    name: "Shared",
+    items: currentPointWorld.items,
+    results: currentPointResults,
+    pending: false,
+  },
+  other: {
+    name: "Offshore",
+    items: otherPointWorld.items,
+    results: otherPointResults,
+    pending: false,
+  },
+  fieldKey: "cg",
+  model,
+  sampling: null,
+};
+const pointOverlay = renderToStaticMarkup(
+  createElement(ScenarioGeometry, geometryProps),
+);
+assert.equal((pointOverlay.match(/<svg/g) ?? []).length, 2);
+assert.match(pointOverlay, /Profile/);
+assert.match(pointOverlay, /End projection/);
+assert.match(pointOverlay, /Shared · engine.cg/);
+assert.match(pointOverlay, /Offshore · engine.cg/);
+assert.equal((pointOverlay.match(/<circle/g) ?? []).length, 2);
+assert.doesNotMatch(pointOverlay, /NaN|Infinity|<input|<button/);
+const pendingOverlay = renderToStaticMarkup(
+  createElement(ScenarioGeometry, {
+    ...geometryProps,
+    current: { ...geometryProps.current, pending: true },
+  }),
+);
+assert.doesNotMatch(pendingOverlay, /<circle/);
+assert.match(pendingOverlay, /updating geometry/);
+// Summary geometry contains only the reported CG, even when authored points exist.
+const { comparisonCentreOfGravity } =
+  await import("../src/editor/weight/pointPlots");
+let summaryBook = run(pointBook, {
+  type: "setOutput",
+  name: "LCG",
+  formula: "engine.cg.x",
+});
+summaryBook = run(summaryBook, {
+  type: "setOutput",
+  name: "VCG",
+  formula: "engine.cg.z",
+});
+assert.deepEqual(
+  comparisonCentreOfGravity(result(summaryBook, null))[0].position,
+  [1, 0, 2],
+);
+assert.deepEqual(
+  comparisonCentreOfGravity(result(summaryBook, alternate))[0].position,
+  [3, 0, 4],
+);
+assert.deepEqual(
+  comparisonCentreOfGravity(result(pointBook, null)),
+  [],
+  "do not substitute authored points for missing CG outputs",
+);
+const summaryOverlay = renderToStaticMarkup(
+  createElement(ScenarioComparison, {
+    book: summaryBook,
+    active: alternate,
+    focus: null,
+    output: "DISPLACEMENT",
+    scope: { k: "all" },
+    summary: true,
+    model,
+    sampling: null,
+    metrics: null,
+    send,
+  }),
+);
+assert.match(summaryOverlay, /<summary>Centre of gravity<\/summary>/);
+assert.equal((summaryOverlay.match(/<circle/g) ?? []).length, 2);
+assert.doesNotMatch(summaryOverlay, /engine.cg|Point positions/);
+assert.match(summaryOverlay, /centreline/);
+const missingCG = renderToStaticMarkup(
+  createElement(ScenarioGeometry, { ...geometryProps, summary: true }),
+);
+assert.doesNotMatch(missingCG, /<circle|engine.cg/);
+assert.match(missingCG, /LCG and VCG are needed/);
+// Values lead; unrelated geometry is optional context, while a point plots only itself.
+const compareGeometrySelection = (field: string, value = pointBook) =>
+  renderToStaticMarkup(
+    createElement(ScenarioComparison, {
+      book: value,
+      active: alternate,
+      focus: { item: "engine", field, leaf: "formula" },
+      output: null,
+      scope: { k: "item", item: "engine" },
+      model,
+      sampling: null,
+      metrics: null,
+      send,
+    }),
+  );
+const scalarGeometry = compareGeometrySelection("mass");
+assert.match(scalarGeometry, /<summary>Show item geometry<\/summary>/);
+assert.doesNotMatch(
+  scalarGeometry,
+  /<details[^>]*class="wscenario-geometry"[^>]*open/,
+);
+assert.ok(
+  scalarGeometry.indexOf('class="wscenario-result"') <
+    scalarGeometry.indexOf('class="wscenario-geometry"'),
+);
+let twoPoints = run(pointBook, {
+  type: "addField",
+  item: "engine",
+  key: "mount",
+  kind: "point",
+});
+twoPoints = run(twoPoints, {
+  type: "setPointPosition",
+  item: "engine",
+  field: "mount",
+  x: "8",
+  y: "0",
+  z: "2",
+});
+const directGeometry = compareGeometrySelection("cg", twoPoints);
+assert.match(
+  directGeometry,
+  /<details[^>]*class="wscenario-geometry"[^>]*open/,
+);
+assert.match(directGeometry, /engine.cg/);
+assert.doesNotMatch(directGeometry, /engine.mount|Show item geometry/);
+assert.ok(
+  directGeometry.indexOf('class="wscenario-result"') <
+    directGeometry.indexOf('class="wscenario-geometry"'),
+);
+assert.ok(
+  summaryOverlay.indexOf('class="wscenario-result"') <
+    summaryOverlay.indexOf('class="wscenario-geometry"'),
+);
 const emptyComparison = renderToStaticMarkup(
   createElement(ScenarioComparison, {
     book: emptyBook(),

@@ -14,6 +14,7 @@ import {
 } from "../../core/sheet/book";
 import {
   resultAt,
+  outputResult,
   type BookResults,
   type CellResult,
 } from "../../core/sheet/evaluate";
@@ -29,7 +30,7 @@ import {
   type SliceMeasurements,
 } from "../../core/sheet/slices";
 import type { Vec2, Vec3 } from "../../core/math";
-import { isDimless, sameDim } from "../../core/sheet/quantity";
+import { isDimless, sameDim, LENGTH } from "../../core/sheet/quantity";
 import type { PlottedCut, PlottedPoint, SnapTarget } from "./PointViews";
 
 const AXES = ["x", "y", "z"] as const;
@@ -371,4 +372,80 @@ export function widestCell(
     }
   }
   return best;
+}
+
+export interface ComparisonPoint {
+  readonly key: string;
+  readonly label: string;
+  readonly position: Vec3;
+}
+
+/** Only complete, valid length coordinates are geometry. Never turn an error into an origin. */
+export function comparisonPoints(
+  items: readonly Item[],
+  results: BookResults,
+  fieldKey?: string | null,
+): ComparisonPoint[] {
+  return items.flatMap((item) =>
+    Object.entries(item.fields).flatMap(([key, field]) => {
+      if (field.k !== "point" || (fieldKey && key !== fieldKey)) return [];
+      const cells = (["x", "y", "z"] as const).map((axis) =>
+        resultAt(results, item.id, key, axis),
+      );
+      if (
+        !cells.every(
+          (cell) =>
+            cell &&
+            !cell.empty &&
+            !cell.error &&
+            !cell.unitWarning &&
+            cell.reading &&
+            cell.quantity &&
+            sameDim(cell.quantity.dim, LENGTH) &&
+            Number.isFinite(cell.reading.v),
+        )
+      )
+        return [];
+      return [
+        {
+          key: JSON.stringify([item.id, key]),
+          label: `${item.name || "Unnamed item"}.${key}`,
+          position: [
+            cells[0]!.reading!.v,
+            cells[1]!.reading!.v,
+            cells[2]!.reading!.v,
+          ] as Vec3,
+        },
+      ];
+    }),
+  );
+}
+
+/** Summary plots the reported centre, not every authored point. No lateral CG output exists. */
+export function comparisonCentreOfGravity(
+  results: BookResults,
+): ComparisonPoint[] {
+  const x = outputResult(results, "LCG"),
+    z = outputResult(results, "VCG");
+  if (
+    ![x, z].every(
+      (cell) =>
+        cell &&
+        !cell.empty &&
+        !cell.error &&
+        !cell.unitWarning &&
+        cell.reading &&
+        cell.quantity &&
+        sameDim(cell.quantity.dim, LENGTH) &&
+        Number.isFinite(cell.reading.v),
+    )
+  )
+    return [];
+  return [
+    {
+      key: "summary-cg",
+      label: "Centre of gravity",
+      position: [x!.reading!.v, 0, z!.reading!.v],
+    },
+  ];
 }

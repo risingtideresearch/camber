@@ -403,3 +403,70 @@
   padding: 5px 0;
   overflow-wrap: anywhere;
 }
+
+.wscenario-geometry {
+  margin: 12px 0;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.wscenario-geometry-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-bottom: 10px;
+}
+.wscenario-geometry-legend small {
+  color: var(--mut);
+}
+.wscenario-geometry-current {
+  color: #246ac4;
+}
+.wscenario-geometry-other {
+  color: #b65c08;
+}
+.wscenario-geometry figure {
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+}
+.wscenario-geometry figcaption {
+  padding: 6px 8px 0;
+  font-size: 11px;
+  color: var(--mut);
+}
+.wscenario-geometry svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.wscenario-geometry svg text {
+  fill: var(--mut);
+  font-size: 10px;
+}
+.wscenario-geometry-axis {
+  stroke: var(--mut);
+  stroke-width: 1;
+}
+.wscenario-geometry-datum {
+  stroke: var(--line);
+  stroke-dasharray: 4 4;
+}
+.wscenario-geometry-hull {
+  fill: none;
+  stroke: var(--mut);
+  stroke-width: 1;
+  opacity: 0.65;
+}
+.wscenario-geometry g:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.wscenario-geometry > summary {
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.wscenario-geometry[open] > summary {
+  margin-bottom: 12px;
+}
