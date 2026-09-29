@@ -35,6 +35,7 @@ import {
   type WeightBook,
 } from "../../core/sheet/book";
 import {
+  fieldRollupUses,
   fieldUses,
   outputResult,
   resultAt,
@@ -159,18 +160,23 @@ export function UsesInspector({
   results,
   focus,
   onGo,
-}: Pick<InspectorProps, "book" | "results" | "focus" | "onGo">) {
+  onOpenRollup,
+}: Pick<InspectorProps, "book" | "results" | "focus" | "onGo"> & {
+  readonly onOpenRollup: (key: string, value: string) => void;
+}) {
   const item = focus ? findItem(book, focus.item) : undefined;
   const fieldKey = focus?.field;
   const field = item && fieldKey ? item.fields[fieldKey] : undefined;
   if (!item || !fieldKey || !field)
     return (
       <p className="whint wpad">
-        Put the caret in a field and this lists every formula that names it.
+        Put the caret in a field to see which formulas name it and which named
+        rollups include it.
       </p>
     );
 
   const uses = fieldUses(book, results, item.id, fieldKey);
+  const rollupUses = fieldRollupUses(book, item.id, fieldKey);
   const sourceOf = (use: (typeof uses)[number]): string => {
     if (use.itemId === "OUT") return book.outputs[use.fieldKey] ?? "";
     const user = findItem(book, use.itemId);
@@ -184,8 +190,9 @@ export function UsesInspector({
   return (
     <div className="winspector">
       <Head address={`${item.name || "unnamed"}.${fieldKey}`} kind="uses" />
-      {uses.length ? (
-        <>
+      {uses.length > 0 && (
+        <section>
+          <h3 className="winspuseheading">Formulas</h3>
           <p className="whint">
             {uses.length} formula{uses.length === 1 ? "" : "s"} name this field.
             Pick one to go to it.
@@ -203,11 +210,39 @@ export function UsesInspector({
               </li>
             ))}
           </ul>
-        </>
-      ) : (
+        </section>
+      )}
+      {rollupUses.length > 0 && (
+        <section>
+          <h3 className="winspuseheading">Named rollups</h3>
+          <p className="whint">
+            Contributes to {rollupUses.length} named rollup
+            {rollupUses.length === 1 ? "" : "s"} through its role, whether or
+            not a formula names them.
+          </p>
+          <ul className="winspuses">
+            {rollupUses.map((use) => (
+              <li key={`${use.rollupId}:${use.address}`}>
+                <button
+                  onClick={() => onOpenRollup(use.facetKey, use.facetValue)}
+                  title="Open this rollup"
+                >
+                  {use.address}
+                </button>
+                <code>
+                  {use.as === "weight"
+                    ? `Weights the ${use.roleLabel}`
+                    : `Contributes its ${use.roleLabel}`}
+                  {` · ${use.facetKey}: ${use.facetValue}`}
+                </code>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {!uses.length && !rollupUses.length && (
         <p className="whint">
-          Nothing else names this field. It can be changed or removed without
-          breaking another formula.
+          No formulas name this field, and it contributes to no named rollups.
         </p>
       )}
     </div>

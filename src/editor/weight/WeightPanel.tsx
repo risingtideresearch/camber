@@ -329,6 +329,13 @@ function WeightPanelContents() {
     setFocus({ item: itemId, field: fieldKey, leaf });
   };
 
+  const openRollup = (key: string, value: string) => {
+    setDestination("sheet");
+    setViewId(facetView(key, value).id);
+    setFocus(null);
+    setRollupSelection(null);
+  };
+
   const createItem = (filing?: NewItemFiling) => {
     const id = newId();
     send({ type: "addItem", id, name: "", after: book.items.length - 1 });
@@ -406,13 +413,7 @@ function WeightPanelContents() {
                 setFocus(null);
                 setRollupSelection(null);
               }}
-              onOpenFacet={(key, value) => {
-                // The explorer's funnel: a node you were looking at becomes the view you are editing in, with
-                // the same scope it drew. No view-builder to learn, because there is nothing to build.
-                setViewId(facetView(key, value).id);
-                setFocus(null);
-                setRollupSelection(null);
-              }}
+              onOpenFacet={openRollup}
               onAddItem={createItem}
               send={send}
             />
@@ -512,6 +513,7 @@ function WeightPanelContents() {
                   rollupSelection,
                   setRollupSelection,
                   go,
+                  openRollup,
                   send,
                   groupFacet,
                   model,
@@ -598,6 +600,7 @@ interface BodyProps {
   readonly rollupSelection: RollupSelection | null;
   readonly setRollupSelection: (selection: RollupSelection | null) => void;
   readonly go: Go;
+  readonly openRollup: (key: string, value: string) => void;
   readonly send: (command: DocumentCommand) => void;
   readonly groupFacet: string | null;
   readonly model: ReturnType<typeof useDocumentRuntime>;
@@ -1031,6 +1034,7 @@ function ViewBody(props: BodyProps) {
                     results={results}
                     focus={props.focus}
                     onGo={props.go}
+                    onOpenRollup={props.openRollup}
                   />
                 ) : (
                   <Inspector
@@ -1177,6 +1181,7 @@ function ViewBody(props: BodyProps) {
                   results={results}
                   focus={props.focus}
                   onGo={props.go}
+                  onOpenRollup={props.openRollup}
                 />
               ) : (
                 <GeometryEditor {...props} items={detail ? [detail] : items} />

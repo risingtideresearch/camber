@@ -2719,6 +2719,11 @@ button.wtermgo:focus-visible {
 }
 
 /* Reverse dependencies: the address is the action and the expression beneath it explains the occurrence. */
+.winspuseheading {
+  margin: 12px 0 4px;
+  color: var(--ink);
+  font-size: 12px;
+}
 .winspuses {
   list-style: none;
   margin: 12px 0 0;
