@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
-export type WeightDestination = "sheet" | "problems" | "scenarios";
+export type WeightDestination = "sheet" | "loading" | "problems" | "scenarios";
 
 const Target = createContext<HTMLDivElement | null>(null);
 const SetTarget = createContext<((node: HTMLDivElement | null) => void) | null>(
@@ -42,7 +42,7 @@ export function WeightNavigation({
   const navigation = (
     <div className="weight-navigation-tools">
       <nav className="weight-navigation" aria-label="Weight sheet views">
-        {(["sheet", "problems", "scenarios"] as const).map((id) => (
+        {(["sheet", "loading", "problems", "scenarios"] as const).map((id) => (
           <button
             type="button"
             key={id}
@@ -50,9 +50,12 @@ export function WeightNavigation({
             onClick={() => onPick(id)}
           >
             {
-              { sheet: "Sheet", problems: "Problems", scenarios: "Scenarios" }[
-                id
-              ]
+              {
+                sheet: "Sheet",
+                loading: "Loading",
+                problems: "Problems",
+                scenarios: "Scenarios",
+              }[id]
             }
             {id === "problems" && (
               <span

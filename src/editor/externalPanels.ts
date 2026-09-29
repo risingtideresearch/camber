@@ -12,11 +12,12 @@
 // Hull views are opened from the pane being duplicated (DetachPanelButton). The window-only analytical panels
 // are labelled in an app bar instead: History travels with the session's undo controls, while Stability and
 // Weights are opened from the main editor because each is a reading of the complete design rather than of one
-// pane. Weights is also the one panel that EDITS something other than the hull — the weight sheet is the
+// pane. Loading normally lives inside Weights; its own opener is an optional second view of that screen.
+// Weights is also the one panel that EDITS something other than the hull — the weight sheet is the
 // session's second authored document (see `core/sessionDocument.ts`) — so its edits undo alongside hull edits
 // in the same history.
 export type PanelKind =
-  "view3d" | "stations" | "history" | "stability" | "weights";
+  "view3d" | "stations" | "history" | "stability" | "weights" | "loading";
 
 export interface PanelSpec {
   /** Caption in the panel window's own bar, and in its document title. */
@@ -46,6 +47,12 @@ export const PANELS: Record<PanelKind, PanelSpec> = {
     hint: "Open this session's edit history in a window of its own — every moment as a tree, including the branches going back and editing again left behind. Click one to jump to it and watch the hull follow here.",
     // A tree of moments: tall and narrow, and meant to sit alongside the editor rather than over it.
     width: 560,
+    height: 820,
+  },
+  loading: {
+    title: "Loading",
+    hint: "Choose a loading condition and calculate a floating equilibrium before applying it to the hull.",
+    width: 900,
     height: 820,
   },
   stability: {
@@ -80,14 +87,20 @@ export function panelKindFromUrl(): PanelKind | null {
  * The window is named per kind and session, so a second click on the same button raises the window that is
  * already showing that panel rather than piling up duplicates — while two different sessions each get their
  * own set. Opening it as a popup drops the browser chrome, which is what makes it read as a panel.
+ * `weightScreen` routes a cross-panel shortcut into Weights rather than opening Loading separately.
  */
-export function openPanelWindow(kind: PanelKind): void {
+export function openPanelWindow(
+  kind: PanelKind,
+  weightScreen?: "sheet" | "loading",
+): void {
   const here = new URL(window.location.href);
   const session = here.searchParams.get("session");
   if (!session) return; // no live session to join — nothing a panel could show
   const url = new URL("panel.html", here);
   url.searchParams.set("session", session);
   url.searchParams.set("panel", kind);
+  if (kind === "weights" && weightScreen)
+    url.searchParams.set("screen", weightScreen);
   const designId = here.searchParams.get("id");
   if (designId) url.searchParams.set("id", designId);
 

@@ -1,0 +1,146 @@
+.loading-panel {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 20px;
+}
+.loading-card {
+  max-width: 860px;
+  margin: 0 auto 16px;
+  padding: 20px;
+}
+.loading-card header,
+.loading-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.loading-card header {
+  justify-content: space-between;
+}
+.loading-card h2 {
+  margin: 0 0 16px;
+  font-size: 16px;
+}
+.loading-card h3 {
+  font-size: 14px;
+}
+.loading-controls {
+  margin: 12px 0;
+}
+.loading-controls label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.loading-values {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 16px;
+  margin: 16px 0 8px;
+}
+.loading-value {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+.loading-value > span {
+  color: var(--mut);
+  font-size: 12px;
+}
+.loading-value strong {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+.loading-value input {
+  width: 120px;
+  max-width: 100%;
+}
+.loading-hint {
+  color: var(--mut);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.loading-iterate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.loading-step + .loading-step {
+  border-top: 1px solid var(--line);
+  margin-top: 20px;
+  padding-top: 16px;
+}
+.loading-step h3 {
+  margin: 0 0 12px;
+}
+.loading-workflow > header h2 {
+  margin: 0;
+}
+.loading-workflow > header {
+  margin-bottom: 12px;
+}
+.loading-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px 24px;
+  margin-bottom: 12px;
+}
+.loading-actions .loading-hint {
+  margin: 6px 0;
+}
+.loading-value small {
+  color: var(--mut);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.loading-diagnostics {
+  margin-top: 12px;
+  font-size: 12px;
+}
+.loading-diagnostics summary {
+  cursor: pointer;
+  color: var(--mut);
+}
+.loading-proposal table {
+  width: 100%;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.loading-proposal th,
+.loading-proposal td {
+  padding: 8px 6px;
+}
+.loading-proposal th:first-child {
+  text-align: left;
+}
+.loading-proposal td:last-child:not(:nth-child(2)) {
+  font-weight: 600;
+  background: var(--bg);
+}
+@media (max-width: 560px) {
+  .loading-panel {
+    padding: 8px;
+  }
+  .loading-card {
+    padding: 14px;
+  }
+}
+
+.loading-panel input[type="number"],
+.loading-panel select {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.loading-panel input[type="number"]:focus-visible,
+.loading-panel select:focus-visible {
+  outline: 2px solid var(--mut);
+  outline-offset: 2px;
+}

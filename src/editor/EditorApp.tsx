@@ -199,8 +199,8 @@ function Editor() {
           onClose={onClose}
         />
         <span className="tabsep" />
-        <DetachPanelButton kind="stability" label="Stability" />
         <DetachPanelButton kind="weights" label="Weights" />
+        <DetachPanelButton kind="stability" label="Stability" />
         <StlControl />
       </div>
       <div className="main">

@@ -24,6 +24,7 @@
 // command-log undo, and no rebase-by-replay. Undo is a snapshot stack (`document-store/history.ts`), and the multi-window
 // design orders commands through one authoritative server rather than replaying them per window.
 
+import { DEFAULT_LOADING, type LoadingCondition } from "./loading";
 import { clamp, lerp } from "./math";
 import { UNIT_MM, type Unit } from "./document";
 import {
@@ -82,6 +83,17 @@ export type HullCommand =
   | { type: "setStationK"; si: number; idx: number; k: number }
   // the document's scalars
   | { type: "setWaterline"; depth: number }
+  | {
+      type: "applyFloatingAttitude";
+      waterline: number;
+      deckRake: number;
+      expectedRevision: number;
+      /** null selects a weight scenario independently of the Stability session. */
+      expectedLoading: string | null;
+      scenarioId?: string | null;
+      vcg: number | null;
+      label: string;
+    }
   | { type: "setDeckRakeDeg"; deg: number }
   | { type: "setName"; name: string }
   | { type: "setUnit"; unit: Unit; rescale: boolean }
@@ -101,7 +113,9 @@ export type HullCommand =
 export type DocumentCommand = HullCommand | SheetCommand;
 
 // Shared between a session's windows, never persisted, never undoable.
-export type SessionCommand = { type: "setX0"; x: number };
+export type SessionCommand =
+  | { type: "setX0"; x: number }
+  | { type: "setLoading"; patch: Partial<LoadingCondition> };
 
 // ---------- what a command touched ----------
 // A bitmask of the slices whose revisions the server must bump. `assemble` rebuilds a sampler only for the
@@ -493,6 +507,9 @@ export function interpretHullCommand(
     }
 
     // ---- the document's scalars ----
+    case "applyFloatingAttitude":
+      d.scalars();
+      return d.commit({ waterline: cmd.waterline, deckRake: cmd.deckRake });
     case "setWaterline":
       d.scalars();
       return d.commit({ waterline: cmd.depth });
@@ -597,6 +614,11 @@ export function applySessionCommand(
   cmd: SessionCommand,
 ): SessionState {
   switch (cmd.type) {
+    case "setLoading":
+      return {
+        ...session,
+        loading: { ...DEFAULT_LOADING, ...session.loading, ...cmd.patch },
+      };
     case "setX0":
       return { ...session, x0: clamp(cmd.x, 0, loa(before)) };
   }
@@ -670,6 +692,8 @@ export function commandSlices(cmd: DocumentCommand): SliceMask {
     case "removeStationPoint":
     case "setStationK":
       return SLICE.stations;
+    case "applyFloatingAttitude":
+      return ALL_SLICES;
     case "setWaterline":
     case "setDeckRakeDeg":
     case "setName":
@@ -798,6 +822,8 @@ export function describeCommand(
       return `Remove section point ${cmd.idx + 1}`;
     case "setStationK":
       return `Knuckle S${cmd.si + 1} point ${cmd.idx + 1}`;
+    case "applyFloatingAttitude":
+      return "Apply floating equilibrium";
     case "setWaterline":
       return "Set the waterline";
     case "setDeckRakeDeg":

@@ -1,3 +1,6 @@
+import { loadingOutputs } from "../core/sheet/loadingOutputs";
+import { useLoadingCondition } from "./useLoadingCondition";
+import { OpenPanelButton } from "./OpenPanelButton";
 import { scenariosOf } from "../core/sheet/scenarios";
 import { resolveScenario } from "../core/sheet/resolveScenario";
 import { useMemo, useRef, useState, type ReactNode } from "react";
@@ -749,16 +752,8 @@ export function StabilityPanel() {
     limit = analysis?.limit ?? EMPTY_LIMIT,
     hydro = analysis?.hydro ?? null,
     lowestSheerKg = analysis?.lowestSheerKg ?? NaN;
-  const [condition, setCondition] = useState<Condition | null>(null);
-  /**
-   * Whether the pinned condition is FOLLOWING the weight sheet rather than standing where it was clicked.
-   *
-   * A link, not a copy. The sheet is the session's other authored document and it lives in the same store, so
-   * while this is on, a formula edited in the weights window moves the condition here as it is typed — which
-   * is the question a designer actually has: not "does this displacement pass" but "does my estimate pass,
-   * and how much of the margin is the estimate rather than the boat".
-   */
-  const [linkSheet, setLinkSheet] = useState(false);
+  const { loading, scenarioId, setLoading } = useLoadingCondition();
+  const linkSheet = loading.source === "sheet";
   // null until a tolerance is touched; `defaultSpread` stands in until then, so the first ± draws a rectangle
   // immediately without seeding state from a viewport the analysis had not produced yet.
   const [spread, setSpread] = useState<Spread | null>(null);
@@ -790,18 +785,25 @@ export function StabilityPanel() {
   // same water the estimate was made in, and the sheet's mass and this axis cannot disagree.
   const unit = snapshot.state.hull.unit;
   const authoredBook = snapshot.state.weights;
-  const [sheetScenario, setSheetScenario] = useState<string | null>(null);
-  const scenarioId = scenariosOf(authoredBook).some(
-    (s) => s.id === sheetScenario,
-  )
-    ? sheetScenario
-    : null;
   const book = useMemo(
     () => resolveScenario(authoredBook, scenarioId),
     [authoredBook, scenarioId],
   );
   const metres = unitScale(unit, "m");
   const tonsPerVolume = metres ** 3 * book.density;
+  const condition =
+    loading.mass !== null
+      ? {
+          vol: loading.mass / 1000 / tonsPerVolume,
+          kg: loading.vcg === null ? null : loading.vcg / metres,
+        }
+      : null;
+  const setCondition = (next: Condition) =>
+    setLoading({
+      source: "manual",
+      mass: next.vol * tonsPerVolume * 1000,
+      vcg: next.kg * metres,
+    });
   const volumeDomain = useMemo<readonly [number, number]>(() => {
     if (!limit.length) return [0, 1];
     return [limit[0].vol, limit[limit.length - 1].vol];
@@ -869,9 +871,10 @@ export function StabilityPanel() {
   );
   const fromSheet = useMemo(() => {
     const mass = sheetResults.outputs.displacement;
-    if (!mass || !isFinite(mass.v) || mass.v <= 0) return null;
+    const valid = loadingOutputs(sheetResults).values;
+    if (!mass || !valid) return null;
     const toTonnes = 1 / 1000;
-    const vcg = sheetResults.outputs.vcg;
+    const vcg = valid.vcg === null ? null : sheetResults.outputs.vcg;
     // Only these two outputs define the safety/tolerance envelope. Unrelated
     // geometry may still be pending, but neither of these spreads may be.
     if (mass.uncertaintyPending || vcg?.uncertaintyPending) return null;
@@ -889,6 +892,17 @@ export function StabilityPanel() {
   // The link is only live while the sheet actually answers; a broken or unnominated displacement leaves the
   // panel exactly as it was rather than snapping the condition to nothing.
   const linked = linkSheet && fromSheet !== null;
+  const setLinkSheet = (follow: boolean) =>
+    setLoading({
+      source: follow ? "sheet" : "manual",
+      ...(!follow && fromSheet
+        ? {
+            mass: fromSheet.vol * tonsPerVolume * 1000,
+            vcg: fromSheet.kg === null ? loading.vcg : fromSheet.kg * metres,
+            lcg: sheetResults.outputs.lcg?.v ?? loading.lcg,
+          }
+        : {}),
+    });
 
   // While linked, the rectangle is the ESTIMATE's spread and is not editable here — dragging a handle would
   // be editing the weight sheet from the wrong window. Unlinking hands back whatever was set before.
@@ -1166,6 +1180,60 @@ export function StabilityPanel() {
     volumeDomain,
   ]);
 
+  const sourceControls = (
+    <div className="sheetlink">
+      <label>
+        Values from{" "}
+        <select
+          aria-label="Loading condition source"
+          value={loading.source}
+          onChange={(event) => setLinkSheet(event.target.value === "sheet")}
+        >
+          <option value="manual">Manual</option>
+          <option value="sheet">Weight scenario</option>
+        </select>
+      </label>
+      {linkSheet && (
+        <label>
+          Scenario{" "}
+          <select
+            aria-label="Stability scenario"
+            value={scenarioId ?? ""}
+            onChange={(event) =>
+              setLoading({ scenarioId: event.target.value || null })
+            }
+          >
+            <option value="">Shared</option>
+            {scenariosOf(authoredBook).map((scenario) => (
+              <option key={scenario.id} value={scenario.id}>
+                {scenario.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <OpenPanelButton
+        kind="weights"
+        weightScreen="sheet"
+        label="Open weight sheet"
+      />
+      <span className="sheetlinknote">
+        {linkSheet
+          ? "Following scenario changes. Editing a value or selecting a chart point switches to Manual."
+          : "Manual condition. Choose a weight scenario to follow its changes."}
+      </span>
+      {linkSheet && !fromSheet && (
+        <span role="status" className="sheetlinknote">
+          {sheetGeometryError
+            ? "Weight estimate unavailable."
+            : sheetUncertaintyPending
+              ? "Weight estimate updating…"
+              : "No valid sheet displacement is available."}
+        </span>
+      )}
+    </div>
+  );
+
   if (!curves || limit.length < 2)
     return (
       <div className="card stabilityempty">
@@ -1177,29 +1245,41 @@ export function StabilityPanel() {
       </div>
     );
 
-  // Begin at the authored waterline with G at B. If an edit changes the envelope, clamp the displayed
-  // condition while retaining the raw click, so derived data never has to be copied into state by an effect.
-  // While linked, the sheet names the condition; otherwise it is wherever it was last clicked.
+  // Loading can contain values entered outside this chart. Never silently
+  // clamp them into a different, apparently compliant loading condition.
   const wanted = linked ? fromSheet : null;
-  const selectedVol = Math.min(
-    volumeDomain[1],
-    Math.max(
-      volumeDomain[0],
-      wanted?.vol ?? condition?.vol ?? hydro?.vol ?? volumeDomain[0],
-    ),
-  );
+  const selectedVol =
+    wanted?.vol ?? condition?.vol ?? hydro?.vol ?? volumeDomain[0];
+  if (selectedVol < volumeDomain[0] || selectedVol > volumeDomain[1])
+    return (
+      <div className="card stabilityempty">
+        <p>
+          The selected displacement ({fmt(selectedVol * tonsPerVolume)} t) is
+          outside the computed stability range (
+          {fmt(volumeDomain[0] * tonsPerVolume)}–
+          {fmt(volumeDomain[1] * tonsPerVolume)} t). No assessment is shown for
+          this condition.
+        </p>
+        {sourceControls}
+        <Button
+          onClick={() =>
+            setCondition({
+              vol: hydro?.vol ?? volumeDomain[0],
+              kg: condition?.kg ?? hydro?.kb ?? 0,
+            })
+          }
+        >
+          Use an in-range manual condition
+        </Button>
+      </div>
+    );
   const bound = limitingKgAt(limit, selectedVol);
   const selected: Condition = {
     vol: selectedVol,
-    kg: Math.min(
-      yMax,
-      Math.max(
-        0,
-        wanted?.kg ??
-          condition?.kg ??
-          Math.min(bound * 0.75, hydro?.kb ?? bound * 0.5),
-      ),
-    ),
+    kg:
+      wanted?.kg ??
+      condition?.kg ??
+      Math.min(bound * 0.75, hydro?.kb ?? bound * 0.5),
   };
   const safe = selected.kg < bound;
   // Whether the pinned condition is off the edge of the view the plane opened on.
@@ -2012,69 +2092,12 @@ export function StabilityPanel() {
             to say it. One number to a line, in a grid of name · field · unit · control, so the units stand in
             a column of their own instead of trailing each value into the next one along. The readings TAKEN
             of the condition are in the GZ card, beside the curve they describe. */}
-        {/* Where the condition comes from. The weight sheet is the session's other authored document, so this
-            is a LIVE link rather than a copy: with it on, a formula edited in the Weights window moves this
-            condition and its tolerance rectangle as it is typed. That is the question a designer actually
-            has — not "does this displacement pass" but "does my estimate pass, and how much of the margin is
-            the estimate rather than the boat". Clicking the plane or typing a number below drops the link. */}
-        <div className="sheetlink">
-          <label>
-            Scenario{" "}
-            <select
-              value={scenarioId ?? ""}
-              onChange={(event) => setSheetScenario(event.target.value || null)}
-            >
-              <option value="">Shared</option>
-              {scenariosOf(authoredBook).map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {sheetUncertaintyPending && (
-            <span className="sheetlinknote" role="status">
-              {sheetGeometryError
-                ? "Weight-sheet uncertainty unavailable."
-                : "Weight-sheet uncertainty updating…"}{" "}
-              Sheet link resumes when complete.
-            </span>
-          )}
-          <Button
-            active={linked}
-            disabled={!fromSheet}
-            aria-pressed={linked}
-            title={
-              fromSheet
-                ? "Follow the weight sheet's estimated displacement, with its uncertainty as the tolerance rectangle"
-                : "The weight sheet has no displacement to follow — nominate a row in the Weights panel"
-            }
-            onClick={() => setLinkSheet((v) => !v)}
-          >
-            {linked ? "Following the weight sheet" : "Use the weight sheet"}
-          </Button>
-          {linked && (
-            <span className="sheetlinknote">
-              Δ and its ± come from the estimate
-              {fromSheet!.kg === null
-                ? "; no VCG is nominated yet, so KG is still yours"
-                : ""}
-              .
-              {/* An estimate can land outside the range the plane opened on — an early, very light estimate
-                  against a hull drawn for a heavier boat. The readings are still right; the marker is simply
-                  off-screen, and saying so beats leaving the plane looking unresponsive. */}
-              {offView && (
-                <>
-                  {" "}
-                  <strong>
-                    It falls outside the plotted range — zoom out to see it on
-                    the plane.
-                  </strong>
-                </>
-              )}
-            </span>
-          )}
-        </div>
+        {sourceControls}
+        {linked && offView && (
+          <p className="sheetlinknote">
+            The estimate falls outside the plotted range — zoom out to see it.
+          </p>
+        )}
         <div className="conditionbar">
           <div className="quantity">
             <label className="cname" htmlFor="cond-disp::input">
