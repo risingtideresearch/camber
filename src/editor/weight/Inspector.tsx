@@ -31,6 +31,7 @@ import {
   leavesOf,
   type Field,
   type FieldLeaf,
+  type Rollup,
   type Item,
   type WeightBook,
 } from "../../core/sheet/book";
@@ -39,6 +40,7 @@ import {
   fieldUses,
   outputResult,
   resultAt,
+  rollupFormulaUses,
   type BookResults,
   type CellResult,
 } from "../../core/sheet/evaluate";
@@ -154,6 +156,98 @@ export function OutputInspector({
   );
 }
 
+const formulaSource = (
+  book: WeightBook,
+  use: { itemId: string; fieldKey: string; leaf: FieldLeaf },
+): string => {
+  if (use.itemId === "OUT") return book.outputs[use.fieldKey] ?? "";
+  const field = findItem(book, use.itemId)?.fields[use.fieldKey];
+  if (!field) return "";
+  return field.k === "point" && isDerived(field)
+    ? field.from
+    : (leafOf(field, use.leaf) ?? "");
+};
+
+/** Direct formula users of the named rollups on this facet view, not its contributing items. */
+export function RollupUsesInspector({
+  book,
+  results,
+  rollups,
+  onGo,
+}: Pick<InspectorProps, "book" | "results" | "onGo"> & {
+  readonly rollups: readonly Rollup[];
+}) {
+  return (
+    <div className="winspector">
+      <Head
+        address={
+          rollups.length === 1 ? `ROLLUP.${rollups[0].name}` : "Named rollups"
+        }
+        kind="uses"
+      />
+      {rollups.map((rollup) => (
+        <RollupFormulaUsers
+          key={rollup.id}
+          book={book}
+          results={results}
+          rollup={rollup}
+          onGo={onGo}
+          showName={rollups.length > 1}
+        />
+      ))}
+    </div>
+  );
+}
+
+function RollupFormulaUsers({
+  book,
+  results,
+  rollup,
+  onGo,
+  showName,
+}: Pick<InspectorProps, "book" | "results" | "onGo"> & {
+  readonly rollup: Rollup;
+  readonly showName: boolean;
+}) {
+  const uses = rollupFormulaUses(book, results, rollup.id);
+  const groups = new Map<string, typeof uses>();
+  for (const use of uses)
+    groups.set(use.reference, [...(groups.get(use.reference) ?? []), use]);
+  return (
+    <section>
+      {showName && <h3 className="winspuseheading">ROLLUP.{rollup.name}</h3>}
+      {uses.length ? (
+        <>
+          <p className="whint">
+            {uses.length} direct use{uses.length === 1 ? "" : "s"} in formulas.
+            Pick one to go to it.
+          </p>
+          {[...groups].map(([reference, occurrences]) => (
+            <section key={reference}>
+              <h3 className="winspuseheading">{reference}</h3>
+              <ul className="winspuses">
+                {occurrences.map(({ use }) => (
+                  <li key={`${use.itemId}:${use.fieldKey}:${use.leaf}`}>
+                    <button
+                      onClick={() => onGo(use.itemId, use.fieldKey, use.leaf)}
+                      title="Go to this formula"
+                    >
+                      {use.address}
+                    </button>
+                    <code>{formulaSource(book, use)}</code>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </>
+      ) : (
+        <p className="whint">No formulas reference this rollup.</p>
+      )}
+    </section>
+  );
+}
+
 /** Where the selected field is named, with every address following back to its formula cell. */
 export function UsesInspector({
   book,
@@ -177,16 +271,6 @@ export function UsesInspector({
 
   const uses = fieldUses(book, results, item.id, fieldKey);
   const rollupUses = fieldRollupUses(book, item.id, fieldKey);
-  const sourceOf = (use: (typeof uses)[number]): string => {
-    if (use.itemId === "OUT") return book.outputs[use.fieldKey] ?? "";
-    const user = findItem(book, use.itemId);
-    const usedField = user?.fields[use.fieldKey];
-    if (!usedField) return "";
-    return usedField.k === "point" && isDerived(usedField)
-      ? usedField.from
-      : (leafOf(usedField, use.leaf) ?? "");
-  };
-
   return (
     <div className="winspector">
       <Head address={`${item.name || "unnamed"}.${fieldKey}`} kind="uses" />
@@ -206,7 +290,7 @@ export function UsesInspector({
                 >
                   {use.address}
                 </button>
-                <code>{sourceOf(use)}</code>
+                <code>{formulaSource(book, use)}</code>
               </li>
             ))}
           </ul>

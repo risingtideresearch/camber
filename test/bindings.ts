@@ -3,11 +3,13 @@ import { type WeightBook } from "../src/core/sheet/book";
 import { createReferenceBinder } from "../src/core/sheet/bindings";
 import {
   cellKey,
+  evaluateBook,
   evaluatePreparedBook,
   fieldRollupUses,
   fieldUses,
   fieldUsers,
   prepareBook,
+  rollupFormulaUses,
 } from "../src/core/sheet/evaluate";
 import { parseFormula } from "../src/core/sheet/formula";
 import { formulaBook, target } from "./sampling-fixtures";
@@ -210,6 +212,98 @@ assert.deepEqual(
     "i0",
     "cg",
   ),
+  [],
+);
+
+const usingRollup: WeightBook = {
+  ...book,
+  items: [
+    book.items[0],
+    {
+      ...book.items[1],
+      fields: {
+        ...book.items[1].fields,
+        allowance: {
+          k: "scalar",
+          formula: "ROLLUP.machinery.MASS + ROLLUP.machinery.MASS",
+          unit: "kg",
+          role: null,
+        },
+        otherRollup: {
+          k: "scalar",
+          formula: "ROLLUP.machinery extra.MASS",
+          unit: "kg",
+          role: null,
+        },
+        position: {
+          k: "point",
+          x: "ROLLUP.machinery.CG.z",
+          y: "0",
+          z: "0",
+          from: "",
+          unit: "m",
+          role: null,
+        },
+        derived: {
+          k: "point",
+          x: "",
+          y: "",
+          z: "",
+          from: "ROLLUP.machinery.CG",
+          unit: "m",
+          role: null,
+        },
+        broken: {
+          k: "scalar",
+          formula: "ROLLUP.machinery.MASS + (",
+          unit: "kg",
+          role: null,
+        },
+      },
+    },
+  ],
+  outputs: {
+    DISPLACEMENT: "ROLLUP.machinery.MASS",
+    VCG: "ROLLUP.machinery.CG.z",
+  },
+  rollups: [
+    ...book.rollups,
+    {
+      id: "r1",
+      name: "machinery extra",
+      facetKey: "system",
+      facetValue: "deck",
+    },
+  ],
+};
+assert.deepEqual(
+  rollupFormulaUses(usingRollup, evaluateBook(usingRollup, null), "r0")
+    .map(({ reference, use }) => [reference, use.address, use.leaf])
+    .sort(),
+  [
+    ["ROLLUP.machinery.MASS", "Other.allowance", "formula"],
+    ["ROLLUP.machinery.CG.z", "Other.position.x", "x"],
+    ["ROLLUP.machinery.CG", "Other.derived", "from"],
+    ["ROLLUP.machinery.MASS", "OUT.DISPLACEMENT", "formula"],
+    ["ROLLUP.machinery.CG.z", "OUT.VCG", "formula"],
+  ].sort(),
+);
+assert.deepEqual(
+  rollupFormulaUses(usingRollup, evaluateBook(usingRollup, null), "r1").map(
+    ({ reference, use }) => [reference, use.address],
+  ),
+  [["ROLLUP.machinery extra.MASS", "Other.otherRollup"]],
+);
+assert.deepEqual(
+  rollupFormulaUses(
+    { ...usingRollup, rollups: [] },
+    evaluateBook(usingRollup, null),
+    "r0",
+  ),
+  [],
+);
+assert.deepEqual(
+  rollupFormulaUses(usingRollup, evaluateBook(usingRollup, null), "missing"),
   [],
 );
 

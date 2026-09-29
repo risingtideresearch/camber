@@ -109,6 +109,7 @@ import {
   ComputedInspector,
   Inspector,
   OutputInspector,
+  RollupUsesInspector,
   UsesInspector,
   type Go,
 } from "./Inspector";
@@ -891,6 +892,15 @@ function ViewBody(props: BodyProps) {
       focusedItem && props.focus?.field
         ? focusedItem.fields[props.focus.field]
         : undefined;
+    // A facet view owns its saved names. Without a field selected, Uses asks which formulas name them.
+    const facetScope = view.scope.k === "facet" ? view.scope : null;
+    const namedRollups = facetScope
+      ? rollupsOf(book).filter(
+          (rollup) =>
+            rollup.facetKey === facetScope.key &&
+            rollup.facetValue === facetScope.value,
+        )
+      : [];
     const geometrySource = selectedTotal ? totalItems : items;
     // A role roll-up draws the semantic positions it reports, not every incidental point an item carries.
     const geometryItems = geometrySource.flatMap((item) => {
@@ -933,7 +943,7 @@ function ViewBody(props: BodyProps) {
     const offers: Shown[] = [
       "spread",
       "sampled",
-      ...(!selectedTotal && focusedField ? (["uses"] as const) : []),
+      ...(focusedField || namedRollups.length ? (["uses"] as const) : []),
       ...(hasGeometry ? (["geometry"] as const) : []),
       "compare",
       "reference",
@@ -1012,7 +1022,7 @@ function ViewBody(props: BodyProps) {
                       props.setFocus(next);
                     }}
                   />
-                ) : selectedTotal && spec && unit ? (
+                ) : shown === "spread" && selectedTotal && spec && unit ? (
                   <ComputedInspector
                     address={`${selectedTotal.label}.${selectedTotal.role}${
                       selectedTotal.leaf === "value"
@@ -1029,13 +1039,22 @@ function ViewBody(props: BodyProps) {
                     note={notes.join(" ") || undefined}
                   />
                 ) : shown === "uses" ? (
-                  <UsesInspector
-                    book={book}
-                    results={results}
-                    focus={props.focus}
-                    onGo={props.go}
-                    onOpenRollup={props.openRollup}
-                  />
+                  focusedField ? (
+                    <UsesInspector
+                      book={book}
+                      results={results}
+                      focus={props.focus}
+                      onGo={props.go}
+                      onOpenRollup={props.openRollup}
+                    />
+                  ) : (
+                    <RollupUsesInspector
+                      book={book}
+                      results={results}
+                      rollups={namedRollups}
+                      onGo={props.go}
+                    />
+                  )
                 ) : (
                   <Inspector
                     book={book}

@@ -231,6 +231,24 @@ export interface FieldUse {
   readonly address: string;
 }
 
+function formulaUse(cell: CellResult, from: Item | undefined): FieldUse {
+  const field = from?.fields[cell.fieldKey];
+  const sharedDerivation = field?.k === "point" && isDerived(field);
+  const base =
+    cell.itemId === OUTPUT_ITEM
+      ? `OUT.${cell.fieldKey}`
+      : `${from?.name || "an unnamed item"}.${cell.fieldKey}`;
+  return {
+    itemId: cell.itemId,
+    fieldKey: cell.fieldKey,
+    leaf: sharedDerivation ? "from" : (cell.leaf as FieldLeaf),
+    address:
+      cell.itemId === OUTPUT_ITEM || field?.k === "scalar" || sharedDerivation
+        ? base
+        : `${base}.${cell.leaf}`,
+  };
+}
+
 /**
  * The individual formula cells that name one field.
  *
@@ -261,23 +279,47 @@ export function fieldUses(
     if (!namesTarget || (cell.itemId === itemId && cell.fieldKey === fieldKey))
       continue;
 
-    const field = from?.fields[cell.fieldKey];
-    const sharedDerivation = field?.k === "point" && isDerived(field);
-    const base =
-      cell.itemId === OUTPUT_ITEM
-        ? `OUT.${cell.fieldKey}`
-        : `${from?.name || "an unnamed item"}.${cell.fieldKey}`;
-    const address =
-      cell.itemId === OUTPUT_ITEM || field?.k === "scalar" || sharedDerivation
-        ? base
-        : `${base}.${cell.leaf}`;
-    if (!found.has(address))
-      found.set(address, {
-        itemId: cell.itemId,
-        fieldKey: cell.fieldKey,
-        leaf: sharedDerivation ? "from" : (cell.leaf as FieldLeaf),
-        address,
-      });
+    const use = formulaUse(cell, from);
+    if (!found.has(use.address)) found.set(use.address, use);
+  }
+  return [...found.values()];
+}
+
+/** One authored formula naming an address of a saved rollup. */
+export interface RollupFormulaUse {
+  /** The address as written in the formula, including its role and optional coordinate. */
+  readonly reference: string;
+  readonly use: FieldUse;
+}
+
+/**
+ * Direct formula references to a named rollup, regardless of its current contributors or whether their
+ * values evaluate. Bound references distinguish a real rollup from similar names and work across outputs,
+ * role coordinates and derived point expressions. One derived `from` is one editable use per address.
+ */
+export function rollupFormulaUses(
+  book: WeightBook,
+  results: BookResults,
+  rollupId: string,
+): readonly RollupFormulaUse[] {
+  if (!rollupsOf(book).some((rollup) => rollup.id === rollupId)) return [];
+  const byId = new Map(book.items.map((item) => [item.id, item]));
+  const found = new Map<string, RollupFormulaUse>();
+  for (const cell of results.cells.values()) {
+    if (!cell.tree) continue;
+    const use = formulaUse(cell, byId.get(cell.itemId));
+    for (const ref of cell.references.values()) {
+      if (ref.binding.k !== "rollup" || ref.binding.rollup.id !== rollupId)
+        continue;
+      const reference = ref.path.join(".");
+      const key = JSON.stringify([
+        reference,
+        cell.itemId,
+        cell.fieldKey,
+        use.leaf,
+      ]);
+      if (!found.has(key)) found.set(key, { reference, use });
+    }
   }
   return [...found.values()];
 }
