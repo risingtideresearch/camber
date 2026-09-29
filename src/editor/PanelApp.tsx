@@ -10,6 +10,7 @@ import { HistoryPanel } from "./HistoryPanel";
 import { HullView3d } from "./HullView3d";
 import { SelectionInfo } from "./SelectionInfo";
 import { StationsGrid } from "./StationsGrid";
+import { LoadingPanel } from "./LoadingPanel";
 import { StabilityPanel } from "./StabilityPanel";
 import { Toolbar } from "./Toolbar";
 import { NavStatusProvider, NavStatusSlot } from "./NavStatus";
@@ -91,6 +92,8 @@ function PanelBody({ kind }: { readonly kind: PanelKind }) {
       return <StationsGrid />;
     case "history":
       return <HistoryPanel />;
+    case "loading":
+      return <LoadingPanel />;
     case "stability":
       return <StabilityPanel />;
     case "weights":
@@ -141,6 +144,8 @@ function PanelControls({ kind }: { readonly kind: PanelKind }) {
           <HistoryControls />
         </>
       );
+    case "loading":
+      return <HistoryControls />;
     case "history":
     case "stability":
       return null;

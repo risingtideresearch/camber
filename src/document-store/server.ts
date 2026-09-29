@@ -5,6 +5,7 @@
 // protocol routing live outside it; only begin/complete/fail save transitions remain here because they alter
 // authoritative saved-revision and shared save metadata.
 
+import { DEFAULT_LOADING, loadingKey } from "../core/loading";
 import { assertValidDocument } from "../core/invariants";
 import {
   interpretDocumentCommand,
@@ -208,6 +209,17 @@ export function createDocumentStoreServer(
       return () => listeners.delete(listener);
     },
     execute(request) {
+      const cmd = request.command;
+      if (
+        cmd.type === "applyFloatingAttitude" &&
+        (cmd.expectedRevision !== revision ||
+          (cmd.expectedLoading !== null &&
+            cmd.expectedLoading !== loadingKey(session.loading)))
+      )
+        return {
+          rejected:
+            "The hull or loading condition changed. Calculate equilibrium again.",
+        };
       // Structural commands use indices, so reject one only when another author changed an overlapping slice
       // after the base revision. An author's own queued commands remain valid.
       const baseRevision = request.baseRevision ?? revision;
@@ -247,6 +259,27 @@ export function createDocumentStoreServer(
         session = { ...session, ...outcome.session };
         sessionRevision++;
       }
+      if (cmd.type === "applyFloatingAttitude") {
+        const loading = session.loading ?? DEFAULT_LOADING;
+        const nextLoading =
+          cmd.expectedLoading !== null && loading.source === "manual"
+            ? { ...loading, vcg: cmd.vcg }
+            : loading;
+        session = {
+          ...session,
+          ...(cmd.expectedLoading !== null ? { loading: nextLoading } : {}),
+          lastBalance: {
+            revision: revision + 1,
+            loadingKey: loadingKey(
+              cmd.expectedLoading === null
+                ? { ...DEFAULT_LOADING, scenarioId: cmd.scenarioId ?? null }
+                : nextLoading,
+            ),
+            label: cmd.label,
+          },
+        };
+        sessionRevision++;
+      }
       history.record({
         before,
         after: outcome.doc,
@@ -260,7 +293,12 @@ export function createDocumentStoreServer(
     executeSession(command) {
       // Session transitions publish on their own clock and deliberately create neither dirtiness nor history.
       const next = applySessionCommand(runtime(), session, command);
-      if (next.x0 === session.x0 && next.viewLen === session.viewLen) return;
+      if (
+        next.x0 === session.x0 &&
+        next.viewLen === session.viewLen &&
+        next.loading === session.loading
+      )
+        return;
       session = next;
       sessionRevision++;
       publish();

@@ -17,8 +17,16 @@ const requestKey = (snapshot: DocumentSnapshot, perf: PerfSettings): string => {
 export function useStabilityAnalysis(
   snapshot: DocumentSnapshot,
   perf: PerfSettings,
-): { analysis: StabilityAnalysis | null; error: string | null } {
-  const [analysis, setAnalysis] = useState<StabilityAnalysis | null>(null);
+): {
+  analysis: StabilityAnalysis | null;
+  error: string | null;
+  pending: boolean;
+} {
+  const [received, setReceived] = useState<{
+    key: string;
+    analysis: StabilityAnalysis | null;
+  } | null>(null);
+  const requestedKey = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tasks] = useState(() =>
     createWorkerTaskQueue<StabilityRequest, StabilityResponse>(
@@ -27,7 +35,7 @@ export function useStabilityAnalysis(
           type: "module",
         }),
       (response) => {
-        setAnalysis(response.analysis);
+        setReceived({ key: response.key, analysis: response.analysis });
         setError(null);
       },
       (reason) =>
@@ -64,8 +72,16 @@ export function useStabilityAnalysis(
     ],
   );
   useEffect(() => {
+    // Loading/scenario selection is shared session state, but does not change
+    // hull geometry. Do not recompute a completed analysis for that publication.
+    if (requestedKey.current === request.key) return;
+    requestedKey.current = request.key;
     tasks.post(request);
   }, [tasks, request]);
 
-  return { analysis, error };
+  return {
+    analysis: received?.analysis ?? null,
+    error,
+    pending: received?.key !== key && !error,
+  };
 }

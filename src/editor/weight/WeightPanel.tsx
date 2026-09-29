@@ -1,3 +1,5 @@
+import { LoadingPanel } from "../LoadingPanel";
+import "../LoadingPanel.css";
 import { isSheetCommand, type SheetCommand } from "../../core/sheet/book";
 import { resolveScenario } from "../../core/sheet/resolveScenario";
 import {
@@ -140,15 +142,14 @@ function WeightPanelContents() {
   const { perf, sampling } = useEditorUi();
   const { analysis } = useStabilityAnalysis(snapshot, perf);
   const authoredBook = snapshot.state.weights;
-  // Shared is the default on opening a sheet, including older books with a Main scenario.
-  // Workspace choice is local UI state; switching documents must not carry it across.
+  // Scenario selection belongs to this weight editor, independent of analysis panels.
   const documentId = snapshot.meta.design.currentId;
-  const [workspace, setWorkspace] = useState<{
-    documentId: string | null;
-    id: string | null;
-  } | null>(null);
+  const [workspace, setWorkspace] = useState(() => ({
+    documentId,
+    id: null as string | null,
+  }));
   const activeScenario =
-    workspace?.documentId === documentId &&
+    workspace.documentId === documentId &&
     scenariosOf(authoredBook).some((s) => s.id === workspace.id)
       ? workspace.id
       : null;
@@ -165,7 +166,11 @@ function WeightPanelContents() {
 
   // The schedule keeps one quiet, consistent reading; both interpretations are explained in the inspector.
   const reading = "worst" as const;
-  const [destination, setDestination] = useState<WeightDestination>("sheet");
+  const [destination, setDestination] = useState<WeightDestination>(() =>
+    new URL(window.location.href).searchParams.get("screen") === "loading"
+      ? "loading"
+      : "sheet",
+  );
   const [viewId, setViewId] = useState<string | null>(null);
   const [focus, setFocus] = useState<Focus | null>(null);
   const [sidePanel, setSidePanel] = useState<SidePanel>("auto");
@@ -415,7 +420,7 @@ function WeightPanelContents() {
         )}
 
         <div className="wmain">
-          {destination !== "scenarios" && (
+          {(destination === "sheet" || destination === "problems") && (
             <SheetHeading
               title={
                 destination === "problems"
@@ -438,9 +443,19 @@ function WeightPanelContents() {
             />
           )}
 
-          {destination === "scenarios" ? (
+          {destination === "loading" ? (
+            <LoadingPanel
+              scenarioId={activeScenario}
+              onEditEstimate={() => {
+                setViewId(SUMMARY_VIEW);
+                setFocus(null);
+                setRollupSelection(null);
+                setDestination("sheet");
+              }}
+            />
+          ) : destination === "scenarios" ? (
             <ScenariosView
-              key={documentId}
+              key={snapshot.meta.design.currentId}
               onEdit={(workspace) => {
                 pickWorkspace(workspace);
                 setDestination("sheet");

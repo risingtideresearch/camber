@@ -22,12 +22,19 @@
 // every command. Callers with no revisions to offer fall back to state identity, which is exactly right for
 // an immutable state that is replaced wholesale.
 
+import type { LoadingCondition } from "./loading";
 import { buildDerived, type Derived, type Loft, type Model } from "./model";
 import type { PlanCurve } from "./bspline";
 import { cloneHull, loa, type HullState } from "./hull";
 
 /** Editor values shared across a session's windows, and never part of a document. */
 export interface SessionState {
+  readonly loading?: LoadingCondition;
+  readonly lastBalance?: {
+    readonly revision: number;
+    readonly loadingKey: string;
+    readonly label: string;
+  };
   readonly x0: number; // the cut-station scrubber's position, in x
   readonly viewLen: number; // the hull length the 2D views lay their panels out against (see Model.viewLen)
 }

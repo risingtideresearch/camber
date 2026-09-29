@@ -96,17 +96,6 @@ svg {
   width: 84px;
 }
 
-/* The "open this panel in a window of its own" button a panel carries (DetachPanelButton). Icon-only — the
-   ⧉ marks it as opening a window rather than toggling something in this one — and sized to sit level with a
-   tab (or with the 3D view's overlay controls) rather than to compete with the panel it belongs to: it acts
-   on the pane, it is not part of the drawing. */
-.detachbtn {
-  flex: 0 0 auto;
-  padding: 4px 8px;
-  line-height: 1.4;
-  color: var(--mut);
-}
-
 /* brief first paint while the hull's first lattice is built entirely off the UI thread */
 .samplingempty {
   flex: 1 1 0;

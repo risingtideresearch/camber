@@ -814,8 +814,8 @@
 }
 
 /* ---------- the weight sheet link ---------- */
-/* Where the condition comes from. Sits above the two fields that state it, because it decides whether those
-   fields are something you type or something you are being shown. */
+/* Source controls sit beside the condition, not at the top of the analysis.
+   Values stay editable: editing automatically switches the source to Manual. */
 .sheetlink {
   display: flex;
   align-items: center;
@@ -826,4 +826,20 @@
 .sheetlinknote {
   font-size: 11.5px;
   color: var(--mut);
+}
+
+.sheetlink label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.sheetlink select {
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font: inherit;
+  max-width: 220px;
 }
