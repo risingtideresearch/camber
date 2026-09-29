@@ -97,6 +97,8 @@ export interface DocumentHistory<S = SessionDocument> {
 }
 
 export interface DocumentHistoryOptions<S = SessionDocument> {
+  /** Resolve labels against this moment's snapshot, not the current document. */
+  readonly describe?: (command: DocumentCommand, state: S) => string;
   readonly depth?: number;
   readonly coalesceMs?: number;
   readonly now?: () => number;
@@ -209,7 +211,11 @@ export function createDocumentHistory<S = SessionDocument>(
     parent: node.parent?.id ?? null,
     children: node.children.map((child) => child.id),
     kind: node.command?.type ?? null,
-    label: node.command ? describeCommand(node.command) : "Session start",
+    label: node.command
+      ? options.describe
+        ? options.describe(node.command, node.state)
+        : describeCommand(node.command)
+      : "Session start",
     author: node.author,
     at: node.at,
     touched: node.touched,

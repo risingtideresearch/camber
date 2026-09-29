@@ -16,7 +16,9 @@ import type { DocumentSnapshot } from "./snapshot";
  * rather than bare `HullState`. A SharedWorker left running from an older build would otherwise hand a new
  * window a hull-shaped state and every view would read undefined off it.
  */
-export const PROTOCOL_VERSION = 5;
+// 6: scenario-aware sheet state and explicitly scoped sheet commands.
+// 8: Scenario field operations address field keys, not the removed field IDs.
+export const PROTOCOL_VERSION = 8;
 
 export type ErrorCode =
   | "protocol-version"

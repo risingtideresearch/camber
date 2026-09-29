@@ -319,6 +319,11 @@ export function ItemDetail(props: ItemDetailProps) {
           <FieldBlock
             key={key}
             item={item}
+            scenarioId={
+              book.scenarioContext?.shared
+                ? undefined
+                : book.scenarioContext?.id
+            }
             fieldKey={key}
             field={field}
             index={index}
@@ -349,7 +354,11 @@ export function ItemDetail(props: ItemDetailProps) {
               // A fresh field lands on a conventional key — `value`, `position` — and the very next thing
               // anyone does is name it. So it is selected, which scrolls the pane to it, and the caret starts
               // in its name rather than in a cell of a field that is not called anything yet.
-              const key = freeFieldKey(item, DEFAULT_FIELD_KEY[kind]);
+              const canonicalItem =
+                book.scenarioContext?.authoredItems.find(
+                  (i) => i.id === item.id,
+                ) ?? item;
+              const key = freeFieldKey(canonicalItem, DEFAULT_FIELD_KEY[kind]);
               send({ type: "addField", item: item.id, key, kind });
               setJustAdded(`${item.id} ${key}`);
               setFocus({
@@ -367,19 +376,31 @@ export function ItemDetail(props: ItemDetailProps) {
       <div className="wdetaildanger">
         {confirmDelete ? (
           <div className="wdeleteconfirm" role="alert">
-            <span>Delete this item and all of its fields?</span>
+            <span>
+              {book.scenarioContext && !book.scenarioContext.shared
+                ? `Exclude this item from ${book.scenarioContext.name}? It will remain in Shared assumptions.`
+                : "Delete this item and all of its fields?"}
+            </span>
             <button onClick={() => setConfirmDelete(false)}>Cancel</button>
             <button className="danger" onClick={props.onDelete}>
-              Delete
+              {book.scenarioContext && !book.scenarioContext.shared
+                ? "Exclude"
+                : "Delete"}
             </button>
           </div>
         ) : (
           <button
             className="wdeleteitem"
-            title={`Delete ${item.name || "this item"} and all of its fields`}
+            title={
+              book.scenarioContext && !book.scenarioContext.shared
+                ? "Exclude from this scenario"
+                : `Delete ${item.name || "this item"} and all of its fields`
+            }
             onClick={() => setConfirmDelete(true)}
           >
-            Delete item…
+            {book.scenarioContext && !book.scenarioContext.shared
+              ? "Exclude item…"
+              : "Delete item…"}
           </button>
         )}
       </div>
@@ -390,6 +411,7 @@ export function ItemDetail(props: ItemDetailProps) {
 // ---------- one field ----------
 
 interface FieldBlockProps {
+  readonly scenarioId?: string;
   readonly item: Item;
   readonly fieldKey: string;
   readonly field: Field;
@@ -461,6 +483,7 @@ function FieldBlock(props: FieldBlockProps) {
 }
 
 function FieldHeader({
+  scenarioId,
   item,
   fieldKey,
   field,
@@ -544,6 +567,20 @@ function FieldHeader({
           send({ type: "setFieldUnit", item: item.id, field: fieldKey, unit })
         }
       />
+      {scenarioId && (
+        <small
+          className="wscenario-origin"
+          title={
+            Object.keys(field.overrides?.[scenarioId] ?? {}).length
+              ? `Overridden inputs: ${Object.keys(field.overrides![scenarioId]).join(", ")}`
+              : "Editing a value creates an override in this scenario"
+          }
+        >
+          {Object.keys(field.overrides?.[scenarioId] ?? {}).length
+            ? "Override"
+            : "Shared"}
+        </small>
+      )}
       <RoleChips item={item} fieldKey={fieldKey} field={field} send={send} />
       {field.k === "point" && (
         <button
@@ -609,7 +646,7 @@ function FieldHeader({
             {users.length === 1
               ? `${users[0]} names this.`
               : `${users.length} fields name this.`}{" "}
-            Remove it?
+            {scenarioId ? "Exclude it from this scenario?" : "Remove it?"}
           </span>
           <button
             onPointerDown={(event) => event.stopPropagation()}
@@ -628,7 +665,7 @@ function FieldHeader({
               remove();
             }}
           >
-            Remove
+            {scenarioId ? "Exclude" : "Remove"}
           </button>
         </span>
       ) : (
@@ -637,11 +674,13 @@ function FieldHeader({
           <button
             type="button"
             className="wremovefield"
-            aria-label={`Remove ${fieldKey}`}
+            aria-label={`${scenarioId ? "Exclude" : "Remove"} ${fieldKey}`}
             title={
               users.length
                 ? `${users.length} other ${users.length === 1 ? "field names" : "fields name"} ${fieldKey} — ${users.join(", ")}. Removing it stops them resolving.`
-                : `Remove ${fieldKey} from this item`
+                : scenarioId
+                  ? `Exclude ${fieldKey} from this scenario`
+                  : `Remove ${fieldKey} from this item`
             }
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {

@@ -1,3 +1,12 @@
+import {
+  scenariosOf,
+  SHARED_WORKSPACE,
+  applicabilityViolation,
+  patchViolation,
+  type Scenario,
+  type Applicability,
+  type FieldPatch,
+} from "./scenarios";
 import { BOUNDARIES, type BoundaryFields } from "./boundaries";
 // ---------- the weight book, on disk ----------
 //
@@ -34,16 +43,12 @@ import {
 import { isOutputName } from "./outputs";
 import { canCarryRole, isRoleName } from "./roles";
 
-/**
- * The one weight-sheet format this build writes and reads.
- *
- * The weight estimate has not shipped, so the item model remains version 1 rather than carrying a migration
- * from the page model used during development. Once this format ships, incompatible changes must increment
- * the version and provide an upgrade path.
- */
-export const SHEET_VERSION = 1;
+/** Version 2 adds flat scenarios. Version 1 imports into Shared without creating a named scenario. */
+export const SHEET_VERSION = 2;
 
 interface StoredField extends BoundaryFields {
+  applicability?: Applicability;
+  overrides?: Readonly<Record<string, FieldPatch>>;
   k: FieldKind;
   formula?: string;
   unit?: string;
@@ -63,6 +68,7 @@ interface StoredField extends BoundaryFields {
 }
 
 interface StoredItem {
+  applicability?: Applicability;
   id: string;
   name: string;
   note: string;
@@ -72,6 +78,7 @@ interface StoredItem {
 
 export interface SheetDocument {
   version: typeof SHEET_VERSION;
+  scenarios: Scenario[];
   items: StoredItem[];
   rollups?: Rollup[];
   views: View[];
@@ -128,18 +135,28 @@ function storeField(field: Field): StoredField {
 }
 
 export function buildSheetJson(book: WeightBook): string {
+  if (book.scenarioContext)
+    throw new Error("Persist the authored book, not an effective scenario");
   const doc: SheetDocument = {
     version: SHEET_VERSION,
+    scenarios: [...scenariosOf(book)],
     rollups: [...rollupsOf(book)],
     items: book.items.map((item) => ({
       id: item.id,
+      applicability: item.applicability,
       name: item.name,
       note: item.note,
       facets: { ...item.facets },
       fields: Object.fromEntries(
         Object.entries(item.fields).map(([key, field]) => [
           key,
-          storeField(field),
+          {
+            ...storeField(field),
+            applicability: field.applicability,
+            overrides: Object.keys(field.overrides ?? {}).length
+              ? field.overrides
+              : undefined,
+          },
         ]),
       ),
     })),
@@ -290,6 +307,44 @@ function readView(raw: unknown): View | null {
 
 /** Everything the current format holds, read forgivingly. */
 export function readDocument(raw: Record<string, unknown>): WeightBook {
+  const scenarios: Scenario[] = [];
+  if (Array.isArray(raw.scenarios))
+    for (const entry of raw.scenarios) {
+      const value = dict(entry),
+        id = str(value.id),
+        name = str(value.name).trim();
+      if (
+        id &&
+        id !== SHARED_WORKSPACE &&
+        name &&
+        !scenarios.some((s) => s.id === id || s.name === name)
+      )
+        scenarios.push({ id, name, note: str(value.note) });
+    }
+  const ids = scenarios.map((s) => s.id);
+  const membership = (value: unknown): Applicability | undefined => {
+    if (value === undefined) return undefined;
+    const rule = dict(value);
+    if (rule.k === "all") return { k: "all" };
+    // Malformed membership never broadens an item to all scenarios.
+    const candidate: Applicability = {
+      k: "only",
+      ...(typeof rule.shared === "boolean" ? { shared: rule.shared } : {}),
+      scenarios: Array.isArray(rule.scenarios)
+        ? [
+            ...new Set(
+              rule.scenarios.filter(
+                (id): id is string =>
+                  typeof id === "string" && ids.includes(id),
+              ),
+            ),
+          ]
+        : [],
+    };
+    return applicabilityViolation(candidate, ids)
+      ? { k: "only", scenarios: [] }
+      : candidate;
+  };
   const items: Item[] = [];
   const seenItems = new Set<string>();
   if (Array.isArray(raw.items))
@@ -313,10 +368,34 @@ export function readDocument(raw: Record<string, unknown>): WeightBook {
         // A field whose kind is unreadable is dropped, per the rule that anything unreadable goes and the
         // rest opens. There is no page to fall back on any more, so the kind has to be on the field.
         if (!kind) continue;
-        fields[key] = readField(f, kind);
+        const field = readField(f, kind);
+        const overrides: Record<string, FieldPatch> = {};
+        for (const [scenarioId, patch] of Object.entries(dict(f.overrides))) {
+          if (
+            ids.includes(scenarioId) &&
+            !patchViolation(field, patch as FieldPatch)
+          )
+            overrides[scenarioId] = patch as FieldPatch;
+        }
+        fields[key] = {
+          ...field,
+          ...(f.applicability !== undefined
+            ? { applicability: membership(f.applicability) }
+            : {}),
+          ...(Object.keys(overrides).length ? { overrides } : {}),
+        };
       }
 
-      items.push({ id, name: str(s.name), note: str(s.note), facets, fields });
+      items.push({
+        id,
+        name: str(s.name),
+        note: str(s.note),
+        facets,
+        fields,
+        ...(s.applicability !== undefined
+          ? { applicability: membership(s.applicability) }
+          : {}),
+      });
     }
 
   const rollups: Rollup[] = [];
@@ -359,7 +438,14 @@ export function readDocument(raw: Record<string, unknown>): WeightBook {
       ? raw.density
       : SEAWATER_DENSITY;
 
-  return { items, rollups, views, outputs, density };
+  return {
+    scenarios,
+    items,
+    rollups,
+    views,
+    outputs,
+    density,
+  };
 }
 
 /**
@@ -381,12 +467,13 @@ export function parseSheet(text: string | null | undefined): WeightBook {
   if (typeof doc !== "object" || doc === null || Array.isArray(doc))
     return emptyBook();
   const raw = doc as Record<string, unknown>;
-  if (raw.version !== SHEET_VERSION) return emptyBook();
+  if (raw.version !== 1 && raw.version !== SHEET_VERSION) return emptyBook();
   return readDocument(raw);
 }
 
 /** Whether a book is worth persisting at all — an untouched one is stored as `null`, not as `{}`. */
 export const sheetIsEmpty = (book: WeightBook): boolean =>
+  scenariosOf(book).length === 0 &&
   book.items.length === 0 &&
   rollupsOf(book).length === 0 &&
   book.views.length === 0 &&

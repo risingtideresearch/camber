@@ -31,7 +31,6 @@ import { useState } from "react";
 import type { DocumentCommand } from "../../core/commands";
 import {
   facetKeys,
-  fieldMoved,
   primaryFacet,
   type Item,
   type WeightBook,
@@ -48,6 +47,9 @@ export interface NewItemFiling {
 }
 
 export interface ExplorerProps {
+  readonly summarySelected: boolean;
+  readonly allSelected: boolean;
+  readonly onOpenSummary: () => void;
   readonly book: WeightBook;
   /** Items with something wrong in them, for the markers. */
   readonly flagged: ReadonlySet<string>;
@@ -83,6 +85,9 @@ const dropIndex = (
 ): number => target + (side === "after" ? 1 : 0) - (source < target ? 1 : 0);
 
 export function Explorer({
+  summarySelected,
+  allSelected,
+  onOpenSummary,
   book,
   flagged,
   activeItem,
@@ -193,13 +198,10 @@ export function Explorer({
             const side = dropMark?.side ?? "before";
             if (source >= 0 && target >= 0)
               send({
-                type: "installSheet",
-                book: fieldMoved(
-                  book,
-                  item.id,
-                  dragged.key,
-                  dropIndex(source, target, side),
-                ),
+                type: "moveField",
+                item: item.id,
+                key: dragged.key,
+                to: dropIndex(source, target, side),
               });
             setDragged(null);
             setDropMark(null);
@@ -431,10 +433,25 @@ export function Explorer({
         </button>
       </div>
 
-      <div className="wexprow wexpgroup wexpall">
+      <div
+        className={`wexprow wexpgroup wexpall${summarySelected ? " active" : ""}`}
+      >
         <button
           type="button"
           className="wexplabel"
+          aria-current={summarySelected ? "page" : undefined}
+          onClick={onOpenSummary}
+        >
+          Summary
+        </button>
+      </div>
+      <div
+        className={`wexprow wexpgroup wexpall${allSelected ? " active" : ""}`}
+      >
+        <button
+          type="button"
+          className="wexplabel"
+          aria-current={allSelected ? "page" : undefined}
           onClick={() => onOpenAll(facet || null)}
           title="Open the rollup of all items, regardless of search"
         >

@@ -81,6 +81,13 @@ export function createReferenceBinder(book: WeightBook) {
     if (isRoleName(key)) return roleBinding(item, key, rest.slice(1));
     const field = item.fields[key];
     if (!field) {
+      if (
+        book.scenarioContext?.authoredItems.find((i) => i.id === item.id)
+          ?.fields[key]
+      )
+        return fail(
+          `${item.name}.${key} is unavailable in ${book.scenarioContext.name}`,
+        );
       const near = Object.keys(item.fields).find(
         (candidate) => candidate.toLowerCase() === key.toLowerCase(),
       );
@@ -145,6 +152,18 @@ export function createReferenceBinder(book: WeightBook) {
         rest.length ? rest.join(".") : undefined,
       );
     }
+    const authoredOwner =
+      owner &&
+      book.scenarioContext?.authoredItems.find((i) => i.id === owner.id);
+    if (authoredOwner?.fields[head])
+      return fail(
+        `${owner!.name}.${head} is unavailable in ${book.scenarioContext!.name}`,
+      );
+    if (
+      !itemsByName.has(head) &&
+      book.scenarioContext?.authoredItems.some((i) => i.name === head)
+    )
+      return fail(`${head} is unavailable in ${book.scenarioContext.name}`);
     if (!rest.length) {
       const item = itemsByName.get(head);
       if (item)

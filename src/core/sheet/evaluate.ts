@@ -328,6 +328,23 @@ export interface PreparedBook {
 
 /** Prepare one immutable book revision, without allocating runtime evaluation state. */
 export function prepareBook(book: WeightBook): PreparedBook {
+  if (
+    !book.scenarioContext &&
+    ((book.scenarios?.length ?? 1) > 1 ||
+      book.items.some(
+        (item) =>
+          item.applicability?.k === "only" ||
+          Object.values(item.fields).some(
+            (field) =>
+              field.applicability?.k === "only" ||
+              Object.keys(field.overrides ?? {}).length,
+          ),
+      ))
+  ) {
+    throw new Error(
+      "Resolve a scenario before evaluating a scenario-aware book",
+    );
+  }
   const cells = new Map<string, PreparedCell>();
   const symbols = symbolsOf(book);
   const bindReferences = createReferenceBinder(book);

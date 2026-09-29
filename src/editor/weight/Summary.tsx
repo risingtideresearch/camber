@@ -97,10 +97,14 @@ export function Summary({
 
 export function Problems({
   problems,
-  onOpenItem,
+  onOpen,
 }: {
   readonly problems: readonly Problem[];
-  readonly onOpenItem: (itemId: string) => void;
+  readonly onOpen: (
+    itemId: string,
+    field: string,
+    leaf: Problem["leaf"],
+  ) => void;
 }) {
   if (!problems.length)
     return (
@@ -110,17 +114,21 @@ export function Problems({
     );
   return (
     <div className="wpad">
-      <ProblemList problems={problems} onOpenItem={onOpenItem} />
+      <ProblemList problems={problems} onOpen={onOpen} />
     </div>
   );
 }
 
 function ProblemList({
   problems,
-  onOpenItem,
+  onOpen,
 }: {
   readonly problems: readonly Problem[];
-  readonly onOpenItem: (itemId: string) => void;
+  readonly onOpen: (
+    itemId: string,
+    field: string,
+    leaf: Problem["leaf"],
+  ) => void;
 }) {
   return (
     <ul className="wproblems">
@@ -131,8 +139,10 @@ function ProblemList({
         >
           <button
             className="wproblemwhere"
-            onClick={() => onOpenItem(problem.item.id)}
-            title="Open this item"
+            onClick={() =>
+              onOpen(problem.item.id, problem.fieldKey, problem.leaf)
+            }
+            title="Open this value in the sheet"
           >
             {problem.item.name || "unnamed"}.{problem.fieldKey}
             {problem.leaf === "formula" ? "" : `.${problem.leaf}`}

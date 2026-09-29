@@ -1,3 +1,4 @@
+import { formulaProperties, type FieldPatch } from "./scenarios";
 import { BOUNDARIES } from "./boundaries";
 import type { Field, Item, RenameCommand, WeightBook } from "./book";
 import { parseFormula, tokenize, type Node } from "./formula";
@@ -127,6 +128,25 @@ export function renameReferences(
             };
             break;
         }
+        if (field.overrides)
+          next = {
+            ...next,
+            overrides: Object.fromEntries(
+              Object.entries(field.overrides).map(([scenarioId, patch]) => {
+                const rewritten = { ...patch } as Record<string, unknown>;
+                for (const property of formulaProperties(field)) {
+                  const value = (patch as Record<string, unknown>)[property];
+                  if (typeof value === "string")
+                    rewritten[property] = rewrite(
+                      value,
+                      `${address} (${scenarioId})`,
+                      item,
+                    );
+                }
+                return [scenarioId, rewritten as FieldPatch];
+              }),
+            ),
+          };
         return [key, next];
       }),
     );

@@ -13,6 +13,10 @@ import { StationsGrid } from "./StationsGrid";
 import { StabilityPanel } from "./StabilityPanel";
 import { Toolbar } from "./Toolbar";
 import { NavStatusProvider, NavStatusSlot } from "./NavStatus";
+import {
+  WeightNavigationProvider,
+  WeightNavigationSlot,
+} from "./weight/WeightNavigation";
 import { WeightPanel } from "./weight/WeightPanel";
 import "./EditorApp.css";
 import "./PanelApp.css";
@@ -44,7 +48,9 @@ export function PanelApp() {
     <DocumentStoreProvider session={panelSession}>
       <EditorUiProvider>
         <NavStatusProvider>
-          <Panel kind={panelKind} />
+          <WeightNavigationProvider>
+            <Panel kind={panelKind} />
+          </WeightNavigationProvider>
         </NavStatusProvider>
       </EditorUiProvider>
     </DocumentStoreProvider>
@@ -126,9 +132,17 @@ function PanelControls({ kind }: { readonly kind: PanelKind }) {
       );
     // The history draws no hull, and needs no miniature of itself: the tree IS undo and redo — the row below
     // the current moment is one step back, and a click reaches any moment rather than only the next one.
+    case "weights":
+      return (
+        <>
+          <span className="tabsep" />
+          <WeightNavigationSlot />
+          <span className="tabsep" />
+          <HistoryControls />
+        </>
+      );
     case "history":
     case "stability":
-    case "weights":
       return null;
   }
 }

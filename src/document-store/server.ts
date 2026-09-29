@@ -9,6 +9,7 @@ import { assertValidDocument } from "../core/invariants";
 import {
   interpretDocumentCommand,
   applySessionCommand,
+  describeCommand,
   commandSlices,
   rejected,
   requiresCurrentBase,
@@ -141,7 +142,11 @@ export function createDocumentStoreServer(
   // still shown the moment the session started from.
   const history =
     options.history ??
-    createDocumentHistory({ ...options.historyOptions, initial: state });
+    createDocumentHistory({
+      describe: (command, moment) => describeCommand(command, moment.weights),
+      ...options.historyOptions,
+      initial: state,
+    });
   // Accepted revision authors are retained for overlapping-slice stale-command checks.
   const authors: RevisionAuthor[] = [];
   const listeners = new Set<(snapshot: DocumentSnapshot) => void>();

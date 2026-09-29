@@ -23,17 +23,26 @@ import {
 } from "./weightGeometryPlan";
 
 type GeometryResource = ReturnType<typeof createWeightGeometryResource>;
-const RESOURCES = new WeakMap<Model, WeakMap<HullSampling, GeometryResource>>();
+const RESOURCES = new WeakMap<
+  Model,
+  WeakMap<HullSampling, Map<string, GeometryResource>>
+>();
 function geometryResource(
   model: Model,
   sampling: HullSampling,
+  world: string,
 ): GeometryResource {
   let bySampling = RESOURCES.get(model);
   if (!bySampling) {
     bySampling = new WeakMap();
     RESOURCES.set(model, bySampling);
   }
-  let resource = bySampling.get(sampling);
+  let worlds = bySampling.get(sampling);
+  if (!worlds) {
+    worlds = new Map();
+    bySampling.set(sampling, worlds);
+  }
+  let resource = worlds.get(world);
   if (!resource) {
     resource = createWeightGeometryResource(() => {
       const worker = new Worker(
@@ -53,7 +62,7 @@ function geometryResource(
       }
       return worker;
     });
-    bySampling.set(sampling, resource);
+    worlds.set(world, resource);
   }
   return resource;
 }
@@ -93,9 +102,12 @@ export function useWeightBookResults(
     () => planWeightGeometry(book, positions),
     [book, positions],
   );
+  // A resource has one desired job set. Separate scenario consumers must not
+  // replace one another's pending work when a comparison renders both at once.
+  const world = book.scenarioContext?.id ?? "unscoped";
   const resource = useMemo(
-    () => (sampling ? geometryResource(model, sampling) : null),
-    [model, sampling],
+    () => (sampling ? geometryResource(model, sampling, world) : null),
+    [model, sampling, world],
   );
   const snapshot = useSyncExternalStore(
     resource?.subscribe ?? noSubscription,
