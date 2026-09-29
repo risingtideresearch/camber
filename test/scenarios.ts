@@ -807,7 +807,12 @@ const { WeightNavigation } =
   await import("../src/editor/weight/WeightNavigation");
 const { Explorer } = await import("../src/editor/weight/Explorer");
 const { Problems } = await import("../src/editor/weight/Summary");
-for (const destination of ["sheet", "problems", "scenarios"] as const) {
+for (const destination of [
+  "sheet",
+  "loading",
+  "problems",
+  "scenarios",
+] as const) {
   const navigation = renderToStaticMarkup(
     createElement(WeightNavigation, {
       destination,
@@ -815,9 +820,10 @@ for (const destination of ["sheet", "problems", "scenarios"] as const) {
       problemCount: 2,
     }),
   );
-  assert.equal((navigation.match(/<button/g) ?? []).length, 3);
+  assert.equal((navigation.match(/<button/g) ?? []).length, 4);
   assert.equal((navigation.match(/aria-current="page"/g) ?? []).length, 1);
   assert.match(navigation, /Sheet/);
+  assert.match(navigation, /Loading/);
   assert.match(navigation, /Problems/);
   assert.match(navigation, /Scenarios/);
   assert.doesNotMatch(navigation, /Summary|Add an item/);
