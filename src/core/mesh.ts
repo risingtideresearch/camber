@@ -585,6 +585,45 @@ export function computeHullSampling(
     return { s: s as HullSample, ci };
   };
 
+  // A cell edge whose two ends are BOTH trimmed away can still carry hull: when the ends fall to DIFFERENT
+  // trims, the span between the two crossings survives wherever the one that cut the first end lets go before
+  // the other takes over. Sign tests at the nodes cannot see that span — it is a sliver thinner than a cell —
+  // so it is looked for here: the crossing the hull is entered at and the one it is left at, in lattice order
+  // along the edge (a column edge in v, a row edge in u), or null where nothing survives between the ends.
+  // It is what the bow closes on when the sheer trim rises to the deck line just short of the centerline: the
+  // sheet's own top edge then has one end above the trim and the other past the centerline, with the tip of
+  // the bow in between.
+  const edgeSliver = (
+    i: number,
+    k: number,
+    col: boolean,
+  ): [{ s: HullSample; ci: number }, { s: HullSample; ci: number }] | null => {
+    const i2 = col ? i : i + 1,
+      k2 = col ? k + 1 : k;
+    let enter: { s: HullSample; ci: number } | null = null,
+      leave: { s: HullSample; ci: number } | null = null,
+      tEnter = -Infinity,
+      tLeave = Infinity;
+    for (let c = 0; c < 3; c++) {
+      const na = cv[c][i][k] < 0,
+        nb = cv[c][i2][k2] < 0;
+      if (na && nb) return null; // one trim cuts the whole edge away
+      if (na === nb) continue;
+      const s = col ? colCross(c, i, k) : rowCross(c, i, k),
+        t = col ? s.v : s.u;
+      if (na) {
+        if (t > tEnter) {
+          tEnter = t;
+          enter = { s, ci: c };
+        }
+      } else if (t < tLeave) {
+        tLeave = t;
+        leave = { s, ci: c };
+      }
+    }
+    return enter && leave && tEnter < tLeave ? [enter, leave] : null;
+  };
+
   // (2) the trimmed columns, and every boundary point tagged with WHICH trim it lies on. A column is clipped to
   // its single surviving run; `keel` / `transom` record which trim ended its bottom.
   // every hull-boundary crossing the tessellation or the columns land on, deduplicated by object identity and
@@ -789,7 +828,10 @@ export function computeHullSampling(
   // them, and fanned into triangles after.
   const hullQuads: Quad[] = [],
     hullTris: Tri[] = [],
-    polys: HullSample[][] = [];
+    polys: HullSample[][] = [],
+    // per polygon, the samples a sliver span STARTS at: that span lies along the cell's own edge, so it is no
+    // bevel and no corner may be spliced into it
+    sliverFrom: Set<HullSample>[] = [];
   const cornersOf: [number, number][] = [
     [0, 0],
     [1, 0],
@@ -805,7 +847,6 @@ export function computeHullSampling(
         inside(i, k + 1),
       ];
       const cnt = flags.reduce((n, f) => n + (f ? 1 : 0), 0);
-      if (cnt === 0) continue;
       if (cnt === 4) {
         hullQuads.push([
           sheet[i][k],
@@ -815,7 +856,8 @@ export function computeHullSampling(
         ]);
         continue;
       }
-      const poly: HullSample[] = [];
+      const poly: HullSample[] = [],
+        spans = new Set<HullSample>();
       for (let e = 0; e < 4; e++) {
         const [di, dk] = cornersOf[e];
         if (flags[e]) poly.push(sheet[i + di][k + dk]);
@@ -829,9 +871,29 @@ export function computeHullSampling(
               : rowBoundary(i + Math.min(ai, bi), k + ak);
           record(b);
           poly.push(b.s);
+        } else if (!flags[e]) {
+          // both ends trimmed away: the edge still bounds the hull where a sliver survives between them
+          const [ai, ak] = cornersOf[e],
+            [bi, bk] = cornersOf[(e + 1) % 4],
+            sl = edgeSliver(
+              i + Math.min(ai, bi),
+              k + Math.min(ak, bk),
+              ai === bi,
+            );
+          if (!sl) continue;
+          // the ring runs up the lattice on the cell's bottom and right edges, down it on the other two
+          const [from, to] = e < 2 ? sl : [sl[1], sl[0]];
+          record(from);
+          record(to);
+          poly.push(from.s, to.s);
+          spans.add(from.s);
         }
       }
-      polys.push(poly);
+      // a cell left with a lone sliver span is kept: the corner its two trims meet at is spliced in below
+      if (poly.length > 1) {
+        polys.push(poly);
+        sliverFrom.push(spans);
+      }
     }
   phase(
     "Tessellating the cells",
@@ -848,8 +910,10 @@ export function computeHullSampling(
     let into: HullSample[] | null = null,
       at = -1,
       best = Infinity;
-    for (const poly of polys)
+    for (let n = 0; n < polys.length; n++) {
+      const poly = polys[n];
       for (let j = 0; j < poly.length; j++) {
+        if (sliverFrom[n].has(poly[j])) continue;
         const p = poly[j].pos,
           q = poly[(j + 1) % poly.length].pos,
           x = ciOf.get(poly[j]),
@@ -866,6 +930,7 @@ export function computeHullSampling(
           at = j + 1;
         }
       }
+    }
     if (into) into.splice(at, 0, c.s); // between the bevel's two ends, so the winding is unchanged
   }
   phase("Splicing the corners", () => corners.length);
@@ -930,6 +995,24 @@ export function computeHullSampling(
   const hullSheer = hullEdge(0),
     hullCenterline = hullEdge(1),
     hullTransom = hullEdge(2);
+  // A sheer trim that rises to the deck line leaves the sheet through its top row, and forward of that there
+  // is nothing left for it to cut: the hull's top edge carries on along the sheet's OWN edge — the deck line,
+  // row 0 — up to the trim that ends it. So the sheer edge is carried on from there too, node by node and
+  // onto that closing crossing, which on the centerline is the stem: the last point of both edges, as the
+  // corner of a bow whose sheer trim runs into the centerline is.
+  const tip = hullSheer[hullSheer.length - 1];
+  if (tip && tip.vSheetIndex === 0 && !Number.isInteger(tip.uSheetIndex)) {
+    let i = Math.ceil(tip.uSheetIndex);
+    const first = i;
+    while (i <= N && inside(i, 0)) hullSheer.push(sheet[i++][0]);
+    if (i <= N) {
+      // what ends the run: past a kept node the one boundary crossing on the edge, else the far end of the
+      // sliver the trim left the sheet into
+      const end =
+        i > first ? rowBoundary(i - 1, 0) : edgeSliver(i - 1, 0, false)?.[1];
+      if (end && seenB.has(end.s) && end.s !== tip) hullSheer.push(end.s);
+    }
+  }
   phase(
     "Boundary curves",
     () => hullSheer.length + hullCenterline.length + hullTransom.length,
