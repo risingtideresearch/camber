@@ -4,6 +4,7 @@ import * as THREE from "three";
 import type { CurvatureSettings } from "../../core/comb";
 import {
   buildCurvature3,
+  buildDeckMesh,
   buildHullMesh,
   buildStationLines,
   buildTransomMesh,
@@ -11,6 +12,7 @@ import {
   type CurvCurve3,
   type Mesh,
   type StationLines3,
+  type SurfaceToggles,
 } from "../../core/hullGeometry";
 import {
   createHullMaterial,
@@ -53,9 +55,10 @@ function meshToGeometry(m: {
 // construction: the shader's gentle diffuse (hullShader.ts) swings the lit hull only a few percent either side
 // of it, and switching shading changes how the form is modelled, not how bright the boat is. The transom keeps
 // its own sand tone to read as a separate panel — its LIT face is unchanged by the flatter shading; only its
-// shadowed side comes up.
+// shadowed side comes up — and the deck a paler, planked cream, a third surface that is neither.
 const HULL_BASE: [number, number, number] = [0.64, 0.74, 0.87];
 const TRANSOM_BASE: [number, number, number] = [0.74, 0.55, 0.37];
+const DECK_BASE: [number, number, number] = [0.88, 0.82, 0.68];
 
 interface SceneProps {
   model: Model;
@@ -67,6 +70,11 @@ interface SceneProps {
   leftovers: boolean; // the Lines dropdown's box: also draw the trim runs that fall outside the boat
   showMesh: boolean;
   meshQuads: boolean;
+  // which of the boat's surfaces to draw (the Mesh dropdown's boxes; another stable object). The hull's
+  // tessellation is built whatever this says — the lines plan is read off it — and only its drawing is
+  // skipped; the deck, which nothing else needs, is built only when asked for. Off the finished hull (on
+  // the raw sheet) there is no transom or deck to draw, whatever the boxes say.
+  surfaces: SurfaceToggles;
   sampling: HullSampling | null;
   curvature: CurvatureSettings;
   stl?: StlState | null;
@@ -83,6 +91,7 @@ export function Scene({
   leftovers,
   showMesh,
   meshQuads,
+  surfaces,
   sampling,
   curvature,
   stl,
@@ -106,6 +115,10 @@ export function Scene({
   );
   const transomMaterial = useMemo(
     () => createHullMaterial(uLight, { base: TRANSOM_BASE, offset: true }),
+    [uLight],
+  );
+  const deckMaterial = useMemo(
+    () => createHullMaterial(uLight, { base: DECK_BASE, offset: true }),
     [uLight],
   );
   // The flat shading mode's unlit skin — the lines plan's classic occluder, and in flat mode the transom's
@@ -143,10 +156,11 @@ export function Scene({
     return () => {
       hullMaterial.dispose();
       transomMaterial.dispose();
+      deckMaterial.dispose();
       flatMaterial.dispose();
       wireMaterial.dispose();
     };
-  }, [hullMaterial, transomMaterial, flatMaterial, wireMaterial]);
+  }, [hullMaterial, transomMaterial, deckMaterial, flatMaterial, wireMaterial]);
 
   // a live uniform, cheap enough to just re-set on every render (the r3f way to sync a plain value onto a
   // persistent three.js object) rather than tracking whether the shading mode actually changed
@@ -156,7 +170,7 @@ export function Scene({
 
   // The hull's own tessellation (the lattice every shading mode shares — mesh.ts) plus the curvature-comb
   // curves and the lines-plan curves, rebuilt together in one pass whenever the model, the line toggles, the
-  // Sheet or Mesh toggle, the shared sampling, or the curvature settings change. One perfBegin/perfEnd
+  // Sheet or Mesh toggle, the deck box, the shared sampling, or the curvature settings change. One perfBegin/perfEnd
   // bracket for the lot, which is how the rebuild reads: the overlay ribbons in CameraFacingCurves open the
   // same pass again further down the tree and add to it (perf.ts keys a pass's tallies to the FRAME, so
   // reopening one accumulates rather than replacing it). Each bracket names its own part of the pass, so the
@@ -167,6 +181,7 @@ export function Scene({
   const {
     hullGeometry,
     transomGeometry,
+    deckGeometry,
     wireGeometry,
     curvCache,
     linesPlanCurves,
@@ -176,6 +191,7 @@ export function Scene({
     perfBegin(PERF_MESH, "hull geometry");
     let hullGeometry: THREE.BufferGeometry | null = null,
       transomGeometry: THREE.BufferGeometry | null = null,
+      deckGeometry: THREE.BufferGeometry | null = null,
       wireGeometry: THREE.BufferGeometry | null = null,
       hullMesh: Mesh | null = null; // the raw triangle soup, kept for the lines-plan curves below
     if (sampling) {
@@ -191,6 +207,15 @@ export function Scene({
           "tris",
         );
         transomGeometry = meshToGeometry(transomMesh);
+        if (surfaces.deck) {
+          const deckMesh = perfStep(
+            "Deck",
+            () => buildDeckMesh(sampling),
+            (m) => m.count / 3,
+            "tris",
+          );
+          deckGeometry = meshToGeometry(deckMesh);
+        }
       }
       wireGeometry = built.wire ? meshToGeometry(built.wire) : null;
     }
@@ -251,6 +276,7 @@ export function Scene({
     return {
       hullGeometry,
       transomGeometry,
+      deckGeometry,
       wireGeometry,
       curvCache,
       linesPlanCurves,
@@ -266,6 +292,7 @@ export function Scene({
     leftovers,
     showMesh,
     meshQuads,
+    surfaces.deck,
     curvature,
   ]);
 
@@ -275,25 +302,32 @@ export function Scene({
     return () => {
       hullGeometry?.dispose();
       transomGeometry?.dispose();
+      deckGeometry?.dispose();
       wireGeometry?.dispose();
     };
-  }, [hullGeometry, transomGeometry, wireGeometry]);
+  }, [hullGeometry, transomGeometry, deckGeometry, wireGeometry]);
 
   const guideIdx = selStationIdx(model, selection);
 
   return (
     <group rotation={[0, -model.deckRake, 0]}>
       {/* the shading mode only picks the material: one geometry, drawn unlit, lit, or zebra-striped */}
-      {hullGeometry && (
+      {surfaces.hull && hullGeometry && (
         <mesh
           geometry={hullGeometry}
           material={flat ? flatMaterial : hullMaterial}
         />
       )}
-      {transomGeometry && (
+      {surfaces.transom && transomGeometry && (
         <mesh
           geometry={transomGeometry}
           material={flat ? flatMaterial : transomMaterial}
+        />
+      )}
+      {deckGeometry && (
+        <mesh
+          geometry={deckGeometry}
+          material={flat ? flatMaterial : deckMaterial}
         />
       )}
       {showMesh && wireGeometry && (

@@ -6,6 +6,12 @@
 //   - STL round-trip: buildStl (ASCII export of the default hull) → parseStl must give back a
 //     non-empty triangle soup whose bounding box is symmetric in y (the export mirrors the
 //     starboard half across the centerline, so any asymmetry is a serialization/parsing bug).
+//   - STL closed: with all three surfaces on (hull, transom, deck) the export must be watertight
+//     and consistently wound — every directed edge matched by exactly one edge the other way, and
+//     a positive signed volume (facets wound outward). Any gap on a seam (keel, transom, sheer) or
+//     an inside-out patch (the port mirror, the transom, the deck) fails it.
+//   - STL options: each surface can be left out, and the hull alone (the default without the deck)
+//     is open along the sheer — so the option is doing something.
 //   - Binary STL: a hand-built 84 + 2×50-byte buffer with two known triangles must parse to exactly
 //     those vertices (guards the fixed-offset binary walk and its little-endian reads).
 //   - pchip: the monotone Hermite interpolant must pass through its knots exactly — the eased
@@ -60,6 +66,92 @@ function stlRoundTrip(): { ok: boolean; detail: string } {
   return {
     ok,
     detail: `${geom.triangleCount} triangles, y-asymmetry ${asym.toExponential(2)}`,
+  };
+}
+
+// the edges of a triangle soup, keyed by their endpoints' exact coordinates: how many times each directed
+// edge occurs, and the soup's signed volume (the sum of the tetrahedra each facet spans with the origin —
+// positive when the facets are wound outward round a closed solid)
+function edgeBook(positions: Float32Array): {
+  edges: Map<string, number>;
+  volume: number;
+} {
+  const edges = new Map<string, number>();
+  let volume = 0;
+  const key = (i: number): string =>
+    `${positions[i]},${positions[i + 1]},${positions[i + 2]}`;
+  for (let t = 0; t + 8 < positions.length; t += 9) {
+    const k = [key(t), key(t + 3), key(t + 6)];
+    for (let e = 0; e < 3; e++) {
+      const d = k[e] + "→" + k[(e + 1) % 3];
+      edges.set(d, (edges.get(d) ?? 0) + 1);
+    }
+    const [ax, ay, az, bx, by, bz, cx, cy, cz] = positions.subarray(t, t + 9);
+    volume +=
+      (ax * (by * cz - bz * cy) -
+        ay * (bx * cz - bz * cx) +
+        az * (bx * cy - by * cx)) /
+      6;
+  }
+  return { edges, volume };
+}
+
+// the directed edges with no twin (the same two vertices the other way round): the boundary of the soup
+// plus every edge of an inconsistently wound pair
+function unmatchedEdges(edges: Map<string, number>): number {
+  let n = 0;
+  for (const [d, c] of edges) {
+    const [a, b] = d.split("→");
+    if (c !== 1 || edges.get(b + "→" + a) !== 1) n++;
+  }
+  return n;
+}
+
+// STL closed: hull + transom + deck must be a watertight, outward-wound solid
+function stlClosed(): { ok: boolean; detail: string } {
+  const model = assemble(defaultHull());
+  const all = { hull: true, transom: true, deck: true };
+  const geom = parseStl(asciiBuffer(buildStl(model, "camber", all)));
+  const { edges, volume } = edgeBook(geom.positions);
+  const open = unmatchedEdges(edges);
+  const ok = geom.triangleCount > 0 && open === 0 && volume > 0;
+  return {
+    ok,
+    detail: `${geom.triangleCount} triangles, ${open} unmatched edges, signed volume ${volume.toExponential(3)}`,
+  };
+}
+
+// STL options: each surface is left out when unticked, and without the deck the sheer stays open
+function stlOptions(): { ok: boolean; detail: string } {
+  const model = assemble(defaultHull());
+  const count = (o: { hull: boolean; transom: boolean; deck: boolean }) =>
+    parseStl(asciiBuffer(buildStl(model, "camber", o))).triangleCount;
+  const hull = count({ hull: true, transom: false, deck: false }),
+    transom = count({ hull: false, transom: true, deck: false }),
+    deck = count({ hull: false, transom: false, deck: true }),
+    all = count({ hull: true, transom: true, deck: true });
+  const noDeck = parseStl(
+    asciiBuffer(
+      buildStl(model, "camber", { hull: true, transom: true, deck: false }),
+    ),
+  );
+  const openNoDeck = unmatchedEdges(edgeBook(noDeck.positions).edges);
+  let refused = false;
+  try {
+    buildStl(model, "camber", { hull: false, transom: false, deck: false });
+  } catch {
+    refused = true;
+  }
+  const ok =
+    hull > 0 &&
+    transom > 0 &&
+    deck > 0 &&
+    all === hull + transom + deck &&
+    openNoDeck > 0 &&
+    refused;
+  return {
+    ok,
+    detail: `hull ${hull} + transom ${transom} + deck ${deck} = ${all} triangles; ${openNoDeck} open edges without the deck; empty selection ${refused ? "refused" : "ACCEPTED"}`,
   };
 }
 
@@ -162,6 +254,8 @@ function main(): number {
   const cases: { name: string; run: () => { ok: boolean; detail: string } }[] =
     [
       { name: "stl round-trip", run: stlRoundTrip },
+      { name: "stl closed mesh", run: stlClosed },
+      { name: "stl export options", run: stlOptions },
       { name: "stl binary parse", run: stlBinary },
       { name: "pchip knot interpolation", run: pchipKnots },
       { name: "bspline endpoints", run: bsplineEndpoints },

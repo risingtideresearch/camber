@@ -8,7 +8,9 @@ import "./Dropdown.css";
 // button's left).
 //
 // SPLIT form, when `onToggle` is given: a toggle button (pressed state `active`, click `onToggle`) joined to
-// a caret that opens the panel. For a feature that is switched on and off AND configured.
+// a caret that opens the panel. For a feature that is switched on and off AND configured — or, with `active`
+// left off, for an ACTION with options (the library's Export STL): the main button does the thing, the panel
+// says how.
 //
 // MENU form, when it is not: one button carrying the caret, which only opens the panel. For a set of choices
 // with no master switch over them — where a toggle would have to invent one, and the button would claim to
@@ -30,6 +32,7 @@ interface DropdownProps {
   menuLabel?: string; // the caret button's aria-label / tooltip
   align?: "left" | "right";
   className?: string;
+  disabled?: boolean; // greys out both buttons (and closes the panel, which then has nothing to configure)
 }
 
 export function Dropdown({
@@ -43,18 +46,20 @@ export function Dropdown({
   menuLabel = "Options",
   align = "left",
   className,
+  disabled = false,
 }: DropdownProps) {
   const groupRef = useRef<HTMLDivElement>(null);
+  const shown = open && !disabled;
 
   // close on any pointer-down outside the group
   useEffect(() => {
-    if (!open) return;
+    if (!shown) return;
     const onDown = (e: PointerEvent) => {
       if (!groupRef.current?.contains(e.target as Node)) onOpenChange(false);
     };
     document.addEventListener("pointerdown", onDown);
     return () => document.removeEventListener("pointerdown", onDown);
-  }, [open, onOpenChange]);
+  }, [shown, onOpenChange]);
 
   return (
     <div
@@ -63,15 +68,21 @@ export function Dropdown({
     >
       {onToggle ? (
         <>
-          <Button active={active} title={title} onClick={onToggle}>
+          <Button
+            active={active}
+            title={title}
+            disabled={disabled}
+            onClick={onToggle}
+          >
             {label}
           </Button>
           <Button
             className="dropdown-caret"
-            active={open}
+            active={shown}
             title={menuLabel}
             aria-label={menuLabel}
-            aria-expanded={open}
+            aria-expanded={shown}
+            disabled={disabled}
             onClick={() => onOpenChange(!open)}
           >
             ▾
@@ -79,9 +90,10 @@ export function Dropdown({
         </>
       ) : (
         <Button
-          active={open}
+          active={shown}
           title={title ?? menuLabel}
-          aria-expanded={open}
+          aria-expanded={shown}
+          disabled={disabled}
           onClick={() => onOpenChange(!open)}
         >
           {label}
@@ -90,7 +102,7 @@ export function Dropdown({
           </span>
         </Button>
       )}
-      {open && (
+      {shown && (
         <div className={"dropdown-panel dropdown-panel--" + align}>
           {children}
         </div>

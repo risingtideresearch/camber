@@ -136,9 +136,9 @@ export function createHullMaterial(
     polygonOffset: opts.offset ?? false,
     polygonOffsetFactor: 1,
     polygonOffsetUnits: 1,
-    // buildHullMesh's mirrored port-half triangles are wound opposite starboard's by design (positions and
-    // normals both negated) — three's default back-face culling would silently drop half the hull without
-    // this, exactly as the old program was two-sided for the same reason.
+    // Every surface is seen from both sides: the hull's inside is in plain view whenever the deck is off
+    // (the default), and the raw sheet is a single skin with no inside at all. So no back-face culling —
+    // three's default would silently drop whichever side the camera is on.
     side: THREE.DoubleSide,
     transparent: opts.transparent ?? false,
     depthWrite: opts.depthWrite ?? true,

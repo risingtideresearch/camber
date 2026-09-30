@@ -1,9 +1,12 @@
 // ---------- STL export: a triangle mesh of the trimmed hull ----------
 //
 // The very geometry the 3D view renders: the shared sampling's trimmed quad/tri mesh (`buildHullMesh`, both
-// halves) plus the flat transom panel (`buildTransomMesh`), emitted facet by facet. So the exported solid is
-// exactly what is on screen — trimmed in both directions, with the transom closed by its own planar face
-// rather than a centroid fan. The deck stays open (as the STEP OPEN_SHELL does).
+// halves), the flat transom panel (`buildTransomMesh`) and the deck cap (`buildDeckMesh`), emitted facet by
+// facet — each of the three at the caller's option (`SurfaceToggles`, the same set the view's Mesh dropdown
+// offers). So the exported solid is exactly what is on screen — trimmed in both directions, with the transom
+// closed by its own planar face rather than a centroid fan. By default the deck stays open (as the STEP
+// OPEN_SHELL does); with it on, the three surfaces share every border vertex and the solid is watertight,
+// every facet wound outward — what a slicer or a volume check wants.
 //
 // Output is ASCII STL in MILLIMETRES. STL carries no unit of its own and is universally read as mm, so a hull
 // authored in another unit is converted on the way out — the model's coordinates are absolute in `model.unit`
@@ -11,7 +14,14 @@
 
 import { type Model } from "./model";
 import { computeHullSampling } from "./mesh";
-import { buildHullMesh, buildTransomMesh, type Mesh } from "./hullGeometry";
+import {
+  buildDeckMesh,
+  buildHullMesh,
+  buildTransomMesh,
+  DEFAULT_SURFACES,
+  type Mesh,
+  type SurfaceToggles,
+} from "./hullGeometry";
 import { unitScale } from "./json";
 import { V, type Vec3 } from "./math";
 
@@ -30,14 +40,22 @@ function facet(a: Vec3, b: Vec3, c: Vec3): string {
   );
 }
 
-// build an ASCII STL string for the given model. Like every geometry consumer it takes a model whose derived
-// curves are current — one that `assemble()` built, or the editor's own, refreshed after its last edit.
-export function buildStl(model: Model, name = "camber"): string {
+// build an ASCII STL string for the given model, of the surfaces asked for. Like every geometry consumer it
+// takes a model whose derived curves are current — one that `assemble()` built, or the editor's own,
+// refreshed after its last edit.
+export function buildStl(
+  model: Model,
+  name = "camber",
+  surfaces: SurfaceToggles = DEFAULT_SURFACES,
+): string {
+  if (!surfaces.hull && !surfaces.transom && !surfaces.deck)
+    throw new Error("no surface selected to export");
   // R = 6 on the default 5-point section gives a 24-column half, as v1's M did
   const sampling = computeHullSampling(model, 80, 6);
   const { hull } = buildHullMesh(sampling, true, false, false);
   if (hull.count < 3) throw new Error("hull has too few sections to export");
   const transom = buildTransomMesh(model, sampling);
+  const deck = buildDeckMesh(sampling);
   const s = unitScale(model.unit, "mm");
 
   // every mesh emits 3 vertices (9 floats) per triangle, already wound with the normal facing out of the hull
@@ -56,8 +74,9 @@ export function buildStl(model: Model, name = "camber"): string {
 
   return (
     `solid ${name}\n` +
-    facetsOf(hull) +
-    facetsOf(transom) +
+    (surfaces.hull ? facetsOf(hull) : "") +
+    (surfaces.transom ? facetsOf(transom) : "") +
+    (surfaces.deck ? facetsOf(deck) : "") +
     `endsolid ${name}\n`
   );
 }

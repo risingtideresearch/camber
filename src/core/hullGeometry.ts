@@ -43,6 +43,25 @@ export const emptyMesh = (): Mesh => ({
   count: 0,
 });
 
+// The three surfaces the finished boat is made of, as independent on/off choices — the one set the 3D view
+// draws from (its Mesh dropdown) and the STL export emits from (its options), so a boat looks the same on
+// screen and in the file. `hull` is the trimmed, mirrored skin (`buildHullMesh`); `transom` the flat panel
+// closing it aft (`buildTransomMesh`); `deck` the cap closing it across the sheer (`buildDeckMesh`). With all
+// three on, the mesh is watertight: every edge of one is an edge of exactly one other.
+export interface SurfaceToggles {
+  hull: boolean;
+  transom: boolean;
+  deck: boolean;
+}
+
+// the hull and its transom, open at the deck — how the boat has always been drawn and exported. The deck is
+// the one to reach for: a closed solid for a slicer or a volume check, at the price of hiding the inside.
+export const DEFAULT_SURFACES: SurfaceToggles = {
+  hull: true,
+  transom: true,
+  deck: false,
+};
+
 // The "longitudinal" of a single station-point index: the locus that control point traces along the hull.
 // That locus is exactly the LOFT of point idx — the curve v2 interpolates across the stations — read at each
 // u and placed into the world by the frame there, the same construction the hull surface uses. So the curve
@@ -586,13 +605,17 @@ export function buildHullMesh(
         }
       }
       if (trimmed) {
-        // the port half: the same triangles y-mirrored (positions and normals). Winding is irrelevant — the
-        // material is double-sided — so the y-negated copy is the whole port skin, meeting starboard at the
-        // keel.
+        // the port half: the same triangles y-mirrored (positions and normals), meeting starboard at the
+        // keel. A mirror reverses a triangle's winding, so each copy is emitted with its last two vertices
+        // swapped: the port skin then winds the same way round its outward normal as starboard does. The
+        // view would not care — its material is double-sided — but the STL export writes each facet's
+        // normal from its winding, and a closed solid has to wind the same way everywhere to be one.
         const nStar = P.length;
-        for (let i = 0; i < nStar; i += 3) {
-          P.push(P[i], -P[i + 1], P[i + 2]);
-          Nn.push(Nn[i], -Nn[i + 1], Nn[i + 2]);
+        for (let i = 0; i < nStar; i += 9) {
+          for (const o of [0, 6, 3]) {
+            P.push(P[i + o], -P[i + o + 1], P[i + o + 2]);
+            Nn.push(Nn[i + o], -Nn[i + o + 1], Nn[i + o + 2]);
+          }
         }
         const wStar = triWireP.length;
         for (let i = 0; i < wStar; i += 3)
@@ -705,8 +728,58 @@ export function buildTransomMesh(model: Model, sampling: HullSampling): Mesh {
     // a rung standing on the centerline is its own mirror, so the quad there is really a triangle: the half
     // of it that would span the point to itself has no area. That is the foot, and it is where the ladder
     // closes — emitting the empty half anyway would leave a degenerate triangle on the seam.
-    if (a[1] !== 0) pushTri(P, Nn, a, nt, ap, nt, bp, nt);
-    if (b[1] !== 0) pushTri(P, Nn, a, nt, bp, nt, b, nt);
+    // wound counter-clockwise seen from aft, so the winding agrees with the outward normal
+    if (a[1] !== 0) pushTri(P, Nn, a, nt, bp, nt, ap, nt);
+    if (b[1] !== 0) pushTri(P, Nn, a, nt, b, nt, bp, nt);
+  }
+  return {
+    pos: new Float32Array(P),
+    nrm: new Float32Array(Nn),
+    count: P.length / 3,
+  };
+}
+
+// The deck: the cap closing the hull across the sheer, from the stem to the transom's top edge.
+//
+// Built the same way as the transom panel, on the hull's own sheer edge — `hullSheer` is the very run of
+// vertices the skin's top boundary is stitched from, head (the transom corner) to stem (the bow's tip on the
+// centerline) — so the deck and the skin share their whole common border vertex for vertex, and the deck's
+// aft rung IS the transom panel's top rung: with all three surfaces on, the boat is watertight.
+//
+// The sheer and its port mirror are spanned as a ladder: each pair of consecutive sheer points and their two
+// mirrors make a quad, whose rung is the straight line across the breadth. The rungs never cross while the
+// sheer runs monotonically along the boat (a hull whose sheer doubles back in plan would fold the deck onto
+// itself, as it would any cap drawn across it). The aft rung is the transom's top edge and the forward one
+// degenerates to the stem, where starboard and port meet on y = 0 — that half of the ladder's last quad is
+// left out, as the transom leaves out its foot.
+//
+// Unlike the transom the deck is not planar — it follows the sheer's rise — so each quad carries its own
+// normal, read off its geometry and pointed UP (+z): the rungs are horizontal, so a ladder quad's normal has
+// no reason to lean any way but along the sheer, and up is out of the hull. Wound to agree with it.
+export function buildDeckMesh(sampling: HullSampling): Mesh {
+  const e = sampling.hullSheer;
+  if (e.length < 2) return emptyMesh();
+  const P: number[] = [],
+    Nn: number[] = [];
+  for (let i = 0; i + 1 < e.length; i++) {
+    const a = e[i].pos,
+      b = e[i + 1].pos,
+      ap: Vec3 = [a[0], -a[1], a[2]],
+      bp: Vec3 = [b[0], -b[1], b[2]];
+    // the quad's normal, from its run along the sheer and the sum of its two rungs (so the end on the
+    // centerline, whose rung is a point, still leaves the other to read it from)
+    let n = V.cross(V.sub(b, a), [0, -2 * (a[1] + b[1]), 0]);
+    if (n[2] < 0) n = [-n[0], -n[1], -n[2]];
+    const len = Math.hypot(n[0], n[1], n[2]);
+    if (len === 0) continue; // both rungs on the centerline: no area at all
+    n = [n[0] / len, n[1] / len, n[2] / len];
+    // the quad a → b → bp → ap, in the order that winds round the upward normal: its vector area is the
+    // cross of its diagonals, which an end on the centerline (a triangle, really) leaves well defined
+    const ccw = V.dot(V.cross(V.sub(bp, a), V.sub(ap, b)), n) >= 0;
+    const tri = (p: Vec3, q: Vec3, r: Vec3): void =>
+      ccw ? pushTri(P, Nn, p, n, q, n, r, n) : pushTri(P, Nn, p, n, r, n, q, n);
+    if (b[1] !== 0) tri(a, b, bp);
+    if (a[1] !== 0) tri(a, bp, ap);
   }
   return {
     pos: new Float32Array(P),

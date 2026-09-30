@@ -10,9 +10,11 @@ import { parseDocument, parseHullState } from "../core/json";
 import { assemble } from "../core/runtime";
 import { buildStep } from "../core/step";
 import { buildStl } from "../core/stl";
+import { DEFAULT_SURFACES, type SurfaceToggles } from "../core/hullGeometry";
 import { buildPreviewSvg } from "../core/preview";
 import { buildZip, type ZipEntry } from "../core/zip";
 import { Button } from "../components/Button";
+import { Dropdown } from "../components/Dropdown";
 import { TopBar } from "../components/TopBar";
 import { DesignCard } from "./DesignCard";
 import { topoOf, type Topo } from "./topo";
@@ -42,6 +44,31 @@ function downloadBlob(filename: string, text: string, mime: string): void {
   download(filename, new Blob([text], { type: mime }));
 }
 
+// the Export STL dropdown's boxes: which of the boat's three surfaces go in the file. The same set the 3D
+// view's Mesh dropdown draws, with the deck the one that makes the mesh watertight (see core/stl.ts).
+const STL_SURFACES: {
+  key: keyof SurfaceToggles;
+  label: string;
+  title: string;
+}[] = [
+  {
+    key: "hull",
+    label: "Export hull",
+    title: "The trimmed, mirrored hull skin",
+  },
+  {
+    key: "transom",
+    label: "Export transom",
+    title: "The flat panel closing the hull aft, on the transom plane",
+  },
+  {
+    key: "deck",
+    label: "Export deck",
+    title:
+      "The cap closing the hull across the sheer. With the hull and transom, a watertight solid — what a slicer or a volume check wants",
+  },
+];
+
 // a filesystem-safe version of a design name for download filenames
 function safeName(name: string): string {
   return name.replace(/[^\w.\- ]+/g, "_").trim() || "hull";
@@ -53,6 +80,11 @@ export function LibraryApp() {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [stlSurfaces, setStlSurfaces] =
+    useState<SurfaceToggles>(DEFAULT_SURFACES); // the Export STL options
+  const [stlMenu, setStlMenu] = useState(false); // its dropdown open state
+  const stlExportable =
+    stlSurfaces.hull || stlSurfaces.transom || stlSurfaces.deck;
 
   // blend mode: null when off, otherwise the id of the hull it was started from. Any hull whose document
   // PARSES is a peer — the interpolator reconciles differing units and control-point counts on open, and
@@ -218,7 +250,7 @@ export function LibraryApp() {
       );
       downloadBlob(
         `${safeName(selectedRow.name)}.stl`,
-        buildStl(model, safeName(selectedRow.name)),
+        buildStl(model, safeName(selectedRow.name), stlSurfaces),
         "model/stl",
       );
     } catch (e) {
@@ -347,13 +379,38 @@ export function LibraryApp() {
           >
             Export STEP
           </Button>
-          <Button
-            disabled={!selectedRow}
-            title="Export the selected design as an STL triangle mesh"
-            onClick={exportStl}
+          <Dropdown
+            label="Export STL"
+            onToggle={exportStl}
+            open={stlMenu}
+            onOpenChange={setStlMenu}
+            disabled={!selectedRow || !stlExportable}
+            title={
+              stlExportable
+                ? "Export the selected design as an STL triangle mesh, of the surfaces picked in the options"
+                : "Pick at least one surface to export in the options"
+            }
+            menuLabel="STL export options"
           >
-            Export STL
-          </Button>
+            <div className="dd-section">
+              <div className="dd-group">Surfaces</div>
+              {STL_SURFACES.map((t) => (
+                <label key={t.key} className="dd-row dd-check" title={t.title}>
+                  <input
+                    type="checkbox"
+                    checked={stlSurfaces[t.key]}
+                    onChange={(e) =>
+                      setStlSurfaces((s) => ({
+                        ...s,
+                        [t.key]: e.target.checked,
+                      }))
+                    }
+                  />
+                  <span className="dd-name">{t.label}</span>
+                </label>
+              ))}
+            </div>
+          </Dropdown>
           <Button
             variant="danger"
             disabled={!selectedRow || deleting}

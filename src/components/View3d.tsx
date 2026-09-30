@@ -8,6 +8,7 @@ import type { Model } from "../core/model";
 import type { ModelSelection } from "../core/modelSelection";
 import type { StlState } from "../core/stlImport";
 import { computeHullSampling, type HullSampling } from "../core/mesh";
+import { DEFAULT_SURFACES, type SurfaceToggles } from "../core/hullGeometry";
 import { PERF_N_DEFAULT, PERF_R_DEFAULT } from "../core/perf";
 import { defaultCurvature, type CurvatureSettings } from "../core/comb";
 import {
@@ -152,6 +153,28 @@ const STATIONS: { key: keyof LineToggles; label: string; title: string }[] = [
   },
 ];
 
+// the Mesh dropdown's "Surfaces" group: the three surfaces the finished boat is made of, each an independent
+// box. The same set the library's Export STL offers, so what is on screen is what goes in the file.
+const SURFACES: { key: keyof SurfaceToggles; label: string; title: string }[] =
+  [
+    {
+      key: "hull",
+      label: "Show hull",
+      title: "The trimmed, mirrored hull skin",
+    },
+    {
+      key: "transom",
+      label: "Show transom",
+      title: "The flat panel closing the hull aft, on the transom plane",
+    },
+    {
+      key: "deck",
+      label: "Show deck",
+      title:
+        "The cap closing the hull across the sheer, from the stem to the transom's top edge. With the hull and transom, a watertight boat — and no view of the inside",
+    },
+  ];
+
 interface View3dProps {
   model: Model;
   selection: ModelSelection;
@@ -194,6 +217,7 @@ export function View3d({
   const [showMesh, setShowMesh] = useState(false); // overlay the quad-grid wireframe
   const [meshQuads, setMeshQuads] = useState(true); // wire as quads (default) or the raw shaded triangles
   const [meshMenu, setMeshMenu] = useState(false); // the Mesh overlay dropdown open state
+  const [surfaces, setSurfaces] = useState<SurfaceToggles>(DEFAULT_SURFACES); // which surfaces are drawn
   const [orthographic, setOrthographic] = useState(true); // matches the view's historical ortho-only behaviour
   const [projMenu, setProjMenu] = useState(false); // the projection dropdown open state
   const [fov, setFov] = useState(DEFAULT_FOV); // the perspective lens, in degrees; ignored while ortho
@@ -226,6 +250,7 @@ export function View3d({
           leftovers={leftovers}
           showMesh={showMesh}
           meshQuads={meshQuads}
+          surfaces={surfaces}
           sampling={effSampling}
           curvature={curvature}
           stl={stl}
@@ -269,19 +294,37 @@ export function View3d({
           open={meshMenu}
           onOpenChange={setMeshMenu}
           title="Overlay the hull's quad grid as a wireframe, whatever else is displayed. Its resolution is set by the Performance control's hull-sampling sliders."
-          menuLabel="Mesh overlay"
+          menuLabel="Mesh options"
         >
-          <label
-            className="dd-row dd-check"
-            title="Wireframe as the hull's quad grid; unchecked shows the raw triangles the shaded hull renders"
-          >
-            <input
-              type="checkbox"
-              checked={meshQuads}
-              onChange={(e) => setMeshQuads(e.target.checked)}
-            />
-            <span className="dd-name">As quads</span>
-          </label>
+          <div className="dd-section">
+            <div className="dd-group">Surfaces</div>
+            {SURFACES.map((t) => (
+              <label key={t.key} className="dd-row dd-check" title={t.title}>
+                <input
+                  type="checkbox"
+                  checked={surfaces[t.key]}
+                  onChange={(e) =>
+                    setSurfaces((s) => ({ ...s, [t.key]: e.target.checked }))
+                  }
+                />
+                <span className="dd-name">{t.label}</span>
+              </label>
+            ))}
+          </div>
+          <div className="dd-section">
+            <div className="dd-group">Wireframe</div>
+            <label
+              className="dd-row dd-check"
+              title="Wireframe as the hull's quad grid; unchecked shows the raw triangles the shaded hull renders"
+            >
+              <input
+                type="checkbox"
+                checked={meshQuads}
+                onChange={(e) => setMeshQuads(e.target.checked)}
+              />
+              <span className="dd-name">As quads</span>
+            </label>
+          </div>
         </Dropdown>
         <Dropdown
           label="Sheet"
