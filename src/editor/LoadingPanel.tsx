@@ -165,7 +165,7 @@ export function LoadingPanel({
       const outcome = await dispatch({
         type: "applyFloatingAttitude",
         waterline: proposal.waterline,
-        deckRake: proposal.deckRake,
+        deckTrim: proposal.deckTrim,
         expectedRevision: snapshot.revision,
         expectedLoading: null,
         scenarioId,
@@ -256,7 +256,7 @@ export function LoadingPanel({
                 Calculate equilibrium
               </Button>
               <p className="loading-hint">
-                Find waterline and rake that balance this loading.
+                Find waterline and trim that balance this loading.
               </p>
             </div>
             <div>
@@ -267,7 +267,7 @@ export function LoadingPanel({
                 Match displacement only
               </Button>
               <p className="loading-hint">
-                Find waterline while keeping the current rake.
+                Find waterline while keeping the current trim.
               </p>
             </div>
           </div>
@@ -336,9 +336,9 @@ export function LoadingPanel({
                   {proposal && <td>{show(proposal.waterline * scale)} m</td>}
                 </tr>
                 <tr>
-                  <th>Deck rake</th>
-                  <td>{show(degrees(model.deckRake))}°</td>
-                  {proposal && <td>{show(degrees(proposal.deckRake))}°</td>}
+                  <th>Deck trim</th>
+                  <td>{show(degrees(model.deckTrim))}°</td>
+                  {proposal && <td>{show(degrees(proposal.deckTrim))}°</td>}
                 </tr>
               </tbody>
             </table>

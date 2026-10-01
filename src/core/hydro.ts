@@ -1,7 +1,7 @@
 // ---------- hydrostatics: naval-architecture metrics from the swept hull ----------
 //
 // Everything here is derived from ONE cut of the hull at the model's current design waterline (already
-// floated at deckRake). `sweep.ts` does the integrating — it owns the fanning-station-plane Jacobian and the
+// floated at deckTrim). `sweep.ts` does the integrating — it owns the fanning-station-plane Jacobian and the
 // polygon clipping — and this module turns its answers into the numbers a designer reads: the principal
 // dimensions, the centroids, the initial stability and the form coefficients.
 //
@@ -124,8 +124,8 @@ export function hydrostatics(
   // Its area, centroid and inertias come from `sweep.ts`, integrated in the same coordinates as the volume.
   // The waterline CURVE is still used, but only for the things that are properties of the curve itself —
   // the waterline's length and beam, and the entrance angle.
-  const cr = geom.cosRake,
-    sr = geom.sinRake;
+  const cr = geom.cosTrim,
+    sr = geom.sinTrim;
   const wl2: [number, number][] = c.waterline.map((p) => [
     p[0] * cr - p[2] * sr,
     p[1],

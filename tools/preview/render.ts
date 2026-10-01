@@ -46,8 +46,8 @@ function projector(yaw: number, pitch: number) {
     s1 = Math.sin(yaw),
     c2 = Math.cos(pitch),
     s2 = Math.sin(pitch);
-  const cT = Math.cos(model.deckRake),
-    sT = Math.sin(model.deckRake);
+  const cT = Math.cos(model.deckTrim),
+    sT = Math.sin(model.deckTrim);
   // same transform as render.ts's WebGL vertex shader; SVG y is down so negate. d = toward-eye depth.
   return ([x, y, z]: Vec3): P2 => {
     const rx = x * cT - z * sT,
@@ -231,8 +231,8 @@ function renderLines(
       s1 = Math.sin(yaw),
       c2 = Math.cos(pitch),
       s2 = Math.sin(pitch);
-    const cT = Math.cos(model.deckRake),
-      sT = Math.sin(model.deckRake);
+    const cT = Math.cos(model.deckTrim),
+      sT = Math.sin(model.deckTrim);
     let vx = -c2 * s1 * cT + s2 * sT,
       vy = -c2 * c1,
       vz = c2 * s1 * sT + s2 * cT;
@@ -314,8 +314,8 @@ function renderShaded(
     s1 = Math.sin(yaw),
     c2 = Math.cos(pitch),
     s2 = Math.sin(pitch),
-    cT = Math.cos(model.deckRake),
-    sT = Math.sin(model.deckRake);
+    cT = Math.cos(model.deckTrim),
+    sT = Math.sin(model.deckTrim);
   let Vx = -c2 * s1 * cT + s2 * sT,
     Vy = -c2 * c1,
     Vz = c2 * s1 * sT + s2 * cT;

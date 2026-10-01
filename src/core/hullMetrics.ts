@@ -58,7 +58,7 @@ export interface HullMetrics {
   readonly bwl: number;
   readonly draft: number;
   readonly waterline: number;
-  readonly deckRakeDeg: number;
+  readonly deckTrimDeg: number;
   readonly dispVol: number;
   readonly wsa: number;
   readonly waterplaneArea: number;
@@ -139,11 +139,11 @@ export const HULL_METRICS: readonly MetricSpec[] = [
     read: (m) => m.waterline,
   },
   {
-    name: "DECK_RAKE",
+    name: "DECK_TRIM",
     dim: DEG,
-    label: "rake",
-    hint: "Deck rake in degrees, bow up positive",
-    read: (m) => m.deckRakeDeg,
+    label: "trim",
+    hint: "Deck trim in degrees, bow up positive",
+    read: (m) => m.deckTrimDeg,
   },
 
   {
@@ -411,7 +411,7 @@ export function hullMetrics(
     bwl: h.bwl * s,
     draft: h.draft * s,
     waterline: model.waterline * s,
-    deckRakeDeg: (model.deckRake * 180) / Math.PI,
+    deckTrimDeg: (model.deckTrim * 180) / Math.PI,
     dispVol: h.vol * s3,
     wsa: h.wettedArea * s2,
     waterplaneArea: h.waterplaneArea * s2,

@@ -310,7 +310,7 @@ export function Scene({
   const guideIdx = selStationIdx(model, selection);
 
   return (
-    <group rotation={[0, -model.deckRake, 0]}>
+    <group rotation={[0, -model.deckTrim, 0]}>
       {/* the shading mode only picks the material: one geometry, drawn unlit, lit, or zebra-striped */}
       {surfaces.hull && hullGeometry && (
         <mesh

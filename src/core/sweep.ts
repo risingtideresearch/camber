@@ -66,7 +66,7 @@ export interface Column {
   kSpeed: number; // κ|P'| — the two always appear together, so curvature is never divided out
   aC: number; // the centerline y = 0 sits at this constant a in the station plane
   poly: Vtx[]; // the starboard half-outline, closed on the centerline and the deck
-  // The column's top point, and whether it is actually ON the sheer. Near a raked transom the transom trim
+  // The column's top point, and whether it is actually ON the sheer. Near a sloped transom the transom edge
   // can cut a column off well below the sheer, so its first point is a transom edge — testing THAT against
   // the waterline would report the deck as awash when the real deck edge is metres clear.
   topA: number;
@@ -83,8 +83,8 @@ export interface StationGeom {
   // geometry, so it does not move when the design waterline does, and it is defined at every heel.
   keelZ: number;
   lowestSheerZ: number; // lowest actual sheer-edge point in world height
-  cosRake: number;
-  sinRake: number;
+  cosTrim: number;
+  sinTrim: number;
 }
 
 // Reduce an already-swept hull to what cutting needs.
@@ -98,8 +98,8 @@ export function stationGeometry(
   hs: HullSampling,
 ): StationGeom | null {
   const cols: Column[] = [];
-  const cosRake = Math.cos(model.deckRake),
-    sinRake = Math.sin(model.deckRake);
+  const cosTrim = Math.cos(model.deckTrim),
+    sinTrim = Math.sin(model.deckTrim);
   let keelZ = Infinity,
     lowestSheerZ = Infinity;
   const H = 1e-5;
@@ -165,7 +165,7 @@ export function stationGeometry(
     });
   }
   if (cols.length < 3 || !Number.isFinite(lowestSheerZ)) return null;
-  return { cols, keelZ, lowestSheerZ, cosRake, sinRake };
+  return { cols, keelZ, lowestSheerZ, cosTrim, sinTrim };
 }
 
 // ---------- polygon integrals ----------
@@ -291,10 +291,10 @@ export interface Cut {
   xB: number;
   yB: number;
   zB: number;
-  zBWorld: number; // ...and its true world height, once floated at deckRake
+  zBWorld: number; // ...and its true world height, once floated at deckTrim
   wsa: number; // wetted surface area
   // ...and where it acts: the SKIN's own centroid, in the same coordinates as the volume's. Zero-filled when
-  // there is no skin. `wsaZWorld` is its true height once floated at deckRake, matching `zBWorld`.
+  // there is no skin. `wsaZWorld` is its true height once floated at deckTrim, matching `zBWorld`.
   //
   // This is what makes "the shell weighs area × areal density and acts at the skin's own centroid" one line
   // in a weight sheet instead of a guess. Taken over the same clipped outlines the area is, so a cut above
@@ -340,7 +340,7 @@ function heightCoeffs(
   cosPhi: number,
   sinPhi: number,
 ): [number, number, number] {
-  const { cosRake: cr, sinRake: sr } = g;
+  const { cosTrim: cr, sinTrim: sr } = g;
   return [
     c.px * sr * cosPhi - side * c.py * sinPhi,
     c.nx * sr * cosPhi - side * c.ny * sinPhi,
@@ -408,7 +408,7 @@ export function cut(
     capFwd: Vec3 | null = null;
   // waterplane accumulators (upright only) — ∫dA, ∫X dA, ∫Y dA, ∫X² dA, ∫Y² dA, trapezoided over u
   const wantWp =
-    detail && Math.abs(sinPhi) < 1e-12 && Math.abs(g.cosRake) > 1e-9;
+    detail && Math.abs(sinPhi) < 1e-12 && Math.abs(g.cosTrim) > 1e-9;
   let wA = 0,
     wX = 0,
     wY = 0,
@@ -513,10 +513,10 @@ export function cut(
           }
           if (wantWp && bestA < c.aC) {
             // the waterplane strip runs from the skin crossing inboard to the centerline. Its area element
-            // is the volume's own |P'|(1 + κa), divided by cos(rake) because the strip is measured in the
+            // is the volume's own |P'|(1 + κa), divided by cos(trim) because the strip is measured in the
             // tilted station frame while the waterplane is horizontal. Everything on it is affine in a, so
             // the moments up to second order are exact polynomials — no sampling along the strip.
-            const cr2 = g.cosRake,
+            const cr2 = g.cosTrim,
               lo = bestA,
               hi = c.aC;
             const mk = (k: number): number =>
@@ -529,7 +529,7 @@ export function cut(
               W1 = (c.speed * m1 + c.kSpeed * m2) / cr2,
               W2 = (c.speed * m2 + c.kSpeed * m3) / cr2;
             // world horizontal x on the waterplane, and athwartships y, both affine in a
-            const ax = (c.px - g.sinRake * wlZ) / cr2,
+            const ax = (c.px - g.sinTrim * wlZ) / cr2,
               bx = c.nx / cr2,
               ay = side * c.py,
               by = side * c.ny;
@@ -586,11 +586,11 @@ export function cut(
     xB,
     yB,
     zB,
-    zBWorld: xB * g.sinRake + zB * g.cosRake,
+    zBWorld: xB * g.sinTrim + zB * g.cosTrim,
     wsa,
     wsaX,
     wsaZ,
-    wsaZWorld: wsaX * g.sinRake + wsaZ * g.cosRake,
+    wsaZWorld: wsaX * g.sinTrim + wsaZ * g.cosTrim,
     draft,
     deckDown,
     sheerZ,

@@ -1123,7 +1123,7 @@ function GeometryReadout({
           <p className="whint">
             World-vertical planes. Longitudinal position and spacing are
             measured along the deck-flat z = 0 axis, not perpendicular to the
-            planes. With rake, the centroid can have a different x.
+            planes. With trim, the centroid can have a different x.
           </p>
         )}
       {failure ? (

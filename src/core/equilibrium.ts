@@ -8,11 +8,11 @@ import { cut, heightSpan, stationGeometry, type StationGeom } from "./sweep";
 export type EquilibriumMode = "displacement" | "balance";
 export const MASS_TOLERANCE = 1e-5;
 export const BALANCE_TOLERANCE = 1e-5; // fraction of hull length
-const MAX_RAKE = Math.PI / 6;
+const MAX_TRIM = Math.PI / 6;
 
 export interface EquilibriumResult {
   readonly waterline: number;
-  readonly deckRake: number;
+  readonly deckTrim: number;
   readonly volumeError: number; // relative
   readonly balanceError: number | null; // metres, horizontal separation of B and G
   readonly values: LoadingValues;
@@ -37,7 +37,7 @@ function gravity(model: Model, geom: StationGeom, values: LoadingValues) {
   )
     throw new Error("Balancing requires finite LCG and VCG values.");
   const x = model.plan.at(0)[0] + values.lcg / scale;
-  const z = (values.vcg / scale + geom.keelZ - x * geom.sinRake) / geom.cosRake;
+  const z = (values.vcg / scale + geom.keelZ - x * geom.sinTrim) / geom.cosTrim;
   return { x, z };
 }
 
@@ -58,12 +58,12 @@ export function equilibriumResidual(
   return {
     volumeError: (c.vol - target) / target,
     balanceError: g
-      ? ((c.xB - g.x) * geom.cosRake - (c.zB - g.z) * geom.sinRake) * scale
+      ? ((c.xB - g.x) * geom.cosTrim - (c.zB - g.z) * geom.sinTrim) * scale
       : null,
   };
 }
 
-/** Pure, bounded solve. Sampling is deck-frame geometry, independent of rake and
+/** Pure, bounded solve. Sampling is deck-frame geometry, independent of trim and
  * waterline, so every trial reuses it. Never mutates a model or the live store. */
 export function solveEquilibrium(
   model: Model,
@@ -81,22 +81,22 @@ export function solveEquilibrium(
     throw new Error(
       "Displacement and water density must be finite and positive.",
     );
-  if (Math.abs(model.deckRake) > MAX_RAKE)
-    throw new Error("Equilibrium solving supports rake between −30° and 30°.");
+  if (Math.abs(model.deckTrim) > MAX_TRIM)
+    throw new Error("Equilibrium solving supports trim between −30° and 30°.");
   const scale = unitScale(model.unit, "m");
   const target = values.mass / (density * 1000 * scale ** 3);
   const initial = geometry(model, sampling);
   const g = mode === "balance" ? gravity(model, initial, values) : null;
   const length = loa(model);
 
-  const at = (rake: number) => {
-    const geom = geometry({ ...model, deckRake: rake }, sampling);
+  const at = (trim: number) => {
+    const geom = geometry({ ...model, deckTrim: trim }, sampling);
     // Do not solve by treating the open deck as a watertight cap.
     let lo = heightSpan(geom, 0)[0];
     let hi = geom.lowestSheerZ;
     if (cut(geom, 0, hi).vol < target)
       throw new Error(
-        "The requested displacement would immerse the sheer at this rake.",
+        "The requested displacement would immerse the sheer at this trim.",
       );
     for (let i = 0; i < 48; i++) {
       const mid = (lo + hi) / 2;
@@ -115,20 +115,20 @@ export function solveEquilibrium(
           !column.transom &&
           column.pts.some(
             ({ pos }) =>
-              pos[0] * geom.sinRake + pos[2] * geom.cosRake < -waterline,
+              pos[0] * geom.sinTrim + pos[2] * geom.cosTrim < -waterline,
           ),
       )
     )
       throw new Error("The immersed hull has an open section.");
     const balance = g
-      ? (c.xB - g.x) * geom.cosRake - (c.zB - g.z) * geom.sinRake
+      ? (c.xB - g.x) * geom.cosTrim - (c.zB - g.z) * geom.sinTrim
       : 0;
-    return { geom, c, waterline, rake, balance };
+    return { geom, c, waterline, trim, balance };
   };
 
-  let current = at(model.deckRake);
+  let current = at(model.deckTrim);
   if (g) {
-    // Damped Newton in rake, with a fresh bracketed sinkage solve at every trial.
+    // Damped Newton in trim, with a fresh bracketed sinkage solve at every trial.
     for (
       let i = 0;
       i < 35 && Math.abs(current.balance) > length * BALANCE_TOLERANCE;
@@ -138,10 +138,10 @@ export function solveEquilibrium(
       let probe: ReturnType<typeof at>;
       let delta = step;
       try {
-        probe = at(current.rake + step);
+        probe = at(current.trim + step);
       } catch {
         delta = -step;
-        probe = at(current.rake - step);
+        probe = at(current.trim - step);
       }
       const derivative = (probe.balance - current.balance) / delta;
       if (!Number.isFinite(derivative) || Math.abs(derivative) < length * 1e-8)
@@ -154,10 +154,10 @@ export function solveEquilibrium(
       );
       let next: ReturnType<typeof at> | null = null;
       for (let damping = 1; damping >= 1 / 128; damping /= 2) {
-        const rake = current.rake + change * damping;
-        if (Math.abs(rake) > MAX_RAKE) continue;
+        const trim = current.trim + change * damping;
+        if (Math.abs(trim) > MAX_TRIM) continue;
         try {
-          const trial = at(rake);
+          const trial = at(trim);
           if (Math.abs(trial.balance) < Math.abs(current.balance)) {
             next = trial;
             break;
@@ -186,14 +186,14 @@ export function solveEquilibrium(
     );
   return {
     waterline: current.waterline,
-    deckRake: current.rake,
+    deckTrim: current.trim,
     volumeError,
     balanceError: g ? current.balance * scale : null,
     values: {
       ...values,
       vcg: g
-        ? (g.x * current.geom.sinRake +
-            g.z * current.geom.cosRake -
+        ? (g.x * current.geom.sinTrim +
+            g.z * current.geom.cosTrim -
             current.geom.keelZ) *
           scale
         : values.vcg,

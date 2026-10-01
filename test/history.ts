@@ -14,8 +14,8 @@ let time = 1000;
 const a = defaultHull();
 const b = { ...a, waterline: 100 };
 const c = { ...a, waterline: 200 };
-const d = { ...a, deckRake: 0.1 };
-const e = { ...a, deckRake: 0.2 };
+const d = { ...a, deckTrim: 0.1 };
+const e = { ...a, deckTrim: 0.2 };
 
 // ---------- one line of edits: recording, coalescing, undo and redo ----------
 const history = createDocumentHistory({
@@ -82,7 +82,7 @@ history.record({
   before: a,
   after: d,
   touched: 8,
-  command: { type: "setDeckRakeDeg", deg: 5 },
+  command: { type: "setDeckTrimDeg", deg: 5 },
   author: "a",
 });
 const branched = history.timeline();
@@ -140,9 +140,9 @@ const shapeOf = (): string =>
     .join(" ");
 const beforeWandering = shapeOf();
 const otherWindow = branched.steps.find((step) => step.author === "b")!;
-const rake = branched.steps.find((step) => step.kind === "setDeckRakeDeg")!;
+const trim = branched.steps.find((step) => step.kind === "setDeckTrimDeg")!;
 history.travel(otherWindow.id);
-history.travel(rake.id);
+history.travel(trim.id);
 history.undo();
 history.redo();
 check(
@@ -150,7 +150,7 @@ check(
   "travelling reorders nothing: the moments stay in the order they were made",
 );
 check(
-  history.timeline().current === rake.id,
+  history.timeline().current === trim.id,
   "and the wandering still ends where it was aimed",
 );
 
@@ -260,7 +260,7 @@ history.record({
   before: e,
   after: d,
   touched: 8,
-  command: { type: "setDeckRakeDeg", deg: 5 },
+  command: { type: "setDeckTrimDeg", deg: 5 },
   author: "a",
 });
 check(

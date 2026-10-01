@@ -101,13 +101,13 @@ type Authored = Pick<HullState, "sheerPlan" | "sheerTrim" | "stations">;
 
 export const bounds = (model: Model): Bounds => boundsOf(model.viewLen);
 
-// ---------- deck rake (world frame) ----------
-// The hull is built deck-flat (deck = z = 0). The deck rake is a rigid rotation of the whole hull by
-// model.deckRake about the transverse (y) axis through the sheer origin (x = 0, z = 0). worldZ is the true
-// vertical height of a deck-frame point once floated at that rake; the waterline is the horizontal plane at
+// ---------- deck trim (world frame) ----------
+// The hull is built deck-flat (deck = z = 0). The deck trim is a rigid rotation of the whole hull by
+// model.deckTrim about the transverse (y) axis through the sheer origin (x = 0, z = 0). worldZ is the true
+// vertical height of a deck-frame point once floated at that trim; the waterline is the horizontal plane at
 // worldZ = −waterline, so immersion(x, z) > 0 means the point is submerged.
 export const worldZ = (model: Model, x: number, z: number): number =>
-  x * Math.sin(model.deckRake) + z * Math.cos(model.deckRake);
+  x * Math.sin(model.deckTrim) + z * Math.cos(model.deckTrim);
 
 export const immersion = (model: Model, x: number, z: number): number =>
   -model.waterline - worldZ(model, x, z);

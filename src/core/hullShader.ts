@@ -2,7 +2,7 @@
 //
 // Three auto-injects position/normal/modelMatrix/modelViewMatrix/viewMatrix/projectionMatrix/cameraPosition/
 // isOrthographic into a ShaderMaterial, so there is no manual attribute/uniform-location bookkeeping the old
-// raw-WebGL program needed. Deck rake is NOT part of this shader — it is a rigid rotation baked into the
+// raw-WebGL program needed. Deck trim is NOT part of this shader — it is a rigid rotation baked into the
 // scene's own <group> transform (see hullGeometry.ts's header comment), so modelMatrix already carries it and
 // mat3(modelMatrix) is exact for normals (rotation only, no scale — no inverse-transpose needed).
 

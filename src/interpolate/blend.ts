@@ -35,7 +35,7 @@ export interface Hull {
 // and the viewer holds one setting across every blend it shows, so they are supplied rather than mixed.
 export interface Trim {
   waterline: number;
-  deckRake: number;
+  deckTrim: number;
 }
 
 // ---------- the blend: Σ wᵢ·Vᵢ componentwise over the shared topology ----------
@@ -81,7 +81,7 @@ export function blendState(
       })),
     })),
     waterline: trim.waterline,
-    deckRake: trim.deckRake,
+    deckTrim: trim.deckTrim,
   };
 }
 

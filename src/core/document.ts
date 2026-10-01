@@ -66,7 +66,7 @@ export interface Station {
   points: StationPoint[]; // all stations have the same number of points S ≥ 2
 }
 
-// The transom: a raked plane at the stern given by two profile points, top and bottom. The hull keeps the
+// The transom: a trimmed plane at the stern given by two profile points, top and bottom. The hull keeps the
 // forward side; the cut is a solid face.
 export interface TransomPoint {
   x: number;
@@ -78,7 +78,7 @@ export interface HullDocument {
   name: string;
   unit: Unit;
   waterline: number;
-  deckRakeDeg: number;
+  deckTrimDeg: number;
   sheerPlan: PlanPoint[]; // ≥ 2 points
   sheerTrim: TrimPoint[]; // ≥ 2 points
   transom: TransomPoint[]; // = 2 points

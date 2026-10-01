@@ -163,10 +163,10 @@ function measureSliceAt(
   const toSheet = (p: Vec3): Vec3 => [
     (p[0] - originX) * s,
     p[1] * s,
-    (p[0] * geom.sinRake + p[2] * geom.cosRake - geom.keelZ) * s,
+    (p[0] * geom.sinTrim + p[2] * geom.cosTrim - geom.keelZ) * s,
   ];
   const toBoundary = (p: Vec3): Vec3 => [
-    (p[0] - (p[2] * geom.sinRake) / geom.cosRake - originX) * s,
+    (p[0] - (p[2] * geom.sinTrim) / geom.cosTrim - originX) * s,
     p[1] * s,
     toSheet(p)[2],
   ];
@@ -175,15 +175,15 @@ function measureSliceAt(
     // the deck-flat z=0 axis, measured from the book's x origin.
     const normal: Vec3 =
       shape === "plane"
-        ? [geom.sinRake, 0, geom.cosRake]
+        ? [geom.sinTrim, 0, geom.cosTrim]
         : shape === "transverse"
-          ? [geom.cosRake, 0, -geom.sinRake]
+          ? [geom.cosTrim, 0, -geom.sinTrim]
           : [0, 1, 0];
     const offset =
       shape === "plane"
         ? geom.keelZ + positionMetres / s
         : shape === "transverse"
-          ? (originX + positionMetres / s) * geom.cosRake
+          ? (originX + positionMetres / s) * geom.cosTrim
           : positionMetres / s;
     const result = intersect(normal, offset, toSheet, s, limits, toBoundary);
     const m = result.measures;
@@ -194,7 +194,7 @@ function measureSliceAt(
     const centroid: Vec3 = [
       mx,
       cg[1] / s,
-      (cg[2] / s + geom.keelZ - mx * geom.sinRake) / geom.cosRake,
+      (cg[2] / s + geom.keelZ - mx * geom.sinTrim) / geom.cosTrim,
     ];
     return {
       measures: m,
@@ -250,7 +250,7 @@ function measureSliceAt(
   const curve = [...starboard, ...port];
   const cx = px + half.a * nx,
     centroid: Vec3 = [cx, 0, half.z],
-    worldCentroidZ = cx * geom.sinRake + half.z * geom.cosRake;
+    worldCentroidZ = cx * geom.sinTrim + half.z * geom.cosTrim;
 
   const segments = (points: readonly Vec3[]): [Vec3, Vec3][] =>
     points.slice(1).map((p, i) => [points[i], p]);
@@ -316,7 +316,7 @@ function measureSliceAt(
     const centroid: Vec3 = [
       mx,
       cg[1] / s,
-      (cg[2] / s + geom.keelZ - mx * geom.sinRake) / geom.cosRake,
+      (cg[2] / s + geom.keelZ - mx * geom.sinTrim) / geom.cosTrim,
     ];
     return {
       measures,

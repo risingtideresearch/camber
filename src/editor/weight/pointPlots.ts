@@ -320,7 +320,7 @@ export function snapTargets(
     if (!item.name) continue;
     for (const [fieldKey, field] of Object.entries(item.fields)) {
       if (field.k !== "cut") continue;
-      // A world-vertical transverse plane is not a constant sheet-x coordinate with rake.
+      // A world-vertical transverse plane is not a constant sheet-x coordinate with trim.
       if (field.shape === "transverse") continue;
       const position = resultAt(results, item.id, fieldKey, "pos");
       if (!position?.reading || position.error) continue;

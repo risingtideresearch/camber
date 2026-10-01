@@ -242,7 +242,7 @@ export function stationLine(
 
 export type Proj = (p: Vec3) => [number, number];
 
-// the swept section at the cut, projected into a 2D view → its true heading/rake (not a plain vertical cut).
+// the swept section at the cut, projected into a 2D view → its true heading/trim (not a plain vertical cut).
 // A caller that already has the row at the cut can pass it in to avoid recomputing.
 export function cutTrace(
   model: Model,
@@ -682,14 +682,14 @@ export function drawProfile(
     { "text-anchor": "end", "font-size": 10, fill: COL.deck },
     "flat deck",
   );
-  // design waterline: horizontal in world ⇒ a raked line in this deck-frame profile (slope = the rake).
+  // design waterline: horizontal in world ⇒ a trimmed line in this deck-frame profile (slope = the trim).
   // Runs from the transom to the hull's closure (forwardLimit, in u → its x on the plan).
   const xFwd = perfStep(
       "Hull forward limit",
       () => model.plan.at(forwardLimit(model))[0],
     ),
-    wlS = Math.sin(model.deckRake),
-    wlC = Math.cos(model.deckRake),
+    wlS = Math.sin(model.deckTrim),
+    wlC = Math.cos(model.deckTrim),
     zWL = (x: number): number => (-model.waterline - x * wlS) / wlC;
   svg.append(
     el("line", {
@@ -880,7 +880,7 @@ export function drawProfile(
     }
   }
   // The authored stations in side view, each in its own accent colour. Drawn through the station's own frame,
-  // so each shows the fan's true rake — running inboard shifts x — rather than a plumb line at the station's
+  // so each shows the fan's true trim — running inboard shifts x — rather than a plumb line at the station's
   // x. Cut to the hull, exactly as the mesh cuts it; but whole while the knot-longitudinal overlay is up,
   // since there the subject is the authored construction geometry the longitudinals loft between, not the
   // finished surface. Non-interactive, like the overlay it accompanies.
@@ -907,7 +907,7 @@ export function drawProfile(
   // every station's knots + the loft curve each knot traces, in side view
   if (knotLongs)
     knotOverlayWorld(svg, model, (p) => [v.mapX(p[0]), v.zScreenP(p[2])]);
-  // cut station — true profile rake (the fan shifts x as the section runs inboard to the keel)
+  // cut station — true profile trim (the fan shifts x as the section runs inboard to the keel)
   cutTrace(model, svg, (p) => [v.mapX(p[0]), v.zScreenP(p[2])], cut);
   // keel dot at the section's deepest point — the keel flag and the last point (y snapped to 0) come from
   // the converged trim in sweptSection, so they are sample-count independent
@@ -1279,9 +1279,9 @@ export function drawCutStation(
     "centerline",
   );
   // (no keel-point marker here — it would sit right on the seam and hide the very continuity being inspected)
-  // the design waterline across the section: the height where worldZ = −waterline (sinkage + rake)
-  const wlS = Math.sin(model.deckRake),
-    wlC = Math.cos(model.deckRake),
+  // the design waterline across the section: the height where worldZ = −waterline (sinkage + trim)
+  const wlS = Math.sin(model.deckTrim),
+    wlC = Math.cos(model.deckTrim),
     wlLine: Vec2[] = [];
   for (let i = 0; i <= 48; i++) {
     const n = b.nMin + ((b.nMax - b.nMin) * i) / 48,

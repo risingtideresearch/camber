@@ -27,7 +27,7 @@ import "./HistoryPanel.css";
 // only name one, and every other window follows because the jump is an ordinary authoritative transition.
 
 // What a gesture was working on, taken from the slices it touched. The document's own division of the hull is
-// also the reader's: "stations" is the section editor, "plan" the sheer, "scalars" the waterline and the rake,
+// also the reader's: "stations" is the section editor, "plan" the sheer, "scalars" the waterline and the trim,
 // "weights" the weight estimate.
 // Each keeps a hue of its own, down the dots and in the pills, so a run of work on one part of the boat reads
 // as one colour in the margin — which is the thing worth telling apart at a glance. (Which WINDOW made an edit

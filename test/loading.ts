@@ -37,7 +37,7 @@ const values = {
   lcg: metrics.lcb,
 };
 
-// Matching displacement preserves rake and handles absent CG.
+// Matching displacement preserves trim and handles absent CG.
 const match = solveEquilibrium(
   model,
   sampling,
@@ -45,7 +45,7 @@ const match = solveEquilibrium(
   1.025,
   "displacement",
 );
-assert.equal(match.deckRake, model.deckRake);
+assert.equal(match.deckTrim, model.deckTrim);
 assert.equal(match.balanceError, null);
 assert.ok(match.waterline < model.waterline);
 assert.ok(Math.abs(match.volumeError) < MASS_TOLERANCE);
@@ -56,29 +56,29 @@ near(
   "G at B preserves attitude",
 );
 
-// Recover a known raked equilibrium. G is ABOVE B on the same world vertical,
+// Recover a known trimmed equilibrium. G is ABOVE B on the same world vertical,
 // so its model x is deliberately different from LCB. Feed it in the input frame.
-for (const rake of [-0.06, 0.055]) {
-  const target = { ...model, deckRake: rake, waterline: model.waterline - 100 };
+for (const trim of [-0.06, 0.055]) {
+  const target = { ...model, deckTrim: trim, waterline: model.waterline - 100 };
   const geom = stationGeometry(target, sampling)!;
   const b = cut(geom, 0, -target.waterline);
   const rise = 200;
-  const gx = b.xB + rise * Math.sin(rake);
-  const gz = b.zB + rise * Math.cos(rake);
-  const input = { ...model, deckRake: 0.025 };
+  const gx = b.xB + rise * Math.sin(trim);
+  const gz = b.zB + rise * Math.cos(trim);
+  const input = { ...model, deckTrim: 0.025 };
   const originalGeom = stationGeometry(input, sampling)!;
   const s = unitScale(model.unit, "m");
   const loading = {
     mass: b.vol * s ** 3 * 1025,
     lcg: (gx - model.plan.at(0)[0]) * s,
     vcg:
-      (gx * originalGeom.sinRake +
-        gz * originalGeom.cosRake -
+      (gx * originalGeom.sinTrim +
+        gz * originalGeom.cosTrim -
         originalGeom.keelZ) *
       s,
   };
   const solved = solveEquilibrium(input, sampling, loading, 1.025, "balance");
-  near(solved.deckRake, rake, 2e-5, "recovers rake with transformed gravity");
+  near(solved.deckTrim, trim, 2e-5, "recovers trim with transformed gravity");
   near(solved.waterline, target.waterline, 0.1, "recovers waterline");
   const final = { ...model, ...solved };
   const residual = equilibriumResidual(
@@ -120,7 +120,7 @@ const mResult = solveEquilibrium(
   1.025,
   "balance",
 );
-near(mmResult.deckRake, mResult.deckRake, 1e-7, "unit-independent rake");
+near(mmResult.deckTrim, mResult.deckTrim, 1e-7, "unit-independent trim");
 near(
   mmResult.waterline / 1000,
   mResult.waterline,
@@ -243,7 +243,7 @@ assert.equal(server.snapshot().session.loading?.mass, values.mass);
 const command: HullCommand = {
   type: "applyFloatingAttitude",
   waterline: mmResult.waterline,
-  deckRake: mmResult.deckRake,
+  deckTrim: mmResult.deckTrim,
   expectedRevision: server.snapshot().revision,
   expectedLoading: loadingKey(server.snapshot().session.loading),
   vcg: mmResult.values.vcg,
@@ -252,7 +252,7 @@ const command: HullCommand = {
 assert.equal(sameGesture(command, command), false);
 assert.ok(!("rejected" in server.execute({ author: "loading", command })));
 assert.equal(server.snapshot().state.hull.waterline, mmResult.waterline);
-assert.equal(server.snapshot().state.hull.deckRake, mmResult.deckRake);
+assert.equal(server.snapshot().state.hull.deckTrim, mmResult.deckTrim);
 assert.equal(
   server.snapshot().session.lastBalance?.revision,
   server.snapshot().revision,
@@ -263,7 +263,7 @@ assert.equal(
   server.snapshot().state.hull.waterline,
   start.state.hull.waterline,
 );
-assert.equal(server.snapshot().state.hull.deckRake, start.state.hull.deckRake);
+assert.equal(server.snapshot().state.hull.deckTrim, start.state.hull.deckTrim);
 assert.equal(server.snapshot().canUndo, false);
 assert.ok(server.redo());
 const fresh = {
@@ -292,7 +292,7 @@ assert.ok(
 );
 assert.deepEqual(server.snapshot().session.loading, stabilityBefore);
 assert.equal(server.snapshot().state.hull.waterline, scenarioCommand.waterline);
-assert.equal(server.snapshot().state.hull.deckRake, scenarioCommand.deckRake);
+assert.equal(server.snapshot().state.hull.deckTrim, scenarioCommand.deckTrim);
 assert.equal(
   server.snapshot().session.lastBalance?.loadingKey,
   loadingKey(DEFAULT_LOADING),

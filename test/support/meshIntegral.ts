@@ -11,7 +11,7 @@
 //
 // Every vertex is rotated into the HEELED WORLD frame, where the waterplane is horizontal at Z = wlZ:
 //
-//     X = x·cos r − z·sin r ,  Y = y ,  Z = x·sin r + z·cos r     (deckRake, about the transverse axis)
+//     X = x·cos r − z·sin r ,  Y = y ,  Z = x·sin r + z·cos r     (deckTrim, about the transverse axis)
 //     Y' = Y·cos φ + Z·sin φ ,  Z' = Z·cos φ − Y·sin φ            (heel, about the longitudinal axis)
 //
 // Both are proper rotations, so volume is preserved. Each triangle is clipped to Z' ≤ wlZ, then two surface
@@ -70,8 +70,8 @@ export function meshImmersed(
     buildHullMesh(sampling, true, false, false).hull,
     buildTransomMesh(model, sampling),
   ];
-  const cr = Math.cos(model.deckRake),
-    sr = Math.sin(model.deckRake),
+  const cr = Math.cos(model.deckTrim),
+    sr = Math.sin(model.deckTrim),
     c = Math.cos(phi),
     s = Math.sin(phi);
   const toHeeled = (p: P3): P3 => {

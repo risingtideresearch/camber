@@ -27,9 +27,9 @@ export function buildPreviewSvg(model: Model): string {
     s1 = Math.sin(YAW),
     c2 = Math.cos(PITCH),
     s2 = Math.sin(PITCH),
-    cT = Math.cos(model.deckRake),
-    sT = Math.sin(model.deckRake);
-  // world (x,y,z) → screen (sx, sy): deck-rake about y, then yaw about up (z), then pitch. SVG y points down,
+    cT = Math.cos(model.deckTrim),
+    sT = Math.sin(model.deckTrim);
+  // world (x,y,z) → screen (sx, sy): deck-trim about y, then yaw about up (z), then pitch. SVG y points down,
   // so negate. Centering/scaling is handled afterward by fitting a viewBox to the projected bounds.
   const proj = ([x, y, z]: Vec3): [number, number] => {
     const rx = x * cT - z * sT,

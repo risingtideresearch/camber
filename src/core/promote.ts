@@ -180,7 +180,7 @@ function bsplineRefit(pts: Vec2[], N: number): Vec2[] {
 // the trim graph, the section curves) rather than re-deriving them. The trim scalars are irrelevant here —
 // nothing below reads the waterline — so they are zeroed rather than carried.
 const modelOf = (data: HullData): Model =>
-  assemble({ ...data, waterline: 0, deckRake: 0 });
+  assemble({ ...data, waterline: 0, deckTrim: 0 });
 
 // The stations of a hull, back in writable form. Promotion builds its hulls up in passes, and `interpretHullCommand`
 // hands back authored state, so this is the crossing between the two.

@@ -75,7 +75,7 @@ export const resolutionFor = (perf: PerfSettings, working: boolean) =>
  * Everything a sweep depends on, as one comparable string: two equal keys are the same lattice.
  *
  * The GEOMETRY half is the four authored slice revisions and nothing else — `computeHullSampling` reads the
- * plan curve, the trim graph, the transom and the loft, so the waterline, the deck rake and the cut station
+ * plan curve, the trim graph, the transom and the loft, so the waterline, the deck trim and the cut station
  * are deliberately absent. It is exposed on its own because the clock below must watch geometry alone: a
  * waterline drag or a cut-station scrub cannot stale a sampling and must not read as a gesture to draft
  * through. `redraws` rides with it — it is how the Performance toggle forces one more sweep with nothing

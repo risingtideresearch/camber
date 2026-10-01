@@ -1,6 +1,6 @@
 // Centerline-fairness regression test.
 //
-// The hull's swept section planes are raked in plan (their transverse axis is perpendicular to the sheer
+// The hull's swept section planes are trimmed in plan (their transverse axis is perpendicular to the sheer
 // tangent, not the boat centerline), so a section point's world-x grows with depth and the keel sits well
 // forward of the sheer. Mirror symmetry then made the keel a forward x-cusp, and a TRUE transverse
 // (constant-x) slice rode up over the centerline into a ridge — the visible "pucker", worst at a narrow,

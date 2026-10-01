@@ -4,7 +4,7 @@ import { UNITS, type Unit } from "../core/document";
 import { useDocumentDispatch, useDocumentRuntime } from "./documentStoreHooks";
 import "./TrimControls.css";
 
-// The design-waterline and deck-rake sliders, plus the document's unit. React-owned: their values are read
+// The design-waterline and deck-trim sliders, plus the document's unit. React-owned: their values are read
 // from the model (the single source of truth) and each change pushes back to the model, which triggers a
 // redraw everywhere.
 
@@ -13,8 +13,8 @@ export function TrimControls() {
   const dispatch = useDocumentDispatch();
   const onWaterline = (depth: number) =>
     void dispatch({ type: "setWaterline", depth });
-  const onRake = (deg: number) =>
-    void dispatch({ type: "setDeckRakeDeg", deg });
+  const onTrim = (deg: number) =>
+    void dispatch({ type: "setDeckTrimDeg", deg });
   // Changing the unit asks which of the two things the user meant: keep the hull the same PHYSICAL size and
   // convert the numbers (2000 mm → 2 m), or keep the numbers and reinterpret them at the new unit's scale
   // (2000 mm → 2000 m). Neither is a safe default, so it is asked rather than assumed.
@@ -44,7 +44,7 @@ export function TrimControls() {
       void dispatch({ type: "setLoa", length });
   };
   const waterline = model.waterline; // depth below the sheer origin (deck datum), in model.unit
-  const rakeDeg = (model.deckRake * 180) / Math.PI;
+  const trimDeg = (model.deckTrim * 180) / Math.PI;
   // the slider's range is a proportion of the hull's own length — the coordinates are absolute in the
   // document's unit now, so a fixed 0..1400 would be most of a 1000 mm dinghy and nothing on a 12 m boat
   const len = loa(model) || 1,
@@ -72,18 +72,18 @@ export function TrimControls() {
       </label>
       <label
         className="ctl"
-        title="Deck rake — bow-up trim angle; rotates the whole hull about the sheer origin"
+        title="Deck trim — bow-up trim angle; rotates the whole hull about the sheer origin"
       >
-        Rake
+        Trim
         <input
           type="range"
           min="-12"
           max="12"
           step="0.5"
-          value={rakeDeg}
-          onChange={(e) => onRake(parseFloat(e.target.value))}
+          value={trimDeg}
+          onChange={(e) => onTrim(parseFloat(e.target.value))}
         />
-        <span className="ctlval">{rakeDeg.toFixed(1)}°</span>
+        <span className="ctlval">{trimDeg.toFixed(1)}°</span>
       </label>
       <label
         className="ctl"

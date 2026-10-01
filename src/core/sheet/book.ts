@@ -105,7 +105,7 @@ export interface ScalarField {
  *
  * The frame is the SHEET's, not the drawing's: x from the transom, y from the centreline (starboard
  * positive), z above the keel baseline — the same frame `hullMetrics.ts` reports `shellLcg` and `shellVcg`
- * in, so a formula never has to know the hull is authored deck-flat with rake applied as a rotation.
+ * in, so a formula never has to know the hull is authored deck-flat with trim applied as a rotation.
  */
 export interface PointField {
   readonly k: "point";

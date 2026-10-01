@@ -92,7 +92,7 @@ export function computeLoading(request: LoadingRequest): LoadingProposal {
     model = {
       ...model,
       waterline: model.waterline + 0.65 * (solved.waterline - model.waterline),
-      deckRake: model.deckRake + 0.65 * (solved.deckRake - model.deckRake),
+      deckTrim: model.deckTrim + 0.65 * (solved.deckTrim - model.deckTrim),
     };
     values = evaluateLoading(request.book!, model, sampling);
     const residual = equilibriumResidual(
@@ -112,7 +112,7 @@ export function computeLoading(request: LoadingRequest): LoadingProposal {
       solveEquilibrium(model, sampling, values, request.density, request.mode);
       return {
         waterline: model.waterline,
-        deckRake: model.deckRake,
+        deckTrim: model.deckTrim,
         values,
         ...residual,
         iterations: iteration,

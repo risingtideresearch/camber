@@ -199,13 +199,26 @@ ok(m.stations.length === 2, "default has 2 stations");
 // ---- json round-trip ----
 {
   const text = buildJson(m);
+  const exported = JSON.parse(text);
+  ok(
+    "deckTrimDeg" in exported && !("deckRakeDeg" in exported),
+    "exports use deck trim",
+  );
+  const previous = { ...exported, deckRakeDeg: 4.5 };
+  delete previous.deckTrimDeg;
+  ok(
+    Math.abs(
+      parseDocument(JSON.stringify(previous)).deckTrim - (4.5 * Math.PI) / 180,
+    ) < 1e-12,
+    "earlier v2 deck angle still imports",
+  );
   const p = parseDocument(text);
   ok(p.topology.stationCount === 2, "round-trip keeps the station count");
   ok(p.hull.unit === "mm", "round-trip keeps the unit");
   const m2 = assemble({
     ...p.hull,
     waterline: p.waterline,
-    deckRake: p.deckRake,
+    deckTrim: p.deckTrim,
   });
   let worst = 0;
   for (let i = 0; i <= 20; i++) {
@@ -263,6 +276,7 @@ ok(m.stations.length === 2, "default has 2 stations");
   const v2 = convertV1ToV2(v1 as never);
   ok(v2.version === 2, "conversion tags v2");
   ok(v2.unit === "mm", "conversion declares mm");
+  ok(v2.deckTrimDeg === 0, "v1 angle converts to deck trim");
   ok(
     v2.stations.length === 2,
     `linear handoff → 2 stations (got ${v2.stations.length})`,
@@ -314,7 +328,7 @@ ok(m.stations.length === 2, "default has 2 stations");
 {
   // a hull's surface, densely sampled — the yardstick for "promotion didn't move anything"
   const surface = (d: HullData): number[] => {
-    const mm = assemble({ ...structuredClone(d), waterline: 0, deckRake: 0 });
+    const mm = assemble({ ...structuredClone(d), waterline: 0, deckTrim: 0 });
     const out: number[] = [];
     for (let i = 0; i <= 24; i++) {
       const s = sweptSection(mm, i / 24, 4, true);
@@ -431,7 +445,7 @@ ok(m.stations.length === 2, "default has 2 stations");
     { name: "B", data: fam[1] },
   ];
   const d0 = defaultHull();
-  const TRIM = { waterline: d0.waterline, deckRake: d0.deckRake };
+  const TRIM = { waterline: d0.waterline, deckTrim: d0.deckTrim };
   const at = (w: number[]): HullState => blendState(hulls, w, TRIM);
   ok(
     worstDiff(surfA, surface(hullOf(assemble(at([1, 0]))))) < 1e-6,

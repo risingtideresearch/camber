@@ -61,7 +61,7 @@ export function hullViolations(
   // The waterline is documented as a depth below the deck datum, but nothing in the parser or the editor
   // clamps it, so a negative one is a hull drawn with its waterline above the deck — odd, not invalid.
   if (!finite(state.waterline)) out.push("waterline must be a finite number");
-  if (!finite(state.deckRake)) out.push("deckRake must be a finite number");
+  if (!finite(state.deckTrim)) out.push("deckTrim must be a finite number");
 
   // ---- the sheer plan: a control polygon read as a function of x ----
   const plan = state.sheerPlan;
