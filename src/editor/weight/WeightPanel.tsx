@@ -91,6 +91,10 @@ import { hullOutlines, spreadRegion } from "../../core/sheet/points";
 import { EMPTY_GRADIENT, LENGTH } from "../../core/sheet/quantity";
 import { naturalUnit } from "../../core/sheet/units";
 import { roleTotals } from "../../core/sheet/rollups";
+import {
+  rollupSampleKey,
+  type SampleRollup,
+} from "../../core/sheet/sampleRollup";
 import { roleSpec } from "../../core/sheet/roles";
 import { PointViews, type Move, type PlottedPoint } from "./PointViews";
 import { plotCuts, plotPoints, snapTargets } from "./pointPlots";
@@ -109,6 +113,7 @@ import {
   ComputedInspector,
   Inspector,
   OutputInspector,
+  RollupUsesInspector,
   UsesInspector,
   type Go,
 } from "./Inspector";
@@ -329,6 +334,13 @@ function WeightPanelContents() {
     setFocus({ item: itemId, field: fieldKey, leaf });
   };
 
+  const openRollup = (key: string, value: string) => {
+    setDestination("sheet");
+    setViewId(facetView(key, value).id);
+    setFocus(null);
+    setRollupSelection(null);
+  };
+
   const createItem = (filing?: NewItemFiling) => {
     const id = newId();
     send({ type: "addItem", id, name: "", after: book.items.length - 1 });
@@ -406,13 +418,7 @@ function WeightPanelContents() {
                 setFocus(null);
                 setRollupSelection(null);
               }}
-              onOpenFacet={(key, value) => {
-                // The explorer's funnel: a node you were looking at becomes the view you are editing in, with
-                // the same scope it drew. No view-builder to learn, because there is nothing to build.
-                setViewId(facetView(key, value).id);
-                setFocus(null);
-                setRollupSelection(null);
-              }}
+              onOpenFacet={openRollup}
               onAddItem={createItem}
               send={send}
             />
@@ -512,6 +518,7 @@ function WeightPanelContents() {
                   rollupSelection,
                   setRollupSelection,
                   go,
+                  openRollup,
                   send,
                   groupFacet,
                   model,
@@ -598,6 +605,7 @@ interface BodyProps {
   readonly rollupSelection: RollupSelection | null;
   readonly setRollupSelection: (selection: RollupSelection | null) => void;
   readonly go: Go;
+  readonly openRollup: (key: string, value: string) => void;
   readonly send: (command: DocumentCommand) => void;
   readonly groupFacet: string | null;
   readonly model: ReturnType<typeof useDocumentRuntime>;
@@ -790,16 +798,47 @@ function ResizableBody({
   );
 }
 
-function SampledInspector(props: BodyProps) {
+function SampledInspector(
+  props: BodyProps & {
+    readonly rollup?: {
+      selection: RollupSelection;
+      items: readonly Item[];
+      nominal: number | null;
+    };
+  },
+) {
   const focus = props.view.layout === "summary" ? null : props.focus;
-  const keys =
-    props.view.layout === "summary"
+  const rollup: SampleRollup | null = props.rollup
+    ? {
+        itemIds: props.rollup.items.map((item) => item.id),
+        role: props.rollup.selection.role,
+        leaf: props.rollup.selection.leaf,
+      }
+    : null;
+  const virtual = rollup
+    ? {
+        target: {
+          cellKey: rollupSampleKey(rollup),
+          rollup,
+          dim: roleSpec(rollup.role)!.dim,
+          nominal:
+            props.rollup!.nominal === null
+              ? { error: "Nominal total unavailable" }
+              : { value: props.rollup!.nominal },
+        },
+        label: `${props.rollup!.selection.label}.${rollup.role}${rollup.leaf === "value" ? "" : `.${rollup.leaf}`}`,
+      }
+    : undefined;
+  const keys = virtual
+    ? [virtual.target.cellKey]
+    : props.view.layout === "summary"
       ? [cellKey(OUTPUT_ITEM, props.selectedOutput)]
       : focus?.field
         ? sampledFieldKeys(props.book, focus.item, focus.field)
         : [];
-  const selectedKey =
-    props.view.layout === "summary"
+  const selectedKey = virtual
+    ? virtual.target.cellKey
+    : props.view.layout === "summary"
       ? keys[0]
       : focus?.field
         ? cellKey(
@@ -811,9 +850,11 @@ function SampledInspector(props: BodyProps) {
   return (
     <SampledResultsPanel
       key={
-        focus?.field
-          ? `${focus.item} ${focus.field}`
-          : `OUT ${props.view.layout} ${props.selectedOutput}`
+        virtual
+          ? virtual.target.cellKey
+          : focus?.field
+            ? `${focus.item} ${focus.field}`
+            : `OUT ${props.view.layout} ${props.selectedOutput}`
       }
       book={props.book}
       sampling={props.hullSampling}
@@ -822,6 +863,7 @@ function SampledInspector(props: BodyProps) {
       run={props.sampledRun}
       keys={keys}
       selectedKey={selectedKey}
+      virtual={virtual}
       onPick={(key) => {
         if (!focus?.field) return;
         const field = findItem(props.book, focus.item)?.fields[focus.field];
@@ -888,6 +930,15 @@ function ViewBody(props: BodyProps) {
       focusedItem && props.focus?.field
         ? focusedItem.fields[props.focus.field]
         : undefined;
+    // A facet view owns its saved names. Without a field selected, Uses asks which formulas name them.
+    const facetScope = view.scope.k === "facet" ? view.scope : null;
+    const namedRollups = facetScope
+      ? rollupsOf(book).filter(
+          (rollup) =>
+            rollup.facetKey === facetScope.key &&
+            rollup.facetValue === facetScope.value,
+        )
+      : [];
     const geometrySource = selectedTotal ? totalItems : items;
     // A role roll-up draws the semantic positions it reports, not every incidental point an item carries.
     const geometryItems = geometrySource.flatMap((item) => {
@@ -930,7 +981,7 @@ function ViewBody(props: BodyProps) {
     const offers: Shown[] = [
       "spread",
       "sampled",
-      ...(!selectedTotal && focusedField ? (["uses"] as const) : []),
+      ...(focusedField || namedRollups.length ? (["uses"] as const) : []),
       ...(hasGeometry ? (["geometry"] as const) : []),
       "compare",
       "reference",
@@ -990,7 +1041,19 @@ function ViewBody(props: BodyProps) {
                 {shown === "compare" ? (
                   <WorkspaceInspector {...props} shown={shown} />
                 ) : shown === "sampled" ? (
-                  <SampledInspector {...props} />
+                  <SampledInspector
+                    {...props}
+                    rollup={
+                      selectedTotal
+                        ? {
+                            selection: selectedTotal,
+                            items: totalItems,
+                            nominal:
+                              total?.values[selectedTotal.leaf]?.v ?? null,
+                          }
+                        : undefined
+                    }
+                  />
                 ) : shown === "reference" ? (
                   <Reference book={book} />
                 ) : shown === "geometry" ? (
@@ -1009,7 +1072,7 @@ function ViewBody(props: BodyProps) {
                       props.setFocus(next);
                     }}
                   />
-                ) : selectedTotal && spec && unit ? (
+                ) : shown === "spread" && selectedTotal && spec && unit ? (
                   <ComputedInspector
                     address={`${selectedTotal.label}.${selectedTotal.role}${
                       selectedTotal.leaf === "value"
@@ -1026,12 +1089,22 @@ function ViewBody(props: BodyProps) {
                     note={notes.join(" ") || undefined}
                   />
                 ) : shown === "uses" ? (
-                  <UsesInspector
-                    book={book}
-                    results={results}
-                    focus={props.focus}
-                    onGo={props.go}
-                  />
+                  focusedField ? (
+                    <UsesInspector
+                      book={book}
+                      results={results}
+                      focus={props.focus}
+                      onGo={props.go}
+                      onOpenRollup={props.openRollup}
+                    />
+                  ) : (
+                    <RollupUsesInspector
+                      book={book}
+                      results={results}
+                      rollups={namedRollups}
+                      onGo={props.go}
+                    />
+                  )
                 ) : (
                   <Inspector
                     book={book}
@@ -1177,6 +1250,7 @@ function ViewBody(props: BodyProps) {
                   results={results}
                   focus={props.focus}
                   onGo={props.go}
+                  onOpenRollup={props.openRollup}
                 />
               ) : (
                 <GeometryEditor {...props} items={detail ? [detail] : items} />

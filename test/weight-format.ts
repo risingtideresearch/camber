@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { evaluateBook, prepareBook } from "../src/core/sheet/evaluate";
 import { createSamplingRun } from "../src/core/sheet/sampling";
+import { rollupSampleKey } from "../src/core/sheet/sampleRollup";
 import { prepareTrials } from "../src/core/sheet/trial";
 import { SampledResultsPanel } from "../src/editor/weight/SampledResultsPanel";
 import { formulaBook, target } from "./sampling-fixtures";
@@ -81,6 +82,49 @@ assert.doesNotMatch(markup, /wsampled-invalid|<th>Invalid<\/th>|Reasons/);
 assert.doesNotMatch(markup, /Selected field:|experimental/);
 assert.match(markup, /aria-label="Sampled trials"/);
 assert.match(markup, /<progress[^>]*value="1"[^>]*max="1"/);
+// A selected transient total has no authored cell, but still has its own nominal and sample readout.
+const rollup = { itemIds: ["i0"], role: "MASS", leaf: "value" as const };
+const rollupKey = rollupSampleKey(rollup);
+const virtual = {
+  target: {
+    cellKey: rollupKey,
+    rollup,
+    dim: { m: 1, l: 0 },
+    nominal: { value: 1250000 },
+  },
+  label: "All items.MASS",
+};
+const rollupMarkup = renderToStaticMarkup(
+  createElement(SampledResultsPanel, {
+    book: sampledBook,
+    sampling: null,
+    results: sampledResults,
+    ready: true,
+    selectedKey: rollupKey,
+    keys: [rollupKey],
+    virtual,
+    onPick: () => {},
+    run: {
+      getRun: () => ({
+        result: {
+          ...sample.snapshot(),
+          outputs: [{ ...sample.snapshot().outputs[0], ...virtual.target }],
+        },
+        completed: 1,
+        error: null,
+        starting: false,
+        runId: "rollup",
+      }),
+      start: () => {},
+      prioritize: () => {},
+      cancel: () => {},
+      refine: () => {},
+    },
+  }),
+);
+assert.match(rollupMarkup, /All items.MASS/);
+assert.match(rollupMarkup, /<td>1250000<\/td>/);
+assert.match(rollupMarkup, /Sampled mean/);
 // Revisiting a field reads its completed report even when another target was
 // the most recent worker run.
 const revisited = renderToStaticMarkup(

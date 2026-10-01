@@ -3,10 +3,13 @@ import { type WeightBook } from "../src/core/sheet/book";
 import { createReferenceBinder } from "../src/core/sheet/bindings";
 import {
   cellKey,
+  evaluateBook,
   evaluatePreparedBook,
+  fieldRollupUses,
   fieldUses,
   fieldUsers,
   prepareBook,
+  rollupFormulaUses,
 } from "../src/core/sheet/evaluate";
 import { parseFormula } from "../src/core/sheet/formula";
 import { formulaBook, target } from "./sampling-fixtures";
@@ -100,6 +103,208 @@ assert.deepEqual(fieldUsers(book, first, "i0").get("mass"), [
 assert.deepEqual(
   fieldUses(book, first, "i0", "mass").map((use) => use.address),
   ["Experiment.twice", "Experiment.qualified", "OUT.DISPLACEMENT"],
+);
+
+// Rollup uses are membership/role edges, independent of formula references or evaluated values.
+const rollupBook: WeightBook = {
+  ...book,
+  items: [
+    {
+      ...book.items[0],
+      facets: { system: "machinery/engine" },
+      fields: {
+        ...book.items[0].fields,
+        mass: { k: "scalar", formula: "broken", unit: "kg", role: "MASS" },
+        cg: {
+          k: "point",
+          x: "1",
+          y: "2",
+          z: "3",
+          from: "",
+          unit: "m",
+          role: "CG",
+        },
+      },
+    },
+    book.items[1],
+  ],
+  rollups: [
+    ...book.rollups,
+    {
+      id: "r1",
+      name: "engines",
+      facetKey: "system",
+      facetValue: "machinery/engine",
+    },
+    { id: "r2", name: "deck", facetKey: "system", facetValue: "deck" },
+  ],
+};
+assert.deepEqual(
+  fieldRollupUses(rollupBook, "i0", "mass").map(({ address, as }) => [
+    address,
+    as,
+  ]),
+  [
+    ["ROLLUP.machinery.MASS", "value"],
+    ["ROLLUP.machinery.CG", "weight"],
+    ["ROLLUP.engines.MASS", "value"],
+    ["ROLLUP.engines.CG", "weight"],
+  ],
+);
+assert.deepEqual(
+  fieldRollupUses(rollupBook, "i0", "cg").map((use) => use.address),
+  ["ROLLUP.machinery.CG", "ROLLUP.engines.CG"],
+);
+assert.deepEqual(fieldRollupUses(rollupBook, "i0", "twice"), []);
+assert.deepEqual(fieldRollupUses(rollupBook, "i1", "Experiment"), []);
+assert.deepEqual(fieldRollupUses(rollupBook, "missing", "mass"), []);
+assert.deepEqual(
+  fieldRollupUses(
+    { ...rollupBook, items: [book.items[0], book.items[1]] },
+    "i0",
+    "mass",
+  ).map((use) => use.address),
+  ["ROLLUP.machinery.MASS"],
+);
+assert.deepEqual(
+  fieldRollupUses(
+    {
+      ...rollupBook,
+      items: [
+        {
+          ...rollupBook.items[0],
+          fields: {
+            ...rollupBook.items[0].fields,
+            cg: {
+              k: "point",
+              x: "1",
+              y: "2",
+              z: "3",
+              from: "",
+              unit: "m",
+              role: null,
+            },
+          },
+        },
+        book.items[1],
+      ],
+    },
+    "i0",
+    "mass",
+  ).map((use) => use.address),
+  ["ROLLUP.machinery.MASS", "ROLLUP.engines.MASS"],
+);
+assert.deepEqual(
+  fieldRollupUses(
+    {
+      ...rollupBook,
+      items: [
+        {
+          ...rollupBook.items[0],
+          fields: {
+            ...rollupBook.items[0].fields,
+            mass: { k: "scalar", formula: "10", unit: "kg", role: null },
+          },
+        },
+        book.items[1],
+      ],
+    },
+    "i0",
+    "cg",
+  ),
+  [],
+);
+
+const usingRollup: WeightBook = {
+  ...book,
+  items: [
+    book.items[0],
+    {
+      ...book.items[1],
+      fields: {
+        ...book.items[1].fields,
+        allowance: {
+          k: "scalar",
+          formula: "ROLLUP.machinery.MASS + ROLLUP.machinery.MASS",
+          unit: "kg",
+          role: null,
+        },
+        otherRollup: {
+          k: "scalar",
+          formula: "ROLLUP.machinery extra.MASS",
+          unit: "kg",
+          role: null,
+        },
+        position: {
+          k: "point",
+          x: "ROLLUP.machinery.CG.z",
+          y: "0",
+          z: "0",
+          from: "",
+          unit: "m",
+          role: null,
+        },
+        derived: {
+          k: "point",
+          x: "",
+          y: "",
+          z: "",
+          from: "ROLLUP.machinery.CG",
+          unit: "m",
+          role: null,
+        },
+        broken: {
+          k: "scalar",
+          formula: "ROLLUP.machinery.MASS + (",
+          unit: "kg",
+          role: null,
+        },
+      },
+    },
+  ],
+  outputs: {
+    DISPLACEMENT: "ROLLUP.machinery.MASS",
+    VCG: "ROLLUP.machinery.CG.z",
+  },
+  rollups: [
+    ...book.rollups,
+    {
+      id: "r1",
+      name: "machinery extra",
+      facetKey: "system",
+      facetValue: "deck",
+    },
+  ],
+};
+assert.deepEqual(
+  rollupFormulaUses(usingRollup, evaluateBook(usingRollup, null), "r0")
+    .map(({ reference, use }) => [reference, use.address, use.leaf])
+    .sort(),
+  [
+    ["ROLLUP.machinery.MASS", "Other.allowance", "formula"],
+    ["ROLLUP.machinery.CG.z", "Other.position.x", "x"],
+    ["ROLLUP.machinery.CG", "Other.derived", "from"],
+    ["ROLLUP.machinery.MASS", "OUT.DISPLACEMENT", "formula"],
+    ["ROLLUP.machinery.CG.z", "OUT.VCG", "formula"],
+  ].sort(),
+);
+assert.deepEqual(
+  rollupFormulaUses(usingRollup, evaluateBook(usingRollup, null), "r1").map(
+    ({ reference, use }) => [reference, use.address],
+  ),
+  [["ROLLUP.machinery extra.MASS", "Other.otherRollup"]],
+);
+assert.deepEqual(
+  rollupFormulaUses(
+    { ...usingRollup, rollups: [] },
+    evaluateBook(usingRollup, null),
+    "r0",
+  ),
+  [],
+);
+assert.deepEqual(
+  rollupFormulaUses(usingRollup, evaluateBook(usingRollup, null), "missing"),
+  [],
 );
 
 const bind = createReferenceBinder(book);

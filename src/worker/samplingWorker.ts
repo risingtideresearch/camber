@@ -2,6 +2,7 @@ import { assemble } from "../core/runtime";
 import type { HullMetrics } from "../core/hullMetrics";
 import { prepareBook } from "../core/sheet/evaluate";
 import { createSamplingRun } from "../core/sheet/sampling";
+import { sampleTargets } from "../core/sheet/sampleRollup";
 import { createSectionMeasurer } from "../core/sheet/slices";
 import { createTrialValueCache } from "../core/sheet/trialCache";
 import { directTrialGeometry, prepareTrials } from "../core/sheet/trial";
@@ -44,7 +45,11 @@ const process = createSamplingController(
       prepared,
       geometry!,
       workerMetrics,
-      evaluateCached,
+      sampleTargets(
+        prepared.prepared.book,
+        command.request.targets,
+        evaluateCached,
+      ),
     );
   },
   (event: SamplingEvent) => {

@@ -85,11 +85,14 @@ import {
   type Source,
 } from "./quantity";
 import {
+  facetContains,
   fieldUnit,
   isDerived,
+  lookupRole,
   leafOf,
   leavesOf,
   roleOf,
+  rollupsOf,
   symbolsOf,
   type Field,
   type FieldLeaf,
@@ -98,7 +101,7 @@ import {
   type WeightBook,
 } from "./book";
 import { OUTPUTS, outputSpec } from "./outputs";
-import { roleSpec } from "./roles";
+import { ROLES, roleSpec } from "./roles";
 import { naturalUnit, parseUnit, UnitError, type UnitSpec } from "./units";
 import { sliceMeasurementKey, type SliceMeasurements } from "./slices";
 
@@ -228,6 +231,24 @@ export interface FieldUse {
   readonly address: string;
 }
 
+function formulaUse(cell: CellResult, from: Item | undefined): FieldUse {
+  const field = from?.fields[cell.fieldKey];
+  const sharedDerivation = field?.k === "point" && isDerived(field);
+  const base =
+    cell.itemId === OUTPUT_ITEM
+      ? `OUT.${cell.fieldKey}`
+      : `${from?.name || "an unnamed item"}.${cell.fieldKey}`;
+  return {
+    itemId: cell.itemId,
+    fieldKey: cell.fieldKey,
+    leaf: sharedDerivation ? "from" : (cell.leaf as FieldLeaf),
+    address:
+      cell.itemId === OUTPUT_ITEM || field?.k === "scalar" || sharedDerivation
+        ? base
+        : `${base}.${cell.leaf}`,
+  };
+}
+
 /**
  * The individual formula cells that name one field.
  *
@@ -258,25 +279,113 @@ export function fieldUses(
     if (!namesTarget || (cell.itemId === itemId && cell.fieldKey === fieldKey))
       continue;
 
-    const field = from?.fields[cell.fieldKey];
-    const sharedDerivation = field?.k === "point" && isDerived(field);
-    const base =
-      cell.itemId === OUTPUT_ITEM
-        ? `OUT.${cell.fieldKey}`
-        : `${from?.name || "an unnamed item"}.${cell.fieldKey}`;
-    const address =
-      cell.itemId === OUTPUT_ITEM || field?.k === "scalar" || sharedDerivation
-        ? base
-        : `${base}.${cell.leaf}`;
-    if (!found.has(address))
-      found.set(address, {
-        itemId: cell.itemId,
-        fieldKey: cell.fieldKey,
-        leaf: sharedDerivation ? "from" : (cell.leaf as FieldLeaf),
-        address,
-      });
+    const use = formulaUse(cell, from);
+    if (!found.has(use.address)) found.set(use.address, use);
   }
   return [...found.values()];
+}
+
+/** One authored formula naming an address of a saved rollup. */
+export interface RollupFormulaUse {
+  /** The address as written in the formula, including its role and optional coordinate. */
+  readonly reference: string;
+  readonly use: FieldUse;
+}
+
+/**
+ * Direct formula references to a named rollup, regardless of its current contributors or whether their
+ * values evaluate. Bound references distinguish a real rollup from similar names and work across outputs,
+ * role coordinates and derived point expressions. One derived `from` is one editable use per address.
+ */
+export function rollupFormulaUses(
+  book: WeightBook,
+  results: BookResults,
+  rollupId: string,
+): readonly RollupFormulaUse[] {
+  if (!rollupsOf(book).some((rollup) => rollup.id === rollupId)) return [];
+  const byId = new Map(book.items.map((item) => [item.id, item]));
+  const found = new Map<string, RollupFormulaUse>();
+  for (const cell of results.cells.values()) {
+    if (!cell.tree) continue;
+    const use = formulaUse(cell, byId.get(cell.itemId));
+    for (const ref of cell.references.values()) {
+      if (ref.binding.k !== "rollup" || ref.binding.rollup.id !== rollupId)
+        continue;
+      const reference = ref.path.join(".");
+      const key = JSON.stringify([
+        reference,
+        cell.itemId,
+        cell.fieldKey,
+        use.leaf,
+      ]);
+      if (!found.has(key)) found.set(key, { reference, use });
+    }
+  }
+  return [...found.values()];
+}
+
+/** A named facet rollup to which this field contributes through its role. */
+export interface FieldRollupUse {
+  readonly rollupId: string;
+  readonly facetKey: string;
+  readonly facetValue: string;
+  readonly address: string;
+  readonly roleLabel: string;
+  /** Whether this field supplies the value or the weight of a weighted mean. */
+  readonly as: "value" | "weight";
+}
+
+/**
+ * Rollup contributions are structural, not formula references. A field participates only when its item
+ * belongs to the named facet subtree and its role is selected by that rollup's aggregation. A weighted mean
+ * requires both the value and its weight on the item; otherwise it has no entry to aggregate. This does not
+ * require a successful reading or a formula naming the rollup.
+ */
+export function fieldRollupUses(
+  book: WeightBook,
+  itemId: string,
+  fieldKey: string,
+): readonly FieldRollupUse[] {
+  const item = book.items.find((candidate) => candidate.id === itemId);
+  if (!item?.fields[fieldKey]) return [];
+  const uses: FieldRollupUse[] = [];
+  for (const rollup of rollupsOf(book)) {
+    if (!facetContains(rollup.facetValue, item.facets[rollup.facetKey] ?? ""))
+      continue;
+    for (const spec of ROLES) {
+      if (spec.aggregation.k === "none") continue;
+      const value = lookupRole(item, spec.name);
+      if (value.k !== "one" || !spec.kinds.includes(value.field.k)) continue;
+      let weightKey: string | null = null;
+      if (spec.aggregation.k === "weightedMean") {
+        const weightSpec = roleSpec(spec.aggregation.weight);
+        const weight = lookupRole(item, spec.aggregation.weight);
+        if (
+          !weightSpec ||
+          weight.k !== "one" ||
+          !weightSpec.kinds.includes(weight.field.k)
+        )
+          continue;
+        weightKey = weight.key;
+      }
+      const as =
+        value.key === fieldKey
+          ? "value"
+          : weightKey === fieldKey
+            ? "weight"
+            : null;
+      if (as)
+        uses.push({
+          rollupId: rollup.id,
+          facetKey: rollup.facetKey,
+          facetValue: rollup.facetValue,
+          address: `ROLLUP.${rollup.name}.${spec.name}`,
+          roleLabel: spec.label,
+          as,
+        });
+    }
+  }
+  return uses;
 }
 
 /** One of the book's answers, as an evaluated cell — what the summary view renders and edits. */

@@ -5,7 +5,19 @@ import {
   validateCheckpoints,
   type SamplingRequest,
 } from "../src/core/sheet/sampling";
-import { prepareTrials } from "../src/core/sheet/trial";
+import {
+  prepareTrials,
+  evaluateTrial,
+  type TrialValue,
+} from "../src/core/sheet/trial";
+import {
+  prepareSampleRollup,
+  rollupSampleKey,
+  sampleTargets,
+} from "../src/core/sheet/sampleRollup";
+import { cellKey } from "../src/core/sheet/evaluate";
+import type { WeightBook } from "../src/core/sheet/book";
+import { LENGTH, MASS } from "../src/core/sheet/quantity";
 import { createSamplingController } from "../src/worker/samplingController";
 import { createSampledRunCache } from "../src/editor/sampledRunCache";
 import type {
@@ -43,6 +55,148 @@ function complete(run: ReturnType<typeof createSamplingRun>, batch: number) {
     if (run.advance(batch, 10000)) checkpoints.push(run.completed);
   return checkpoints;
 }
+// Transient report totals are not authored cells: evaluate their constituent roles in each world.
+const roleBook: WeightBook = {
+  ...formulaBook({}),
+  items: [
+    {
+      id: "i0",
+      name: "First",
+      note: "",
+      facets: {},
+      fields: {
+        mass: { k: "scalar", formula: "10 ± 2", unit: "kg", role: "MASS" },
+        cg: {
+          k: "point",
+          x: "1",
+          y: "0",
+          z: "0",
+          from: "",
+          unit: "m",
+          role: "CG",
+        },
+      },
+    },
+    {
+      id: "i1",
+      name: "Second",
+      note: "",
+      facets: {},
+      fields: {
+        mass: { k: "scalar", formula: "30", unit: "kg", role: "MASS" },
+        cg: {
+          k: "point",
+          x: "5",
+          y: "0",
+          z: "0",
+          from: "",
+          unit: "m",
+          role: "CG",
+        },
+      },
+    },
+  ],
+};
+const rolePlan = prepareTrials(prepareBook(roleBook));
+const rollups = ["MASS", "CG"].map((role) => {
+  const descriptor = {
+    itemIds: ["i0", "i1"],
+    role,
+    leaf: role === "MASS" ? ("value" as const) : ("x" as const),
+  };
+  return {
+    key: rollupSampleKey(descriptor),
+    prepared: prepareSampleRollup(roleBook, descriptor),
+    descriptor,
+  };
+});
+const rollupRun = createSamplingRun(
+  {
+    ...request,
+    targets: rollups.map(({ key, descriptor }) => ({
+      cellKey: key,
+      rollup: descriptor,
+      dim: null,
+      nominal: { value: 0 },
+    })),
+  },
+  rolePlan,
+  undefined,
+  null,
+  sampleTargets(
+    roleBook,
+    rollups.map(({ key, descriptor }) => ({
+      cellKey: key,
+      rollup: descriptor,
+      dim: null,
+      nominal: { value: 0 },
+    })),
+    (trial, keys) =>
+      evaluateTrial(rolePlan, trial, undefined, null, keys).values,
+  ),
+);
+complete(rollupRun, 64);
+const [massOutput, cgOutput] = rollupRun.snapshot().outputs;
+assert.equal(massOutput.validTrials, 1024);
+assert.equal(cgOutput.validTrials, 1024);
+assert.ok(massOutput.distribution!.standardDeviation > 0);
+assert.ok(cgOutput.distribution!.standardDeviation > 0);
+const fixedValues = new Map<string, TrialValue>([
+  [cellKey("i0", "mass"), { value: 10, dim: MASS, error: null }],
+  [cellKey("i1", "mass"), { value: 30, dim: MASS, error: null }],
+  [cellKey("i0", "cg", "x"), { value: 1, dim: LENGTH, error: null }],
+  [cellKey("i0", "cg", "y"), { value: 0, dim: LENGTH, error: null }],
+  [cellKey("i0", "cg", "z"), { value: 0, dim: LENGTH, error: null }],
+  [cellKey("i1", "cg", "x"), { value: 5, dim: LENGTH, error: null }],
+  [cellKey("i1", "cg", "y"), { value: 0, dim: LENGTH, error: null }],
+  [cellKey("i1", "cg", "z"), { value: 0, dim: LENGTH, error: null }],
+]);
+assert.equal(rollups[0].prepared.evaluate(fixedValues).value, 40);
+assert.equal(rollups[1].prepared.evaluate(fixedValues).value, 4);
+assert.match(
+  rollups[1].prepared.evaluate(
+    new Map([
+      ...fixedValues,
+      [cellKey("i0", "mass"), { value: null, dim: MASS, error: "bad mass" }],
+    ]),
+  ).error ?? "",
+  /bad mass/,
+);
+assert.match(
+  rollups[1].prepared.evaluate(
+    new Map([
+      ...fixedValues,
+      [cellKey("i0", "cg", "y"), { value: null, dim: LENGTH, error: "bad y" }],
+    ]),
+  ).error ?? "",
+  /bad y/,
+);
+assert.match(
+  rollups[1].prepared.evaluate(
+    new Map([
+      ...fixedValues,
+      [cellKey("i0", "mass"), { value: 0, dim: MASS, error: null }],
+      [cellKey("i1", "mass"), { value: 0, dim: MASS, error: null }],
+    ]),
+  ).error ?? "",
+  /zero total/,
+);
+assert.throws(() =>
+  createSamplingRun(
+    {
+      ...request,
+      targets: [
+        {
+          cellKey: "wrong",
+          rollup: rollups[0].descriptor,
+          dim: null,
+          nominal: { value: 0 },
+        },
+      ],
+    },
+    rolePlan,
+  ),
+);
 const progressive = createSamplingRun(request, plan);
 assert.deepEqual(complete(progressive, 19), [64, 256, 1024]);
 const snapshot = progressive.snapshot();

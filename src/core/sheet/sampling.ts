@@ -1,5 +1,10 @@
 import type { HullMetrics } from "../hullMetrics";
 import type { Dim } from "./quantity";
+import {
+  prepareSampleRollup,
+  rollupSampleKey,
+  type SampleRollup,
+} from "./sampleRollup";
 import { generateTrial } from "./generateTrials";
 import {
   evaluateTrial,
@@ -16,6 +21,8 @@ export interface SamplingContext {
 }
 export interface SamplingTarget {
   readonly cellKey: string;
+  /** A transient role total, evaluated in each trial rather than from nominal gradients. */
+  readonly rollup?: SampleRollup;
   readonly dim: Dim | null;
   readonly nominal: { readonly value: number } | { readonly error: string };
 }
@@ -117,9 +124,14 @@ export function createSamplingRun(
       request.targets.length
   )
     throw new Error("Choose 1–32 distinct output cells");
-  for (const target of request.targets)
-    if (!plan.prepared.cells.has(target.cellKey))
+  for (const target of request.targets) {
+    if (target.rollup) {
+      if (target.cellKey !== rollupSampleKey(target.rollup))
+        throw new Error(`Invalid roll-up target: ${target.cellKey}`);
+      prepareSampleRollup(plan.prepared.book, target.rollup);
+    } else if (!plan.prepared.cells.has(target.cellKey))
       throw new Error(`Unknown target: ${target.cellKey}`);
+  }
   // Validate the seed even before the first batch.
   generateTrial(plan, request.seed, 0);
   let checkpoints = [...request.checkpoints];

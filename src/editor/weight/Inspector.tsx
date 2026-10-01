@@ -31,13 +31,16 @@ import {
   leavesOf,
   type Field,
   type FieldLeaf,
+  type Rollup,
   type Item,
   type WeightBook,
 } from "../../core/sheet/book";
 import {
+  fieldRollupUses,
   fieldUses,
   outputResult,
   resultAt,
+  rollupFormulaUses,
   type BookResults,
   type CellResult,
 } from "../../core/sheet/evaluate";
@@ -153,39 +156,127 @@ export function OutputInspector({
   );
 }
 
+const formulaSource = (
+  book: WeightBook,
+  use: { itemId: string; fieldKey: string; leaf: FieldLeaf },
+): string => {
+  if (use.itemId === "OUT") return book.outputs[use.fieldKey] ?? "";
+  const field = findItem(book, use.itemId)?.fields[use.fieldKey];
+  if (!field) return "";
+  return field.k === "point" && isDerived(field)
+    ? field.from
+    : (leafOf(field, use.leaf) ?? "");
+};
+
+/** Direct formula users of the named rollups on this facet view, not its contributing items. */
+export function RollupUsesInspector({
+  book,
+  results,
+  rollups,
+  onGo,
+}: Pick<InspectorProps, "book" | "results" | "onGo"> & {
+  readonly rollups: readonly Rollup[];
+}) {
+  return (
+    <div className="winspector">
+      <Head
+        address={
+          rollups.length === 1 ? `ROLLUP.${rollups[0].name}` : "Named rollups"
+        }
+        kind="uses"
+      />
+      {rollups.map((rollup) => (
+        <RollupFormulaUsers
+          key={rollup.id}
+          book={book}
+          results={results}
+          rollup={rollup}
+          onGo={onGo}
+          showName={rollups.length > 1}
+        />
+      ))}
+    </div>
+  );
+}
+
+function RollupFormulaUsers({
+  book,
+  results,
+  rollup,
+  onGo,
+  showName,
+}: Pick<InspectorProps, "book" | "results" | "onGo"> & {
+  readonly rollup: Rollup;
+  readonly showName: boolean;
+}) {
+  const uses = rollupFormulaUses(book, results, rollup.id);
+  const groups = new Map<string, typeof uses>();
+  for (const use of uses)
+    groups.set(use.reference, [...(groups.get(use.reference) ?? []), use]);
+  return (
+    <section>
+      {showName && <h3 className="winspuseheading">ROLLUP.{rollup.name}</h3>}
+      {uses.length ? (
+        <>
+          <p className="whint">
+            {uses.length} direct use{uses.length === 1 ? "" : "s"} in formulas.
+            Pick one to go to it.
+          </p>
+          {[...groups].map(([reference, occurrences]) => (
+            <section key={reference}>
+              <h3 className="winspuseheading">{reference}</h3>
+              <ul className="winspuses">
+                {occurrences.map(({ use }) => (
+                  <li key={`${use.itemId}:${use.fieldKey}:${use.leaf}`}>
+                    <button
+                      onClick={() => onGo(use.itemId, use.fieldKey, use.leaf)}
+                      title="Go to this formula"
+                    >
+                      {use.address}
+                    </button>
+                    <code>{formulaSource(book, use)}</code>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </>
+      ) : (
+        <p className="whint">No formulas reference this rollup.</p>
+      )}
+    </section>
+  );
+}
+
 /** Where the selected field is named, with every address following back to its formula cell. */
 export function UsesInspector({
   book,
   results,
   focus,
   onGo,
-}: Pick<InspectorProps, "book" | "results" | "focus" | "onGo">) {
+  onOpenRollup,
+}: Pick<InspectorProps, "book" | "results" | "focus" | "onGo"> & {
+  readonly onOpenRollup: (key: string, value: string) => void;
+}) {
   const item = focus ? findItem(book, focus.item) : undefined;
   const fieldKey = focus?.field;
   const field = item && fieldKey ? item.fields[fieldKey] : undefined;
   if (!item || !fieldKey || !field)
     return (
       <p className="whint wpad">
-        Put the caret in a field and this lists every formula that names it.
+        Put the caret in a field to see which formulas name it and which named
+        rollups include it.
       </p>
     );
 
   const uses = fieldUses(book, results, item.id, fieldKey);
-  const sourceOf = (use: (typeof uses)[number]): string => {
-    if (use.itemId === "OUT") return book.outputs[use.fieldKey] ?? "";
-    const user = findItem(book, use.itemId);
-    const usedField = user?.fields[use.fieldKey];
-    if (!usedField) return "";
-    return usedField.k === "point" && isDerived(usedField)
-      ? usedField.from
-      : (leafOf(usedField, use.leaf) ?? "");
-  };
-
+  const rollupUses = fieldRollupUses(book, item.id, fieldKey);
   return (
     <div className="winspector">
       <Head address={`${item.name || "unnamed"}.${fieldKey}`} kind="uses" />
-      {uses.length ? (
-        <>
+      {uses.length > 0 && (
+        <section>
+          <h3 className="winspuseheading">Formulas</h3>
           <p className="whint">
             {uses.length} formula{uses.length === 1 ? "" : "s"} name this field.
             Pick one to go to it.
@@ -199,15 +290,43 @@ export function UsesInspector({
                 >
                   {use.address}
                 </button>
-                <code>{sourceOf(use)}</code>
+                <code>{formulaSource(book, use)}</code>
               </li>
             ))}
           </ul>
-        </>
-      ) : (
+        </section>
+      )}
+      {rollupUses.length > 0 && (
+        <section>
+          <h3 className="winspuseheading">Named rollups</h3>
+          <p className="whint">
+            Contributes to {rollupUses.length} named rollup
+            {rollupUses.length === 1 ? "" : "s"} through its role, whether or
+            not a formula names them.
+          </p>
+          <ul className="winspuses">
+            {rollupUses.map((use) => (
+              <li key={`${use.rollupId}:${use.address}`}>
+                <button
+                  onClick={() => onOpenRollup(use.facetKey, use.facetValue)}
+                  title="Open this rollup"
+                >
+                  {use.address}
+                </button>
+                <code>
+                  {use.as === "weight"
+                    ? `Weights the ${use.roleLabel}`
+                    : `Contributes its ${use.roleLabel}`}
+                  {` · ${use.facetKey}: ${use.facetValue}`}
+                </code>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {!uses.length && !rollupUses.length && (
         <p className="whint">
-          Nothing else names this field. It can be changed or removed without
-          breaking another formula.
+          No formulas name this field, and it contributes to no named rollups.
         </p>
       )}
     </div>
