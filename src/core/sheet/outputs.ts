@@ -22,7 +22,7 @@
 // ---------- closed, on purpose ----------
 //
 // The stability panel has to know the names it is looking for, so this list is not user-extensible. Adding an
-// output is an entry here and nothing else: no schema change, no stored field, no migration.
+// output needs no schema change or migration; consumers opt in to reading it.
 
 import { LENGTH, MASS, type Dim } from "./quantity";
 import type { WeightBook } from "./book";
@@ -40,10 +40,9 @@ export interface OutputSpec {
 /**
  * The catalogue, in the order the summary lists them: what it weighs, then where that weight is.
  *
- * The two centres are stated apart, as two lengths, because that is what the rest of the app asks for — the
- * stability panel wants a KG and an LCG, not a place. A book that has built its centre of gravity as a POINT
- * answers them with `CG.place.z` and `CG.place.x`, which is the same one statement read twice and costs a
- * line each.
+ * The centres are stated apart, as lengths, because the consumers ask for KG,
+ * LCG and TCG rather than a place. A book that has built its centre of gravity as
+ * a POINT answers them with `CG.place.z`, `CG.place.x` and `CG.place.y`.
  */
 export const OUTPUTS: readonly OutputSpec[] = [
   {
@@ -63,6 +62,12 @@ export const OUTPUTS: readonly OutputSpec[] = [
     dim: LENGTH,
     label: "LCG",
     hint: "Centre of gravity along the hull, from the transom",
+  },
+  {
+    name: "TCG",
+    dim: LENGTH,
+    label: "TCG",
+    hint: "Centre of gravity from the centreline: positive to starboard, negative to port",
   },
 ];
 

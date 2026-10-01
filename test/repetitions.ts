@@ -712,25 +712,25 @@ console.log(
   "Real hull: all orientations, Repetition integration, lateral symmetry and legacy aliases passed",
 );
 
-const raked = assemble({ ...hull, deckRake: 0.12 });
-const rakedSampling = computeHullSampling(raked, 80, 6);
-const rakedMeasure = createSectionMeasurer(raked, rakedSampling);
-const rakedCut = createSliceMeasurer(raked, rakedSampling);
-const transverse = rakedCut("transverse", 2)!;
+const trimmed = assemble({ ...hull, deckTrim: 0.12 });
+const trimmedSampling = computeHullSampling(trimmed, 80, 6);
+const trimmedMeasure = createSectionMeasurer(trimmed, trimmedSampling);
+const trimmedCut = createSliceMeasurer(trimmed, trimmedSampling);
+const transverse = trimmedCut("transverse", 2)!;
 assert.ok(transverse.curve.length > 2);
 for (const p of transverse.curve)
   near(
     p[0] * Math.cos(0.12) - p[2] * Math.sin(0.12),
-    (raked.plan.at(0)[0] + 2000) * Math.cos(0.12),
+    (trimmed.plan.at(0)[0] + 2000) * Math.cos(0.12),
     1e-7,
   );
 assert.ok(
   Math.abs(transverse.x - 2) > 0.001,
-  "true vertical is not constant deck-frame x with rake",
+  "true vertical is not constant deck-frame x with trim",
 );
-const horizontal = rakedCut("plane", 0.6)!;
+const horizontal = trimmedCut("plane", 0.6)!;
 for (const p of horizontal.sheetContours.flat()) near(p[2], 0.6);
-near(rakedMeasure("station", 2).area, measure("station", 2).area);
+near(trimmedMeasure("station", 2).area, measure("station", 2).area);
 let sequence = 0;
 assert.match(
   measureRepetition(
@@ -747,7 +747,7 @@ assert.match(
   /did not converge/,
 );
 console.log(
-  "Rake frame, station regression and convergence diagnostics passed",
+  "Trim frame, station regression and convergence diagnostics passed",
 );
 
 // Preview geometry must follow the measure, not draw artificial closing edges.
@@ -872,7 +872,7 @@ near(islands.measures.area.amount, 4);
 near(islands.measures.closedLength.amount, 12);
 assert.equal(islands.contours.length, 2);
 
-for (const measurer of [measure, rakedMeasure]) {
+for (const measurer of [measure, trimmedMeasure]) {
   for (const shape of ["transverse", "station", "longitudinal"] as const) {
     const pos = shape === "longitudinal" ? 0.3 : 2;
     const full = measurer(shape, pos);
@@ -1005,7 +1005,7 @@ assert.ok(
   resultAt(singleHeightResults, "c", "section", "area")!.reading!.worst.hi > 0,
 );
 console.log(
-  "Top boundaries: clipping, closure, holes, islands, sweep halves, rake, persistence and uncertainty passed",
+  "Top boundaries: clipping, closure, holes, islands, sweep halves, trim, persistence and uncertainty passed",
 );
 const renamedTop = interpretSheetCommand(
   makeBook({
@@ -1092,7 +1092,7 @@ for (const invalid of [
     /must be less/,
   );
 
-for (const measurer of [measure, rakedMeasure]) {
+for (const measurer of [measure, trimmedMeasure]) {
   for (const shape of ["transverse", "station"] as const) {
     const full = measurer(shape, 2);
     const half = measurer(shape, 2, { portOffset: 0 });
@@ -1122,19 +1122,20 @@ for (const measurer of [measure, rakedMeasure]) {
     );
   }
 }
-const rakedDeck = rakedMeasure("plane", 0.6, {
+const trimmedDeck = trimmedMeasure("plane", 0.6, {
   aftPosition: 1,
   forwardPosition: 3,
   portOffset: -0.3,
   starboardOffset: 0.5,
 });
-assert.ok(rakedDeck.area > 0);
-for (const p of rakedDeck.contours.flat()) {
-  const position = (p[0] - p[2] * Math.tan(0.12) - raked.plan.at(0)[0]) / 1000;
+assert.ok(trimmedDeck.area > 0);
+for (const p of trimmedDeck.contours.flat()) {
+  const position =
+    (p[0] - p[2] * Math.tan(0.12) - trimmed.plan.at(0)[0]) / 1000;
   assert.ok(position >= 1 - 1e-8 && position <= 3 + 1e-8);
 }
 console.log(
-  "Directional boundaries: combined box clips, signed offsets, asymmetric sweep halves and world-vertical rake passed",
+  "Directional boundaries: combined box clips, signed offsets, asymmetric sweep halves and world-vertical trim passed",
 );
 const directionalField: RepetitionField = {
   ...repetition,

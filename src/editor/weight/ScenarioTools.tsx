@@ -262,6 +262,16 @@ function Membership({
   );
 }
 
+function MembershipStatus({ included }: { readonly included: boolean }) {
+  return (
+    <span
+      className={`wscenario-membership-status ${included ? "is-included" : "is-excluded"}`}
+    >
+      {included ? "Included" : "Excluded"}
+    </span>
+  );
+}
+
 const text = (value: unknown): string =>
   value === undefined
     ? "Not set"
@@ -301,7 +311,7 @@ function ChangeList({
           </button>
           {change.k === "membership" ? (
             <small>
-              {change.included ? "Included in this scenario" : "Not included"}
+              <MembershipStatus included={change.included} />
             </small>
           ) : (
             <>
@@ -569,11 +579,9 @@ export function ScenariosView({
             <details key={item.id} className="wscenarios-member">
               <summary>
                 {item.name || "Unnamed item"}
-                <span>
-                  {appliesTo(item.applicability, selected)
-                    ? "Included"
-                    : "Excluded"}
-                </span>
+                <MembershipStatus
+                  included={appliesTo(item.applicability, selected)}
+                />
               </summary>
               <Membership
                 book={book}
@@ -590,12 +598,12 @@ export function ScenariosView({
                 <details key={key} className="wscenarios-field">
                   <summary>
                     {key}
-                    <span>
-                      {appliesTo(item.applicability, selected) &&
-                      appliesTo(field.applicability, selected)
-                        ? "Included"
-                        : "Excluded"}
-                    </span>
+                    <MembershipStatus
+                      included={
+                        appliesTo(item.applicability, selected) &&
+                        appliesTo(field.applicability, selected)
+                      }
+                    />
                   </summary>
                   {!appliesTo(item.applicability, selected) && (
                     <p className="whint">

@@ -3,9 +3,9 @@
 // Everything here builds plain { pos, nrm, count } Float32Array meshes (or Vec3 polylines) in MODEL space —
 // no GL, no camera, no React. The 3D view (components/view3d/*) uploads these into three.js BufferGeometry
 // and owns the camera/rendering; hullShader.ts owns the GLSL; hullLines3d.ts builds the lines-plan curves.
-// Deck rake is NOT baked in here — it is applied once, as a rigid Y-axis rotation, by the scene's own
+// Deck trim is NOT baked in here — it is applied once, as a rigid Y-axis rotation, by the scene's own
 // <group> transform (rx = x·cosθ − z·sinθ, rz = x·sinθ + z·cosθ is exactly three's rotateY(−θ)) — so every
-// builder below emits unraked, deck-flat coordinates.
+// builder below emits untrimmed, deck-flat coordinates.
 
 import { type Vec2, type Vec3, V } from "./math";
 import {
@@ -829,7 +829,7 @@ export function getHullBBox(model: Model): number[] {
 
 // the zoom is fixed: it frames a NOMINAL hull box (≈ a typical hull's overall size, as fractions of its own
 // LOA) at a reference orientation, so it depends only on the hull's length — not on the live rotation, the
-// edited geometry, or the rake. Used once, for the camera's initial framing (see nominalCameraFraming below)
+// edited geometry, or the trim. Used once, for the camera's initial framing (see nominalCameraFraming below)
 // — not re-applied on every redraw the way v1's fixed-zoom projection was, since a real orbit camera now
 // owns the live framing.
 const REF_YAW = -0.62,

@@ -162,6 +162,7 @@ export interface BookResults {
     readonly displacement: Reading | null;
     readonly vcg: Reading | null;
     readonly lcg: Reading | null;
+    readonly tcg: Reading | null;
   };
 }
 
@@ -1288,6 +1289,7 @@ export function createPreparedBookEvaluator(
         displacement: outputOf("DISPLACEMENT"),
         vcg: outputOf("VCG"),
         lcg: outputOf("LCG"),
+        tcg: outputOf("TCG"),
       },
     };
   };

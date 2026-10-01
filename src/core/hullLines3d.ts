@@ -160,10 +160,10 @@ export function buildLinesPlanCurves(
 
   // The design waterline shares the waterline family's field, so when its box is on the two are marched in one
   // pass over the triangles: the DWL is laid on as the last level, after any of the family's own, so it can be
-  // lifted straight back off. The field is `worldZ` with the rake's sin/cos lifted out — it runs once per mesh
+  // lifted straight back off. The field is `worldZ` with the trim's sin/cos lifted out — it runs once per mesh
   // vertex per pass, and those two trig calls cost more than the whole rest of the march put together.
-  const sr = Math.sin(model.deckRake),
-    cr = Math.cos(model.deckRake),
+  const sr = Math.sin(model.deckTrim),
+    cr = Math.cos(model.deckTrim),
     wz: Field = (x, _y, z) => x * sr + z * cr;
   const wzLevels: number[] = [];
   if (lines.waterlines) {

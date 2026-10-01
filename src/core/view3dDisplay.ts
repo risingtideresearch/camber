@@ -77,7 +77,7 @@ export interface TrimToggles {
   // WHICH TRIM either form — and the view's own `leftovers` — is drawn for
   sheer: boolean; // the top cut: z = the sheer trim curve
   centerline: boolean; // the keel cut: y = 0
-  transom: boolean; // the aft cut: the raked transom plane
+  transom: boolean; // the aft cut: the sloped transom plane
 }
 
 // both forms of all three trims, which is the whole story the moment Sheet goes on, with every box there to

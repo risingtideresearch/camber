@@ -82,7 +82,7 @@ export function InterpolateApp() {
   // captured once and never move.
   const [trim] = useState(() => {
     const d = defaultHull();
-    return { waterline: d.waterline, deckRake: d.deckRake };
+    return { waterline: d.waterline, deckTrim: d.deckTrim };
   });
 
   // The blend, assembled. This app holds no store and needs none: there is one writer (the blend control) and

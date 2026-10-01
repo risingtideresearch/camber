@@ -14,7 +14,7 @@
 //     those two halves of `sweep.ts` describe the same hull.
 //   - the VCG identity: two VCGs against the same displacement differ by exactly ΔVCG·sin φ, at no extra
 //     flotation solve. That is the whole reason the table is built in KN rather than GZ.
-//   - a raked hull: the same agreement holds with deckRake ≠ 0, which exercises the world-height path, and
+//   - a trimmed hull: the same agreement holds with deckTrim ≠ 0, which exercises the world-height path, and
 //     so does a hull whose sheer plan turns three times as hard, which tilts the station planes hardest.
 //   - symmetry: KN and GZ are odd in heel, which also pins the sign convention (+φ heels to starboard).
 //   - the deck-immersion flag flips exactly where the lowest sheer point crosses the waterline, and ∇ stays
@@ -87,17 +87,17 @@ const sample = (model: Model): HullSampling => {
 
 // ---- agreement with hydro.ts at the design waterline ----
 {
-  for (const rake of [0, 3 * DEG]) {
-    const model = assemble({ ...defaultHull(), deckRake: rake });
+  for (const trim of [0, 3 * DEG]) {
+    const model = assemble({ ...defaultHull(), deckTrim: trim });
     const h = hydrostatics(model, sample(model));
     const sec = stationGeometry(model, sample(model));
     if (!h || !sec) {
-      ok(false, `hydro and sections both build (rake ${rake / DEG}°)`);
+      ok(false, `hydro and sections both build (trim ${trim / DEG}°)`);
       continue;
     }
     // hydro's waterline is a DEPTH below the deck datum; the cut here is at a world HEIGHT
     const im = immersedAt(sec, 0, -model.waterline);
-    const tag = `(rake ${Math.round(rake / DEG)}°)`;
+    const tag = `(trim ${Math.round(trim / DEG)}°)`;
     ok(
       Math.abs(im.vol - h.vol) / h.vol < 2e-3,
       `∇ matches hydro.ts to 0.2% ${tag} — ${im.vol.toFixed(1)} vs ${h.vol.toFixed(1)}`,
@@ -563,14 +563,14 @@ const sample = (model: Model): HullSampling => {
 // ---- a strongly curved sheer plan ----
 //
 // A station plane is normal to the plan's heading, so the harder the plan turns the more a section tilts in
-// x — and at a non-zero deckRake that tilt is what decides where the waterline cuts each vertex. This hull
+// x — and at a non-zero deckTrim that tilt is what decides where the waterline cuts each vertex. This hull
 // turns roughly three times as hard as the default one, which is the case that broke an earlier version
 // that used one nominal x per column.
 {
   // the authored defaults are in v1 units scaled into the hull's own; reuse that scale so the plan below
   // sits on the same hull rather than a millimetre-sized one
   const S = defaultHull().sheerPlan[4].x / 1000;
-  const curved = (rake: number): HullState => ({
+  const curved = (trim: number): HullState => ({
     ...defaultHull(),
     sheerPlan: [
       [0, 205],
@@ -579,13 +579,13 @@ const sample = (model: Model): HullSampling => {
       [750, 190],
       [1000, 0],
     ].map(([x, y]) => ({ x: x * S, y: y * S })),
-    deckRake: rake,
+    deckTrim: trim,
   });
-  for (const rake of [0, 4 * DEG]) {
-    const model = assemble(curved(rake));
+  for (const trim of [0, 4 * DEG]) {
+    const model = assemble(curved(trim));
     const h = hydrostatics(model, sample(model));
     const sec = stationGeometry(model, sample(model));
-    const tag = `(curved plan, rake ${Math.round(rake / DEG)}°)`;
+    const tag = `(curved plan, trim ${Math.round(trim / DEG)}°)`;
     if (!h || !sec) {
       ok(false, `the curved hull builds ${tag}`);
       continue;

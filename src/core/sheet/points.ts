@@ -8,7 +8,7 @@
 //
 // Everything here speaks the SHEET's frame — x from the transom, y from the centreline, z above the keel
 // baseline, all in metres — because that is the frame the cells are written in. The hull is authored
-// deck-flat with rake applied as a rotation, so z is a WORLD height (`x·sinRake + z·cosRake`, as `sweep.ts`
+// deck-flat with trim applied as a rotation, so z is a WORLD height (`x·sinTrim + z·cosTrim`, as `sweep.ts`
 // computes `zBWorld`) while x stays in the deck frame. That hybrid is not this module's invention: it is the
 // frame `hullMetrics.ts` reports `shellLcg` and `shellVcg` in and `slices.ts` measures cuts in, and a point
 // has to land in the same one or a moment arm written against `HULL.SHELL_VCG` would be measured twice.
@@ -61,8 +61,8 @@ export interface PointFrame {
   readonly x0: number;
   readonly x1: number;
   readonly keelZ: number;
-  readonly cosRake: number;
-  readonly sinRake: number;
+  readonly cosTrim: number;
+  readonly sinTrim: number;
   /** The hull's own extent in the sheet's frame, which is what the views fit themselves to. */
   readonly xSpan: readonly [number, number];
   readonly ySpan: readonly [number, number];
@@ -82,7 +82,7 @@ export function toSheet(frame: PointFrame, p: Vec3): Vec3 {
   return [
     (p[0] - frame.x0) * frame.s,
     p[1] * frame.s,
-    (p[0] * frame.sinRake + p[2] * frame.cosRake - frame.keelZ) * frame.s,
+    (p[0] * frame.sinTrim + p[2] * frame.cosTrim - frame.keelZ) * frame.s,
   ];
 }
 
@@ -90,7 +90,7 @@ export function toSheet(frame: PointFrame, p: Vec3): Vec3 {
 export function toModel(frame: PointFrame, p: Vec3): Vec3 {
   const mx = p[0] / frame.s + frame.x0;
   const worldZ = p[2] / frame.s + frame.keelZ;
-  return [mx, p[1] / frame.s, (worldZ - mx * frame.sinRake) / frame.cosRake];
+  return [mx, p[1] / frame.s, (worldZ - mx * frame.sinTrim) / frame.cosTrim];
 }
 
 // ---------- the outlines ----------
@@ -271,11 +271,11 @@ export function hullOutlines(
     x0,
     x1,
     keelZ: geom.keelZ,
-    cosRake: geom.cosRake,
-    sinRake: geom.sinRake,
+    cosTrim: geom.cosTrim,
+    sinTrim: geom.sinTrim,
   };
   // `heightSpan` brackets the hull's own heights, and the keel datum is its floor — so the sheet z of the
-  // lowest point on the hull is 0 by construction, whatever the rake.
+  // lowest point on the hull is 0 by construction, whatever the trim.
   const frame: PointFrame = {
     ...base,
     xSpan: [0, (x1 - x0) * s],

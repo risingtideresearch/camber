@@ -34,5 +34,6 @@ export function loadingOutputs(results: BookResults): {
   const mass = value("DISPLACEMENT", true);
   const vcg = value("VCG");
   const lcg = value("LCG");
-  return { values: mass === null ? null : { mass, vcg, lcg }, errors };
+  const tcg = value("TCG");
+  return { values: mass === null ? null : { mass, vcg, lcg, tcg }, errors };
 }

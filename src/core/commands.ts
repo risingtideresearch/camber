@@ -86,7 +86,7 @@ export type HullCommand =
   | {
       type: "applyFloatingAttitude";
       waterline: number;
-      deckRake: number;
+      deckTrim: number;
       expectedRevision: number;
       /** null selects a weight scenario independently of the Stability session. */
       expectedLoading: string | null;
@@ -94,7 +94,7 @@ export type HullCommand =
       vcg: number | null;
       label: string;
     }
-  | { type: "setDeckRakeDeg"; deg: number }
+  | { type: "setDeckTrimDeg"; deg: number }
   | { type: "setName"; name: string }
   | { type: "setUnit"; unit: Unit; rescale: boolean }
   | { type: "setLoa"; length: number }
@@ -233,7 +233,7 @@ function draft(base: HullState): Draft {
           transom: (transom ?? base.transom) as readonly TransomCP[],
           stations: (stations ?? base.stations) as readonly StationCP[],
           waterline: base.waterline,
-          deckRake: base.deckRake,
+          deckTrim: base.deckTrim,
           ...patch,
         },
         touched,
@@ -509,13 +509,13 @@ export function interpretHullCommand(
     // ---- the document's scalars ----
     case "applyFloatingAttitude":
       d.scalars();
-      return d.commit({ waterline: cmd.waterline, deckRake: cmd.deckRake });
+      return d.commit({ waterline: cmd.waterline, deckTrim: cmd.deckTrim });
     case "setWaterline":
       d.scalars();
       return d.commit({ waterline: cmd.depth });
-    case "setDeckRakeDeg":
+    case "setDeckTrimDeg":
       d.scalars();
-      return d.commit({ deckRake: (cmd.deg * Math.PI) / 180 });
+      return d.commit({ deckTrim: (cmd.deg * Math.PI) / 180 });
     case "setName":
       d.scalars();
       return d.commit({ name: cmd.name });
@@ -695,7 +695,7 @@ export function commandSlices(cmd: DocumentCommand): SliceMask {
     case "applyFloatingAttitude":
       return ALL_SLICES;
     case "setWaterline":
-    case "setDeckRakeDeg":
+    case "setDeckTrimDeg":
     case "setName":
       return SLICE.scalars;
     case "setUnit":
@@ -756,7 +756,7 @@ export function sameGesture(a: DocumentCommand, b: DocumentCommand): boolean {
     case "setStationK":
     case "setKeelK":
     case "setWaterline":
-    case "setDeckRakeDeg":
+    case "setDeckTrimDeg":
     case "setName":
     case "setLoa":
       return true; // a slider or a text field, held down or typed into
@@ -826,8 +826,8 @@ export function describeCommand(
       return "Apply floating equilibrium";
     case "setWaterline":
       return "Set the waterline";
-    case "setDeckRakeDeg":
-      return "Set the deck rake";
+    case "setDeckTrimDeg":
+      return "Set the deck trim";
     case "setName":
       return "Rename the hull";
     case "setUnit":

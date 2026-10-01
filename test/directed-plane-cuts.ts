@@ -192,7 +192,7 @@ compare(
   createDirectedPlaneIntersector(shuffled)([1, 0, 0], 2.13, identity, 1),
   hole,
 );
-// Rake-like affine reporting is deliberately NOT a rigid frame. Amounts remain
+// Trim-like affine reporting is deliberately NOT a rigid frame. Amounts remain
 // physical; only centroids/moments transform. Also exercise millimetre scaling.
 for (const [n, r] of [
   [40, 4],
@@ -833,5 +833,5 @@ assert.equal(
   0,
 );
 console.log(
-  `Directed plane cuts: ${comparisons} grid and ${randomComparisons} random reference comparisons, mesh winding, holes, islands, clipping, shared topology, contact ownership, moments, rake, contour-free and buffered measurement and cache reuse passed`,
+  `Directed plane cuts: ${comparisons} grid and ${randomComparisons} random reference comparisons, mesh winding, holes, islands, clipping, shared topology, contact ownership, moments, trim, contour-free and buffered measurement and cache reuse passed`,
 );

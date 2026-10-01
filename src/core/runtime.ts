@@ -151,7 +151,7 @@ export function assemble(
     transom: hull.transom as Model["transom"],
     stations: hull.stations as Model["stations"],
     waterline: hull.waterline,
-    deckRake: hull.deckRake,
+    deckTrim: hull.deckTrim,
     x0: session.x0,
     viewLen: session.viewLen,
     ...derived,
@@ -170,7 +170,7 @@ export const stateOf = (model: Model): HullState =>
     transom: model.transom,
     stations: model.stations,
     waterline: model.waterline,
-    deckRake: model.deckRake,
+    deckTrim: model.deckTrim,
   });
 
 /** The session values a runtime model is carrying. */

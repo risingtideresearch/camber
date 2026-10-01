@@ -29,7 +29,7 @@
 //
 // What is assumed, and what it costs:
 //
-//   • FIXED TRIM. The hull heels at the model's own deckRake; it is not free to trim as it heels. This is
+//   • FIXED TRIM. The hull heels at the model's own deckTrim; it is not free to trim as it heels. This is
 //     the one real modelling assumption here, and the first thing to revisit. Free trim would make each
 //     (φ, ∇) a 2×2 balance — a genuine root-find — and would re-introduce a weak VCG coupling (G's world-x
 //     shifts by z_G·sin θ), which is exactly the term standard KN tabulation neglects.

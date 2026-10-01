@@ -5,7 +5,7 @@
   padding: 20px;
 }
 .loading-card {
-  max-width: 860px;
+  max-width: 1000px;
   margin: 0 auto 16px;
   padding: 20px;
 }
@@ -63,11 +63,30 @@
   font-size: 12px;
   line-height: 1.6;
 }
-.loading-iterate {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.loading-purpose {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin: 0 0 12px;
+  padding: 12px;
+}
+.loading-purpose legend {
+  color: var(--mut);
+  font-size: 12px;
+  padding: 0 6px;
+}
+.loading-purpose label {
   font-size: 13px;
+  cursor: pointer;
+}
+.loading-purpose label span {
+  display: block;
+  color: var(--mut);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 6px 0 0 24px;
 }
 .loading-step + .loading-step {
   border-top: 1px solid var(--line);
@@ -82,15 +101,6 @@
 }
 .loading-workflow > header {
   margin-bottom: 12px;
-}
-.loading-actions {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 12px 24px;
-  margin-bottom: 12px;
-}
-.loading-actions .loading-hint {
-  margin: 6px 0;
 }
 .loading-value small {
   color: var(--mut);
@@ -143,4 +153,83 @@
 .loading-panel select:focus-visible {
   outline: 2px solid var(--mut);
   outline-offset: 2px;
+}
+
+.loading-constraints-disclosure {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin: 12px 0;
+  padding: 12px;
+}
+.loading-constraints-disclosure summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+.loading-constraints-disclosure summary small {
+  color: var(--mut);
+  font-size: 12px;
+  margin-left: 12px;
+}
+.loading-constraints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  min-width: 0;
+  border: 0;
+  margin: 12px 0 0;
+  padding: 0;
+}
+.loading-constraints > div,
+.loading-constraints label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.loading-constraints input[type="number"] {
+  width: 85px;
+}
+.loading-constraints .loading-hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+.loading-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.loading-comparison {
+  width: 100%;
+  min-width: 650px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.loading-comparison caption {
+  text-align: left;
+  color: var(--mut);
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+.loading-comparison th,
+.loading-comparison td {
+  text-align: right;
+  padding: 12px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.loading-comparison th:first-child {
+  text-align: left;
+}
+.loading-comparison .loading-row-status {
+  text-align: left;
+  font-size: 12px;
+  max-width: 220px;
+  overflow-wrap: anywhere;
+}
+.loading-reference {
+  background: var(--bg);
+}
+.loading-fixed {
+  display: block;
+  color: var(--mut);
+  font-size: 11px;
+  font-weight: normal;
 }

@@ -1154,7 +1154,7 @@ export function dwlPointAt(model: Model, u: number): Vec3 | null {
 
 const immersionOf = (model: Model, p: Vec3): number =>
   -model.waterline -
-  (p[0] * Math.sin(model.deckRake) + p[2] * Math.cos(model.deckRake));
+  (p[0] * Math.sin(model.deckTrim) + p[2] * Math.cos(model.deckTrim));
 
 // ---------- the hull's longitudinal extent ----------
 // The bow closes where the sections vanish — the forefoot rises above the sheer trim, or a tumblehome lens
@@ -1191,7 +1191,7 @@ export function aftLimit(model: Model): number {
 
 // ---------- the transom outline ----------
 //
-// Where the swept surface meets the raked transom plane, head (on the sheer) → foot (on the centerline). It is
+// Where the swept surface meets the sloped transom plane, head (on the sheer) → foot (on the centerline). It is
 // `hullTransom` itself — the trimmed boundary curve, its two ends the head / foot corners computeHullSampling
 // root-finds onto the plane — so whatever is built on it (the 3D panel, the plan footprint, the profile edge)
 // rides the hull's own aft edge exactly, sharing its very vertices, rather than a second approximation of it.
@@ -1247,11 +1247,11 @@ export function dwlContour(
   model: Model,
   sampling: HullSampling,
 ): [number, number][][] {
-  // the immersion field with the rake's sin/cos lifted out — it runs once per sample of every column, and
+  // the immersion field with the trim's sin/cos lifted out — it runs once per sample of every column, and
   // those two trig calls would otherwise cost more than the whole march put together (the same reason the
   // lines plan's own march hoists them)
-  const sr = Math.sin(model.deckRake),
-    cr = Math.cos(model.deckRake),
+  const sr = Math.sin(model.deckTrim),
+    cr = Math.cos(model.deckTrim),
     imm = (p: Vec3): number => -model.waterline - (p[0] * sr + p[2] * cr);
   const runs: [number, number][][] = [];
   let run: [number, number][] = [];

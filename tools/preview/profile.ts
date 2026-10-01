@@ -46,8 +46,8 @@ let body = "";
 body += `<line x1="${mapX(0)}" y1="${zScreenP(0)}" x2="${mapX(L)}" y2="${zScreenP(0)}" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="2 4"/>`;
 
 // DWL (blue), all the way forward to the closure
-const wlS = Math.sin(model.deckRake),
-  wlC = Math.cos(model.deckRake);
+const wlS = Math.sin(model.deckTrim),
+  wlC = Math.cos(model.deckTrim);
 const zWL = (x: number) => (-model.waterline - x * wlS) / wlC;
 body += `<line x1="${mapX(0)}" y1="${zScreenP(zWL(0))}" x2="${mapX(xFwd)}" y2="${zScreenP(zWL(xFwd))}" stroke="#0ea5e9" stroke-width="1.8"/>`;
 

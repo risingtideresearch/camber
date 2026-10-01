@@ -89,7 +89,7 @@
 //   section #2 residuals: depth-steps i=1..S-1 (base,Δ) + n i=1..S-2 (base,Δ)   (2(S-1)+2(S-2))
 //   sheer backbone:       dMaxTrim, dTransom, dBow, fLow                        (4)
 //   sheer #2 residuals:   interior trim points 1..Q-2                           (Q-2)
-//   transom:              immersion-frac, x, rake                               (3)
+//   transom:              immersion-frac, x, trim                               (3)
 //   ⇒ M = 19 + (P-2) + (Q-2) + (4S-6)      (default topology 5 / 4 / 5  ⇒  M = 38)
 //   Past the end of θ the coordinate source returns 0 (the backbone value), so a short or empty θ
 //   simply yields the canonical hull — which is exactly how `meanDoc()` works.
@@ -347,7 +347,7 @@ function decodeDoc(model: Model, z: Coord): string {
   });
 
   // --- transom: top edge meets the sheer at the stern (predicted, no own coord); immersion ∝ aft draft.
-  // v1 stated a point, a depth-step and a rake slope; v2 states both profile points outright, so the rake
+  // v1 stated a point, a depth-step and a trim slope; v2 states both profile points outright, so the trim
   // is applied here rather than stored. ---
   const depthTop = clamp(trimDepth(0), S1(5), DEPTH_MAX * 0.5),
     depthBot = clamp(
@@ -356,12 +356,12 @@ function decodeDoc(model: Model, z: Coord): string {
       DEPTH_MAX,
     );
   const tx0 = clamp(bounded(z(), S1(150), S1(60), S1(360)), 0, L * 0.45),
-    rake = real(z(), -0.25, 0.2), // dx/dz: negative ⇒ the foot sits FORWARD of the top (a raked transom)
+    trim = real(z(), -0.25, 0.2), // dx/dz: negative ⇒ the foot sits FORWARD of the top (a sloped transom)
     zTop = -depthTop,
     zBot = -depthBot;
   const transom = [
     { x: tx0, z: zTop },
-    { x: tx0 + (zBot - zTop) * rake, z: zBot },
+    { x: tx0 + (zBot - zTop) * trim, z: zBot },
   ];
 
   // the two sections become stations at the ends of the plan; `d` is depth, the document stores world z
@@ -383,7 +383,7 @@ function decodeDoc(model: Model, z: Coord): string {
     name: "random",
     unit: model.unit,
     waterline: model.waterline, // preserve the current trim controls; only the shape is resampled
-    deckRakeDeg: (model.deckRake * 180) / Math.PI,
+    deckTrimDeg: (model.deckTrim * 180) / Math.PI,
     sheerPlan,
     sheerTrim,
     transom,

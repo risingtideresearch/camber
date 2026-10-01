@@ -30,7 +30,7 @@ import { assertValidHull } from "./invariants";
 // A hull under construction: everything a `HullState` carries but the two trim scalars, and mutable, because
 // decoding, unit conversion and topology promotion all build it up in passes. It becomes authored state — and
 // stops being writable — at `parseDocument`'s return.
-export type HullData = Writable<Omit<HullState, "waterline" | "deckRake">>;
+export type HullData = Writable<Omit<HullState, "waterline" | "deckTrim">>;
 
 type PlanCP = HullData["sheerPlan"][number];
 type TrimCP = HullData["sheerTrim"][number];
@@ -38,7 +38,7 @@ type TransomCP = HullData["transom"][number];
 type StationCP = HullData["stations"][number];
 export interface ParsedDoc {
   waterline: number;
-  deckRake: number; // radians
+  deckTrim: number; // radians
   topology: {
     sheerPlan: number;
     sheerTrim: number;
@@ -59,7 +59,7 @@ export function buildJson(hull: HullState): string {
     name: hull.name,
     unit: hull.unit,
     waterline: hull.waterline,
-    deckRakeDeg: (hull.deckRake * 180) / Math.PI,
+    deckTrimDeg: (hull.deckTrim * 180) / Math.PI,
     sheerPlan: hull.sheerPlan.map((p) => ({ x: p.x, y: p.y })),
     sheerTrim: hull.sheerTrim.map((p) => ({ x: p.x, z: p.z, k: p.k })),
     transom: hull.transom.map((p) => ({ x: p.x, z: p.z })),
@@ -233,15 +233,14 @@ export function parseDocument(text: string): ParsedDoc {
     typeof doc.waterline === "number" && isFinite(doc.waterline)
       ? doc.waterline
       : 0;
-  const deckRakeDeg =
-    typeof doc.deckRakeDeg === "number" && isFinite(doc.deckRakeDeg)
-      ? doc.deckRakeDeg
-      : 0;
+  // Read earlier v2 exports as well as the current spelling; always write deckTrimDeg.
+  const angle = doc.deckTrimDeg ?? doc.deckRakeDeg;
+  const deckTrimDeg = typeof angle === "number" && isFinite(angle) ? angle : 0;
   const hull = decodeHull(doc);
   const state: HullState = {
     ...hull,
     waterline,
-    deckRake: (deckRakeDeg * Math.PI) / 180,
+    deckTrim: (deckTrimDeg * Math.PI) / 180,
   };
   // The structural validators above are the format's rules; this is the model's. A document may be laxer than
   // what the editor writes — fewer control points, stations packed tighter than U_GAP — and still be a hull
@@ -250,7 +249,7 @@ export function parseDocument(text: string): ParsedDoc {
 
   return {
     waterline: state.waterline,
-    deckRake: state.deckRake,
+    deckTrim: state.deckTrim,
     topology: {
       sheerPlan: hull.sheerPlan.length,
       sheerTrim: hull.sheerTrim.length,

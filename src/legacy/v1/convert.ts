@@ -223,7 +223,7 @@ export function convertV1ToV2(doc: V1Doc): V2Doc {
     name: doc.name ?? "",
     unit: "mm", // v1 was unitless; the numbers carry across as written (see the header)
     waterline: doc.waterline ?? 0,
-    deckRakeDeg: doc.deckRakeDeg ?? 0,
+    deckTrimDeg: doc.deckRakeDeg ?? 0,
     sheerPlan: plan.map((p) => ({ x: p.x, y: p.y })),
     sheerTrim: trim.map((p) => ({ x: p.x, z: p.z, k: p.k })),
     transom: [top, bot],
@@ -231,7 +231,7 @@ export function convertV1ToV2(doc: V1Doc): V2Doc {
   };
 }
 
-// v1's transom was a point plus a depth-step and a rake slope; v2 states both profile points outright
+// v1's transom was a point plus a depth-step and a slope; v2 states both profile points outright
 function decTransomPoints(
   t: V1Doc["transom"],
 ): [{ x: number; z: number }, { x: number; z: number }] {

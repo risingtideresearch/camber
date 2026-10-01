@@ -25,7 +25,7 @@ Try it here: [https://risingtideresearch.github.io/camber/](https://risingtidere
 
 - **The sweep is primary; almost everything else is emergent.** A hull is authored as a
   small set of _generators_ — one **sheer** (a plan-view guide curve plus a profile trim
-  line), one raked **transom** plane, a small set of transverse **section templates**, and a
+  line), one sloped **transom** plane, a small set of transverse **section templates**, and a
   **weight curve** that blends them along the length. The 3-D surface is the locus traced by
   sweeping the blended template along the sheer. The **keel, stem, and rocker are not authored** — they emerge where the
   swept sections reach the centerline. So are the waterlines, buttocks, draft, and the
@@ -41,7 +41,7 @@ Try it here: [https://risingtideresearch.github.io/camber/](https://risingtidere
   [Interpolation](#interpolation-and-blending)). The previous model is `K = 2` with
   `w = (1−x/L, x/L)`.
 - **Everything positional is a concrete number.** A control point's position, a template
-  point's depth and offset, the transom's rake — each is a single authored number. There is
+  point's depth and offset, the transom's slope — each is a single authored number. There is
   no position-solving phase; the only thing downstream code does is _evaluate_ the sweep and
   fair the curves through the authored points.
 - **A document is one hull.** Each document holds the numbers for a single hull — the
@@ -121,10 +121,10 @@ HullDocument {
   name?:        string
   length:       number          // L, overall length (x of the bow); the unitless scale (= 1000)
   waterline?:   number          // depth of the design waterline below the sheer origin
-  deckRakeDeg?: number          // deck rake (degrees, +ve = bow up); the hull is built deck-flat
+  deckRakeDeg?: number          // deck trim (degrees, +ve = bow up); the hull is built deck-flat
   sheerPlan:    PlanPoint[]     // ≥ 2; the deck-edge guide curve — and the blend path (see below)
   sheerTrim:    TrimPoint[]     // ≥ 2; the real sheer, in profile
-  transom:      Transom         // the raked stern plane (always two points)
+  transom:      Transom         // the sloped stern plane (always two points)
   templates:    SectionPoint[][] // K ≥ 1 templates, each the same length S ≥ 2 (index 0 = sheer point)
   keelK?:       number[]        // length K; per-template keel knuckle ∈ [0,1]
 }
@@ -134,7 +134,7 @@ Nothing is referred to by id, and there is no separate "topology" block: the dis
 is just the array lengths — `sheerPlan.length`, `sheerTrim.length`, the per-template point count
 `S = templates[0].length` (the same for every template), and the template count `K =
 templates.length`. There is exactly one sheer and one transom, so those are implicit; the
-transom is always two points (top and bottom of its raked plane). The templates are
+transom is always two points (top and bottom of its sloped plane). The templates are
 index-aligned, so each along-hull blend pairs point `i` with point `i`.
 
 `length` is the document's **unitless scale**. Geometry is built in world `x ∈ [0, L]`; on
@@ -181,7 +181,7 @@ Quantities with a _sign_ but no _ordering_ are stored directly and constrained `
 point's half-breadth `y`, a trim point's `depth` below the deck (`= −z`), the transom's two
 depths. Non-negativity is preserved by convex combination. The genuinely free quantities are
 stored directly over `ℝ`: a section point's inboard offset `n` (negative is allowed —
-**tumblehome**, the section leaning outboard of the deck edge), and the transom rake slope.
+**tumblehome**, the section leaning outboard of the deck edge), and the transom slope.
 Finally, a section point carries a **knuckle** `k ∈ [0,1]` (`0` = smooth, `1` = hard corner);
 a bounded interval is convex, so it blends like everything else.
 
@@ -198,7 +198,7 @@ SectionPoint { dd: number,  n: number,  k: number }     // dd > 0 (= 0 for pt 0,
 
 The valid region of a hull is thus the product of: positive orthants (every later plan/trim
 `dx`, every template `dd`), a non-negative orthant (every `y`, every `depth`), free lines
-(every `n`, the transom rake), bounded intervals (every knuckle `k`), simplices (every plan
+(every `n`, the transom slope), bounded intervals (every knuckle `k`), simplices (every plan
 station's `w`), and the transom's bounded box (below). Every factor is convex and an
 intersection of convex sets is convex, so the valid region is convex. **Any convex blend of valid
 hulls is valid**, with no feasibility check.
@@ -233,8 +233,11 @@ independent generators with independent control-point counts.
 
 ## The transom
 
-The transom is the raked plane that closes the hull aft. It is a vertical-in-`y`, raked-in-
-`x`-`z` plane: at height `z` its longitudinal position is `x = x_top + (z − z_top)·rake`,
+The field names below describe the original v1 file format; new exports use `deckTrimDeg`
+and represent the transom as two profile points. Existing v1 field names remain supported on import.
+
+The transom is the sloped plane that closes the hull aft. It is a vertical-in-`y`, sloped-in-
+`x`-`z` plane: at height `z` its longitudinal position is `x = x_top + (z − z_top)·slope`,
 constant across the breadth. The sweep is clipped to the forward side of this plane, and the
 cut face is solid.
 
@@ -250,7 +253,7 @@ Transom {
 `x` lives in a bounded interval in the aft region (a convex box). The plane is pinned by its
 top edge `(x_top, z_top = −depthTop)` and its slope `transomRake`; the bottom edge's depth is
 encoded as a positive increment `dDepthBot > 0` so the bottom stays below the top under every
-blend. `rake` is a free real, matching the slope convention used for tilts. The actual
+blend. The transom slope is a free real, matching the slope convention used for tilts. The actual
 transom _outline_ — where the plane meets the swept surface — is derived (see below), not
 authored.
 
@@ -386,7 +389,7 @@ rather than forbidden.
   curve, and it fades out wherever the knuckle relaxes toward `0`. Derived.
 - **Draft** at a station is the depth of its keel point; the maximum over `x` is the hull's
   draft. Derived.
-- **The transom outline** is where the swept surface meets the raked transom plane, bounded
+- **The transom outline** is where the swept surface meets the sloped transom plane, bounded
   above by the trim and below by the emergent keel. Derived.
 - **Waterlines** (`z = const`) and **buttocks** (`y = const`) are contours traced across the
   swept sections. Derived.
@@ -438,7 +441,7 @@ feasibility check:
   single-valued in `x` and the templates stay strictly descending in depth.
 - Every half-breadth `y`, trim `depth`, and transom depth stays non-negative; the transom `x`
   stays in its box; the bottom edge stays below the top via `dDepthBot > 0`.
-- Free reals (`n`, rake) stay free.
+- Free reals (`n`, the transom slope) stay free.
 
 **Two interpolations that no longer commute (and the bilinear defect).** The along-hull blend
 (the weight curve mixing the templates) and the across-design blend (designs mixed by weights)

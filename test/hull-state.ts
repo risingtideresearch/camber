@@ -388,7 +388,7 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
   }
   run({ type: "setTrimK", idx: 1, k: 0.5 });
   run({ type: "setWaterline", depth: 0.03 * L });
-  run({ type: "setDeckRakeDeg", deg: 3 });
+  run({ type: "setDeckTrimDeg", deg: 3 });
   run({ type: "setName", name: "a boat" });
   ok(model.name === "a boat", "setName reaches the hull");
   check("the scalar setters");
@@ -421,7 +421,7 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
       beam: Math.max(...model.sheerPlan.map((p) => p.y)),
       z: model.stations[0].points[1].z,
       u: model.stations[0].u,
-      rake: model.deckRake,
+      trim: model.deckTrim,
     };
     const target = 3.7 * was.loa;
     run({ type: "setLoa", length: target });
@@ -443,8 +443,8 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
       "setLoa scales the waterline, the breadths and the section heights by the same factor",
     );
     ok(
-      model.stations[0].u === was.u && model.deckRake === was.rake,
-      "setLoa leaves the dimensionless parameters — u, knuckles, rake — alone",
+      model.stations[0].u === was.u && model.deckTrim === was.trim,
+      "setLoa leaves the dimensionless parameters — u, knuckles, trim — alone",
     );
     check("setLoa");
     ok(

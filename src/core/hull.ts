@@ -47,7 +47,7 @@ export interface HullState {
   readonly transom: readonly TransomCP[]; // exactly 2: [top, bottom]
   readonly stations: readonly StationCP[]; // K ≥ 1, strictly increasing in u
   readonly waterline: number; // depth (≥ 0) of the design waterline below the deck datum
-  readonly deckRake: number; // radians, +ve = bow up
+  readonly deckTrim: number; // radians, +ve = bow up
 }
 
 // ---------- the hull's own scale ----------
@@ -167,7 +167,7 @@ export function defaultHull(): HullState {
       points: st.pts.map(([n, z, k]) => ({ n: S(n), z: S(z), k })),
     })),
     waterline: S(150),
-    deckRake: 0,
+    deckTrim: 0,
   };
 }
 
@@ -185,7 +185,7 @@ export function cloneHull(state: HullState): HullState {
       points: st.points.map((p) => ({ ...p })),
     })),
     waterline: state.waterline,
-    deckRake: state.deckRake,
+    deckTrim: state.deckTrim,
   };
 }
 
@@ -216,7 +216,7 @@ export function withUnit(
       })),
     })),
     waterline: state.waterline * scale,
-    deckRake: state.deckRake,
+    deckTrim: state.deckTrim,
   };
 }
 
