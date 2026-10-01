@@ -186,6 +186,29 @@
   color: var(--mut);
   margin-top: 4px;
 }
+/* Color is a quiet secondary cue; the words still carry the membership state. */
+.wscenario-membership-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: normal;
+  white-space: nowrap;
+}
+.wscenario-membership-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.wscenario-membership-status.is-included {
+  color: #23745a;
+}
+.wscenario-membership-status.is-excluded {
+  color: #a05a32;
+}
 .wscenario-change-values {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -345,12 +368,9 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
-.wscenarios-member summary > span {
+.wscenarios-member summary > .wscenario-membership-status {
   float: right;
-  color: var(--mut);
-  font-weight: normal;
   margin-left: 12px;
-  font-size: 11px;
 }
 .wscenarios-member .wscenario-membership {
   padding: 10px 16px;
