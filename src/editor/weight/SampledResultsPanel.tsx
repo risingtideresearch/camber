@@ -17,6 +17,7 @@ export function SampledResultsPanel({
   selectedKey,
   keys,
   onPick,
+  virtual,
 }: {
   readonly book: WeightBook;
   readonly sampling: HullSampling | null;
@@ -26,11 +27,16 @@ export function SampledResultsPanel({
   readonly selectedKey: string | null;
   readonly keys: readonly string[];
   readonly onPick: (key: string) => void;
+  readonly virtual?: {
+    readonly target: SamplingTarget;
+    readonly label: string;
+  };
 }) {
   const names = new Map(
     book.items.map((item) => [item.id, item.name || item.id]),
   );
   const label = (key: string) => {
+    if (virtual?.target.cellKey === key) return virtual.label;
     const cell = results.cells.get(key);
     if (!cell) return key;
     return `${names.get(cell.itemId) ?? cell.itemId}.${cell.fieldKey}${cell.leaf === "formula" ? "" : `.${cell.leaf}`}`;
@@ -38,6 +44,7 @@ export function SampledResultsPanel({
   const [picked, setPicked] = useState(selectedKey);
   const selected = picked && keys.includes(picked) ? picked : (keys[0] ?? null);
   const targets = keys.filter((key) => {
+    if (virtual?.target.cellKey === key) return true;
     const cell = results.cells.get(key);
     return cell && !cell.empty;
   });
@@ -58,6 +65,7 @@ export function SampledResultsPanel({
       return;
     }
     const requested: SamplingTarget[] = signature.split("\0").map((key) => {
+      if (virtual?.target.cellKey === key) return virtual.target;
       const cell = results.cells.get(key)!;
       return {
         cellKey: key,
@@ -69,10 +77,25 @@ export function SampledResultsPanel({
       };
     });
     start(requested);
-  }, [ready, sampling, signature, current, results, start, prioritize]);
+  }, [
+    ready,
+    sampling,
+    signature,
+    current,
+    results,
+    start,
+    prioritize,
+    virtual,
+  ]);
   const chosen = result?.outputs.find((output) => output.cellKey === selected);
   const unitFor = (key: string, dim?: SamplingTarget["dim"]) =>
     results.cells.get(key)?.unit ?? (dim ? naturalUnit(dim) : null);
+  const nominalFor = (key: string) =>
+    virtual?.target.cellKey === key
+      ? "value" in virtual.target.nominal
+        ? virtual.target.nominal.value
+        : undefined
+      : results.cells.get(key)?.quantity?.v;
   const number = (value: number | undefined, factor = 1) =>
     value === undefined ? "—" : sig(inUnit(value, factor));
   const allInvalid = (output: NonNullable<typeof chosen>) =>
@@ -209,7 +232,7 @@ export function SampledResultsPanel({
                         </span>
                       ) : null}
                     </th>
-                    <td>{number(cell?.quantity?.v, factor)}</td>
+                    <td>{number(nominalFor(key), factor)}</td>
                     <td>
                       {output?.distribution ? (
                         `${number(output.distribution.mean, factor)} ± ${number(output.distribution.standardDeviation, factor)}`

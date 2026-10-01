@@ -91,6 +91,10 @@ import { hullOutlines, spreadRegion } from "../../core/sheet/points";
 import { EMPTY_GRADIENT, LENGTH } from "../../core/sheet/quantity";
 import { naturalUnit } from "../../core/sheet/units";
 import { roleTotals } from "../../core/sheet/rollups";
+import {
+  rollupSampleKey,
+  type SampleRollup,
+} from "../../core/sheet/sampleRollup";
 import { roleSpec } from "../../core/sheet/roles";
 import { PointViews, type Move, type PlottedPoint } from "./PointViews";
 import { plotCuts, plotPoints, snapTargets } from "./pointPlots";
@@ -794,16 +798,47 @@ function ResizableBody({
   );
 }
 
-function SampledInspector(props: BodyProps) {
+function SampledInspector(
+  props: BodyProps & {
+    readonly rollup?: {
+      selection: RollupSelection;
+      items: readonly Item[];
+      nominal: number | null;
+    };
+  },
+) {
   const focus = props.view.layout === "summary" ? null : props.focus;
-  const keys =
-    props.view.layout === "summary"
+  const rollup: SampleRollup | null = props.rollup
+    ? {
+        itemIds: props.rollup.items.map((item) => item.id),
+        role: props.rollup.selection.role,
+        leaf: props.rollup.selection.leaf,
+      }
+    : null;
+  const virtual = rollup
+    ? {
+        target: {
+          cellKey: rollupSampleKey(rollup),
+          rollup,
+          dim: roleSpec(rollup.role)!.dim,
+          nominal:
+            props.rollup!.nominal === null
+              ? { error: "Nominal total unavailable" }
+              : { value: props.rollup!.nominal },
+        },
+        label: `${props.rollup!.selection.label}.${rollup.role}${rollup.leaf === "value" ? "" : `.${rollup.leaf}`}`,
+      }
+    : undefined;
+  const keys = virtual
+    ? [virtual.target.cellKey]
+    : props.view.layout === "summary"
       ? [cellKey(OUTPUT_ITEM, props.selectedOutput)]
       : focus?.field
         ? sampledFieldKeys(props.book, focus.item, focus.field)
         : [];
-  const selectedKey =
-    props.view.layout === "summary"
+  const selectedKey = virtual
+    ? virtual.target.cellKey
+    : props.view.layout === "summary"
       ? keys[0]
       : focus?.field
         ? cellKey(
@@ -815,9 +850,11 @@ function SampledInspector(props: BodyProps) {
   return (
     <SampledResultsPanel
       key={
-        focus?.field
-          ? `${focus.item} ${focus.field}`
-          : `OUT ${props.view.layout} ${props.selectedOutput}`
+        virtual
+          ? virtual.target.cellKey
+          : focus?.field
+            ? `${focus.item} ${focus.field}`
+            : `OUT ${props.view.layout} ${props.selectedOutput}`
       }
       book={props.book}
       sampling={props.hullSampling}
@@ -826,6 +863,7 @@ function SampledInspector(props: BodyProps) {
       run={props.sampledRun}
       keys={keys}
       selectedKey={selectedKey}
+      virtual={virtual}
       onPick={(key) => {
         if (!focus?.field) return;
         const field = findItem(props.book, focus.item)?.fields[focus.field];
@@ -1003,7 +1041,19 @@ function ViewBody(props: BodyProps) {
                 {shown === "compare" ? (
                   <WorkspaceInspector {...props} shown={shown} />
                 ) : shown === "sampled" ? (
-                  <SampledInspector {...props} />
+                  <SampledInspector
+                    {...props}
+                    rollup={
+                      selectedTotal
+                        ? {
+                            selection: selectedTotal,
+                            items: totalItems,
+                            nominal:
+                              total?.values[selectedTotal.leaf]?.v ?? null,
+                          }
+                        : undefined
+                    }
+                  />
                 ) : shown === "reference" ? (
                   <Reference book={book} />
                 ) : shown === "geometry" ? (
