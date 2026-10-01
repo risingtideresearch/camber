@@ -1,16 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "../components/Button";
-import { DEFAULT_LOADING, loadingKey } from "../core/loading";
+import { canApplyEquilibrium } from "../core/equilibrium";
+import {
+  DEFAULT_LOADING,
+  loadingKey,
+  type LoadingPurpose,
+} from "../core/loading";
 import { unitScale } from "../core/json";
-import { loadingOutputs } from "../core/sheet/loadingOutputs";
+import { defaultSession } from "../core/runtime";
 import { resolveScenario } from "../core/sheet/resolveScenario";
-import { scenariosOf } from "../core/sheet/scenarios";
-import type { EquilibriumMode } from "../core/equilibrium";
-import type {
-  LoadingProposal,
-  LoadingRequest,
-  LoadingResponse,
-} from "../worker/loadingComputation";
+import { scenariosOf, SHARED_WORKSPACE } from "../core/sheet/scenarios";
+import type { LoadingBatchRequest } from "../worker/loadingComputation";
 import {
   useDocumentDispatch,
   useDocumentRuntime,
@@ -19,146 +19,154 @@ import {
 import { useEditorUi } from "./editorUi";
 import { OpenPanelButton } from "./OpenPanelButton";
 import { DetachPanelButton } from "./DetachPanelButton";
-import { ScenarioLoading } from "./weight/ScenarioLoading";
-import { useStabilityAnalysis } from "./useStabilityAnalysis";
-import { useWeightBookResults } from "./useWeightBookResults";
+import {
+  LoadingAttitudePreview,
+  LoadingConstraintFields,
+  LoadingPurposePicker,
+} from "./LoadingAttitudePreview";
+import { LoadingScenarioComparison } from "./LoadingScenarioComparison";
+import {
+  degrees,
+  readLoadingConstraints,
+  showLoadingValue as show,
+  type LoadingConstraintInputs,
+} from "./loadingPresentation";
+import { useLoadingAnalysis } from "./useLoadingAnalysis";
 import "./LoadingPanel.css";
 
-const show = (value: number | null, digits = 3) =>
-  value === null || !Number.isFinite(value)
-    ? "—"
-    : value.toLocaleString(undefined, { maximumFractionDigits: digits });
-const degrees = (radians: number) => (radians * 180) / Math.PI;
-
-interface Task {
-  readonly key: string;
-  readonly mode: EquilibriumMode;
-  readonly pending: boolean;
-  readonly proposal?: LoadingProposal;
-  readonly error?: string;
-}
-
-export function LoadingPanel({
-  onEditEstimate,
-  scenarioId: selectedScenario,
-}: {
+interface LoadingPanelProps {
   /** Present when hosted inside Weights; return to its output formulas in place. */
   readonly onEditEstimate?: () => void;
   readonly scenarioId?: string | null;
-} = {}) {
+}
+
+export function LoadingPanel(props: LoadingPanelProps = {}) {
+  const snapshot = useDocumentSnapshot();
+  // A newly opened design gets its own controls/reference and cancels old work.
+  return <LoadingWorkspace key={snapshot.meta.design.currentId} {...props} />;
+}
+
+function LoadingWorkspace({
+  onEditEstimate,
+  scenarioId: selectedScenario,
+}: LoadingPanelProps) {
   const snapshot = useDocumentSnapshot();
   const model = useDocumentRuntime();
   const dispatch = useDocumentDispatch();
-  const { perf, sampling } = useEditorUi();
+  const { perf } = useEditorUi();
   const authoredBook = snapshot.state.weights;
   const documentId = snapshot.meta.design.currentId;
-  const [workspace, setWorkspace] = useState<{
-    documentId: string | null;
-    id: string | null;
-  }>({ documentId, id: null });
+  const [workspace, setWorkspace] = useState<string | null>(null);
+  const [purpose, setPurpose] = useState<LoadingPurpose>("balance-design");
+  const [inputs, setInputs] = useState<LoadingConstraintInputs>({
+    fixTrim: false,
+    trim: String(degrees(model.deckTrim)),
+    fixHeel: false,
+    heel: "0",
+  });
+  const [reference, setReference] = useState(SHARED_WORKSPACE);
+  const [showChanges, setShowChanges] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState<{
+    key: string;
+    error: string;
+  } | null>(null);
+  const choices = useMemo(
+    () => [
+      { id: SHARED_WORKSPACE, name: "Shared" },
+      ...scenariosOf(authoredBook),
+    ],
+    [authoredBook],
+  );
   const requestedScenario =
-    selectedScenario !== undefined
-      ? selectedScenario
-      : workspace.documentId === documentId
-        ? workspace.id
-        : null;
-  const scenarioId = scenariosOf(authoredBook).some(
-    (s) => s.id === requestedScenario,
-  )
+    selectedScenario !== undefined ? selectedScenario : workspace;
+  const scenarioId = choices.some((choice) => choice.id === requestedScenario)
     ? requestedScenario
     : null;
-  const loading = { ...DEFAULT_LOADING, scenarioId };
-  const book = useMemo(
-    () => resolveScenario(authoredBook, scenarioId),
-    [authoredBook, scenarioId],
+  const activeId = scenarioId ?? SHARED_WORKSPACE;
+  const label = choices.find((choice) => choice.id === activeId)!.name;
+  const referenceId = choices.some((choice) => choice.id === reference)
+    ? reference
+    : SHARED_WORKSPACE;
+  const constraintInputs = {
+    ...inputs,
+    trim: inputs.fixTrim ? inputs.trim : String(degrees(model.deckTrim)),
+  };
+  const { constraints, error: constraintError } = useMemo(
+    () => readLoadingConstraints(inputs, purpose),
+    [inputs, purpose],
   );
-  const {
-    analysis,
-    pending: analysisPending,
-    error: analysisError,
-  } = useStabilityAnalysis(snapshot, perf);
-  const sheet = useWeightBookResults(
-    book,
-    model,
-    sampling(),
-    analysis?.metrics ?? null,
+  const entries = useMemo(
+    () =>
+      (purpose === "balance-design"
+        ? choices.filter((choice) => choice.id === activeId)
+        : choices
+      ).map(({ id }) => ({
+        id,
+        book: resolveScenario(
+          authoredBook,
+          id === SHARED_WORKSPACE ? null : id,
+        ),
+      })),
+    [authoredBook, choices, activeId, purpose],
   );
-  const outputs = loadingOutputs(sheet.results);
-  const values = outputs.values;
-  const [iterate, setIterate] = useState(true);
-  const [task, setTask] = useState<Task | null>(null);
-  const [applying, setApplying] = useState(false);
-  const [applyError, setApplyError] = useState<string | null>(null);
-  const worker = useRef<Worker | null>(null);
-  const key = `${documentId}|${snapshot.revision}|${loadingKey(loading)}|${iterate}|${perf.numSections}|${perf.girthSteps}`;
-  // A changed input invalidates and cancels the private calculation. No effect
-  // ever starts a solve or writes attitude back to the document.
-  useEffect(
-    () => () => {
-      worker.current?.terminate();
-      worker.current = null;
-    },
-    [key],
+  const key = JSON.stringify([
+    documentId,
+    snapshot.revision,
+    purpose,
+    purpose === "balance-design" ? activeId : null,
+    constraints,
+    perf.numSections,
+    perf.girthSteps,
+  ]);
+  const request = useMemo<LoadingBatchRequest | null>(
+    () =>
+      constraints
+        ? {
+            key,
+            state: snapshot.state.hull,
+            // Loading selection and editor scrubbers cannot affect physical results.
+            session: defaultSession(snapshot.state.hull),
+            sliceRevs: snapshot.sliceRevs,
+            numSections: perf.numSections,
+            girthSteps: perf.girthSteps,
+            purpose,
+            constraints,
+            entries,
+          }
+        : null,
+    [
+      key,
+      snapshot.state.hull,
+      snapshot.sliceRevs,
+      perf.numSections,
+      perf.girthSteps,
+      purpose,
+      constraints,
+      entries,
+    ],
   );
-  const current = task?.key === key ? task : null;
-  const busy = !!current?.pending;
-  const proposal = current?.proposal;
+  const results = useLoadingAnalysis(request);
+  const response = results.get(activeId);
+  const proposal =
+    response && "proposal" in response ? response.proposal : undefined;
   const scale = unitScale(model.unit, "m");
-  const scenario = scenariosOf(authoredBook).find((s) => s.id === scenarioId);
-  const label = scenario?.name ?? "Shared estimate";
-  const ready =
-    !sheet.pending && !sheet.error && !analysisPending && !analysisError;
-  const canMatch = ready && values !== null;
-  const canBalance = canMatch && values?.lcg !== null && values?.vcg !== null;
-
-  const calculate = (mode: EquilibriumMode) => {
-    worker.current?.terminate();
-    setApplyError(null);
-    setTask({ key, mode, pending: true });
-    try {
-      const active = new Worker(
-        new URL("../worker/loadingWorker.ts", import.meta.url),
-        { type: "module" },
-      );
-      worker.current = active;
-      const finish = (response: LoadingResponse) => {
-        if (worker.current !== active) return;
-        active.terminate();
-        worker.current = null;
-        setTask({ key, mode, pending: false, ...response });
-      };
-      active.onmessage = (event: MessageEvent<LoadingResponse>) =>
-        finish(event.data);
-      active.onerror = (event) =>
-        finish({ error: event.message || "Could not calculate equilibrium." });
-      const request: LoadingRequest = {
-        key,
-        state: snapshot.state.hull,
-        session: snapshot.session,
-        sliceRevs: snapshot.sliceRevs,
-        numSections: perf.numSections,
-        girthSteps: perf.girthSteps,
-        values,
-        mode,
-        book,
-        density: book.density,
-        iterate,
-      };
-      active.postMessage(request);
-    } catch (error) {
-      worker.current?.terminate();
-      worker.current = null;
-      setTask({ key, mode, pending: false, error: String(error) });
-    }
-  };
-  const cancel = () => {
-    worker.current?.terminate();
-    worker.current = null;
-    setTask(null);
-    setApplyError(null);
-  };
+  const changeConstraints = (patch: Partial<LoadingConstraintInputs>) =>
+    setInputs((previous) => ({
+      ...previous,
+      ...(patch.fixTrim === true && !previous.fixTrim
+        ? { trim: String(degrees(model.deckTrim)) }
+        : {}),
+      ...patch,
+    }));
   const apply = async () => {
-    if (!proposal || applying) return;
+    if (
+      purpose !== "balance-design" ||
+      !proposal ||
+      applying ||
+      !canApplyEquilibrium(proposal)
+    )
+      return;
     setApplying(true);
     setApplyError(null);
     try {
@@ -170,12 +178,12 @@ export function LoadingPanel({
         expectedLoading: null,
         scenarioId,
         vcg: proposal.values.vcg,
-        label: `${label}${current?.mode === "displacement" ? " · displacement only" : ""}`,
+        label: `${label} · upright design balance${constraints?.trim !== null ? " · fixed trim" : ""}`,
       });
-      if ("rejected" in outcome) setApplyError(outcome.rejected);
-      else setTask(null);
+      if ("rejected" in outcome)
+        setApplyError({ key, error: outcome.rejected });
     } catch (error) {
-      setApplyError(String(error));
+      setApplyError({ key, error: String(error) });
     } finally {
       setApplying(false);
     }
@@ -184,7 +192,7 @@ export function LoadingPanel({
   const outdated =
     last &&
     (last.revision !== snapshot.revision ||
-      last.loadingKey !== loadingKey(loading));
+      last.loadingKey !== loadingKey({ ...DEFAULT_LOADING, scenarioId }));
   return (
     <div className="loading-panel">
       <section className="card loading-card loading-workflow">
@@ -192,12 +200,12 @@ export function LoadingPanel({
           <h2>Loading</h2>
           <div className="loading-controls">
             {onEditEstimate ? (
-              <Button onClick={onEditEstimate}>Edit output formulas</Button>
+              <Button onClick={onEditEstimate}>Edit estimates</Button>
             ) : (
               <OpenPanelButton
                 kind="weights"
                 weightScreen="sheet"
-                label="Edit output formulas"
+                label="Edit estimates"
               />
             )}
             <OpenPanelButton kind="stability" label="Open stability" />
@@ -206,208 +214,167 @@ export function LoadingPanel({
             )}
           </div>
         </header>
-        <section className="loading-step" aria-label="Scenario inputs">
-          {selectedScenario !== undefined && <h3>{label}</h3>}
-          {selectedScenario === undefined && (
-            <label>
-              Scenario{" "}
-              <select
-                aria-label="Loading scenario"
-                value={scenarioId ?? ""}
-                onChange={(event) =>
-                  setWorkspace({ documentId, id: event.target.value || null })
-                }
-              >
-                <option value="">Shared</option>
-                {scenariosOf(authoredBook).map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <ScenarioLoading
-            results={sheet.results}
-            scenarioName={label}
-            density={book.density}
-          />
+        <LoadingPurposePicker
+          purpose={purpose}
+          onChange={setPurpose}
+          disabled={applying}
+        />
+        {purpose === "balance-design" && (
+          <section className="loading-step" aria-label="Design estimate">
+            {selectedScenario === undefined ? (
+              <label>
+                Estimate{" "}
+                <select
+                  aria-label="Design estimate"
+                  value={activeId}
+                  disabled={applying}
+                  onChange={(event) =>
+                    setWorkspace(
+                      event.target.value === SHARED_WORKSPACE
+                        ? null
+                        : event.target.value,
+                    )
+                  }
+                >
+                  {choices.map(({ id, name }) => (
+                    <option key={id} value={id}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <h3>Estimate: {label}</h3>
+            )}
+            <p className="loading-hint">
+              Solves waterline and trim with heel held at 0°. Heel is not
+              balanced and TCG is not used for transverse balance.
+              Geometry-dependent sheet values follow this upright attitude.
+              Apply stores the calculated waterline and trim.
+            </p>
+          </section>
+        )}
+        {purpose === "compare-scenarios" && (
           <p className="loading-hint">
-            Nominal scenario outputs. LCG is measured from the transom
-            reference; VCG is height above the current keel baseline.
+            Each estimate is evaluated at the same starting design attitude,
+            then its mass and hull-fixed centre of gravity remain unchanged
+            during the solve. All scenarios use the same constraints. Nothing is
+            applied to the model.
           </p>
-          {(sheet.pending || analysisPending) && (
-            <p role="status" className="loading-hint">
-              Measuring estimate geometry…
-            </p>
+        )}
+        <LoadingConstraintFields
+          inputs={constraintInputs}
+          allowHeel={purpose === "compare-scenarios"}
+          onChange={changeConstraints}
+          disabled={applying}
+        />
+        <p className="loading-hint">
+          Calculations update automatically. Supported trim is ±30°, with the
+          sheer clear of the water. Free trim needs LCG and VCG.
+          {purpose === "compare-scenarios" && (
+            <>
+              {" "}
+              Heel is supported to ±45°; free heel needs VCG and TCG. Fixed
+              angles are held, not necessarily balanced.
+            </>
           )}
-          {sheet.error && <p role="alert">{sheet.error}</p>}
-          {analysisError && <p role="alert">{analysisError}</p>}
-        </section>
-        <section className="loading-step" aria-labelledby="loading-calculate">
-          <h3 id="loading-calculate">Calculate floating attitude</h3>
-          <div className="loading-actions">
-            <div>
-              <Button
-                variant="primary"
-                disabled={!canBalance || busy || applying}
-                onClick={() => calculate("balance")}
-              >
-                Calculate equilibrium
-              </Button>
-              <p className="loading-hint">
-                Find waterline and trim that balance this loading.
+        </p>
+        {constraintError && <p role="alert">{constraintError}</p>}
+        {purpose === "balance-design" ? (
+          <section
+            className="loading-step loading-proposal"
+            aria-label="Design balance result"
+          >
+            <h3>Upright design balance</h3>
+            {!constraintError && !response && (
+              <p role="status" className="loading-hint">
+                Computing balanced attitude…
               </p>
+            )}
+            {response && "error" in response && (
+              <p role="alert">{response.error}</p>
+            )}
+            <div className="loading-table-scroll">
+              <LoadingAttitudePreview
+                waterline={model.waterline}
+                deckTrim={model.deckTrim}
+                scale={scale}
+                proposal={proposal}
+              />
             </div>
-            <div>
-              <Button
-                disabled={!canMatch || busy || applying}
-                onClick={() => calculate("displacement")}
-              >
-                Match displacement only
-              </Button>
-              <p className="loading-hint">
-                Find waterline while keeping the current trim.
-              </p>
-            </div>
-          </div>
-          {!canMatch && ready && (
-            <p className="loading-hint">
-              A valid, positive displacement is needed to calculate.
-            </p>
-          )}
-          {canMatch && !canBalance && (
-            <p className="loading-hint">
-              Full equilibrium also needs valid LCG and VCG. Displacement-only
-              matching is available.
-            </p>
-          )}
-          <label className="loading-iterate">
-            <input
-              type="checkbox"
-              checked={iterate}
-              disabled={applying}
-              onChange={(event) => setIterate(event.target.checked)}
-            />{" "}
-            Update geometry-dependent formulas during the solve
-          </label>
-          {iterate && (
-            <p className="loading-hint">
-              Re-measure the estimate as the boat’s attitude changes, until it
-              settles.
-            </p>
-          )}
-          {!iterate && (
-            <p className="loading-hint">
-              Uses the current estimate without feedback. Geometry-dependent
-              outputs may change after applying the attitude.
-            </p>
-          )}
-          {busy && (
-            <div className="loading-controls" role="status">
-              Calculating on a private copy…{" "}
-              <Button onClick={cancel}>Cancel</Button>
-            </div>
-          )}
-          {current?.error && <p role="alert">{current.error}</p>}
-        </section>
-        <section className="loading-step" aria-labelledby="loading-preview">
-          <h3 id="loading-preview">
-            {proposal ? "Preview changes" : "Current floating attitude"}
-          </h3>
-          <p className="loading-hint">
-            {proposal
-              ? "Calculation complete. Review the proposed change before applying it."
-              : "Calculate to preview a new attitude. The model stays unchanged until you apply it."}
-          </p>
-          <div className="loading-proposal">
-            <table>
-              <thead>
-                <tr>
-                  <th>Attitude</th>
-                  <th>Current</th>
-                  {proposal && <th>Proposed</th>}
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <th>Waterline depth</th>
-                  <td>{show(model.waterline * scale)} m</td>
-                  {proposal && <td>{show(proposal.waterline * scale)} m</td>}
-                </tr>
-                <tr>
-                  <th>Deck trim</th>
-                  <td>{show(degrees(model.deckTrim))}°</td>
-                  {proposal && <td>{show(degrees(proposal.deckTrim))}°</td>}
-                </tr>
-              </tbody>
-            </table>
-            <p className="loading-hint">
-              Waterline depth is measured below the deck datum.
-            </p>
             {proposal && (
               <>
-                {iterate &&
-                  values &&
-                  (proposal.values.mass !== values.mass ||
-                    proposal.values.lcg !== values.lcg ||
-                    proposal.values.vcg !== values.vcg) && (
-                    <p className="loading-hint">
-                      Updated estimate: {show(proposal.values.mass / 1000)} t ·
-                      LCG {show(proposal.values.lcg)} m · VCG{" "}
-                      {show(proposal.values.vcg)} m.
-                    </p>
-                  )}
                 <details className="loading-diagnostics">
-                  <summary>
-                    {current.mode === "balance"
-                      ? "Equilibrium converged"
-                      : "Displacement matched"}{" "}
-                    · Solver details
-                  </summary>
+                  <summary>Solver details</summary>
                   <p className="loading-hint">
-                    {proposal.iterations}{" "}
-                    {proposal.iterations === 1 ? "iteration" : "iterations"} ·
-                    Displacement error:{" "}
-                    {show(Math.abs(proposal.volumeError) * 100, 4)}%
+                    {proposal.iterations} iterations · Displacement error:{" "}
+                    {show(Math.abs(proposal.volumeError) * 100)}%
                     {proposal.balanceError !== null && (
                       <>
                         {" "}
                         · Longitudinal balance error:{" "}
-                        {show(Math.abs(proposal.balanceError) * 1000, 2)} mm
+                        {show(Math.abs(proposal.balanceError) * 1000)} mm
+                      </>
+                    )}
+                    {proposal.transverseBalanceError !== null && (
+                      <>
+                        {" "}
+                        · Transverse balance error:{" "}
+                        {show(
+                          Math.abs(proposal.transverseBalanceError) * 1000,
+                        )}{" "}
+                        mm
                       </>
                     )}
                   </p>
                 </details>
-                <div className="loading-controls">
-                  <Button
-                    variant="primary"
-                    disabled={applying}
-                    onClick={() => void apply()}
-                  >
-                    {applying ? "Applying…" : "Apply to model"}
-                  </Button>
-                  <Button disabled={applying} onClick={cancel}>
-                    Discard
-                  </Button>
-                </div>
+                {canApplyEquilibrium(proposal) && (
+                  <div className="loading-controls">
+                    <Button
+                      variant="primary"
+                      disabled={applying}
+                      onClick={() => void apply()}
+                    >
+                      {applying ? "Applying…" : "Apply to model"}
+                    </Button>
+                  </div>
+                )}
               </>
             )}
-          </div>
-          {task && !current && (
-            <p role="status" className="loading-hint">
-              Inputs changed. Calculate again to preview the new attitude.
-            </p>
-          )}
-          {applyError && <p role="alert">{applyError}</p>}
-          {last && (
-            <p className="loading-hint" role="status">
-              {outdated
-                ? `Last applied: ${last.label}. Scenario or geometry changed since that calculation.`
-                : `Applied to model: ${last.label}. You can undo this change.`}
-            </p>
-          )}
-        </section>
+            {applyError?.key === key && <p role="alert">{applyError.error}</p>}
+            {last && (
+              <p className="loading-hint" role="status">
+                {outdated
+                  ? `Last applied: ${last.label}. Estimate or geometry changed since that calculation.`
+                  : `Applied to model: ${last.label}. You can undo this change.`}
+              </p>
+            )}
+          </section>
+        ) : (
+          !constraintError && (
+            <section
+              className="loading-step"
+              aria-label="Loading scenario comparison"
+            >
+              <h3>Compare loading scenarios</h3>
+              <LoadingScenarioComparison
+                scenarios={choices}
+                results={results}
+                scale={scale}
+                referenceId={referenceId}
+                onReferenceChange={setReference}
+                showChanges={showChanges}
+                onShowChanges={setShowChanges}
+                disabled={applying}
+              />
+            </section>
+          )
+        )}
+        <p className="loading-hint">
+          Waterline depth is measured below the deck datum. Positive trim is bow
+          up; positive heel and TCG are starboard, negative are port. LCG is
+          from the transom; VCG is above the keel baseline.
+        </p>
       </section>
     </div>
   );

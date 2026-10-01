@@ -22,6 +22,7 @@ export function ScenarioLoading({
     },
     { key: "LCG", label: "LCG", unit: "m", factor: 1, dim: LENGTH },
     { key: "VCG", label: "VCG", unit: "m", factor: 1, dim: LENGTH },
+    { key: "TCG", label: "TCG", unit: "m", factor: 1, dim: LENGTH },
   ];
   return (
     <div

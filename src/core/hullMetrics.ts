@@ -372,10 +372,13 @@ export function hullMetrics(
   model: Model,
   sampling: HullSampling,
   hydro: Hydro | null = null,
+  heel = 0,
 ): HullMetrics | null {
   const geom = stationGeometry(model, sampling);
   if (!geom) return null;
-  const h = hydro ?? hydrostatics(model, sampling);
+  // Sheet positions stay in the established zero-heel, trimmed frame. Heel
+  // changes immersion metrics, not the meaning of an authored point or slice.
+  const h = hydro ?? hydrostatics(model, sampling, heel);
   if (!h) return null;
 
   // Metres per model unit, and its powers for the area and volume integrals.

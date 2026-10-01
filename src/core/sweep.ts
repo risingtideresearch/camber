@@ -311,8 +311,7 @@ export interface Cut {
   // curve below. Two reasons. It is exact at any column count, where a polygon through the crossings is an
   // inscribed chord approximation that only converges at first order (0.5% low at 200 columns). And it stays
   // consistent with `vol` by construction, which is what keeps hydro's KMt agreeing with stability's KN.
-  // Only produced for an UPRIGHT cut (a heeled waterplane meets the station lines at a different angle);
-  // null otherwise, and null when `detail` was not asked for.
+  // Produced when `detail` is requested and the waterplane is not parallel to the station z axis.
   wp: {
     area: number;
     cx: number; // centroid, in world horizontal coordinates (x along the hull, y athwartships)
@@ -406,9 +405,8 @@ export function cut(
   // adds or drops the triangle between them, and on a hard-turning plan that is worth ~5% of the waterplane.
   let capAft: Vec3 | null = null,
     capFwd: Vec3 | null = null;
-  // waterplane accumulators (upright only) — ∫dA, ∫X dA, ∫Y dA, ∫X² dA, ∫Y² dA, trapezoided over u
-  const wantWp =
-    detail && Math.abs(sinPhi) < 1e-12 && Math.abs(g.cosTrim) > 1e-9;
+  // waterplane accumulators — ∫dA, ∫X dA, ∫Y dA, ∫X² dA, ∫Y² dA, trapezoided over u
+  const wantWp = detail && Math.abs(g.cosTrim * cosPhi) > 1e-9;
   let wA = 0,
     wX = 0,
     wY = 0,
@@ -511,7 +509,7 @@ export function cut(
               capFwd = cap;
             }
           }
-          if (wantWp && bestA < c.aC) {
+          if (wantWp && Math.abs(sinPhi) < 1e-12 && bestA < c.aC) {
             // the waterplane strip runs from the skin crossing inboard to the centerline. Its area element
             // is the volume's own |P'|(1 + κa), divided by cos(trim) because the strip is measured in the
             // tilted station frame while the waterplane is horizontal. Everything on it is affine in a, so
@@ -533,6 +531,39 @@ export function cut(
               bx = c.nx / cr2,
               ay = side * c.py,
               by = side * c.ny;
+            curW[0] += W0;
+            curW[1] += ax * W0 + bx * W1;
+            curW[2] += ay * W0 + by * W1;
+            curW[3] += ax * ax * W0 + 2 * ax * bx * W1 + bx * bx * W2;
+            curW[4] += ay * ay * W0 + 2 * ay * by * W1 + by * by * W2;
+          }
+        }
+        if (wantWp && Math.abs(sinPhi) >= 1e-12) {
+          // Intersect the whole outline with h=wlZ. Paired crossings delimit
+          // actual waterplane strips, including when the centreline is dry.
+          const crossings: number[] = [];
+          for (let i = 0; i < poly.length; i++) {
+            const j = (i + 1) % poly.length;
+            if (f[i] >= 0 === f[j] >= 0) continue;
+            const t = f[i] / (f[i] - f[j]);
+            crossings.push(poly[i][0] + t * (poly[j][0] - poly[i][0]));
+          }
+          crossings.sort((a, b) => a - b);
+          const z0 = (wlZ - C0) / C2;
+          const z1 = -C1 / C2;
+          const ax = c.px * g.cosTrim - z0 * g.sinTrim;
+          const bx = c.nx * g.cosTrim - z1 * g.sinTrim;
+          const ay =
+            side * c.py * cosPhi + (c.px * g.sinTrim + z0 * g.cosTrim) * sinPhi;
+          const by =
+            side * c.ny * cosPhi + (c.nx * g.sinTrim + z1 * g.cosTrim) * sinPhi;
+          for (let i = 0; i + 1 < crossings.length; i += 2) {
+            const lo = crossings[i],
+              hi = crossings[i + 1];
+            const mk = (k: number) => (hi ** (k + 1) - lo ** (k + 1)) / (k + 1);
+            const W0 = (c.speed * mk(0) + c.kSpeed * mk(1)) / Math.abs(C2);
+            const W1 = (c.speed * mk(1) + c.kSpeed * mk(2)) / Math.abs(C2);
+            const W2 = (c.speed * mk(2) + c.kSpeed * mk(3)) / Math.abs(C2);
             curW[0] += W0;
             curW[1] += ax * W0 + bx * W1;
             curW[2] += ay * W0 + by * W1;

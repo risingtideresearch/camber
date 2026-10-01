@@ -250,7 +250,7 @@ export interface WeightBook {
    */
   readonly views: readonly View[];
   /**
-   * What the book answers, by `OUTPUTS` name: `DISPLACEMENT`, `VCG`, `LCG`. An ordinary formula in the same
+   * What the book answers, by `OUTPUTS` name: `DISPLACEMENT`, `VCG`, `LCG`, `TCG`. An ordinary formula in the same
    * language as everything else, so optional rename updates include these formulas too.
    * See `outputs.ts` for why this is a formula rather than a reference to a row.
    */

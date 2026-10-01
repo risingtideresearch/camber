@@ -96,14 +96,19 @@ function deadriseAt(sec: { pts: Vec3[]; keel: boolean }, len: number): number {
 
 // `sampling` is the hull already swept — see `stationGeometry`. Use HYDRO_NS / HYDRO_GIRTH if there is no
 // sampling to hand; reuse the host's if there is.
+// A private loading solve can pass heel to remeasure immersion. Centroids stay
+// in the sheet's zero-heel trimmed frame; the waterplane is measured in actual
+// world horizontal coordinates. KM is an upright-only small-angle quantity and
+// is unavailable at heel rather than pretending KB + BM is a heeled GM datum.
 export function hydrostatics(
   model: Model,
   sampling: HullSampling,
+  heel = 0,
 ): Hydro | null {
   const geom = stationGeometry(model, sampling);
   if (!geom) return null;
   const wlZ = -model.waterline;
-  const c = cut(geom, 0, wlZ, true);
+  const c = cut(geom, heel, wlZ, true);
   if (c.vol <= 0) return null;
 
   // the wetted span, and the sectional-area curve's peak and its value amidships
@@ -128,11 +133,12 @@ export function hydrostatics(
     sr = geom.sinTrim;
   const wl2: [number, number][] = c.waterline.map((p) => [
     p[0] * cr - p[2] * sr,
-    p[1],
+    p[1] * Math.cos(heel) + (p[0] * sr + p[2] * cr) * Math.sin(heel),
   ]);
   const wp = c.wp;
   // ...and back to model x for reporting, since lcb and the station span are in model x
-  const toModelX = (X: number): number => X * cr + wlZ * sr;
+  const toModelX = (X: number, Y: number): number =>
+    X * cr + (Y * Math.sin(heel) + wlZ * Math.cos(heel)) * sr;
 
   const lcb = c.xB,
     // KB above K — `stationGeometry`'s keel baseline, which is the ONE vertical datum the whole hull is
@@ -149,8 +155,10 @@ export function hydrostatics(
   const wpOk = !!wp && wl2.length >= 3 && !c.deckDown;
   const na = (v: number): number => (wpOk ? v : NaN);
   const aw = wp ? wp.area : 0,
-    lcf = wp ? toModelX(wp.cx) : amid,
-    bwl = wp ? 2 * Math.max(...wl2.map(([, y]) => Math.abs(y))) : 0,
+    lcf = wp ? toModelX(wp.cx, wp.cy) : amid,
+    bwl = wp
+      ? Math.max(...wl2.map(([, y]) => y)) - Math.min(...wl2.map(([, y]) => y))
+      : 0,
     // waterline length from the curve itself rather than from the station spacing
     lwlRaw = wp
       ? Math.max(...wl2.map(([x]) => x)) - Math.min(...wl2.map(([x]) => x))
@@ -195,9 +203,9 @@ export function hydrostatics(
     lcf: na(lcf),
     kb,
     bmt,
-    kmt: na(kb + bmt),
+    kmt: Math.abs(heel) < 1e-12 ? na(kb + bmt) : NaN,
     bml,
-    kml: na(kb + bml),
+    kml: Math.abs(heel) < 1e-12 ? na(kb + bml) : NaN,
     cb,
     cp,
     cm,
