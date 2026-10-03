@@ -15,6 +15,7 @@ import { TrimControls } from "./TrimControls";
 import { CurvatureControls } from "./CurvatureControls";
 import { PerfControls } from "./PerfControls";
 import { HistoryControls } from "./HistoryControls";
+import { VariantsControl } from "./VariantsControl";
 import { PerfPanel } from "./PerfPanel";
 import { DesignBar } from "./DesignBar";
 import { HullView3d } from "./HullView3d";
@@ -186,6 +187,10 @@ function Editor() {
             has no pane here to hang a ⧉ off — it is a window and nothing else. */}
         <span className="tabsep" />
         <HistoryControls />
+        {/* Variants: six random neighbours of the current design, one click to adopt. A session action like
+            the history beside it — it installs a whole hull, which is exactly what makes a pick undoable. */}
+        <span className="tabsep" />
+        <VariantsControl />
         <DesignBar
           name={meta.name}
           saveKind={save.kind}

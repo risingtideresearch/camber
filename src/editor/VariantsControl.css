@@ -1,0 +1,52 @@
+/* The Variants popover (VariantsControl): a spread picker and a set button above a grid of six wireframe
+   thumbnails. The thumbnails are the library's card previews at card size, so a variant reads the way a saved
+   design does; the grid is three across, which keeps the panel narrower than the app bar at any sane width. */
+.variantsbar {
+  justify-content: space-between;
+}
+.variantspread > .btn {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.variantgrid {
+  display: grid;
+  grid-template-columns: repeat(3, 160px);
+  gap: 8px;
+}
+.variant {
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  cursor: pointer;
+  display: block;
+  line-height: 0;
+}
+.variant:hover,
+.variant:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(43, 108, 176, 0.18);
+  outline: none;
+}
+.variant img {
+  display: block;
+  width: 100%;
+  height: 100px;
+  object-fit: contain;
+}
+.variantnone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100px;
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--mut);
+}
+
+.variantshint {
+  font-size: 11px;
+  color: var(--mut);
+  max-width: 496px;
+}

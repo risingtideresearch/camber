@@ -575,6 +575,36 @@ gauge, e.g. `u_K = 0`, before taking the density). Carry that term whenever `θ`
 a sampler or a MAP objective; it is irrelevant to a purely deterministic optimization of a
 geometric objective.
 
+### A ratio form, for sampling
+
+The flat vector above makes every θ _valid_; it does not make a random θ a _boat_. Drawn independently,
+the authored numbers miss the relations that matter — a section's keel reach against the plan's
+half-breadth (does the bottom close?), the waterline against the sheer and the keel (does it float, dry?),
+the transom against the aft section, and neighbouring control points against each other (is the curve
+fair?) — and land on them only by coincidence. The reference implementation therefore carries a second
+change of variables (`src/core/reparam.ts`), again a bijection onto the valid region, in which those
+relations are coordinates of their own:
+
+- **size, then ratios** — one length; then length/beam, beam/depth, sheer depth as a fraction of hull depth,
+  the waterline as a fraction of the way from the lowest sheer to the emergent keel, the transom's foot as a
+  fraction of the aft depth;
+- **closure as a coordinate** — each station's keel reach is `ρ = n_keel / R*`, with `R*` the largest
+  centerline distance the plan presents over the stretch that station governs, so `ρ > 1` closes it;
+- **shape in the unit box** — a section is its reach and depth plus stick-breaking fractions of the depth
+  and per-panel inboard runs, whose backbone turns from steep topsides to a flat run;
+- **residuals in a smooth basis** — per-point detail as cosine-mode coefficients with geometrically falling
+  scale, so a unit draw is a fair curve rather than a lumpy one;
+- **reachable boundaries** — knuckles, the keel crease and the depth fractions through a censored logistic,
+  so a draw can be exactly a hard chine, exactly smooth, or exactly a level panel; ratios that the saved
+  designs put at zero or past it (a double-ender's stern, an inverted bow) through `asinh` rather than `log`.
+
+Independent unit normals in these coordinates are a usable prior: at half the intended spread every draw is
+a boat by the scorecard in `tools/hullSampleMetrics.ts`, and at the full spread most are, where the same
+spread applied slot-by-slot to the authored numbers opens a third of the bottoms. The same coordinates give
+"variants of this design": encode it, step, decode. Blending stays in the convex authored space — a straight
+line in these coordinates is a different, ratio-wise path between the same two hulls. The comparison is
+`npm run compare:samplers`.
+
 ## Invariants
 
 Guaranteed by the encoding rather than checked after a solve:

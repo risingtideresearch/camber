@@ -2,11 +2,12 @@
 //  random.ts — generating hull designs by REPARAMETERIZING the unconstrained vector space
 // ============================================================================================
 //
-// STATUS: not wired into the UI. The "Randomize" button was removed — the sampled hulls aren't yet
-// convincing enough — and this module is kept as a documented, self-contained reference for the
-// reparameterization approach and as the basis for the next iteration. The exports
-// `randomDoc(adventure)`, `meanDoc()`, and `randomHull()` remain, so it can be re-hooked to a
-// button or driven from the console / a test without further plumbing.
+// STATUS: superseded by `reparam.ts`, which carries the "levers not yet pulled" below (dimensionless
+// ratios, closure as a coordinate, shape in the unit box, residuals in a smooth basis) and is an exact
+// change of variables — every hull encodes, and decodes back. This module's prior was also tuned against a
+// waterline convention the model no longer uses, so at `adventure = 1` almost every draw now sits with its
+// deck awash (see `tools/compare-hull-samplers.ts`). It is kept as the documented first iteration; the
+// exports `randomDoc(adventure)`, `meanDoc()`, and `randomHull()` still work.
 //
 // ---- the problem: validity is not realism -------------------------------------------------
 // The README's "Unconstrained parameterization" gives a flat real vector θ ∈ ℝᴹ in which every
