@@ -9,8 +9,7 @@ import "./Dropdown.css";
 //
 // SPLIT form, when `onToggle` is given: a toggle button (pressed state `active`, click `onToggle`) joined to
 // a caret that opens the panel. For a feature that is switched on and off AND configured — or, with `active`
-// left off, for an ACTION with options (the library's Export STL): the main button does the thing, the panel
-// says how.
+// left off, for an ACTION with options: the main button does the thing, the panel says how.
 //
 // MENU form, when it is not: one button carrying the caret, which only opens the panel. For a set of choices
 // with no master switch over them — where a toggle would have to invent one, and the button would claim to

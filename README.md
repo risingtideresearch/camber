@@ -629,13 +629,30 @@ their end conditions, fairing weights, and surface-fit tolerances are downstream
 properties of the model — what the model fixes is the control points, their knuckles, the
 simplex-valued weight path, the monotonicity guarantees, and the sweep construction.
 
-## Hydrostatic table export
+## Exports
 
-The editor toolbar's **Export hydrostatics** action downloads a standalone v1
-hydrostatic table JSON, in metres, for importing into hydrostatic-table explorers.
-The adjacent options caret selects upright-only, fixed-design-trim, or heel/trim
-grid coverage and standard/fine resolution. Computation runs in a cancellable
-worker against the captured current hull, including unsaved edits.
+Choose **Export…** in the library or editor to open the shared export dialog.
+Both offer Camber hull document JSON, STEP CAD surfaces, STL triangle meshes and
+hydrostatic-table JSON. Configure the selected type, then click **Export**.
+
+The library exports the selected saved document; the editor exports the current
+hull, including unsaved changes and its current name. The source is captured when
+export starts, so later edits do not change the file. Document JSON contains only
+the hull, not its weight sheet; saved JSON retains its original format version.
+STEP and STL use millimetres; hydrostatic tables use metres. STL lets you choose
+hull, transom and deck surfaces (include all three for a closed envelope).
+
+Exports run in a cancellable worker. Close the dialog to continue working and
+reopen **Exporting…** to view progress or cancel. **Export All JSON** remains a
+separate library-wide ZIP backup action. Run `npm run test:export` to check the
+shared writers, source capture and job lifecycle.
+
+### Hydrostatic table export
+
+Select **Hydrostatic table (.hydrostatics.json)** to download a standalone v1
+hydrostatic table for importing into hydrostatic-table explorers. Options select
+upright-only, fixed-design-trim, or heel/trim grid coverage and standard/fine
+resolution.
 
 The export discloses idealized closures, provides sampled deck-edge markers,
 and does not invent downflooding limits or include loading CG/density. See

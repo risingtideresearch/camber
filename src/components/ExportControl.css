@@ -1,0 +1,109 @@
+.export-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 24px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink);
+  background: var(--panel);
+  font: inherit;
+  user-select: text;
+  -webkit-user-select: text;
+  box-shadow: 0 16px 48px #0003;
+}
+.export-dialog::backdrop {
+  background: #1a202c66;
+}
+.export-content,
+.export-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.export-content h2 {
+  margin: 0;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+.export-content p {
+  margin: 0;
+  color: var(--mut);
+  font-size: 13px;
+}
+.export-content .export-source {
+  color: var(--ink);
+}
+.export-settings {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.export-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-weight: 600;
+}
+.export-field select {
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 400;
+}
+.export-surfaces {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.export-surfaces label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.export-content details {
+  font-size: 13px;
+}
+.export-content summary {
+  cursor: pointer;
+}
+.export-content details p {
+  margin-top: 8px;
+}
+.export-content .export-error {
+  color: var(--danger);
+}
+.export-content .export-status {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.export-content progress {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.export-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.export-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
