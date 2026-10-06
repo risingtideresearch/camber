@@ -23,6 +23,7 @@ import { ProfileView } from "./ProfileView";
 import { StationView } from "./StationView";
 import { CutStationView } from "./CutStationView";
 import { StlControl } from "../components/StlControl";
+import { HydrostaticExport } from "./HydrostaticExport";
 import { DetachPanelButton } from "./DetachPanelButton";
 import { Area, AreaGroup, AreaSeparator } from "polymorph-ui";
 import "./EditorApp.css";
@@ -201,6 +202,7 @@ function Editor() {
         <span className="tabsep" />
         <DetachPanelButton kind="weights" label="Weights" />
         <DetachPanelButton kind="stability" label="Stability" />
+        <HydrostaticExport />
         <StlControl />
       </div>
       <div className="main">

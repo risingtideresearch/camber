@@ -372,8 +372,83 @@ export function cut(
   wlZ: number,
   detail = false,
 ): Cut {
+  return integrateCut(g, heelRad, wlZ, detail);
+}
+
+export type BuoyancyCut = Pick<
+  Cut,
+  "vol" | "xB" | "yB" | "zB" | "deckDown" | "wp"
+>;
+
+interface PreparedSide {
+  coeffs: [number, number, number];
+  heights: number[];
+  lo: number;
+  hi: number;
+}
+interface PreparedBuoyancy {
+  cosPhi: number;
+  sinPhi: number;
+  sheerZ: number;
+  cols: { full: Moments; sides: PreparedSide[] }[];
+}
+
+// Reuse only within this fixed geometry/attitude. Preparing once per row avoids
+// recalculating vertex heights and full-section moments at every immersion.
+// The table needs neither skin integrals nor traced waterline/section arrays.
+export function prepareBuoyancySweep(
+  g: StationGeom,
+  heelRad: number,
+): { heightSpan: [number, number]; cut: (wlZ: number) => BuoyancyCut } {
   const cosPhi = Math.cos(heelRad),
-    sinPhi = Math.sin(heelRad),
+    sinPhi = Math.sin(heelRad);
+  let lo = Infinity,
+    hi = -Infinity,
+    sheerZ = Infinity;
+  const cols = g.cols.map((c) => ({
+    full: moments(c.poly),
+    sides: [1, -1].map((side): PreparedSide => {
+      const coeffs = heightCoeffs(g, c, side, cosPhi, sinPhi);
+      const [C0, C1, C2] = coeffs;
+      const heights = c.poly.map((v) => C0 + C1 * v[0] + C2 * v[1]);
+      let sideLo = Infinity,
+        sideHi = -Infinity;
+      for (const h of heights) {
+        sideLo = Math.min(sideLo, h);
+        sideHi = Math.max(sideHi, h);
+      }
+      lo = Math.min(lo, sideLo);
+      hi = Math.max(hi, sideHi);
+      if (c.topIsSheer)
+        sheerZ = Math.min(sheerZ, c.topZ * C2 + c.topA * C1 + C0);
+      return { coeffs, heights, lo: sideLo, hi: sideHi };
+    }),
+  }));
+  const prepared = { cosPhi, sinPhi, sheerZ, cols };
+  return {
+    heightSpan: [lo, hi],
+    cut: (wlZ) => integrateCut(g, heelRad, wlZ, false, prepared),
+  };
+}
+
+function trapezoid(p: number, q: number, du: number): number {
+  return ((p + q) / 2) * du;
+}
+
+function stripMoment(lo: number, hi: number, k: number): number {
+  return (hi ** (k + 1) - lo ** (k + 1)) / (k + 1);
+}
+
+function integrateCut(
+  g: StationGeom,
+  heelRad: number,
+  wlZ: number,
+  detail: boolean,
+  prepared?: PreparedBuoyancy,
+): Cut {
+  const buoyancyOnly = prepared !== undefined;
+  const cosPhi = prepared?.cosPhi ?? Math.cos(heelRad),
+    sinPhi = prepared?.sinPhi ?? Math.sin(heelRad),
     cols = g.cols;
   // trapezoid state over u: the previous column's integrands
   let vol = 0,
@@ -399,6 +474,12 @@ export function cut(
     wet: boolean[] = [],
     wlStbd: Vec3[] = [],
     wlPort: Vec3[] = [];
+  if (prepared) {
+    // Decide whether a free waterplane is trustworthy before doing any cuts, so
+    // volume and waterplane can be integrated in one pass rather than two.
+    sheerZ = prepared.sheerZ;
+    deckDown = sheerZ < wlZ;
+  }
   // The waterplane's two ENDS are on the centerline, not on the skin: at the first and last wetted station
   // the region closes at a = aC, and with fanning planes that point sits at a very different x from the skin
   // crossing beside it. Joining the two skin runs directly instead — which is what a naive traverse does —
@@ -406,7 +487,9 @@ export function cut(
   let capAft: Vec3 | null = null,
     capFwd: Vec3 | null = null;
   // waterplane accumulators — ∫dA, ∫X dA, ∫Y dA, ∫X² dA, ∫Y² dA, trapezoided over u
-  const wantWp = detail && Math.abs(g.cosTrim * cosPhi) > 1e-9;
+  const wantWp =
+    (detail || (buoyancyOnly && !deckDown)) &&
+    Math.abs(g.cosTrim * cosPhi) > 1e-9;
   let wA = 0,
     wX = 0,
     wY = 0,
@@ -429,7 +512,9 @@ export function cut(
     return [c.px + c.aC * c.nx, 0, z];
   };
 
-  for (const c of cols) {
+  for (let columnIndex = 0; columnIndex < cols.length; columnIndex++) {
+    const c = cols[columnIndex],
+      cached = prepared?.cols[columnIndex];
     let gV = 0,
       gX = 0,
       gY = 0,
@@ -439,9 +524,12 @@ export function cut(
       gSZ = 0,
       secArea = 0;
     curW.fill(0);
-    for (const side of [1, -1]) {
-      const [C0, C1, C2] = heightCoeffs(g, c, side, cosPhi, sinPhi);
-      if (c.topIsSheer) {
+    for (let side = 1; side >= -1; side -= 2) {
+      const cachedSide = cached?.sides[side > 0 ? 0 : 1];
+      if (cachedSide && wlZ < cachedSide.lo) continue;
+      const [C0, C1, C2] =
+        cachedSide?.coeffs ?? heightCoeffs(g, c, side, cosPhi, sinPhi);
+      if (!buoyancyOnly && c.topIsSheer) {
         const topZ = c.topZ * C2 + c.topA * C1 + C0;
         if (topZ < sheerZ) sheerZ = topZ;
         if (topZ < wlZ) deckDown = true;
@@ -450,18 +538,22 @@ export function cut(
         f = c.f;
       let anyWet = false,
         anyDry = false;
-      for (let i = 0; i < poly.length; i++) {
-        const fi = wlZ - (C0 + C1 * poly[i][0] + C2 * poly[i][1]);
-        f[i] = fi;
-        if (fi >= 0) {
-          anyWet = true;
-          if (fi > draft) draft = fi;
-        } else anyDry = true;
+      const fullyWet = cachedSide && wlZ >= cachedSide.hi;
+      if (!fullyWet) {
+        for (let i = 0; i < poly.length; i++) {
+          const fi =
+            wlZ -
+            (cachedSide?.heights[i] ?? C0 + C1 * poly[i][0] + C2 * poly[i][1]);
+          f[i] = fi;
+          if (fi >= 0) {
+            anyWet = true;
+            if (fi > draft) draft = fi;
+          } else anyDry = true;
+        }
+        if (!anyWet) continue;
       }
-      if (!anyWet) continue;
       const clipped = anyDry ? clipSubmerged(poly, f) : poly,
-        m = moments(clipped),
-        gr = girthOf(clipped);
+        m = fullyWet ? cached!.full : moments(clipped);
       if (m.A <= 0) continue;
       secArea += m.A;
       // dV = |P'|(1 + κa) dA, and every moment is that weight times a coordinate that is affine in a or z
@@ -474,13 +566,16 @@ export function cut(
       gZ += wz;
       // ∫dS and its two first moments. y is left out: the two halves are mirror images, so the skin's
       // centroid is on the centerline by construction and computing it would only accumulate float noise.
-      gS += c.speed * gr.len + c.kSpeed * gr.Msa;
-      gSX +=
-        c.px * (c.speed * gr.len + c.kSpeed * gr.Msa) +
-        c.nx * (c.speed * gr.Msa + c.kSpeed * gr.Msaa);
-      gSZ += c.speed * gr.Msz + c.kSpeed * gr.Msaz;
+      if (!buoyancyOnly) {
+        const gr = girthOf(clipped);
+        gS += c.speed * gr.len + c.kSpeed * gr.Msa;
+        gSX +=
+          c.px * (c.speed * gr.len + c.kSpeed * gr.Msa) +
+          c.nx * (c.speed * gr.Msa + c.kSpeed * gr.Msaa);
+        gSZ += c.speed * gr.Msz + c.kSpeed * gr.Msaz;
+      }
 
-      if (detail) {
+      if (detail || (wantWp && !fullyWet && Math.abs(sinPhi) < 1e-12)) {
         // the outermost point where the SKIN crosses the waterline — the waterplane's edge at this station
         // Take the OUTERMOST crossing — a grows inboard, so that is the smallest a — since a re-entrant
         // section can cross more than once and only the outer one bounds the waterplane.
@@ -497,16 +592,18 @@ export function cut(
           }
         }
         if (bestA < Infinity) {
-          (side > 0 ? wlStbd : wlPort).push([
-            c.px + bestA * c.nx,
-            side * (c.py + bestA * c.ny),
-            bestZ,
-          ]);
-          if (side > 0) {
-            const cap = centerlineCap(c);
-            if (cap) {
-              if (!capAft) capAft = cap;
-              capFwd = cap;
+          if (detail) {
+            (side > 0 ? wlStbd : wlPort).push([
+              c.px + bestA * c.nx,
+              side * (c.py + bestA * c.ny),
+              bestZ,
+            ]);
+            if (side > 0) {
+              const cap = centerlineCap(c);
+              if (cap) {
+                if (!capAft) capAft = cap;
+                capFwd = cap;
+              }
             }
           }
           if (wantWp && Math.abs(sinPhi) < 1e-12 && bestA < c.aC) {
@@ -517,12 +614,10 @@ export function cut(
             const cr2 = g.cosTrim,
               lo = bestA,
               hi = c.aC;
-            const mk = (k: number): number =>
-              (Math.pow(hi, k + 1) - Math.pow(lo, k + 1)) / (k + 1);
-            const m0 = mk(0),
-              m1 = mk(1),
-              m2 = mk(2),
-              m3 = mk(3);
+            const m0 = stripMoment(lo, hi, 0),
+              m1 = stripMoment(lo, hi, 1),
+              m2 = stripMoment(lo, hi, 2),
+              m3 = stripMoment(lo, hi, 3);
             const W0 = (c.speed * m0 + c.kSpeed * m1) / cr2,
               W1 = (c.speed * m1 + c.kSpeed * m2) / cr2,
               W2 = (c.speed * m2 + c.kSpeed * m3) / cr2;
@@ -538,38 +633,41 @@ export function cut(
             curW[4] += ay * ay * W0 + 2 * ay * by * W1 + by * by * W2;
           }
         }
-        if (wantWp && Math.abs(sinPhi) >= 1e-12) {
-          // Intersect the whole outline with h=wlZ. Paired crossings delimit
-          // actual waterplane strips, including when the centreline is dry.
-          const crossings: number[] = [];
-          for (let i = 0; i < poly.length; i++) {
-            const j = (i + 1) % poly.length;
-            if (f[i] >= 0 === f[j] >= 0) continue;
-            const t = f[i] / (f[i] - f[j]);
-            crossings.push(poly[i][0] + t * (poly[j][0] - poly[i][0]));
-          }
-          crossings.sort((a, b) => a - b);
-          const z0 = (wlZ - C0) / C2;
-          const z1 = -C1 / C2;
-          const ax = c.px * g.cosTrim - z0 * g.sinTrim;
-          const bx = c.nx * g.cosTrim - z1 * g.sinTrim;
-          const ay =
-            side * c.py * cosPhi + (c.px * g.sinTrim + z0 * g.cosTrim) * sinPhi;
-          const by =
-            side * c.ny * cosPhi + (c.nx * g.sinTrim + z1 * g.cosTrim) * sinPhi;
-          for (let i = 0; i + 1 < crossings.length; i += 2) {
-            const lo = crossings[i],
-              hi = crossings[i + 1];
-            const mk = (k: number) => (hi ** (k + 1) - lo ** (k + 1)) / (k + 1);
-            const W0 = (c.speed * mk(0) + c.kSpeed * mk(1)) / Math.abs(C2);
-            const W1 = (c.speed * mk(1) + c.kSpeed * mk(2)) / Math.abs(C2);
-            const W2 = (c.speed * mk(2) + c.kSpeed * mk(3)) / Math.abs(C2);
-            curW[0] += W0;
-            curW[1] += ax * W0 + bx * W1;
-            curW[2] += ay * W0 + by * W1;
-            curW[3] += ax * ax * W0 + 2 * ax * bx * W1 + bx * bx * W2;
-            curW[4] += ay * ay * W0 + 2 * ay * by * W1 + by * by * W2;
-          }
+      }
+      if (wantWp && !fullyWet && Math.abs(sinPhi) >= 1e-12) {
+        // Intersect the whole outline with h=wlZ. Paired crossings delimit
+        // actual waterplane strips, including when the centreline is dry.
+        const crossings: number[] = [];
+        for (let i = 0; i < poly.length; i++) {
+          const j = (i + 1) % poly.length;
+          if (f[i] >= 0 === f[j] >= 0) continue;
+          const t = f[i] / (f[i] - f[j]);
+          crossings.push(poly[i][0] + t * (poly[j][0] - poly[i][0]));
+        }
+        crossings.sort((a, b) => a - b);
+        const z0 = (wlZ - C0) / C2;
+        const z1 = -C1 / C2;
+        const ax = c.px * g.cosTrim - z0 * g.sinTrim;
+        const bx = c.nx * g.cosTrim - z1 * g.sinTrim;
+        const ay =
+          side * c.py * cosPhi + (c.px * g.sinTrim + z0 * g.cosTrim) * sinPhi;
+        const by =
+          side * c.ny * cosPhi + (c.nx * g.sinTrim + z1 * g.cosTrim) * sinPhi;
+        for (let i = 0; i + 1 < crossings.length; i += 2) {
+          const lo = crossings[i],
+            hi = crossings[i + 1];
+          const m0 = stripMoment(lo, hi, 0),
+            m1 = stripMoment(lo, hi, 1),
+            m2 = stripMoment(lo, hi, 2),
+            m3 = stripMoment(lo, hi, 3);
+          const W0 = (c.speed * m0 + c.kSpeed * m1) / Math.abs(C2);
+          const W1 = (c.speed * m1 + c.kSpeed * m2) / Math.abs(C2);
+          const W2 = (c.speed * m2 + c.kSpeed * m3) / Math.abs(C2);
+          curW[0] += W0;
+          curW[1] += ax * W0 + bx * W1;
+          curW[2] += ay * W0 + by * W1;
+          curW[3] += ax * ax * W0 + 2 * ax * bx * W1 + bx * bx * W2;
+          curW[4] += ay * ay * W0 + 2 * ay * by * W1 + by * by * W2;
         }
       }
     }
@@ -578,21 +676,20 @@ export function cut(
       wet.push(secArea > 0);
     }
     if (have) {
-      const du = c.u - pU,
-        avg = (p: number, q: number): number => ((p + q) / 2) * du;
-      vol += avg(pV, gV);
-      IX += avg(pX, gX);
-      IY += avg(pY, gY);
-      IZ += avg(pZ, gZ);
-      wsa += avg(pS, gS);
-      SX += avg(pSX, gSX);
-      SZ += avg(pSZ, gSZ);
+      const du = c.u - pU;
+      vol += trapezoid(pV, gV, du);
+      IX += trapezoid(pX, gX, du);
+      IY += trapezoid(pY, gY, du);
+      IZ += trapezoid(pZ, gZ, du);
+      wsa += trapezoid(pS, gS, du);
+      SX += trapezoid(pSX, gSX, du);
+      SZ += trapezoid(pSZ, gSZ, du);
       if (wantWp) {
-        wA += avg(prevW[0], curW[0]);
-        wX += avg(prevW[1], curW[1]);
-        wY += avg(prevW[2], curW[2]);
-        wXX += avg(prevW[3], curW[3]);
-        wYY += avg(prevW[4], curW[4]);
+        wA += trapezoid(prevW[0], curW[0], du);
+        wX += trapezoid(prevW[1], curW[1], du);
+        wY += trapezoid(prevW[2], curW[2], du);
+        wXX += trapezoid(prevW[3], curW[3], du);
+        wYY += trapezoid(prevW[4], curW[4], du);
       }
     }
     for (let i = 0; i < 5; i++) prevW[i] = curW[i];

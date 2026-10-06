@@ -1,0 +1,105 @@
+.chartframe {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 230px;
+  display: flex;
+  flex-direction: column;
+}
+/* The overlaid toolbar takes no height of its own; the frame allows only for the wider top margin the plot
+   keeps beneath it. */
+.chartframe.navigable {
+  min-height: 242px;
+}
+.stabilitychart {
+  flex: 1 1 0;
+  width: 100%;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+}
+/* Preserve authored stroke weights even if an embedding context scales the responsive SVG. */
+.stabilitychart line,
+.stabilitychart path,
+.stabilitychart rect,
+.stabilitychart circle {
+  vector-effect: non-scaling-stroke;
+}
+.stabilitychart.clickable {
+  cursor: crosshair;
+}
+.stabilitychart.pannable {
+  cursor: grab;
+  touch-action: none;
+}
+.stabilitychart.dragging {
+  cursor: grabbing;
+}
+/* Chart navigation (ChartFrame's toolbar) — the shared Button in its ghost variant, held to the size of a
+   chart caption rather than of an app bar. It sits in the plot's own top margin, at the trailing corner: a row of its
+   own above the frame cost the chart a band of empty white as tall as the buttons themselves, on top of the
+   margin the plot already keeps there. ChartFrame widens that margin for a navigable chart instead, so the
+   controls land in space the drawing was never going to use and nothing below them moves down.
+
+   Sizing and placement are all this file has to say: what the buttons look like, when one is lit and when one
+   is dim, is the shared component's business, which is the point of it being the shared component. */
+.chartnav {
+  position: absolute;
+  top: 0;
+  /* `right` and `height` come from ChartFrame: the plot's own right margin, and its top margin less a hair of
+     clearance. Bottom-aligned within that band, so the buttons sit on the plot's top edge with the white
+     ABOVE them — the gap that used to be under them is what made them read as the row before the chart. */
+  z-index: 1;
+  display: flex;
+  align-items: flex-end;
+  /* The clusters are told apart by spacing, since ghosts have no borders to join: open between them... */
+  gap: 12px;
+}
+/* ...and tight within one. */
+.chartnavgroup {
+  display: flex;
+  gap: 1px;
+}
+/* Icon-only throughout, so the buttons are square-ish: the text padding would leave each glyph adrift in its
+   own button. */
+.chartnav .btn {
+  padding: 3px 6px;
+  /* squarer than an app-bar button: these are icons, and the chip behind one should read as its own square */
+  border-radius: 6px;
+}
+.chartnav .btn svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+}
+/* The hand fills its own drawing to the edges, where the others keep a margin, so it is set a size smaller to
+   weigh the same as the icons beside it. */
+.chartnav .chartpan svg {
+  width: 13px;
+  height: 13px;
+}
+
+.chartgrid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.chartborder {
+  fill: none;
+  stroke: var(--station);
+  stroke-width: 1;
+}
+.charttick,
+.chartlabel {
+  fill: var(--mut);
+  font-family: inherit;
+  user-select: none;
+}
+.charttick {
+  font-size: 10px;
+}
+.chartlabel {
+  fill: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}

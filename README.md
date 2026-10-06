@@ -628,3 +628,18 @@ The spline families (the sheer's plan and trim curves, the section templates, th
 their end conditions, fairing weights, and surface-fit tolerances are downstream choices, not
 properties of the model — what the model fixes is the control points, their knuckles, the
 simplex-valued weight path, the monotonicity guarantees, and the sweep construction.
+
+## Hydrostatic table export
+
+The editor toolbar's **Export hydrostatics** action downloads a standalone v1
+hydrostatic table JSON, in metres, for importing into hydrostatic-table explorers.
+The adjacent options caret selects upright-only, fixed-design-trim, or heel/trim
+grid coverage and standard/fine resolution. Computation runs in a cancellable
+worker against the captured current hull, including unsaved edits.
+
+The export discloses idealized closures, provides sampled deck-edge markers,
+and does not invent downflooding limits or include loading CG/density. See
+[the export guide](docs/hydrostatic-export.md) and
+[the format contract](docs/hydrostatic-table.md) for conventions and limitations.
+Run `npm run test:hydrostatic-export` to check the exporter against the schema
+and independent numerical fixtures.
