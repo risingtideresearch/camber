@@ -8,71 +8,23 @@ import {
 import { VERSION, documentVersion, isReadableVersion } from "../core/document";
 import { parseDocument, parseHullState } from "../core/json";
 import { assemble } from "../core/runtime";
-import { buildStep } from "../core/step";
-import { buildStl } from "../core/stl";
-import { DEFAULT_SURFACES, type SurfaceToggles } from "../core/hullGeometry";
 import { buildPreviewSvg } from "../core/preview";
 import { buildZip, type ZipEntry } from "../core/zip";
 import { Button } from "../components/Button";
-import { Dropdown } from "../components/Dropdown";
+import { ExportControl } from "../components/ExportControl";
+import { captureSavedHull } from "../export/source";
+import { downloadBlob } from "../export/download";
+import { safeExportName } from "../export/filename";
 import { TopBar } from "../components/TopBar";
 import { DesignCard } from "./DesignCard";
 import { topoOf, type Topo } from "./topo";
 import "./LibraryApp.css";
 
-// The design library (the fullscreen file view). Lists the hull designs stored in Supabase and lets you open
-// one in the editor, start a new one, import a JSON file, blend a compatible family in the interpolation
-// viewer, or export the selected design as JSON / STEP / STL. Exports reuse the same code paths as the editor:
-// JSON is the stored document verbatim; STEP and STL load the document into a model and run their writers
-// (which fair the surfaces internally). It owns one scratch model shared by the topology and export paths.
+// The design library lists stored hulls and offers the same export dialog as the editor. Its source is
+// the selected SAVED document, not any edits in an open editor. Library-wide ZIP backup stays separate.
 
 const msg = (e: unknown): string =>
   e instanceof Error ? e.message : String(e);
-
-function download(filename: string, blob: Blob): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-function downloadBlob(filename: string, text: string, mime: string): void {
-  download(filename, new Blob([text], { type: mime }));
-}
-
-// the Export STL dropdown's boxes: which of the boat's three surfaces go in the file. The same set the 3D
-// view's Mesh dropdown draws, with the deck the one that makes the mesh watertight (see core/stl.ts).
-const STL_SURFACES: {
-  key: keyof SurfaceToggles;
-  label: string;
-  title: string;
-}[] = [
-  {
-    key: "hull",
-    label: "Export hull",
-    title: "The trimmed, mirrored hull skin",
-  },
-  {
-    key: "transom",
-    label: "Export transom",
-    title: "The flat panel closing the hull aft, on the transom plane",
-  },
-  {
-    key: "deck",
-    label: "Export deck",
-    title:
-      "The cap closing the hull across the sheer. With the hull and transom, a watertight solid — what a slicer or a volume check wants",
-  },
-];
-
-// a filesystem-safe version of a design name for download filenames
-function safeName(name: string): string {
-  return name.replace(/[^\w.\- ]+/g, "_").trim() || "hull";
-}
 
 export function LibraryApp() {
   const [rows, setRows] = useState<DesignRow[]>([]);
@@ -80,12 +32,6 @@ export function LibraryApp() {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [stlSurfaces, setStlSurfaces] =
-    useState<SurfaceToggles>(DEFAULT_SURFACES); // the Export STL options
-  const [stlMenu, setStlMenu] = useState(false); // its dropdown open state
-  const stlExportable =
-    stlSurfaces.hull || stlSurfaces.transom || stlSurfaces.deck;
-
   // blend mode: null when off, otherwise the id of the hull it was started from. Any hull whose document
   // PARSES is a peer — the interpolator reconciles differing units and control-point counts on open, and
   // differing lengths simply blend (v1 required one shared `length` only because its coordinates were
@@ -189,20 +135,7 @@ export function LibraryApp() {
     window.location.href = `editor.html?id=${encodeURIComponent(id)}`;
   };
 
-  // ---------- exports (reuse the editor's writers via the scratch model) ----------
-  const exportJson = () => {
-    if (!selectedRow) return;
-    try {
-      // pretty-print the stored document on the way out
-      downloadBlob(
-        `${safeName(selectedRow.name)}.json`,
-        JSON.stringify(selectedRow.document, null, 2),
-        "application/json",
-      );
-    } catch (e) {
-      alert("Export JSON failed: " + msg(e));
-    }
-  };
+  // ---------- library-wide backup ----------
   // bundle every design's document (already in `rows`) into one ZIP of pretty-printed JSON files
   const exportAllJson = () => {
     if (rows.length === 0) return;
@@ -210,7 +143,7 @@ export function LibraryApp() {
       const encoder = new TextEncoder();
       const used = new Set<string>(); // dedupe filenames — two designs may share a name
       const entries: ZipEntry[] = rows.map((row) => {
-        const base = safeName(row.name);
+        const base = safeExportName(row.name);
         let name = `${base}.json`;
         for (let i = 2; used.has(name); i++) name = `${base} (${i}).json`;
         used.add(name);
@@ -220,44 +153,11 @@ export function LibraryApp() {
         };
       });
       const stamp = new Date().toISOString().slice(0, 10);
-      download(`camber-designs-${stamp}.zip`, buildZip(entries));
+      downloadBlob(`camber-designs-${stamp}.zip`, buildZip(entries));
     } catch (e) {
       alert("Export All JSON failed: " + msg(e));
     }
   };
-  const exportStep = () => {
-    if (!selectedRow) return;
-    try {
-      // one model per export, assembled from the stored document — nothing is held between exports
-      const model = assemble(
-        parseHullState(JSON.stringify(selectedRow.document)),
-      );
-      const stamp = new Date().toISOString().replace(/\.\d+Z$/, "");
-      downloadBlob(
-        `${safeName(selectedRow.name)}.step`,
-        buildStep(model, stamp),
-        "application/step",
-      );
-    } catch (e) {
-      alert("Export STEP failed: " + msg(e));
-    }
-  };
-  const exportStl = () => {
-    if (!selectedRow) return;
-    try {
-      const model = assemble(
-        parseHullState(JSON.stringify(selectedRow.document)),
-      );
-      downloadBlob(
-        `${safeName(selectedRow.name)}.stl`,
-        buildStl(model, safeName(selectedRow.name), stlSurfaces),
-        "model/stl",
-      );
-    } catch (e) {
-      alert("Export STL failed: " + msg(e));
-    }
-  };
-
   // ---------- delete ----------
   const onDelete = async () => {
     if (!selectedRow) return;
@@ -365,52 +265,19 @@ export function LibraryApp() {
           >
             {converts ? `Convert to v${VERSION} and Open` : "Open"}
           </Button>
-          <Button
+          <ExportControl
+            name={selectedRow?.name ?? ""}
+            sourceLabel="Saved library document"
             disabled={!selectedRow}
-            title="Download the selected design as JSON"
-            onClick={exportJson}
-          >
-            Export JSON
-          </Button>
-          <Button
-            disabled={!selectedRow}
-            title="Export the selected design as a STEP (ISO 10303) file"
-            onClick={exportStep}
-          >
-            Export STEP
-          </Button>
-          <Dropdown
-            label="Export STL"
-            onToggle={exportStl}
-            open={stlMenu}
-            onOpenChange={setStlMenu}
-            disabled={!selectedRow || !stlExportable}
-            title={
-              stlExportable
-                ? "Export the selected design as an STL triangle mesh, of the surfaces picked in the options"
-                : "Pick at least one surface to export in the options"
-            }
-            menuLabel="STL export options"
-          >
-            <div className="dd-section">
-              <div className="dd-group">Surfaces</div>
-              {STL_SURFACES.map((t) => (
-                <label key={t.key} className="dd-row dd-check" title={t.title}>
-                  <input
-                    type="checkbox"
-                    checked={stlSurfaces[t.key]}
-                    onChange={(e) =>
-                      setStlSurfaces((s) => ({
-                        ...s,
-                        [t.key]: e.target.checked,
-                      }))
-                    }
-                  />
-                  <span className="dd-name">{t.label}</span>
-                </label>
-              ))}
-            </div>
-          </Dropdown>
+            captureSource={() => {
+              if (!selectedRow) throw new Error("No design selected");
+              return captureSavedHull(
+                selectedRow.document,
+                selectedRow.name,
+                selectedRow.id,
+              );
+            }}
+          />
           <Button
             variant="danger"
             disabled={!selectedRow || deleting}

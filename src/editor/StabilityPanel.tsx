@@ -1,9 +1,10 @@
+import { linePath, bandPath } from "../components/chartPaths";
 import { loadingOutputs } from "../core/sheet/loadingOutputs";
 import { useLoadingCondition } from "./useLoadingCondition";
 import { OpenPanelButton } from "./OpenPanelButton";
 import { scenariosOf } from "../core/sheet/scenarios";
 import { resolveScenario } from "../core/sheet/resolveScenario";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { NumberInput } from "polymorph-ui";
 import { unitScale } from "../core/json";
 import {
@@ -25,18 +26,22 @@ import {
   type LimitingKgPoint,
 } from "../core/stability";
 import { Button } from "../components/Button";
-import { ButtonGroup } from "../components/ButtonGroup";
-import { Dropdown } from "../components/Dropdown";
 import { useWeightBookResults } from "./useWeightBookResults";
 import { useDocumentRuntime, useDocumentSnapshot } from "./documentStoreHooks";
 import { useEditorUi } from "./editorUi";
 import { useStabilityAnalysis } from "./useStabilityAnalysis";
+import { ChartFrame } from "./ChartFrame";
 import {
-  ChartFrame,
-  PLOT_LEFT_INSET,
-  type ChartScale,
-  type PlotGrab,
-} from "./ChartFrame";
+  StabilityView,
+  ShadePicker,
+  SpreadHandle,
+  ToleranceToggle,
+  ToleranceCells,
+  OverlayMenu,
+  ConditionControls,
+  BandLegend,
+  type Reading,
+} from "../components/StabilityView";
 import "./StabilityPanel.css";
 
 interface Condition {
@@ -358,237 +363,21 @@ const runsOf = <T,>(
   return runs;
 };
 
-const linePath = (
-  points: readonly { x: number; y: number }[],
-  scale: ChartScale,
-): string =>
-  points
-    .map(
-      (point, i) => `${i ? "L" : "M"}${scale.x(point.x)},${scale.y(point.y)}`,
-    )
-    .join(" ");
-
-// A filled ribbon between a lower and an upper KG boundary, one x per sample.
-const bandPath = (
-  samples: readonly { x: number; lo: number; hi: number }[],
-  scale: ChartScale,
-): string =>
-  runsOf(samples, (s) => Number.isFinite(s.lo) && Number.isFinite(s.hi))
-    .filter((run) => run.length >= 2)
-    .map(
-      (run) =>
-        `${linePath(
-          run.map((s) => ({ x: s.x, y: s.hi })),
-          scale,
-        )} ${run
-          .slice()
-          .reverse()
-          .map((s) => `L${scale.x(s.x)},${scale.y(s.lo)}`)
-          .join(" ")} Z`,
-    )
-    .join(" ");
-
-// ---------- the uncertainty bars ----------
-
-const HANDLE_CAP = 7, // half-length of the visible end cap
-  HANDLE_GRAB = 9; // half-extent of the invisible target around it, across the bar
-/**
- * What a typed or dragged field stores. polymorph-ui renders the value it is given with `toString`, so an
- * unrounded drag would put a dozen digits in a box 60px wide; rounding on the way IN keeps the number in the
- * state and the number on screen the same one, which is what stops the field fighting its own value.
- */
 const snap = (value: number): number =>
   Number.isFinite(value) ? Number(value.toPrecision(4)) : 0;
 
-/**
- * One end of one bar, draggable along its own axis.
- *
- * `ChartFrame` owns pointer events on the SVG, so the press has to be stopped from reaching it — otherwise
- * dragging a handle pans the chart — and the release has to suppress the click the frame would otherwise
- * turn into a brand new condition, moving the point out from under the bar being adjusted. Both are what
- * `PlotGrab` exists for.
- */
-function SpreadHandle({
-  px,
-  py,
-  axis,
-  label,
-  grab,
-  onMove,
-}: {
-  readonly px: number;
-  readonly py: number;
-  readonly axis: "x" | "y";
-  readonly label: string;
-  readonly grab: PlotGrab;
-  readonly onMove: (at: { x: number; y: number }) => void;
-}) {
-  const dragging = useRef(false);
-  const halfWidth = axis === "x" ? HANDLE_GRAB : HANDLE_CAP + 4,
-    halfHeight = axis === "x" ? HANDLE_CAP + 4 : HANDLE_GRAB;
-  return (
-    <g
-      className={`spreadhandle ${axis}`}
-      onPointerDown={(event) => {
-        if (grab.panActive || event.button !== 0) return;
-        event.stopPropagation();
-        dragging.current = true;
-        event.currentTarget.setPointerCapture(event.pointerId);
-      }}
-      onPointerMove={(event) => {
-        if (!dragging.current) return;
-        // The frame reads its hover off this same move, and a ghost curve chasing the handle being dragged
-        // is noise: while a handle has the pointer, it is not a question about somewhere else on the plane.
-        event.stopPropagation();
-        const at = grab.locate(event.clientX, event.clientY);
-        if (at) onMove(at);
-      }}
-      onPointerUp={(event) => {
-        if (!dragging.current) return;
-        dragging.current = false;
-        grab.suppressClick();
-        event.stopPropagation();
-        if (event.currentTarget.hasPointerCapture(event.pointerId))
-          event.currentTarget.releasePointerCapture(event.pointerId);
-      }}
-      onPointerCancel={() => {
-        dragging.current = false;
-      }}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <line
-        className="spreadcap"
-        x1={axis === "x" ? px : px - HANDLE_CAP}
-        y1={axis === "x" ? py - HANDLE_CAP : py}
-        x2={axis === "x" ? px : px + HANDLE_CAP}
-        y2={axis === "x" ? py + HANDLE_CAP : py}
-      />
-      <rect
-        className="spreadgrab"
-        x={px - halfWidth}
-        y={py - halfHeight}
-        width={halfWidth * 2}
-        height={halfHeight * 2}
-      />
-      <title>{label}</title>
-    </g>
-  );
-}
+/** The spread of a reading across the rectangle, shown under the reading itself. */
+const rangeNote = (
+  range: { lo: number; hi: number } | null,
+  format: (value: number) => string,
+): ReactNode =>
+  range && range.hi - range.lo > 0 ? (
+    <small className="spreadrange">
+      {format(range.lo)} – {format(range.hi)}
+    </small>
+  ) : null;
 
-/**
- * A mark that gives up an explanation on hover or focus, and takes no room until it is asked.
- *
- * CSS-only, and anchored to the bar it sits in rather than to itself: the card scrolls its own overflow, so a
- * bubble hung off a mark near the right-hand end would be clipped by it or would open a scrollbar. Held to
- * the bar's width, it can only ever grow downwards over the chart.
- */
-function InfoHint({
-  label,
-  children,
-}: {
-  readonly label: string;
-  readonly children: ReactNode;
-}) {
-  return (
-    <span className="infohint">
-      <button type="button" className="infomark" aria-label={label}>
-        i
-      </button>
-      <span className="infobubble" role="tooltip">
-        {children}
-      </span>
-    </span>
-  );
-}
-
-/**
- * The readings, in one of two sizes.
- *
- * CLOSED they are a wrapping row of the few that are always worth a glance. OPEN they become a grid of the
- * lot, one tile apiece with room for the name, the number and its spread — and the chart above gives up the
- * height, because a card whose numbers are being read does not need as much of a picture.
- */
-function Readings({
-  readings,
-  open,
-  onToggle,
-}: {
-  readonly readings: readonly Reading[];
-  readonly open: boolean;
-  readonly onToggle: () => void;
-}) {
-  return (
-    <div className={open ? "gzreadout isopen" : "gzreadout"}>
-      {readings
-        .filter((reading) => open || reading.always)
-        .map((reading) => (
-          <span key={reading.id} title={reading.title}>
-            <span className="rname">{reading.name}</span>{" "}
-            <strong>{reading.value}</strong>
-            {reading.range}
-            {reading.note}
-          </span>
-        ))}
-      {/* Last in the row, where it reads as the end of what is on show — "…and more", rather than a control
-          in the caption asking to be connected to something eight inches below it. */}
-      <Button
-        variant="ghost"
-        className="readmore"
-        aria-expanded={open}
-        title={
-          open
-            ? "Show only the key readings, and give the height back to the curve"
-            : "Show every reading, at the curve's expense"
-        }
-        onClick={onToggle}
-      >
-        {open ? "Less ▴" : "More ▾"}
-      </Button>
-    </div>
-  );
-}
-
-/** The ± beside a quantity: whether it has a tolerance at all. Its extents are kept while it is off. */
-function ToleranceToggle({
-  on,
-  what,
-  onChange,
-}: {
-  readonly on: boolean;
-  readonly what: string;
-  readonly onChange: (on: boolean) => void;
-}) {
-  return (
-    <Button
-      className="rangetoggle"
-      active={on}
-      title={
-        on
-          ? `Every reading spans this tolerance — click to read ${what} as one exact value`
-          : `Give ${what} a tolerance, and read every value across it`
-      }
-      onClick={() => onChange(!on)}
-    >
-      ±
-    </Button>
-  );
-}
-
-/**
- * A condition's tolerance on one axis: both extents on the quantity's own line, with the tie that links them.
- *
- * BOTH are always on show. A control that collapsed to one box while the two agreed had to be read before it
- * could be trusted — the same field meant "both sides" or "the low side" depending on a number somewhere
- * else — and it regrouped under the pointer as a drag happened to pass through symmetry. Two fields and a
- * link say the same thing with nothing to infer.
- *
- * The signs ride inside their boxes here, which is the one place polymorph-ui's leading label reads correctly:
- * "− 0.60" is the quantity, where "° 30" was a unit stranded in front of its number.
- *
- * `max` is not a limit so much as a scale: polymorph-ui's drag covers min…max in 200px, and without it a
- * field for a 0.6 t tolerance would move a whole tonne per pixel.
- */
-function ToleranceCells({
+function AxisToleranceCells({
   idBase,
   axis,
   max,
@@ -602,81 +391,32 @@ function ToleranceCells({
   readonly onLink: (linked: boolean) => void;
 }) {
   return (
-    <>
-      <NumberInput
-        idBase={`${idBase}-lo`}
-        label="−"
-        value={axis.lo}
-        min={0}
-        max={max}
-        onChange={(value) => onExtent("lo", value)}
-      />
-      {/* Drawn as the tie between the two boxes it governs — unbroken while they move together, and a line
-          with a gap in it while each is its own. A mark rather than a word because it has to say WHICH two
-          fields it joins, which a word sitting beside them could not. */}
-      <button
-        type="button"
-        className={`tollink${axis.linked ? " islinked" : ""}`}
-        aria-pressed={axis.linked}
-        title={
-          axis.linked
-            ? "The two extents move together — click to give each its own"
-            : "Each extent is its own — click to move them together, at the wider of the two"
-        }
-        aria-label={axis.linked ? "Unlink the extents" : "Link the extents"}
-        onClick={() => onLink(!axis.linked)}
-      />
-      <NumberInput
-        idBase={`${idBase}-hi`}
-        label="+"
-        value={axis.hi}
-        min={0}
-        max={max}
-        onChange={(value) => onExtent("hi", value)}
-      />
-    </>
+    <ToleranceCells
+      linked={axis.linked}
+      onLink={onLink}
+      low={
+        <NumberInput
+          idBase={`${idBase}-lo`}
+          label="−"
+          value={axis.lo}
+          min={0}
+          max={max}
+          onChange={(v) => onExtent("lo", v)}
+        />
+      }
+      high={
+        <NumberInput
+          idBase={`${idBase}-hi`}
+          label="+"
+          value={axis.hi}
+          min={0}
+          max={max}
+          onChange={(v) => onExtent("hi", v)}
+        />
+      }
+    />
   );
 }
-
-/**
- * One reading of the selected condition.
- *
- * `always` marks the handful worth having on screen at all times; the rest are there when the section is
- * opened out. None of them depends on what the plane is shaded by — a design either satisfies the criteria or it
- * does not, and which one is being pictured at the moment has no bearing on that.
- */
-interface Reading {
-  readonly id: string;
-  readonly name: ReactNode;
-  readonly value: string;
-  readonly range: ReactNode;
-  readonly note?: ReactNode;
-  readonly title?: string;
-  readonly always: boolean;
-}
-
-/** The spread of a reading across the rectangle, shown under the reading itself. */
-const rangeNote = (
-  range: { lo: number; hi: number } | null,
-  format: (value: number) => string,
-): ReactNode =>
-  range && range.hi - range.lo > 0 ? (
-    <small className="spreadrange">
-      {format(range.lo)} – {format(range.hi)}
-    </small>
-  ) : null;
-
-/**
- * The Overlays menu: which reference marks are drawn. It uses the shared dropdown in its MENU form and its
- * row primitives, so it reads as the same control as Curvature and Mesh resolution rather than as a third way
- * of doing this — but with no toggle on the button, because there is no feature here to switch on. The marks
- * are a list of independent choices, and a master switch over them would be one this panel invented.
- *
- * A mark's PARAMETER sits in the row under the mark it belongs to — the reference angle means nothing without
- * the hatching it defines, and keeping the two together is what stops a "settings" section accumulating at
- * the bottom of the panel. Dimmed rather than hidden while its mark is off: the value stays readable, and the
- * panel does not resize under the pointer as rows are ticked.
- */
 function OverlayControls({
   value,
   onChange,
@@ -684,61 +424,50 @@ function OverlayControls({
   readonly value: Overlays;
   readonly onChange: (next: Overlays) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const set = <K extends keyof Overlays>(key: K, next: Overlays[K]): void =>
-    onChange({ ...value, [key]: next });
   return (
-    <Dropdown
-      label="Overlays"
-      open={open}
-      onOpenChange={setOpen}
-      title="Which reference marks are drawn over the shading"
-      menuLabel="Overlays"
-      align="right"
-    >
-      <div className="dd-section">
-        <div className="dd-group">References</div>
-        <label className="dd-row dd-check">
-          <input
-            type="checkbox"
-            checked={value.sheerReference}
-            onChange={(e) => set("sheerReference", e.target.checked)}
-          />
-          <span className="dd-name">Sheer immersion</span>
-        </label>
-        <div
-          className={`dd-row dd-sub${value.sheerReference ? "" : " isoff"}`}
-          title="Hatch the displacements whose sheer immerses before this heel"
-        >
-          <span className="dd-name">Immerses before</span>
-          <NumberInput
-            label=""
-            value={value.sheerReferenceDeg}
-            // The field is dragged as well as typed, and a heel is read in whole degrees either way.
-            onChange={(deg) => set("sheerReferenceDeg", Math.round(deg))}
-            min={5}
-            max={90}
-          />
-          <span className="dd-unit">°</span>
-        </div>
-        <label className="dd-row dd-check">
-          <input
-            type="checkbox"
-            checked={value.designWaterline}
-            onChange={(e) => set("designWaterline", e.target.checked)}
-          />
-          <span className="dd-name">Design waterline</span>
-        </label>
-        <label className="dd-row dd-check">
-          <input
-            type="checkbox"
-            checked={value.lowestSheer}
-            onChange={(e) => set("lowestSheer", e.target.checked)}
-          />
-          <span className="dd-name">Lowest sheer-immersing KG</span>
-        </label>
-      </div>
-    </Dropdown>
+    <OverlayMenu
+      references={[
+        {
+          id: "sheer",
+          name: "Sheer immersion",
+          on: value.sheerReference,
+          onChange: (on) => onChange({ ...value, sheerReference: on }),
+          parameter: (
+            <>
+              <label
+                className="dd-name"
+                htmlFor="stability-sheer-reference::input"
+              >
+                Immerses before
+              </label>
+              <NumberInput
+                idBase="stability-sheer-reference"
+                label=""
+                value={value.sheerReferenceDeg}
+                onChange={(deg) =>
+                  onChange({ ...value, sheerReferenceDeg: Math.round(deg) })
+                }
+                min={5}
+                max={90}
+              />
+              <span className="dd-unit">°</span>
+            </>
+          ),
+        },
+        {
+          id: "waterline",
+          name: "Design waterline",
+          on: value.designWaterline,
+          onChange: (on) => onChange({ ...value, designWaterline: on }),
+        },
+        {
+          id: "height",
+          name: "Lowest sheer-immersing KG",
+          on: value.lowestSheer,
+          onChange: (on) => onChange({ ...value, lowestSheer: on }),
+        },
+      ]}
+    />
   );
 }
 
@@ -1563,45 +1292,21 @@ export function StabilityPanel() {
   ];
 
   return (
-    <div className="stabilitypanel">
-      <section className="card stabilitycard">
-        <div className="cap">
-          <span className="capname">Limiting KG</span>
-          <span className="capctls">
-            <OverlayControls value={overlays} onChange={setOverlays} />
-          </span>
-        </div>
-        {/* What the plane is shaded by. A segmented bar rather than the select it was, because this is not a
-            setting of the chart but the question the whole card answers: it decides the shading, the legend,
-            the wording of the verdict, and which reading is taken beside the curve in the next card. A select
-            says "minor option" and hides its own alternatives; a bar shows the four readings as the four
-            readings. The explanation that used to sit under it in a paragraph of its own is behind the mark
-            at the end — it is read once and then never again, which is not worth a permanent row. */}
-        <div className="shadebar">
-          <ButtonGroup className="shadepick" aria-label="Shade the plane by">
-            {SHADINGS.map((shading) => (
-              <Button
-                key={shading.key}
-                active={coloring === shading.key}
-                title={shading.hint}
-                aria-pressed={coloring === shading.key}
-                onClick={() => setColoring(shading.key)}
-              >
-                {shading.label}
-              </Button>
-            ))}
-          </ButtonGroup>
-          <InfoHint label="What this shading means">
-            {isImo
-              ? "Green is where every general intact-stability criterion of IMO A.749 is met at once. The heavy curve is the limiting KG each displacement allows — the least of the six ceilings, drawn thin behind it — and it is labelled with the criterion that sets it. The 40° criteria are read at 40° flat: downflooding openings are not modelled, so the sheer-immersion overlay is a warning here and not a criterion."
-              : criterion
-                ? `Shaded by the area under GZ out to ${criterion.deg}°, which the IMO criterion puts at ${fmtArea(passArea(criterion))} m·rad or more.`
-                : isMaximum
-                  ? "Shaded by maximum GZ. The dashed contour requires GZ ≥ 0.20 m at or beyond 30°; cross-hatching marks a qualifying lever whose peak occurs before 25°."
-                  : "Green is where the transverse metacenter M is above G (GMt > 0)."}{" "}
-            Point anywhere to see that condition’s curve, and click to pin it.
-          </InfoHint>
-        </div>
+    <StabilityView
+      overlays={<OverlayControls value={overlays} onChange={setOverlays} />}
+      shading={
+        <ShadePicker options={SHADINGS} value={coloring} onChange={setColoring}>
+          {isImo
+            ? "Green is where every general intact-stability criterion of IMO A.749 is met at once. The heavy curve is the limiting KG each displacement allows — the least of the six ceilings, drawn thin behind it — and it is labelled with the criterion that sets it. The 40° criteria are read at 40° flat: downflooding openings are not modelled, so the sheer-immersion overlay is a warning here and not a criterion."
+            : criterion
+              ? `Shaded by the area under GZ out to ${criterion.deg}°, which the IMO criterion puts at ${fmtArea(passArea(criterion))} m·rad or more.`
+              : isMaximum
+                ? "Shaded by maximum GZ. The dashed contour requires GZ ≥ 0.20 m at or beyond 30°; cross-hatching marks a qualifying lever whose peak occurs before 25°."
+                : "Green is where the transverse metacenter M is above G (GMt > 0)."}{" "}
+          Point anywhere to see that condition’s curve, and click to pin it.
+        </ShadePicker>
+      }
+      plane={
         <ChartFrame
           xDomain={xDomain}
           yDomain={[0, yMax]}
@@ -2058,135 +1763,123 @@ export function StabilityPanel() {
             );
           }}
         </ChartFrame>
-        {/* The key to the shading, under the drawing it is the key to. */}
-        {(criterion || isMaximum) && (
-          <div
-            className="bandlegend"
-            style={{ paddingLeft: `${PLOT_LEFT_INSET}px` }}
-          >
-            {(criterion?.bands ?? MAX_GZ_BANDS).map((band) => (
-              <span
-                key={band.key}
-                className={`bandkey ${band.key}`}
-                title={`${band.name} · ${band.range} ${criterion ? "m·rad" : "m"} — ${band.note}`}
-              >
-                {band.name}
-                <small>
-                  {band.range} {criterion ? "m·rad" : "m"}
-                </small>
-              </span>
-            ))}
-            {isMaximum && (
-              <span className="hatchkey">Cross-hatched: peak before 25°</span>
-            )}
-          </div>
-        )}
-        {/* The condition itself, and every reading taken of it. The two that DEFINE it are fields rather than
-            figures: a loading condition is a number that came out of a weight estimate, and pointing at it on
-            the plane is the coarse way to say it. KMt is not among the readings because it IS the limit curve
-            (see limitingKgCurve) — the chart states it at this displacement already, and GMt is the form of
-            it that the chart does not. */}
-        {/* ---------- the condition bar ---------- */}
-        {/* The two quantities that DEFINE the condition, as fields rather than figures: a loading condition
-            is a number that came out of a weight estimate, and pointing at it on the plane is the coarse way
-            to say it. One number to a line, in a grid of name · field · unit · control, so the units stand in
-            a column of their own instead of trailing each value into the next one along. The readings TAKEN
-            of the condition are in the GZ card, beside the curve they describe. */}
-        {sourceControls}
-        {linked && offView && (
-          <p className="sheetlinknote">
-            The estimate falls outside the plotted range — zoom out to see it.
-          </p>
-        )}
-        <div className="conditionbar">
-          <div className="quantity">
-            <label className="cname" htmlFor="cond-disp::input">
-              Δ
-            </label>
-            <NumberInput
-              idBase="cond-disp"
-              label=""
-              value={snap(selected.vol * tonsPerVolume)}
-              min={xDomain[0]}
-              max={xDomain[1]}
-              onChange={(tons) => {
-                setLinkSheet(false);
-                setCondition({ vol: tons / tonsPerVolume, kg: selected.kg });
-              }}
-            />
-            <span className="cunit">t</span>
-            <ToleranceToggle
-              on={tolerance.x.on}
-              what="the displacement"
-              onChange={(on) => editAxis("x", { on })}
-            />
-            {tolerance.x.on && (
-              <ToleranceCells
-                idBase="tol-disp"
-                axis={tolerance.x}
-                max={xDomain[1] - xDomain[0]}
-                onExtent={(side, value) => setExtent("x", side, value)}
-                onLink={(linked) => setLinked("x", linked)}
-              />
-            )}
-          </div>
-          <div className="quantity">
-            <label className="cname" htmlFor="cond-kg::input">
-              KG
-            </label>
-            <NumberInput
-              idBase="cond-kg"
-              label=""
-              value={snap(selected.kg)}
-              min={0}
-              max={yMax}
-              onChange={(kg) => {
-                if (fromSheet?.kg !== null) setLinkSheet(false);
-                setCondition({ vol: selected.vol, kg });
-              }}
-            />
-            <span className="cunit">{unit}</span>
-            <ToleranceToggle
-              on={tolerance.y.on}
-              what="the VCG"
-              onChange={(on) => editAxis("y", { on })}
-            />
-            {tolerance.y.on && (
-              <ToleranceCells
-                idBase="tol-kg"
-                axis={tolerance.y}
-                max={yMax}
-                onExtent={(side, value) => setExtent("y", side, value)}
-                onLink={(linked) => setLinked("y", linked)}
-              />
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section
-        className={`card stabilitycard gzcard${numbersOpen ? " numbersopen" : ""}`}
-      >
-        <div className="cap">
-          <span className="capname">
-            {region ? "GZ curve and range" : "GZ curve"}
-          </span>
-          {/* The pinned condition, and the one the pointer is over. Only the pinned one is fixed here: the
-              ghost gives up width first and is cut with an ellipsis, because a reading being taken should not
-              slide off the line as the pointer wanders over somewhere with longer numbers. */}
-          <span className="val">
-            {hover && (
-              <span className="ghostval">
-                pointing at Δ {fmt(hover.vol * tonsPerVolume)} t · VCG{" "}
-                {fmt(hover.kg)} {unit}
-              </span>
-            )}
-            <span className="pinnedval">
-              Δ {fmt(selected.vol * tonsPerVolume)} t · VCG {fmt(selected.kg)}{" "}
-              {unit}
+      }
+      legend={
+        criterion || isMaximum ? (
+          <BandLegend
+            bands={criterion?.bands ?? MAX_GZ_BANDS}
+            unit={criterion ? "m·rad" : "m"}
+            earlyPeak={isMaximum}
+          />
+        ) : null
+      }
+      condition={
+        <>
+          {sourceControls}
+          {linked && offView && (
+            <p className="sheetlinknote">
+              The estimate falls outside the plotted range — zoom out to see it.
+            </p>
+          )}
+          <ConditionControls
+            quantities={[
+              {
+                label: "Δ",
+                inputId: "cond-disp::input",
+                unit: "t",
+                input: (
+                  <NumberInput
+                    idBase="cond-disp"
+                    label=""
+                    value={snap(selected.vol * tonsPerVolume)}
+                    min={xDomain[0]}
+                    max={xDomain[1]}
+                    onChange={(tons) => {
+                      setLinkSheet(false);
+                      setCondition({
+                        vol: tons / tonsPerVolume,
+                        kg: selected.kg,
+                      });
+                    }}
+                  />
+                ),
+                tolerance: (
+                  <>
+                    {" "}
+                    <ToleranceToggle
+                      on={tolerance.x.on}
+                      what="the displacement"
+                      onChange={(on) => editAxis("x", { on })}
+                    />
+                    {tolerance.x.on && (
+                      <AxisToleranceCells
+                        idBase="tol-disp"
+                        axis={tolerance.x}
+                        max={xDomain[1] - xDomain[0]}
+                        onExtent={(side, value) => setExtent("x", side, value)}
+                        onLink={(linked) => setLinked("x", linked)}
+                      />
+                    )}
+                  </>
+                ),
+              },
+              {
+                label: "KG",
+                inputId: "cond-kg::input",
+                unit: unit,
+                input: (
+                  <NumberInput
+                    idBase="cond-kg"
+                    label=""
+                    value={snap(selected.kg)}
+                    min={0}
+                    max={yMax}
+                    onChange={(kg) => {
+                      if (fromSheet?.kg !== null) setLinkSheet(false);
+                      setCondition({ vol: selected.vol, kg });
+                    }}
+                  />
+                ),
+                tolerance: (
+                  <>
+                    {" "}
+                    <ToleranceToggle
+                      on={tolerance.y.on}
+                      what="the VCG"
+                      onChange={(on) => editAxis("y", { on })}
+                    />
+                    {tolerance.y.on && (
+                      <AxisToleranceCells
+                        idBase="tol-kg"
+                        axis={tolerance.y}
+                        max={yMax}
+                        onExtent={(side, value) => setExtent("y", side, value)}
+                        onLink={(linked) => setLinked("y", linked)}
+                      />
+                    )}
+                  </>
+                ),
+              },
+            ]}
+          />
+        </>
+      }
+      curveValue={
+        <>
+          {" "}
+          {hover && (
+            <span className="ghostval">
+              pointing at Δ {fmt(hover.vol * tonsPerVolume)} t · VCG{" "}
+              {fmt(hover.kg)} {unit}
             </span>
+          )}
+          <span className="pinnedval">
+            Δ {fmt(selected.vol * tonsPerVolume)} t · VCG {fmt(selected.kg)}{" "}
+            {unit}
           </span>
-        </div>
+        </>
+      }
+      curve={
         <ChartFrame
           xDomain={[0, 90]}
           yDomain={gzDomain}
@@ -2385,14 +2078,11 @@ export function StabilityPanel() {
             );
           }}
         </ChartFrame>
-        {/* Every reading taken of the condition, beside the curve they are readings of — the initial-stability
-            one, whichever large-angle criterion is being shaded by, and what the sheer does under it. */}
-        <Readings
-          readings={readings}
-          open={numbersOpen}
-          onToggle={() => setNumbersOpen((open) => !open)}
-        />
-      </section>
-    </div>
+      }
+      hasRange={!!region}
+      readings={readings}
+      numbersOpen={numbersOpen}
+      onToggleNumbers={() => setNumbersOpen((open) => !open)}
+    />
   );
 }

@@ -23,6 +23,8 @@ import { ProfileView } from "./ProfileView";
 import { StationView } from "./StationView";
 import { CutStationView } from "./CutStationView";
 import { StlControl } from "../components/StlControl";
+import { ExportControl } from "../components/ExportControl";
+import { captureCurrentHull } from "../export/source";
 import { DetachPanelButton } from "./DetachPanelButton";
 import { Area, AreaGroup, AreaSeparator } from "polymorph-ui";
 import "./EditorApp.css";
@@ -201,6 +203,18 @@ function Editor() {
         <span className="tabsep" />
         <DetachPanelButton kind="weights" label="Weights" />
         <DetachPanelButton kind="stability" label="Stability" />
+        <ExportControl
+          name={meta.name || snapshot.state.hull.name}
+          sourceLabel="Current editor hull · includes unsaved changes"
+          disabled={!meta.initialized}
+          captureSource={() =>
+            captureCurrentHull(
+              snapshot.state.hull,
+              meta.name,
+              meta.design.currentId ?? undefined,
+            )
+          }
+        />
         <StlControl />
       </div>
       <div className="main">

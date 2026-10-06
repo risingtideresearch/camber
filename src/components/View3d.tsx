@@ -154,7 +154,7 @@ const STATIONS: { key: keyof LineToggles; label: string; title: string }[] = [
 ];
 
 // the Mesh dropdown's "Surfaces" group: the three surfaces the finished boat is made of, each an independent
-// box. The same set the library's Export STL offers, so what is on screen is what goes in the file.
+// box. The shared export dialog offers the same set for STL, independently of these display toggles.
 const SURFACES: { key: keyof SurfaceToggles; label: string; title: string }[] =
   [
     {
