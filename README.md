@@ -658,5 +658,7 @@ The export discloses idealized closures, provides sampled deck-edge markers,
 and does not invent downflooding limits or include loading CG/density. See
 [the export guide](docs/hydrostatic-export.md) and
 [the format contract](docs/hydrostatic-table.md) for conventions and limitations.
-Run `npm run test:hydrostatic-export` to check the exporter against the schema
-and independent numerical fixtures.
+The format contract and schema are maintained in
+[Chartroom](https://github.com/risingtideresearch/chartroom), pinned to `v0.1.0`
+in Camber's dev dependencies. Run `npm run test:hydrostatic-export` to check the
+exporter against the installed shared schema and independent numerical fixtures.

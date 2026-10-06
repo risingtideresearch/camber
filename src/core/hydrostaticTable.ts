@@ -1,5 +1,6 @@
-// Portable hydrostatic-table v1 data. This is a buoyancy response, not a
-// Camber document, loading condition, mesh or CrossCurves cache.
+// Camber's output subset of the Chartroom hydrostatic-table v1 contract.
+// This is a buoyancy response, not a Camber document, loading condition,
+// mesh or CrossCurves cache. The complete contract is maintained in Chartroom.
 export type HydrostaticPointM = [number, number, number];
 
 export interface HydrostaticSample {

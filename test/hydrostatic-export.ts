@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import Ajv from "ajv";
 import {
   buildHydrostaticTable,
@@ -26,13 +27,17 @@ import {
 } from "../src/core/sweep";
 import type { HydrostaticTable } from "../src/core/hydrostaticTable";
 
+const require = createRequire(import.meta.url);
+const contract = "@risingtideresearch/chartroom/formats/hydrostatic-table/v1";
 const schema = JSON.parse(
-  readFileSync(
-    new URL("../formats/hydrostatic-table.schema.json", import.meta.url),
-    "utf8",
-  ),
+  readFileSync(require.resolve(`${contract}/schema.json`), "utf8"),
 );
 const validate = new Ajv({ allErrors: true }).compile(schema);
+// Exercise a full-contract document as well as Camber's narrower exporter output.
+const example = JSON.parse(
+  readFileSync(require.resolve(`${contract}/examples/box.json`), "utf8"),
+);
+assert.ok(validate(example), JSON.stringify(validate.errors));
 const RAD = Math.PI / 180;
 const near = (a: number, b: number, tol = 1e-9) =>
   assert.ok(Math.abs(a - b) <= tol * Math.max(1, Math.abs(b)), `${a} != ${b}`);
