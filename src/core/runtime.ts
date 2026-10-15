@@ -50,8 +50,8 @@ export const defaultSession = (state: HullState): SessionState => {
 
 /**
  * One counter per independently derivable slice of authored state, bumped by whoever writes that slice.
- * `transom` and `scalars` derive no sampler; they are here so a reader can key its own caches — the mesh's
- * transom cut, the hydrostatics — on the same scheme.
+ * `transom` (both transom planes, the stern's and the bow's) and `scalars` derive no sampler; they are here so
+ * a reader can key its own caches — the mesh's transom cuts, the hydrostatics — on the same scheme.
  */
 export interface SliceRevs {
   readonly plan: number;
@@ -149,6 +149,7 @@ export function assemble(
     sheerPlan: hull.sheerPlan as Model["sheerPlan"],
     sheerTrim: hull.sheerTrim as Model["sheerTrim"],
     transom: hull.transom as Model["transom"],
+    bowTransom: hull.bowTransom as Model["bowTransom"],
     stations: hull.stations as Model["stations"],
     waterline: hull.waterline,
     deckTrim: hull.deckTrim,
@@ -168,6 +169,7 @@ export const stateOf = (model: Model): HullState =>
     sheerPlan: model.sheerPlan,
     sheerTrim: model.sheerTrim,
     transom: model.transom,
+    bowTransom: model.bowTransom,
     stations: model.stations,
     waterline: model.waterline,
     deckTrim: model.deckTrim,

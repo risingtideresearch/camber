@@ -16,7 +16,7 @@
 // The format version this build writes, and the newest it can read. Bump it when a change to the structures
 // below is not readable by an older build; documents that declare a higher version are ones this build must
 // refuse rather than misread.
-export const VERSION = 2;
+export const VERSION = 3;
 
 // The document's length unit. Every coordinate below is a number of these.
 export type Unit = "mm" | "cm" | "m" | "in" | "ft";
@@ -66,8 +66,10 @@ export interface Station {
   points: StationPoint[]; // all stations have the same number of points S ≥ 2
 }
 
-// The transom: a trimmed plane at the stern given by two profile points, top and bottom. The hull keeps the
-// forward side; the cut is a solid face.
+// A transom: a trimmed plane closing one end of the hull, given by two profile points, top and bottom. The
+// hull keeps the side toward its middle — forward of the stern transom, aft of the bow one — and the cut is a
+// solid face. Either end may have none (null), in which case the swept sheet simply runs out to the plan's
+// end there.
 export interface TransomPoint {
   x: number;
   z: number;
@@ -81,7 +83,8 @@ export interface HullDocument {
   deckTrimDeg: number;
   sheerPlan: PlanPoint[]; // ≥ 2 points
   sheerTrim: TrimPoint[]; // ≥ 2 points
-  transom: TransomPoint[]; // = 2 points
+  transom: TransomPoint[] | null; // the STERN transom: = 2 points, or null for an open stern (version 3+)
+  bowTransom?: TransomPoint[] | null; // = 2 points, or null / absent (every version 2 document) for none
   stations: Station[]; // K ≥ 1 stations
 }
 

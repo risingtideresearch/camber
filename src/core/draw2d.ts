@@ -1,6 +1,6 @@
 import { SEL, HILITE, SELB, COL, KNOT_LONG, stationColor } from "./colors";
 import { startDrag } from "./drag";
-import { isStationEnd } from "./hull";
+import { isStationEnd, transomOf, type TransomSide } from "./hull";
 import type { Vec2, Vec3 } from "./math";
 import {
   bounds,
@@ -519,21 +519,22 @@ export function drawPlan(
         "stroke-linecap": "round",
       }),
     );
-  // The transom's footprint in plan: its outline seen from above, head at the sheer → foot on the centerline.
+  // Each transom's footprint in plan: its outline seen from above, head at the sheer → foot on the centerline.
   // Read off the same sampling the outline above was drawn from, so the 2D strips and the 3D panel are three
   // projections of ONE curve rather than three curves that ought to agree.
-  const te = transomOutline(sampling);
-  if (te.length > 1) {
-    svg.append(
-      el("path", {
-        d: poly(te.map((p): Vec2 => [v.mapX(p[0]), v.yPlan(p[1])])),
-        fill: "none",
-        stroke: "var(--transom)",
-        "stroke-width": W_MAIN,
-        "stroke-linejoin": "round",
-        "stroke-linecap": "round",
-      }),
-    );
+  for (const side of TRANSOM_SIDES) {
+    const te = transomOutline(sampling, side);
+    if (te.length > 1)
+      svg.append(
+        el("path", {
+          d: poly(te.map((p): Vec2 => [v.mapX(p[0]), v.yPlan(p[1])])),
+          fill: "none",
+          stroke: "var(--transom)",
+          "stroke-width": W_MAIN,
+          "stroke-linejoin": "round",
+          "stroke-linecap": "round",
+        }),
+      );
   }
   // Design-waterline footprint (where the hull meets the WL plane). Marched down the columns of the same
   // sampling the outline, the max-beam line and the transom footprint above are read from, so it is a fourth
@@ -770,42 +771,53 @@ export function drawProfile(
       "stroke-linecap": "round",
     }),
   );
-  // transom: the construction line through the two control points (dashed) + the actual cut edge (solid)
-  const [ta, tb] = model.transom;
-  svg.append(
-    el("line", {
-      x1: v.mapX(ta.x),
-      y1: v.zScreenP(ta.z),
-      x2: v.mapX(tb.x),
-      y2: v.zScreenP(tb.z),
-      stroke: "var(--transom)",
-      "stroke-width": W_GUIDE,
-      opacity: 0.6,
-      "stroke-dasharray": "5 4",
-    }),
-  );
-  // the cut edge itself: the outline in side view. Every point of it is on the transom plane by construction,
-  // so it lies along the dashed construction line above — between the head at the sheer and the foot on the
-  // keel, which is the stretch of that line the hull actually reaches.
-  const te = transomOutline(sampling);
-  if (te.length > 1)
+  // each transom the hull has: the construction line through its two control points (dashed) + the actual
+  // cut edge (solid). The cut edge is the outline in side view. Every point of it is on the transom plane by
+  // construction, so it lies along the dashed construction line — between the head at the sheer and the foot
+  // on the keel, which is the stretch of that line the hull actually reaches.
+  for (const side of TRANSOM_SIDES) {
+    const t = transomOf(model, side);
+    if (!t) continue;
+    const [ta, tb] = t;
     svg.append(
-      el("path", {
-        d: poly(te.map((p): Vec2 => [v.mapX(p[0]), v.zScreenP(p[2])])),
-        fill: "none",
+      el("line", {
+        x1: v.mapX(ta.x),
+        y1: v.zScreenP(ta.z),
+        x2: v.mapX(tb.x),
+        y2: v.zScreenP(tb.z),
         stroke: "var(--transom)",
-        "stroke-width": W_MAIN,
-        "stroke-linejoin": "round",
-        "stroke-linecap": "round",
+        "stroke-width": W_GUIDE,
+        opacity: 0.6,
+        "stroke-dasharray": "5 4",
       }),
     );
-  fixedText(
-    svg,
-    v.mapX(ta.x) + 6,
-    v.zScreenP(ta.z) - 4,
-    { "font-size": 10, fill: "var(--transom)" },
-    "transom",
-  );
+    const te = transomOutline(sampling, side);
+    if (te.length > 1)
+      svg.append(
+        el("path", {
+          d: poly(te.map((p): Vec2 => [v.mapX(p[0]), v.zScreenP(p[2])])),
+          fill: "none",
+          stroke: "var(--transom)",
+          "stroke-width": W_MAIN,
+          "stroke-linejoin": "round",
+          "stroke-linecap": "round",
+        }),
+      );
+    // the label sits beside the head, on the outboard side of the plane: aft of the stern's, forward of the
+    // bow's, so neither runs into the hull
+    const bow = side === "bow";
+    fixedText(
+      svg,
+      v.mapX(ta.x) + (bow ? -6 : 6),
+      v.zScreenP(ta.z) - 4,
+      {
+        "font-size": 10,
+        fill: "var(--transom)",
+        ...(bow ? { "text-anchor": "end" } : {}),
+      },
+      bow ? "bow transom" : "transom",
+    );
+  }
   // cusp marker: shade the folded depth band (offset = R down to the deepest swept point) at the cusping
   // stations, in red — the same folded region the plan view shades.
   const cusps = perfStep("Cusp (fold) check", () => cuspRuns(model), runPts);
@@ -930,11 +942,23 @@ export function drawProfile(
       onSelect,
     ),
   );
-  model.transom.forEach((cp, idx) =>
-    transomDot(selection, svg, idx, v.mapX(cp.x), v.zScreenP(cp.z), onSelect),
-  );
+  for (const side of TRANSOM_SIDES)
+    transomOf(model, side)?.forEach((cp, idx) =>
+      transomDot(
+        selection,
+        svg,
+        side,
+        idx,
+        v.mapX(cp.x),
+        v.zScreenP(cp.z),
+        onSelect,
+      ),
+    );
   perfEnd(PERF_PROFILE);
 }
+
+// the two transoms, in the order they are drawn
+const TRANSOM_SIDES: readonly TransomSide[] = ["stern", "bow"];
 
 // ---------- the station editors ----------
 // One station editor (station `si`): the other stations ghosted faint behind it, this one solid with
@@ -1506,6 +1530,7 @@ export function trimDot(
 export function transomDot(
   selection: ModelSelection,
   svg: SVGGElement,
+  side: TransomSide,
   idx: number,
   sx: number,
   sy: number,
@@ -1516,12 +1541,14 @@ export function transomDot(
       cx: 0,
       cy: 0,
       r: 5.5,
-      fill: isSelected(selection, "transom", idx) ? SELB : "var(--transom)",
+      fill: isSelected(selection, "transom", idx, undefined, side)
+        ? SELB
+        : "var(--transom)",
       stroke: "#fff",
       "stroke-width": 1.5,
     });
     c.addEventListener("pointerdown", (e) =>
-      transomPointDown(idx, svg, e, onSelect),
+      transomPointDown(side, idx, svg, e, onSelect),
     );
     g.append(c);
   });
@@ -1569,13 +1596,14 @@ export function trimPointDown(
 }
 
 export function transomPointDown(
+  side: TransomSide,
   idx: number,
   svg: SVGGElement,
   e: PointerEvent,
   onSelect: OnModelSelect,
 ): void {
   e.stopPropagation();
-  startDrag({ kind: "transom", idx }, svg, e, onSelect);
+  startDrag({ kind: "transom", side, idx }, svg, e, onSelect);
 }
 
 // a station's position handle: drags the station along the sheer plan (its u). Like the cut slider, it

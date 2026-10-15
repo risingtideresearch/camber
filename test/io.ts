@@ -24,7 +24,7 @@
 // it can gate CI alongside the geometry tests.
 
 import { assemble } from "../src/core/runtime";
-import { defaultHull } from "../src/core/hull";
+import { defaultHull, defaultTransom } from "../src/core/hull";
 import { buildStl } from "../src/core/stl";
 import { parseStl } from "../src/core/stlImport";
 import { pchipSlopes, hermiteEval } from "../src/core/pchip";
@@ -118,6 +118,34 @@ function stlClosed(): { ok: boolean; detail: string } {
   return {
     ok,
     detail: `${geom.triangleCount} triangles, ${open} unmatched edges, signed volume ${volume.toExponential(3)}`,
+  };
+}
+
+// STL closed, the other way round: a bow transom and no stern transom, on a double-ender whose plan runs
+// to the centerline aft as well, so the stern closes to a point where the sheer meets the centerline (as a
+// bow without a transom does). The bow panel, the deck and the skin must seal the solid just as the stern
+// panel does on the default hull.
+function stlClosedBowTransom(): { ok: boolean; detail: string } {
+  const d = defaultHull();
+  const model = assemble({
+    ...d,
+    sheerPlan: d.sheerPlan.map((p, i) => (i === 0 ? { ...p, y: 0 } : p)),
+    transom: null,
+    bowTransom: defaultTransom(d, "bow"),
+  });
+  const all = { hull: true, transom: true, deck: true };
+  const geom = parseStl(asciiBuffer(buildStl(model, "camber", all)));
+  const { edges, volume } = edgeBook(geom.positions);
+  const open = unmatchedEdges(edges);
+  const panel = parseStl(
+    asciiBuffer(
+      buildStl(model, "camber", { hull: false, transom: true, deck: false }),
+    ),
+  ).triangleCount;
+  const ok = geom.triangleCount > 0 && open === 0 && volume > 0 && panel > 0;
+  return {
+    ok,
+    detail: `${geom.triangleCount} triangles, ${open} unmatched edges, signed volume ${volume.toExponential(3)}, ${panel} bow panel triangles`,
   };
 }
 
@@ -255,6 +283,7 @@ function main(): number {
     [
       { name: "stl round-trip", run: stlRoundTrip },
       { name: "stl closed mesh", run: stlClosed },
+      { name: "stl closed, bow transom", run: stlClosedBowTransom },
       { name: "stl export options", run: stlOptions },
       { name: "stl binary parse", run: stlBinary },
       { name: "pchip knot interpolation", run: pchipKnots },

@@ -34,7 +34,7 @@ export type HullData = Writable<Omit<HullState, "waterline" | "deckTrim">>;
 
 type PlanCP = HullData["sheerPlan"][number];
 type TrimCP = HullData["sheerTrim"][number];
-type TransomCP = HullData["transom"][number];
+type TransomCP = NonNullable<HullData["transom"]>[number];
 type StationCP = HullData["stations"][number];
 export interface ParsedDoc {
   waterline: number;
@@ -62,7 +62,8 @@ export function buildJson(hull: HullState): string {
     deckTrimDeg: (hull.deckTrim * 180) / Math.PI,
     sheerPlan: hull.sheerPlan.map((p) => ({ x: p.x, y: p.y })),
     sheerTrim: hull.sheerTrim.map((p) => ({ x: p.x, z: p.z, k: p.k })),
-    transom: hull.transom.map((p) => ({ x: p.x, z: p.z })),
+    transom: encodeTransom(hull.transom),
+    bowTransom: encodeTransom(hull.bowTransom),
     stations: hull.stations.map((s) => ({
       u: s.u,
       keelK: s.keelK,
@@ -71,6 +72,8 @@ export function buildJson(hull: HullState): string {
   };
   return JSON.stringify(doc, null, 2);
 }
+const encodeTransom = (t: HullState["transom"]): HullDocument["transom"] =>
+  t && t.map((p) => ({ x: p.x, z: p.z }));
 
 // ---------- structural validators ----------
 // These throw a clear message rather than loading a broken model; nothing is committed until it all passes.
@@ -101,6 +104,21 @@ function unitOf(v: unknown, ctx: string): Unit {
 }
 
 // ---------- decode ----------
+// a transom: exactly two profile points, the bottom below the top — or none (null or absent)
+function decodeTransom(v: unknown, ctx: string): TransomCP[] | null {
+  if (v === null || v === undefined) return null;
+  const raw = arr(v, ctx, 2);
+  if (raw.length !== 2)
+    throw new Error(`${ctx} must have exactly 2 points (top and bottom)`);
+  const pts: TransomCP[] = raw.map((p, i) => {
+    const o = obj(p, `${ctx}[${i}]`);
+    return { x: num(o.x, `${ctx}[${i}].x`), z: num(o.z, `${ctx}[${i}].z`) };
+  });
+  if (pts[1].z >= pts[0].z)
+    throw new Error(`${ctx}[1] (the bottom) must be below ${ctx}[0]`);
+  return pts;
+}
+
 function decodeHull(v: Record<string, unknown>): HullData {
   const c = "document"; // error-message prefix — the whole document IS the hull
 
@@ -135,18 +153,10 @@ function decodeHull(v: Record<string, unknown>): HullData {
         `${c}.sheerTrim[${i}].x must be > the previous point's x`,
       );
 
-  const rawTr = arr(v.transom, `${c}.transom`, 2);
-  if (rawTr.length !== 2)
-    throw new Error(`${c}.transom must have exactly 2 points (top and bottom)`);
-  const transom: TransomCP[] = rawTr.map((p, i) => {
-    const o = obj(p, `${c}.transom[${i}]`);
-    return {
-      x: num(o.x, `${c}.transom[${i}].x`),
-      z: num(o.z, `${c}.transom[${i}].z`),
-    };
-  });
-  if (transom[1].z >= transom[0].z)
-    throw new Error(`${c}.transom[1] (the bottom) must be below transom[0]`);
+  // The two transoms. The stern's key has always been written; the bow's arrived with version 3, so a
+  // document without it has no bow transom. Either may be null: that end of the hull is open.
+  const transom = decodeTransom(v.transom, `${c}.transom`),
+    bowTransom = decodeTransom(v.bowTransom, `${c}.bowTransom`);
 
   // stations: index-aligned, so they fix one shared point count S. They must also be ordered and distinct
   // in u — the loft interpolates across them and cannot have two sections in the same place.
@@ -186,6 +196,7 @@ function decodeHull(v: Record<string, unknown>): HullData {
     sheerPlan,
     sheerTrim,
     transom,
+    bowTransom,
     stations,
   };
 }
@@ -198,7 +209,8 @@ export function convertUnits(d: HullData, to: Unit): void {
   const s = UNIT_MM[d.unit] / UNIT_MM[to];
   d.sheerPlan.forEach((p) => ((p.x *= s), (p.y *= s)));
   d.sheerTrim.forEach((p) => ((p.x *= s), (p.z *= s)));
-  d.transom.forEach((p) => ((p.x *= s), (p.z *= s)));
+  for (const t of [d.transom, d.bowTransom])
+    t?.forEach((p) => ((p.x *= s), (p.z *= s)));
   d.stations.forEach((st) =>
     st.points.forEach((p) => ((p.n *= s), (p.z *= s))),
   );

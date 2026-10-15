@@ -17,7 +17,8 @@
 //   inboard normal and `z` is simply world z: the deck is flat at z = 0 and the hull hangs below it.
 //
 //   TRIMMING — the swept sheet is cut by the sheer trim (above it is not hull), the centerline (y = 0, where
-//   the two halves meet at the keel) and the transom plane. That happens in `mesh.ts`.
+//   the two halves meet at the keel) and the transom planes — the stern's, the bow's, either, or neither:
+//   an end with no transom simply runs out at the plan's end. That happens in `mesh.ts`.
 //
 // Coordinates are ABSOLUTE, in the model's `unit`. There is no unitless scale: a 5 m hull in mm runs x from
 // 0 to 5000. The panels the 2D editor draws are therefore fractions of a hull length (see `bounds`), not the
@@ -35,12 +36,19 @@ import {
   type Bez,
   type Curve,
 } from "./spline";
-import { boundsOf, type Bounds, type HullState } from "./hull";
+import {
+  boundsOf,
+  type Bounds,
+  type HullState,
+  type TransomCP,
+  type TransomSide,
+} from "./hull";
 // The authored schema, the domain constants and the defaults live in `hull.ts` now, as plain readonly data.
 // They are re-exported here so that the geometry's callers keep one import.
 export {
   boundsOf,
   loa,
+  transomOf,
   MIN_PLAN_CP,
   MIN_STATION_PTS,
   MIN_TRIM_CP,
@@ -55,6 +63,7 @@ export type {
   PlanCP,
   TrimCP,
   TransomCP,
+  TransomSide,
   StationPointCP,
   StationCP,
 } from "./hull";
@@ -276,11 +285,23 @@ export function sectionAt(model: Model, u: number): Section {
   };
 }
 
-// the transom plane in profile: the x of the cut at height z (linear through the two control points, full
-// breadth). The hull keeps the forward side, x ≥ xTransom(z).
-export function xTransom(model: Model, z: number): number {
-  const [a, b] = model.transom;
+// ---------- the transom planes ----------
+// A transom plane in profile: the x of the cut at height z (linear through its two control points, full
+// breadth). The hull keeps the side toward its middle: x ≥ xTransom(z) for the stern's plane, x ≤ for the bow's.
+export function xTransom(t: readonly TransomCP[], z: number): number {
+  const [a, b] = t;
   return a.x + (b.x - a.x) * ((z - a.z) / (b.z - a.z || 1));
+}
+
+// How far inside the hull a world point is with respect to the transom at `side`, as a signed distance along
+// x: ≥ 0 is kept. An end without a transom constrains nothing, which reads as +∞ — the min that `keepAt`
+// and the mesh take over the constraints then never sees it, and no sign change is ever found on it.
+export function keepTransom(model: Model, side: TransomSide, p: Vec3): number {
+  const t = side === "stern" ? model.transom : model.bowTransom;
+  if (!t) return Infinity;
+  return side === "stern"
+    ? p[0] - xTransom(t, p[2]) // forward of the stern transom
+    : xTransom(t, p[2]) - p[0]; // aft of the bow transom
 }
 
 // ---------- bisection ----------
@@ -305,15 +326,17 @@ export function bisectRoot(
 
 // ---------- the trim test ----------
 // How far inside the hull a section point is, as one signed number: the hull keeps a point iff it is at or
-// below the sheer trim, at or inboard of the centerline, and forward of the transom plane. Taking the MIN of
-// the three makes "kept" a single sign test, so one bisection converges whichever constraint happens to bind
-// — the sheer trim at the top, the centerline or the transom at the bottom — with no case analysis.
+// below the sheer trim, at or inboard of the centerline, forward of the stern transom plane and aft of the
+// bow's (where the hull has them). Taking the MIN of the constraints makes "kept" a single sign test, so one
+// bisection converges whichever constraint happens to bind — the sheer trim at the top, the centerline or a
+// transom at the bottom — with no case analysis.
 export function keepAt(model: Model, fr: Frame, nz: Vec2): number {
   const p = stationWorld(fr, nz[0], nz[1]);
   return Math.min(
     model.trimZ(p[0]) - p[2], // at or below the sheer trim
     p[1], // at or inboard of the centerline
-    p[0] - xTransom(model, p[2]), // forward of the transom
+    keepTransom(model, "stern", p),
+    keepTransom(model, "bow", p),
   );
 }
 

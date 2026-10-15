@@ -26,6 +26,7 @@ import {
   U_GAP,
   type HullState,
 } from "../src/core/hull";
+import { VERSION } from "../src/core/document";
 import { hullViolations, type InvariantLevel } from "../src/core/invariants";
 import {
   assemble,
@@ -173,13 +174,13 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
     "a knuckle outside [0,1] is caught",
   );
   complains(
-    broken((h) => (h.transom[1].z = h.transom[0].z + 1)),
+    broken((h) => (h.transom![1].z = h.transom![0].z + 1)),
     "document",
     "transom[1] (the bottom) must be below",
     "an inverted transom is caught",
   );
   complains(
-    broken((h) => h.transom.push({ x: 0, z: -1 })),
+    broken((h) => h.transom!.push({ x: 0, z: -1 })),
     "document",
     "transom must have exactly 2 points",
     "a third transom point is caught",
@@ -350,10 +351,16 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
 
   run({ type: "moveTrim", idx: 1, x: -9e9, z: 9e9 });
   check("moveTrim driven hard past its neighbour");
-  run({ type: "moveTransom", idx: 0, x: 0.1 * L, z: -9e9 }); // top pushed below the bottom
+  run({ type: "moveTransom", side: "stern", idx: 0, x: 0.1 * L, z: -9e9 }); // top pushed below the bottom
   check("moveTransom with the top pushed below the bottom");
-  run({ type: "moveTransom", idx: 1, x: 0.1 * L, z: 9e9 });
+  run({ type: "moveTransom", side: "stern", idx: 1, x: 0.1 * L, z: 9e9 });
   check("moveTransom with the bottom pushed above the top");
+  run({ type: "setTransom", side: "bow", on: true });
+  check("setTransom giving the bow a transom");
+  run({ type: "moveTransom", side: "bow", idx: 0, x: 0.9 * L, z: -9e9 });
+  check("moveTransom on the bow with the top pushed below the bottom");
+  run({ type: "setTransom", side: "stern", on: false });
+  check("setTransom taking the stern transom away");
 
   run({ type: "moveStationU", idx: 1, u: 9e9 });
   check("moveStationU dragged past its neighbour");
@@ -509,8 +516,13 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
     "a trim drag touches the trim alone",
   );
   ok(
-    maskOf({ type: "moveTransom", idx: 0, x: 100, z: -100 }) === SLICE.transom,
+    maskOf({ type: "moveTransom", side: "stern", idx: 0, x: 100, z: -100 }) ===
+      SLICE.transom,
     "a transom drag touches the transom alone",
+  );
+  ok(
+    maskOf({ type: "setTransom", side: "bow", on: true }) === SLICE.transom,
+    "switching a transom on touches the transom alone",
   );
   ok(
     maskOf({ type: "moveStationU", idx: 0, u: 0.1 }) === SLICE.stations,
@@ -697,6 +709,131 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
   ok(
     worst === "",
     `every example hull round-trips and reads as a valid document${worst ? ` — ${worst}` : ""}`,
+  );
+}
+
+// ---- the transoms: each end's plane is optional, and one command switches it ----
+// A hull may close either end with a transom, both, or neither. Switching one on places it at a default near
+// that end; off removes it, and the document, the invariants and the commands all have to agree on "none".
+{
+  const apply = (state: HullState, cmd: HullCommand): HullState => {
+    const out = interpretHullCommand(assemble(state), cmd);
+    if (rejected(out)) throw new Error(out.rejected);
+    return out.state;
+  };
+  const d = defaultHull(),
+    L = loa(d);
+  ok(
+    d.transom !== null && d.bowTransom === null,
+    "the default hull has a stern transom and no bow transom",
+  );
+  const both = apply(d, { type: "setTransom", side: "bow", on: true });
+  const bt = both.bowTransom!;
+  ok(
+    !!bt && bt.length === 2,
+    "setTransom on gives the bow a two-point transom",
+  );
+  ok(
+    bt[0].x > 0.9 * L && bt[1].x < bt[0].x && bt[1].z < bt[0].z,
+    "the bow transom sits near the bow, its foot aft of and below its head",
+  );
+  ok(
+    deepEq(both.transom, d.transom),
+    "giving the bow a transom leaves the stern's where it was",
+  );
+  ok(
+    hullViolations(both, "editor").length === 0,
+    "a hull with both transoms satisfies the editor invariants",
+  );
+  const again = interpretHullCommand(assemble(both), {
+    type: "setTransom",
+    side: "bow",
+    on: true,
+  });
+  ok(
+    !rejected(again) &&
+      again.result === false &&
+      again.touched === 0 &&
+      deepEq(again.state.bowTransom, both.bowTransom),
+    "setTransom on an end that already has one moves nothing, and touches no slice",
+  );
+  const none = apply(
+    apply(both, { type: "setTransom", side: "stern", on: false }),
+    { type: "setTransom", side: "bow", on: false },
+  );
+  ok(
+    none.transom === null && none.bowTransom === null,
+    "setTransom off removes each transom",
+  );
+  ok(
+    hullViolations(none, "editor").length === 0,
+    "a hull with no transom at all is a valid hull",
+  );
+  ok(
+    rejected(
+      interpretHullCommand(assemble(none), {
+        type: "moveTransom",
+        side: "stern",
+        idx: 0,
+        x: 0,
+        z: 0,
+      }),
+    ),
+    "moveTransom on an end without a transom is rejected",
+  );
+  const moved = apply(both, {
+    type: "moveTransom",
+    side: "bow",
+    idx: 1,
+    x: 0.5 * L,
+    z: 9e9,
+  });
+  ok(
+    moved.bowTransom![1].z < moved.bowTransom![0].z &&
+      deepEq(moved.transom, both.transom),
+    "moveTransom on the bow keeps its foot below its head and leaves the stern alone",
+  );
+  complains(
+    { ...both, bowTransom: [bt[1], bt[0]] },
+    "document",
+    "bowTransom[1] (the bottom) must be below",
+    "an inverted bow transom is caught",
+  );
+  complains(
+    { ...both, bowTransom: [bt[0]] },
+    "document",
+    "bowTransom must have exactly 2 points",
+    "a one-point bow transom is caught",
+  );
+  for (const [label, h] of [
+    ["both transoms", both],
+    ["no transom", none],
+  ] as const) {
+    const back = parseHullState(buildJson(h));
+    ok(
+      deepEq(back, h),
+      `a hull with ${label} round-trips through the document format`,
+    );
+  }
+  const written = JSON.parse(buildJson(both)) as Record<string, unknown>;
+  ok(
+    written.version === VERSION && Array.isArray(written.bowTransom),
+    "the document carries the bow transom under its own key, at the current version",
+  );
+  // a version 2 document has no bowTransom key at all: it reads as a hull without one
+  const v2 = JSON.parse(buildJson(d)) as Record<string, unknown>;
+  delete v2.bowTransom;
+  v2.version = 2;
+  ok(
+    parseHullState(JSON.stringify(v2)).bowTransom === null,
+    "a version 2 document reads as a hull with no bow transom",
+  );
+  // a rescale carries both transoms
+  const m = apply(both, { type: "setUnit", unit: "m", rescale: true });
+  ok(
+    Math.abs(m.bowTransom![0].x - bt[0].x / 1000) < 1e-9 &&
+      Math.abs(m.transom![0].x - both.transom![0].x / 1000) < 1e-9,
+    "a rescaling unit change carries both transoms",
   );
 }
 

@@ -6,8 +6,8 @@ import { BOUNDARIES, isBoundaryLeaf } from "./sheet/boundaries";
 // have drawn:
 //
 //   "document" — what must hold for the hull to be READABLE and drawable at all. Every curve has enough
-//   points to be a curve, the two sequences read as functions of x are ordered, the transom plane does not
-//   invert, and the loft has index-aligned stations to interpolate across. A file that fails this cannot be
+//   points to be a curve, the two sequences read as functions of x are ordered, no transom plane
+//   inverts, and the loft has index-aligned stations to interpolate across. A file that fails this cannot be
 //   opened.
 //
 //   "editor" — what the EDIT OPERATIONS additionally guarantee about a hull they produced. The remove
@@ -90,17 +90,23 @@ export function hullViolations(
     if (!(trim[i].x > trim[i - 1].x))
       out.push(`sheerTrim[${i}].x must be greater than sheerTrim[${i - 1}].x`);
 
-  // ---- the transom: two profile points read as a line x(z), which inverts if they cross ----
-  const transom = state.transom;
-  if (transom.length !== 2)
-    out.push("transom must have exactly 2 points (top and bottom)");
-  else {
-    transom.forEach((p, i) => {
-      if (!finite(p.x) || !finite(p.z))
-        out.push(`transom[${i}] must have finite x and z`);
-    });
-    if (!(transom[1].z < transom[0].z))
-      out.push("transom[1] (the bottom) must be below transom[0] (the top)");
+  // ---- the transoms: two profile points each, read as a line x(z), which inverts if they cross. Either
+  // may be absent (null) — an open end — but not malformed. ----
+  for (const [key, transom] of [
+    ["transom", state.transom],
+    ["bowTransom", state.bowTransom],
+  ] as const) {
+    if (transom === null) continue;
+    if (transom.length !== 2)
+      out.push(`${key} must have exactly 2 points (top and bottom)`);
+    else {
+      transom.forEach((p, i) => {
+        if (!finite(p.x) || !finite(p.z))
+          out.push(`${key}[${i}] must have finite x and z`);
+      });
+      if (!(transom[1].z < transom[0].z))
+        out.push(`${key}[1] (the bottom) must be below ${key}[0] (the top)`);
+    }
   }
 
   // ---- the stations: index-aligned, ordered in u, and the loft's knots ----

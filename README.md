@@ -234,12 +234,21 @@ independent generators with independent control-point counts.
 ## The transom
 
 The field names below describe the original v1 file format; new exports use `deckTrimDeg`
-and represent the transom as two profile points. Existing v1 field names remain supported on import.
+and represent each transom as two profile points. Existing v1 field names remain supported on import.
 
 The transom is the sloped plane that closes the hull aft. It is a vertical-in-`y`, sloped-in-
 `x`-`z` plane: at height `z` its longitudinal position is `x = x_top + (z − z_top)·slope`,
 constant across the breadth. The sweep is clipped to the forward side of this plane, and the
 cut face is solid.
+
+Since format version 3 a hull may close **either end** this way, both, or neither. The stern
+transom is written as `transom` (as it always was) and the bow transom — a pram or scow bow,
+clipping the sweep to its aft side — as `bowTransom`; each is two profile points `{x, z}` (top,
+then bottom) or `null` for an end with no transom. An end without a transom simply runs out at
+the plan's end: a bow closes wherever the sheer trim meets the centerline, and an open stern
+likewise. In the editor the two checkboxes under the profile view switch each one; only the
+stern transom is on by default. A version 2 document has no `bowTransom` key and reads as a
+hull without one.
 
 ```
 Transom {

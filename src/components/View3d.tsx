@@ -113,8 +113,9 @@ const TRIMS: { key: keyof TrimToggles; label: string; title: string }[] = [
   },
   {
     key: "transom",
-    label: "Transom trim",
-    title: "The aft cut: where the transom plane crosses the sheet",
+    label: "Transom trims",
+    title:
+      "The end cuts: where the stern and bow transom planes cross the sheet (whichever the hull has)",
   },
 ];
 
@@ -164,14 +165,15 @@ const SURFACES: { key: keyof SurfaceToggles; label: string; title: string }[] =
     },
     {
       key: "transom",
-      label: "Show transom",
-      title: "The flat panel closing the hull aft, on the transom plane",
+      label: "Show transoms",
+      title:
+        "The flat panels closing the hull at the stern and at the bow, on the transom planes the hull has",
     },
     {
       key: "deck",
       label: "Show deck",
       title:
-        "The cap closing the hull across the sheer, from the stem to the transom's top edge. With the hull and transom, a watertight boat — and no view of the inside",
+        "The cap closing the hull across the sheer, from end to end. With the hull and transoms, a watertight boat — and no view of the inside",
     },
   ];
 
@@ -380,7 +382,7 @@ export function View3d({
             <div className="dd-group">Feature edges</div>
             <label
               className="dd-row dd-check"
-              title="The mesh boundary: the outline the surface ends on — sheer, keel, and the transom (its aft cut plus the top edge that closes the panel across the breadth). Uncheck to keep the chines but drop the outline drawn over them"
+              title="The mesh boundary: the outline the surface ends on — sheer, keel, and each transom (its cut plus the top edge that closes the panel across the breadth). Uncheck to keep the chines but drop the outline drawn over them"
             >
               <input
                 type="checkbox"

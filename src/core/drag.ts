@@ -1,6 +1,7 @@
 // Note: we may want to refactor this to make it more generic, but for now `Drag` is a union of everything
 // that can be dragged across all apps in this repo.
 
+import type { TransomSide } from "./hull";
 import { OnModelSelect } from "./modelSelection";
 
 export interface Drag {
@@ -8,6 +9,7 @@ export interface Drag {
   svg?: SVGGraphicsElement; // the pan/zoom content <g> the drag started in (its CTM maps pointer → content)
   idx?: number;
   si?: number; // which station, for a "stn" (section-point) drag
+  side?: TransomSide; // which transom, for a "transom" drag
 }
 
 let CURRENT_DRAG: Drag | null = null;
@@ -24,6 +26,7 @@ type DragSpec = {
   kind: Drag["kind"];
   idx?: number;
   si?: number;
+  side?: TransomSide;
 };
 
 export function startDrag(
@@ -39,7 +42,8 @@ export function startDrag(
   // alongside this, the same way its tab does.)
   if (d.kind === "sheer") onSelect({ tgt: "plan", idx: d.idx! });
   else if (d.kind === "trim") onSelect({ tgt: "trim", idx: d.idx! });
-  else if (d.kind === "transom") onSelect({ tgt: "transom", idx: d.idx! });
+  else if (d.kind === "transom")
+    onSelect({ tgt: "transom", idx: d.idx!, side: d.side ?? "stern" });
   else if (d.kind === "stn")
     onSelect({ tgt: "station", idx: d.idx!, si: d.si! });
   e.stopPropagation();

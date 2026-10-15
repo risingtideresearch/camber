@@ -16,6 +16,7 @@ import {
   loa,
   sectionAt,
   stationWorld,
+  transomOf,
 } from "./model";
 import { crCurveAuto } from "./spline";
 import {
@@ -45,16 +46,17 @@ export const emptyMesh = (): Mesh => ({
 
 // The three surfaces the finished boat is made of, as independent on/off choices — the one set the 3D view
 // draws from (its Mesh dropdown) and the STL export emits from (its options), so a boat looks the same on
-// screen and in the file. `hull` is the trimmed, mirrored skin (`buildHullMesh`); `transom` the flat panel
-// closing it aft (`buildTransomMesh`); `deck` the cap closing it across the sheer (`buildDeckMesh`). With all
-// three on, the mesh is watertight: every edge of one is an edge of exactly one other.
+// screen and in the file. `hull` is the trimmed, mirrored skin (`buildHullMesh`); `transom` the flat panels
+// closing it at the stern and at the bow, whichever ends have one (`buildTransomMesh`); `deck` the cap closing
+// it across the sheer (`buildDeckMesh`). With all three on, the mesh is watertight: every edge of one is an
+// edge of exactly one other.
 export interface SurfaceToggles {
   hull: boolean;
   transom: boolean;
   deck: boolean;
 }
 
-// the hull and its transom, open at the deck — how the boat has always been drawn and exported. The deck is
+// the hull and its transoms, open at the deck — how the boat has always been drawn and exported. The deck is
 // the one to reach for: a closed solid for a slicer or a volume check, at the price of hiding the inside.
 export const DEFAULT_SURFACES: SurfaceToggles = {
   hull: true,
@@ -67,7 +69,7 @@ export const DEFAULT_SURFACES: SurfaceToggles = {
 // u and placed into the world by the frame there, the same construction the hull surface uses. So the curve
 // rides exactly on the swept sheet (it is the keel line when idx is the keel point, a chine line at a
 // knuckle, etc.). Each sample is trimmed exactly as the hull is — `keepAt` is the same signed min of the
-// sheer trim, the centerline and the transom plane the mesh uses — so the line stops where the hull does (an
+// sheer trim, the centerline and the transom planes the mesh uses — so the line stops where the hull does (an
 // overshooting keel point, for instance, only shows where it actually reaches the centerline). Returned as
 // starboard plus its port mirror, each broken across trimmed-away spans; the view draws them as ribbons.
 export function buildLongitudinalCurve(model: Model, idx: number): Vec3[][] {
@@ -694,10 +696,11 @@ export function buildHullMesh(
   };
 }
 
-// The flat transom panel: the plane's own face, closing the hull aft.
+// The flat transom panels: each plane's own face, closing the hull at the stern and at the bow — one panel
+// per transom the hull has, both in one mesh, and an empty mesh for a hull with neither.
 //
-// It is built on NOTHING BUT the hull's own aft edge — `transomOutline` hands back the very vertices the mesh
-// stitched its bottom boundary from, in the same order — so the panel and the skin share their whole common
+// A panel is built on NOTHING BUT the hull's own end edge — `transomOutline` hands back the very vertices the
+// mesh stitched its boundary from, in the same order — so the panel and the skin share their whole common
 // border vertex for vertex. There is no tolerance to tune and no seam to close: a gap could only appear if
 // the two disagreed about where the hull ends, and they cannot, because there is only one answer and both
 // read it.
@@ -709,28 +712,37 @@ export function buildHullMesh(
 // line across the breadth at the sheer, which is the transom's top edge, and the bottom one degenerates to a
 // point at the foot, where starboard and port meet on y = 0.
 //
-// The panel is planar by construction: every outline point but the foot is a linear crossing of a plane
+// A panel is planar by construction: every outline point but the foot is a linear crossing of a plane
 // affine in (x, z), and the foot is a bisected corner that sits on the same plane to ~1e-3 of a lattice step.
-// So one constant normal serves the whole face.
+// So one constant normal serves the whole face — pointing out of the hull, which is aft for the stern's
+// panel and forward for the bow's, with the winding flipped to match.
 export function buildTransomMesh(model: Model, sampling: HullSampling): Mesh {
-  const e = transomOutline(sampling);
-  if (e.length < 2) return emptyMesh();
-  const [ta, tb] = model.transom,
-    slope = (tb.x - ta.x) / (tb.z - ta.z || 1),
-    nt = V.norm([-1, 0, slope]), // outward (aft-facing)
-    P: number[] = [],
+  const P: number[] = [],
     Nn: number[] = [];
-  for (let i = 0; i + 1 < e.length; i++) {
-    const a = e[i],
-      b = e[i + 1],
-      ap: Vec3 = [a[0], -a[1], a[2]],
-      bp: Vec3 = [b[0], -b[1], b[2]];
-    // a rung standing on the centerline is its own mirror, so the quad there is really a triangle: the half
-    // of it that would span the point to itself has no area. That is the foot, and it is where the ladder
-    // closes — emitting the empty half anyway would leave a degenerate triangle on the seam.
-    // wound counter-clockwise seen from aft, so the winding agrees with the outward normal
-    if (a[1] !== 0) pushTri(P, Nn, a, nt, bp, nt, ap, nt);
-    if (b[1] !== 0) pushTri(P, Nn, a, nt, b, nt, bp, nt);
+  for (const side of ["stern", "bow"] as const) {
+    const t = transomOf(model, side),
+      e = transomOutline(sampling, side);
+    if (!t || e.length < 2) continue;
+    const [ta, tb] = t,
+      slope = (tb.x - ta.x) / (tb.z - ta.z || 1),
+      out = side === "stern" ? -1 : 1, // the outward direction along x
+      nt = V.norm([out, 0, -out * slope]);
+    for (let i = 0; i + 1 < e.length; i++) {
+      const a = e[i],
+        b = e[i + 1],
+        ap: Vec3 = [a[0], -a[1], a[2]],
+        bp: Vec3 = [b[0], -b[1], b[2]];
+      // a rung standing on the centerline is its own mirror, so the quad there is really a triangle: the half
+      // of it that would span the point to itself has no area. That is the foot, and it is where the ladder
+      // closes — emitting the empty half anyway would leave a degenerate triangle on the seam.
+      // wound counter-clockwise seen from outside the hull, so the winding agrees with the outward normal
+      const tri = (p: Vec3, q: Vec3, r: Vec3): void =>
+        out < 0
+          ? pushTri(P, Nn, p, nt, q, nt, r, nt)
+          : pushTri(P, Nn, p, nt, r, nt, q, nt);
+      if (a[1] !== 0) tri(a, bp, ap);
+      if (b[1] !== 0) tri(a, b, bp);
+    }
   }
   return {
     pos: new Float32Array(P),
@@ -739,19 +751,21 @@ export function buildTransomMesh(model: Model, sampling: HullSampling): Mesh {
   };
 }
 
-// The deck: the cap closing the hull across the sheer, from the stem to the transom's top edge.
+// The deck: the cap closing the hull across the sheer, from end to end — a transom's top edge or the tip
+// where the sheer meets the centerline, whichever each end has.
 //
-// Built the same way as the transom panel, on the hull's own sheer edge — `hullSheer` is the very run of
-// vertices the skin's top boundary is stitched from, head (the transom corner) to stem (the bow's tip on the
-// centerline) — so the deck and the skin share their whole common border vertex for vertex, and the deck's
-// aft rung IS the transom panel's top rung: with all three surfaces on, the boat is watertight.
+// Built the same way as the transom panels, on the hull's own sheer edge — `hullSheer` is the very run of
+// vertices the skin's top boundary is stitched from, head (the stern transom's corner) to stem (the bow's tip
+// on the centerline, or the bow transom's head) — so the deck and the skin share their whole common border
+// vertex for vertex, and the deck's end rung IS a transom panel's top rung: with all three surfaces on, the
+// boat is watertight.
 //
 // The sheer and its port mirror are spanned as a ladder: each pair of consecutive sheer points and their two
 // mirrors make a quad, whose rung is the straight line across the breadth. The rungs never cross while the
 // sheer runs monotonically along the boat (a hull whose sheer doubles back in plan would fold the deck onto
-// itself, as it would any cap drawn across it). The aft rung is the transom's top edge and the forward one
-// degenerates to the stem, where starboard and port meet on y = 0 — that half of the ladder's last quad is
-// left out, as the transom leaves out its foot.
+// itself, as it would any cap drawn across it). A rung at a transom is that transom's top edge; a rung at an
+// end that closes to a point degenerates there, where starboard and port meet on y = 0 — that half of the
+// ladder's end quad is left out, as a transom panel leaves out its foot.
 //
 // Unlike the transom the deck is not planar — it follows the sheer's rise — so each quad carries its own
 // normal, read off its geometry and pointed UP (+z): the rungs are horizontal, so a ladder quad's normal has

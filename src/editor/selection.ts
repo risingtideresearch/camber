@@ -8,11 +8,12 @@
 // dispatches that.
 
 import type { Model } from "../core/model";
-import { isStationEnd } from "../core/hull";
+import { isStationEnd, transomOf } from "../core/hull";
 import type { DocumentCommand } from "../core/commands";
-import type {
-  ModelSelection,
-  ModelSelectionTarget,
+import {
+  selSide,
+  type ModelSelection,
+  type ModelSelectionTarget,
 } from "../core/modelSelection";
 
 // the knuckle-carrying point array for the current selection (a station's section, or the sheer trim), or
@@ -29,7 +30,7 @@ export function selArr(
 }
 
 // can the selected point be deleted? Ends are pinned; the plan / trim / section keep a minimum of 3 points;
-// the transom is a fixed pair of points.
+// a transom is a fixed pair of points (the whole transom goes through its checkbox under the profile view).
 export function canDelete(
   model: Model,
   s: { tgt: ModelSelectionTarget; idx: number },
@@ -145,20 +146,21 @@ export function selectionFields(
     ];
   }
   if (tgt === "transom") {
-    const p = model.transom[idx];
+    const side = selSide(selection),
+      p = transomOf(model, side)?.[idx];
     if (!p) return [];
     return [
       {
         key: "x",
         label: "x",
         value: p.x,
-        command: (x) => ({ type: "moveTransom", idx, x, z: p.z }),
+        command: (x) => ({ type: "moveTransom", side, idx, x, z: p.z }),
       },
       {
         key: "z",
         label: "z",
         value: p.z,
-        command: (z) => ({ type: "moveTransom", idx, x: p.x, z }),
+        command: (z) => ({ type: "moveTransom", side, idx, x: p.x, z }),
       },
     ];
   }
@@ -184,16 +186,17 @@ export function selectionFields(
   ];
 }
 
-export function labelFor(s: {
-  tgt: ModelSelectionTarget;
-  idx: number;
-  si?: number;
-}): string {
+export function labelFor(s: NonNullable<ModelSelection>): string {
   if (s.tgt === "station")
     return `Station ${(s.si ?? 0) + 1} · point ${s.idx + 1}`;
-  const name = { plan: "Sheer (plan)", trim: "Sheer trim", transom: "Transom" }[
-    s.tgt as "plan" | "trim" | "transom"
-  ];
+  const name =
+    s.tgt === "plan"
+      ? "Sheer (plan)"
+      : s.tgt === "trim"
+        ? "Sheer trim"
+        : selSide(s) === "stern"
+          ? "Stern transom"
+          : "Bow transom";
   return `${name} · point ${s.idx + 1}`;
 }
 

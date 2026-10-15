@@ -1911,7 +1911,7 @@ const problem = (
     ...base,
     sheerPlan: base.sheerPlan.map((p) => ({ ...p, x: p.x + shift })),
     sheerTrim: base.sheerTrim.map((p) => ({ ...p, x: p.x + shift })),
-    transom: base.transom.map((p) => ({
+    transom: base.transom!.map((p) => ({
       ...p,
       x: p.x + shift,
     })) as typeof base.transom,

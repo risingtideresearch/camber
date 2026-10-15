@@ -30,13 +30,16 @@ import { UNIT_MM, type Unit } from "./document";
 import {
   loa,
   boundsOf,
+  defaultTransom,
   stationKnuckle,
+  transomOf,
   U_GAP,
   type HullState,
   type PlanCP,
   type StationCP,
   type StationPointCP,
   type TransomCP,
+  type TransomSide,
   type TrimCP,
 } from "./hull";
 import type { Model } from "./model";
@@ -69,8 +72,15 @@ export type HullCommand =
   | { type: "moveTrim"; idx: number; x: number; z: number }
   | { type: "removeTrimPoint"; idx: number }
   | { type: "setTrimK"; idx: number; k: number }
-  // the transom
-  | { type: "moveTransom"; idx: number; x: number; z: number }
+  // the transoms: each end's plane is switched on (at its default place) or off, and its two points moved
+  | { type: "setTransom"; side: TransomSide; on: boolean }
+  | {
+      type: "moveTransom";
+      side: TransomSide;
+      idx: number;
+      x: number;
+      z: number;
+    }
   // the stations
   | { type: "addStation"; u: number }
   | { type: "removeStation"; idx: number }
@@ -165,13 +175,15 @@ export const rejected = <T extends object>(
 type MutPlan = { x: number; y: number };
 type MutTrim = { x: number; z: number; k: number };
 type MutTransom = { x: number; z: number };
+type MutTransoms = Record<TransomSide, MutTransom[] | null>;
 type MutPoint = { n: number; z: number; k: number };
 type MutStation = { u: number; keelK: number; points: MutPoint[] };
 
 interface Draft {
   plan(): MutPlan[];
   trim(): MutTrim[];
-  transom(): MutTransom[];
+  /** Both transoms, by side — null where that end has none. The slice is one: either moving marks it. */
+  transoms(): MutTransoms;
   stations(): MutStation[];
   /** Mark the scalars dirty; they are assigned through `commit`'s patch rather than a mutable branch. */
   scalars(): void;
@@ -184,7 +196,7 @@ interface Draft {
 function draft(base: HullState): Draft {
   let plan: MutPlan[] | null = null,
     trim: MutTrim[] | null = null,
-    transom: MutTransom[] | null = null,
+    transoms: MutTransoms | null = null,
     stations: MutStation[] | null = null,
     touched = 0;
   return {
@@ -202,12 +214,13 @@ function draft(base: HullState): Draft {
       }
       return trim;
     },
-    transom() {
-      if (!transom) {
-        transom = base.transom.map((p) => ({ ...p }));
+    transoms() {
+      if (!transoms) {
+        const copy = (t: HullState["transom"]) => t && t.map((p) => ({ ...p }));
+        transoms = { stern: copy(base.transom), bow: copy(base.bowTransom) };
         touched |= SLICE.transom;
       }
-      return transom;
+      return transoms;
     },
     stations() {
       if (!stations) {
@@ -230,7 +243,10 @@ function draft(base: HullState): Draft {
           unit: base.unit,
           sheerPlan: (plan ?? base.sheerPlan) as readonly PlanCP[],
           sheerTrim: (trim ?? base.sheerTrim) as readonly TrimCP[],
-          transom: (transom ?? base.transom) as readonly TransomCP[],
+          transom: (transoms ? transoms.stern : base.transom) as
+            readonly TransomCP[] | null,
+          bowTransom: (transoms ? transoms.bow : base.bowTransom) as
+            readonly TransomCP[] | null,
           stations: (stations ?? base.stations) as readonly StationCP[],
           waterline: base.waterline,
           deckTrim: base.deckTrim,
@@ -242,6 +258,11 @@ function draft(base: HullState): Draft {
     },
   };
 }
+
+const rescaleTransoms = (ts: MutTransoms, s: number): void => {
+  for (const t of [ts.stern, ts.bow])
+    t?.forEach((p) => ((p.x *= s), (p.z *= s)));
+};
 
 // The one spacing rule between neighbouring control points, and it is not a matter of taste: the plan's x(u)
 // and the sheer trim's z(x) are both READ as functions of x (bspline.ts inverts the one, pchip.ts differences
@@ -360,12 +381,25 @@ export function interpretHullCommand(
       return d.commit();
     }
 
-    // ---- the transom ----
-    // It goes anywhere in the profile; only the ORDER of its two points is held, because they are read as a
-    // line x(z) through two heights and the plane inverts if the top drops below the bottom.
+    // ---- the transoms ----
+    // Switching an end's transom on gives it the default plane for that end, sized to this hull (see
+    // `defaultTransom`); switching it off drops the plane, and with it the cut. Asking for the state the hull
+    // is already in is a no-op rather than a reset, so a repeated click cannot move a transom.
+    case "setTransom": {
+      if ((transomOf(before, cmd.side) !== null) === cmd.on)
+        return d.commit(undefined, { result: false }); // nothing to do, and no slice to touch
+      const ts = d.transoms();
+      ts[cmd.side] = cmd.on
+        ? defaultTransom(before, cmd.side).map((p) => ({ ...p }))
+        : null;
+      return d.commit(undefined, { result: true });
+    }
+    // A transom point goes anywhere in the profile; only the ORDER of the two is held, because they are read
+    // as a line x(z) through two heights and the plane inverts if the top drops below the bottom.
     case "moveTransom": {
-      const cp = d.transom(),
+      const cp = d.transoms()[cmd.side],
         e = hair(before);
+      if (!cp) return { rejected: `the hull has no ${cmd.side} transom` };
       if (!cp[cmd.idx]) return { rejected: "no such transom point" };
       cp[cmd.idx].x = cmd.x;
       cp[cmd.idx].z =
@@ -529,7 +563,7 @@ export function interpretHullCommand(
       const s = UNIT_MM[before.unit] / UNIT_MM[cmd.unit];
       d.plan().forEach((p) => ((p.x *= s), (p.y *= s)));
       d.trim().forEach((p) => ((p.x *= s), (p.z *= s)));
-      d.transom().forEach((p) => ((p.x *= s), (p.z *= s)));
+      rescaleTransoms(d.transoms(), s);
       d.stations().forEach((st) =>
         st.points.forEach((p) => ((p.n *= s), (p.z *= s))),
       );
@@ -554,7 +588,7 @@ export function interpretHullCommand(
       d.scalars();
       d.plan().forEach((p) => ((p.x *= s), (p.y *= s)));
       d.trim().forEach((p) => ((p.x *= s), (p.z *= s)));
-      d.transom().forEach((p) => ((p.x *= s), (p.z *= s)));
+      rescaleTransoms(d.transoms(), s);
       d.stations().forEach((st) =>
         st.points.forEach((p) => ((p.n *= s), (p.z *= s))),
       );
@@ -681,6 +715,7 @@ export function commandSlices(cmd: DocumentCommand): SliceMask {
     case "removeTrimPoint":
     case "setTrimK":
       return SLICE.trim;
+    case "setTransom":
     case "moveTransom":
       return SLICE.transom;
     case "addStation":
@@ -747,9 +782,10 @@ export function sameGesture(a: DocumentCommand, b: DocumentCommand): boolean {
       return true;
     case "movePlanPoint":
     case "moveTrim":
-    case "moveTransom":
     case "moveStationU":
       return a.idx === (b as typeof a).idx;
+    case "moveTransom":
+      return a.side === (b as typeof a).side && a.idx === (b as typeof a).idx;
     case "moveStationPoint":
       return a.si === (b as typeof a).si && a.idx === (b as typeof a).idx;
     case "setTrimK":
@@ -804,8 +840,10 @@ export function describeCommand(
       return `Remove trim point ${cmd.idx + 1}`;
     case "setTrimK":
       return `Knuckle trim point ${cmd.idx + 1}`;
+    case "setTransom":
+      return `${cmd.on ? "Add" : "Remove"} the ${cmd.side} transom`;
     case "moveTransom":
-      return `Move transom point ${cmd.idx + 1}`;
+      return `Move ${cmd.side} transom point ${cmd.idx + 1}`;
     case "addStation":
       return "Add a station";
     case "removeStation":

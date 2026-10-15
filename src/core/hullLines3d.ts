@@ -8,7 +8,7 @@
 //
 // Every curve here is read off the RENDERED geometry, not off a second, coarser lattice of its own:
 //
-//   • the feature edges (both sheers, the keel / transom cut, every chine) are chains of the hull mesh's own
+//   • the feature edges (both sheers, the keel / transom cuts, every chine) are chains of the hull mesh's own
 //     boundary and rung edges, taken from the shared sampling's trimmed columns;
 //   • a station IS a column of that sampling — one of the mesh's girth edge loops;
 //   • the buttock / waterline / DWL families are marched across the emitted TRIANGLES, so each crossing lands
@@ -129,16 +129,18 @@ export function buildLinesPlanCurves(
     if (lines.meshBoundary) runs.push(...boundary);
     if (lines.chines) runs.push(...chines);
     for (const run of runs) bold.push(...bothSides(run));
-    // The flat transom panel closes the hull aft, and its outline is a closed loop: the aft edge the skin
-    // ends on — already in `boundary` above, head to foot, mirrored to port by `bothSides` — plus the
+    // A flat transom panel closes the hull at its end, and its outline is a closed loop: the end edge the
+    // skin ends on — already in `boundary` above, head to foot, mirrored to port by `bothSides` — plus the
     // straight top edge across the breadth at the sheer, which no skin spans (the open top of the transom).
     // So the boundary the skin gives leaves the transom's outline broken at the top; when it is up, close it
     // with just that one edge, the head corner to its port mirror. Only that edge, because the rest of the
-    // panel's border IS the skin's aft edge — drawing the whole loop would lay a second polyline over it.
-    if (trimmed && lines.meshBoundary && sampling.hullTransom.length > 1) {
-      const head = sampling.hullTransom[0].pos;
-      if (Math.abs(head[1]) > 1e-9) bold.push([head, mir(head)]);
-    }
+    // panel's border IS the skin's end edge — drawing the whole loop would lay a second polyline over it.
+    if (trimmed && lines.meshBoundary)
+      for (const edge of [sampling.hullTransom, sampling.hullBowTransom])
+        if (edge.length > 1) {
+          const head = edge[0].pos;
+          if (Math.abs(head[1]) > 1e-9) bold.push([head, mir(head)]);
+        }
   }
 
   const family: Vec3[][] = [];
@@ -205,13 +207,14 @@ export function buildLinesPlanCurves(
   return { bold, family, dwl };
 }
 
-// ---------- the sheet's own three trims ----------
+// ---------- the sheet's own trims ----------
 //
 // Nothing here is computed: every curve this draws is already in the sampling, and it is taken exactly as it
 // stands. Each trim comes marched across the WHOLE sheet as if it were the only one (`sheetSheer` /
-// `sheetCenterline` / `sheetTransom`), which is the cut itself, running on past the boat wherever another trim
-// got to the sheet first; and the span of it the other two leave standing is the hull's own edge (`hullSheer`
-// / `hullCenterline` / `hullTransom`), corners and ordering included. The two are drawn as two independent
+// `sheetCenterline` / `sheetTransom` / `sheetBowTransom`), which is the cut itself, running on past the boat
+// wherever another trim got to the sheet first; and the span of it the others leave standing is the hull's own
+// edge (`hullSheer` / `hullCenterline` / `hullTransom` / `hullBowTransom`), corners and ordering included.
+// The two transom cuts share the one "transom" toggle. The two forms are drawn as two independent
 // toggles — the sheet's form in the bold black, the hull's in that trim's 2D colour. Alone, each draws the
 // whole of its curve. TOGETHER, the sheet form drops back to the LEFTOVER the sampling holds beside the hull
 // edge (`hullSheerLeftover` and its two siblings): the span the hull edge already covers would otherwise be
@@ -232,35 +235,35 @@ export interface TrimPlanCurves {
   hull: { color: string; lines: Vec3[][] }[]; // per shown trim: the hull edge it survives as, in its colour
 }
 
-// Which pair of cached curves each of the three per-trim toggles draws, and in which colour. The colours are
-// the 2D views' own: the sheer trim's orange and the centerline's teal from the plan / profile, the transom's
-// brown from the transom outline both views draw.
+// Which cached curves each of the three per-trim toggles draws, and in which colour. The colours are the 2D
+// views' own: the sheer trim's orange and the centerline's teal from the plan / profile, the transoms' brown
+// from the transom outlines both views draw. The transom toggle covers both transom planes.
 const TRIM_SPECS: {
   key: "sheer" | "centerline" | "transom";
   sheet: (s: HullSampling) => TrimCurve[]; // marched over the whole sheet, as if this were the only trim
-  hull: (s: HullSampling) => TrimCurve; // the part of it the other two leave standing: the hull's own edge
+  hull: (s: HullSampling) => TrimCurve[]; // the part of it the others leave standing: the hull's own edge(s)
   leftover: (s: HullSampling) => TrimCurve[]; // and the rest of it, in runs — what `hull` does not draw
   color: string;
 }[] = [
   {
     key: "sheer",
     sheet: (s) => s.sheetSheer,
-    hull: (s) => s.hullSheer,
+    hull: (s) => [s.hullSheer],
     leftover: (s) => s.hullSheerLeftover,
     color: COL.sheer,
   },
   {
     key: "centerline",
     sheet: (s) => s.sheetCenterline,
-    hull: (s) => s.hullCenterline,
+    hull: (s) => [s.hullCenterline],
     leftover: (s) => s.hullCenterlineLeftover,
     color: COL.keel,
   },
   {
     key: "transom",
-    sheet: (s) => s.sheetTransom,
-    hull: (s) => s.hullTransom,
-    leftover: (s) => s.hullTransomLeftover,
+    sheet: (s) => [...s.sheetTransom, ...s.sheetBowTransom],
+    hull: (s) => [s.hullTransom, s.hullBowTransom],
+    leftover: (s) => [...s.hullTransomLeftover, ...s.hullBowTransomLeftover],
     color: COL.transom,
   },
 ];
@@ -294,9 +297,11 @@ export function buildTrimCurves(
         : spec.sheet(sampling))
         if (run.length > 1) sheet.push(run.map((s) => s.pos));
     if (drawHullForm) {
-      const edge = spec.hull(sampling);
-      if (edge.length > 1)
-        hull.push({ color: spec.color, lines: [edge.map((s) => s.pos)] });
+      const lines = spec
+        .hull(sampling)
+        .filter((edge) => edge.length > 1)
+        .map((edge) => edge.map((s) => s.pos));
+      if (lines.length) hull.push({ color: spec.color, lines });
     }
   }
   return { sheet, hull };
@@ -306,7 +311,7 @@ export function buildTrimCurves(
 //
 // The surface's feature lines are exactly two kinds of triangle edge, so reading them from the mesh keeps them
 // ON it — they end where its triangles do, not a lattice step short of a trim or of the bow:
-//   • BOUNDARY edges — an edge in a single triangle — are the sheer / keel / transom the surface ends on;
+//   • BOUNDARY edges — an edge in a single triangle — are the sheer / keel / transoms the surface ends on;
 //   • CREASE edges — an edge whose two ends both sit on the same creased station row — are the chines.
 // Both come back chained into polylines (a boundary is one closed loop; a chine an open run).
 
