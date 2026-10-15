@@ -153,8 +153,9 @@ function decodeHull(v: Record<string, unknown>): HullData {
         `${c}.sheerTrim[${i}].x must be > the previous point's x`,
       );
 
-  // The two transoms. The stern's key has always been written; the bow's arrived with version 3, so a
-  // document without it has no bow transom. Either may be null: that end of the hull is open.
+  // The two transoms. The stern's key has always been written; the bow's was added later within version 2
+  // (an older build never reads a document with one), so a document without the key has no bow transom.
+  // Either may be null: that end of the hull is open.
   const transom = decodeTransom(v.transom, `${c}.transom`),
     bowTransom = decodeTransom(v.bowTransom, `${c}.bowTransom`);
 

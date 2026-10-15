@@ -820,13 +820,12 @@ const worstDiff = (a: Vec3[], b: Vec3[]): number => {
     written.version === VERSION && Array.isArray(written.bowTransom),
     "the document carries the bow transom under its own key, at the current version",
   );
-  // a version 2 document has no bowTransom key at all: it reads as a hull without one
-  const v2 = JSON.parse(buildJson(d)) as Record<string, unknown>;
-  delete v2.bowTransom;
-  v2.version = 2;
+  // a document from before the bow transom has no bowTransom key at all: it reads as a hull without one
+  const older = JSON.parse(buildJson(d)) as Record<string, unknown>;
+  delete older.bowTransom;
   ok(
-    parseHullState(JSON.stringify(v2)).bowTransom === null,
-    "a version 2 document reads as a hull with no bow transom",
+    parseHullState(JSON.stringify(older)).bowTransom === null,
+    "a document without a bowTransom key reads as a hull with no bow transom",
   );
   // a rescale carries both transoms
   const m = apply(both, { type: "setUnit", unit: "m", rescale: true });

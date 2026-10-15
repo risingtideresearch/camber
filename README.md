@@ -241,14 +241,15 @@ The transom is the sloped plane that closes the hull aft. It is a vertical-in-`y
 constant across the breadth. The sweep is clipped to the forward side of this plane, and the
 cut face is solid.
 
-Since format version 3 a hull may close **either end** this way, both, or neither. The stern
+A hull may close **either end** this way, both, or neither. The stern
 transom is written as `transom` (as it always was) and the bow transom — a pram or scow bow,
 clipping the sweep to its aft side — as `bowTransom`; each is two profile points `{x, z}` (top,
 then bottom) or `null` for an end with no transom. An end without a transom simply runs out at
 the plan's end: a bow closes wherever the sheer trim meets the centerline, and an open stern
 likewise. In the editor the two checkboxes under the profile view switch each one; only the
-stern transom is on by default. A version 2 document has no `bowTransom` key and reads as a
-hull without one.
+stern transom is on by default. A document written before the bow transom existed has no
+`bowTransom` key and reads as a hull without one; the format version stays 2, since such
+documents stay readable and users are assumed to run the current build.
 
 ```
 Transom {

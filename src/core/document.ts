@@ -16,7 +16,7 @@
 // The format version this build writes, and the newest it can read. Bump it when a change to the structures
 // below is not readable by an older build; documents that declare a higher version are ones this build must
 // refuse rather than misread.
-export const VERSION = 3;
+export const VERSION = 2;
 
 // The document's length unit. Every coordinate below is a number of these.
 export type Unit = "mm" | "cm" | "m" | "in" | "ft";
@@ -83,8 +83,8 @@ export interface HullDocument {
   deckTrimDeg: number;
   sheerPlan: PlanPoint[]; // ≥ 2 points
   sheerTrim: TrimPoint[]; // ≥ 2 points
-  transom: TransomPoint[] | null; // the STERN transom: = 2 points, or null for an open stern (version 3+)
-  bowTransom?: TransomPoint[] | null; // = 2 points, or null / absent (every version 2 document) for none
+  transom: TransomPoint[] | null; // the STERN transom: = 2 points, or null for an open stern
+  bowTransom?: TransomPoint[] | null; // = 2 points, or null / absent (older version 2 documents) for none
   stations: Station[]; // K ≥ 1 stations
 }
 
