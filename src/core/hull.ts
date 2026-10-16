@@ -28,6 +28,8 @@ export interface TransomCP {
   readonly x: number;
   readonly z: number;
 }
+// The two ends a transom can close: the stern (the classic transom, aft) and the bow (a pram or scow bow).
+export type TransomSide = "stern" | "bow";
 export interface StationPointCP {
   readonly n: number;
   readonly z: number;
@@ -44,7 +46,11 @@ export interface HullState {
   readonly unit: Unit;
   readonly sheerPlan: readonly PlanCP[];
   readonly sheerTrim: readonly TrimCP[];
-  readonly transom: readonly TransomCP[]; // exactly 2: [top, bottom]
+  // The two transom planes, each exactly 2 points [top, bottom] — or null where that end of the hull has no
+  // transom and the swept sheet simply runs out to the plan's end. `transom` is the STERN transom: the name
+  // predates the bow one, and it is the key the document format has always written it under.
+  readonly transom: readonly TransomCP[] | null;
+  readonly bowTransom: readonly TransomCP[] | null;
   readonly stations: readonly StationCP[]; // K ≥ 1, strictly increasing in u
   readonly waterline: number; // depth (≥ 0) of the design waterline below the deck datum
   readonly deckTrim: number; // radians, +ve = bow up
@@ -55,6 +61,13 @@ export interface HullState {
 // the authored plan alone, so a document can be measured without being assembled.
 export const loa = (hull: { readonly sheerPlan: readonly PlanCP[] }): number =>
   hull.sheerPlan[hull.sheerPlan.length - 1].x - hull.sheerPlan[0].x;
+
+/** The transom at `side` — the stern's or the bow's — or null where that end is open. */
+export const transomOf = (
+  hull: Pick<HullState, "transom" | "bowTransom">,
+  side: TransomSide,
+): readonly TransomCP[] | null =>
+  side === "stern" ? hull.transom : hull.bowTransom;
 
 // ---------- editor policy ----------
 // The minimum spacing the edit operations keep between two stations, in the plan's parameter. A document may
@@ -117,6 +130,9 @@ const TRIM_DEF: readonly (readonly [number, number])[] = [
   [667, -65],
   [1000, -10],
 ];
+// The stern transom, as [x, z] from the plan's aft end: raked, its foot forward of its head. The bow transom
+// a hull is given on request is this same plane mirrored about the bow — the same rake leaning the other way,
+// so a pram bow leans forward at the top as a transom stern leans aft (see `defaultTransom`).
 const TRANSOM_DEF: readonly (readonly [number, number])[] = [
   [38, -14],
   [95, -180],
@@ -161,6 +177,7 @@ export function defaultHull(): HullState {
     sheerPlan: PLAN_DEF.map(([x, y]) => ({ x: S(x), y: S(y) })),
     sheerTrim: TRIM_DEF.map(([x, z]) => ({ x: S(x), z: S(z), k: 0 })),
     transom: TRANSOM_DEF.map(([x, z]) => ({ x: S(x), z: S(z) })),
+    bowTransom: null,
     stations: STATION_DEFS.map((st) => ({
       u: st.u,
       keelK: st.keelK,
@@ -171,6 +188,31 @@ export function defaultHull(): HullState {
   };
 }
 
+/**
+ * The transom a hull gets when `side` is switched on: the default stern transom's proportions, scaled to this
+ * hull's length and measured in from the end it closes — in from the plan's aft end for the stern, in from the
+ * bow for the bow transom, whose plane is the stern's mirrored so that it leans forward at the top.
+ */
+export function defaultTransom(
+  hull: { readonly sheerPlan: readonly PlanCP[] },
+  side: TransomSide,
+): readonly TransomCP[] {
+  const len = loa(hull) || DEF_LEN,
+    f = len / DEF_LEN,
+    x0 = hull.sheerPlan[0].x,
+    x1 = hull.sheerPlan[hull.sheerPlan.length - 1].x;
+  return TRANSOM_DEF.map(([x, z]) => ({
+    x: side === "stern" ? x0 + x * f : x1 - x * f,
+    z: z * f,
+  }));
+}
+
+const copyTransom = (
+  t: readonly TransomCP[] | null,
+  scale = 1,
+): readonly TransomCP[] | null =>
+  t && t.map((p) => ({ x: p.x * scale, z: p.z * scale }));
+
 /** Deep copy at the authored-data boundary. Also the way out of a legacy mutable model. */
 export function cloneHull(state: HullState): HullState {
   return {
@@ -178,7 +220,8 @@ export function cloneHull(state: HullState): HullState {
     unit: state.unit,
     sheerPlan: state.sheerPlan.map((p) => ({ ...p })),
     sheerTrim: state.sheerTrim.map((p) => ({ ...p })),
-    transom: state.transom.map((p) => ({ ...p })),
+    transom: copyTransom(state.transom),
+    bowTransom: copyTransom(state.bowTransom),
     stations: state.stations.map((st) => ({
       u: st.u,
       keelK: st.keelK,
@@ -205,7 +248,8 @@ export function withUnit(
       z: p.z * scale,
       k: p.k,
     })),
-    transom: state.transom.map((p) => ({ x: p.x * scale, z: p.z * scale })),
+    transom: copyTransom(state.transom, scale),
+    bowTransom: copyTransom(state.bowTransom, scale),
     stations: state.stations.map((st) => ({
       u: st.u,
       keelK: st.keelK,

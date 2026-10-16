@@ -4,11 +4,11 @@
 // Algorithm A9.4 — global surface interpolation), so the exported surface passes exactly through the
 // station sections and is fair between them. The grid spans the FULL breadth (starboard sheer → keel →
 // port sheer) so the keel is interior to one B_SPLINE_SURFACE_WITH_KNOTS face — C² smooth across the
-// centerline, with no mirror seam to fold into a welt. The transom is a single planar face sharing the
-// hull's aft edge. Both live in one OPEN_SHELL (the hull is open along the deck/sheer edge).
+// centerline, with no mirror seam to fold into a welt. Each transom the hull has is a single planar face
+// sharing the hull's end edge. All live in one OPEN_SHELL (the hull is open along the deck/sheer edge).
 
 import { V, type Vec3 } from "./math";
-import { type Model } from "./model";
+import { transomOf, type Model, type TransomSide } from "./model";
 import { trimmedHullGrid } from "./mesh";
 import { unitScale } from "./json";
 
@@ -361,21 +361,26 @@ function emitSurfaceFace(
   return d.add(`ADVANCED_FACE('',(#${bound}),#${surf},.T.)`);
 }
 
-// Emit the planar transom face. Its bottom boundary reuses the single full-width hull surface's aft
-// control row (net[0]) with the same degree/knots, so it is the IDENTICAL B-spline curve as the hull
-// face's aft edge — the kernel sews them into one watertight skin. The aft row runs starboard-sheer →
-// keel → port-sheer (the keel is interior, on the centerline), and the face is closed at the top by a
-// straight line across the breadth between the two sheer ends.
+// Emit a planar transom face — the stern's on the hull surface's aft control row (net[0]), the bow's on its
+// forward one (net[last]). The face's bottom boundary reuses that full-width control row with the same
+// degree/knots, so it is the IDENTICAL B-spline curve as the hull face's end edge — the kernel sews them
+// into one watertight skin. The row runs starboard-sheer → keel → port-sheer (the keel is interior, on the
+// centerline), and the face is closed at the top by a straight line across the breadth between the two sheer
+// ends. Null where the hull has no transom at that end: the surface is simply open there.
 function emitTransomFace(
   model: Model,
+  side: TransomSide,
   d: StepDoc,
   net: Vec3[][],
   q: number,
   Vk: number[],
 ): number | null {
-  const nv = net[0].length - 1;
+  const t = transomOf(model, side);
+  if (!t) return null;
+  const row = net[side === "stern" ? 0 : net.length - 1],
+    nv = row.length - 1;
   if (nv < 2) return null;
-  const cp = net[0].map((p) => d.point([p[0], p[1], p[2]] as Vec3)); // full aft row, shared with the hull
+  const cp = row.map((p) => d.point([p[0], p[1], p[2]] as Vec3)); // the full end row, shared with the hull
   const vSheerS = d.add(`VERTEX_POINT('',#${cp[0]})`),
     vSheerP = d.add(`VERTEX_POINT('',#${cp[nv]})`);
   const k = compressKnots(Vk),
@@ -393,10 +398,10 @@ function emitTransomFace(
     o2 = d.add(`ORIENTED_EDGE('',*,*,#${eTop},.T.)`);
   const loop = d.add(`EDGE_LOOP('',(#${o1},#${o2}))`),
     bound = d.add(`FACE_OUTER_BOUND('',#${loop},.T.)`);
-  const [ta, tb] = model.transom,
+  const [ta, tb] = t,
     slope = (tb.x - ta.x) / (tb.z - ta.z || 1),
     place = d.add(
-      `AXIS2_PLACEMENT_3D('',#${d.point(net[0][0])},#${d.dir(V.norm([1, 0, -slope]))},#${d.dir([0, 1, 0])})`,
+      `AXIS2_PLACEMENT_3D('',#${d.point(row[0])},#${d.dir(V.norm([1, 0, -slope]))},#${d.dir([0, 1, 0])})`,
     ),
     plane = d.add(`PLANE('',#${place})`);
   return d.add(`ADVANCED_FACE('',(#${bound}),#${plane},.T.)`);
@@ -426,8 +431,10 @@ export function buildStep(model: Model, date: string): string {
   const faces: number[] = [];
   const hull = interpSurfaceCreased(grid, creaseCols);
   faces.push(emitSurfaceFace(d, hull.net, hull.p, hull.q, hull.U, hull.Vk));
-  const tf = emitTransomFace(model, d, hull.net, hull.q, hull.Vk);
-  if (tf) faces.push(tf);
+  for (const side of ["stern", "bow"] as const) {
+    const tf = emitTransomFace(model, side, d, hull.net, hull.q, hull.Vk);
+    if (tf) faces.push(tf);
+  }
 
   const shell = d.add(
       `OPEN_SHELL('',(${faces.map((f) => `#${f}`).join(",")}))`,

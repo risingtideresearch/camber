@@ -182,6 +182,7 @@ export function EditorUiProvider({ children }: { children: ReactNode }) {
       else if (drag.kind === "transom")
         void dispatch({
           type: "moveTransom",
+          side: drag.side ?? "stern",
           idx,
           x: v.invX(vx),
           z: v.invZp(vy),

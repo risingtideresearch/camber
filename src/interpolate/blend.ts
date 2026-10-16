@@ -65,10 +65,8 @@ export function blendState(
       z: mix((h) => h.data.sheerTrim[i].z),
       k: mix((h) => h.data.sheerTrim[i].k),
     })),
-    transom: first.transom.map((_, i) => ({
-      x: mix((h) => h.data.transom[i].x),
-      z: mix((h) => h.data.transom[i].z),
-    })),
+    transom: blendTransom(hulls, w, (d) => d.transom),
+    bowTransom: blendTransom(hulls, w, (d) => d.bowTransom),
     // station j of every hull is the same PLACE on the boat (promote.ts's correspondence), so its position
     // along the hull blends with its shape
     stations: first.stations.map((st0, j) => ({
@@ -83,6 +81,31 @@ export function blendState(
     waterline: trim.waterline,
     deckTrim: trim.deckTrim,
   };
+}
+
+// A transom is the one part of the topology a family need not share: a hull may have one at the stern, at
+// the bow, both or neither, and there is no neutral transom to lift a hull without one onto. So the blend
+// decides presence by WEIGHT — the result has the transom iff the hulls that have it carry more than half of
+// it — and blends its two points over those hulls alone, their weights renormalized. Every vertex of the
+// blend space reproduces its own hull exactly, with or without; between two that disagree the transom
+// appears or goes where the balance tips, which is the one discontinuity this leaves.
+function blendTransom(
+  hulls: Hull[],
+  w: number[],
+  pick: (d: HullData) => HullData["transom"],
+): HullState["transom"] {
+  const has = hulls.map((h) => pick(h.data) !== null),
+    wHas = w.reduce((a, x, k) => a + (has[k] ? x : 0), 0);
+  if (!(wHas > 0.5)) return null;
+  const mix = (f: (t: NonNullable<HullData["transom"]>) => number): number =>
+    hulls.reduce(
+      (a, h, k) => (has[k] ? a + (w[k] / wHas) * f(pick(h.data)!) : a),
+      0,
+    );
+  return [0, 1].map((i) => ({
+    x: mix((t) => t[i].x),
+    z: mix((t) => t[i].z),
+  }));
 }
 
 // ---------- the blend control: a slider param (2 hulls) / a polygon pad puck (3+ hulls) ----------

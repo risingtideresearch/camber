@@ -34,7 +34,11 @@ export function closedHullTriangles(sampling: HullSampling): CutTriangle[] {
       const [a, b, c] = t.map((p) => (reflect ? mirror(p.pos) : p.pos));
       tri(a, b, c, true);
     }
-  for (const edge of [sampling.hullSheer, sampling.hullTransom]) {
+  for (const edge of [
+    sampling.hullSheer,
+    sampling.hullTransom,
+    sampling.hullBowTransom,
+  ]) {
     for (let i = 1; i < edge.length; i++) {
       const a = edge[i - 1].pos,
         b = edge[i].pos;

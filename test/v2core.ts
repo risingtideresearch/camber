@@ -23,8 +23,16 @@
 //     well-formed hull (its plan x, trim x and station u all strictly increasing).
 //
 // Run with `npm run test:v2` (tsx runs this directly under node). Non-zero exit on any failure.
-import { loa, sectionAt, frameAt, bounds, type Model } from "../src/core/model";
 import {
+  loa,
+  sectionAt,
+  frameAt,
+  bounds,
+  xTransom,
+  type Model,
+} from "../src/core/model";
+import {
+  aftLimit,
   computeHullSampling,
   hullGrid,
   sweptSection,
@@ -32,6 +40,7 @@ import {
   sheerPointAt,
   keelPointAt,
 } from "../src/core/mesh";
+import { VERSION } from "../src/core/document";
 import {
   buildJson,
   parseDocument,
@@ -39,7 +48,7 @@ import {
   type HullData,
 } from "../src/core/json";
 import { assemble } from "../src/core/runtime";
-import { defaultHull, type HullState } from "../src/core/hull";
+import { defaultHull, defaultTransom, type HullState } from "../src/core/hull";
 import { crCurveAuto } from "../src/core/spline";
 import { convertV1ToV2 } from "../src/legacy/v1/convert";
 import { promoteFamily, autoCorrespondence } from "../src/core/promote";
@@ -274,7 +283,7 @@ ok(m.stations.length === 2, "default has 2 stations");
     keelK: [0, 0],
   };
   const v2 = convertV1ToV2(v1 as never);
-  ok(v2.version === 2, "conversion tags v2");
+  ok(v2.version === VERSION, "conversion tags the current format version");
   ok(v2.unit === "mm", "conversion declares mm");
   ok(v2.deckTrimDeg === 0, "v1 angle converts to deck trim");
   ok(
@@ -297,7 +306,8 @@ ok(m.stations.length === 2, "default has 2 stations");
   ok(Math.abs(v2.sheerTrim[1].z + 70) < 1e-9, "trim depth became absolute z");
   ok(Math.abs(v2.sheerTrim[2].x - 667) < 1e-9, "trim dx became absolute x");
   ok(
-    Math.abs(v2.transom[0].z + 14) < 1e-9 && v2.transom[1].z < v2.transom[0].z,
+    Math.abs(v2.transom![0].z + 14) < 1e-9 &&
+      v2.transom![1].z < v2.transom![0].z,
     "transom became two points",
   );
   // the converted hull must actually build
@@ -376,7 +386,7 @@ ok(m.stations.length === 2, "default has 2 stations");
       p.x *= s;
       p.z *= s;
     }
-    for (const p of d.transom) {
+    for (const p of d.transom ?? []) {
       p.x *= s;
       p.z *= s;
     }
@@ -528,6 +538,112 @@ ok(m.stations.length === 2, "default has 2 stations");
       );
     }
   }
+}
+
+// ---- sampling: a bow transom cuts the bow, and an end without a transom is simply open ----
+{
+  const d = defaultHull(),
+    L = loa(d),
+    bowT = defaultTransom(d, "bow"),
+    both = assemble({ ...d, bowTransom: bowT }),
+    s = computeHullSampling(both, 180, 16);
+  ok(
+    s.hullTransom.length > 1 && s.hullBowTransom.length > 1,
+    "with both transoms, both have a cut edge",
+  );
+  const bowEdge = s.hullBowTransom,
+    head = bowEdge[0],
+    foot = bowEdge[bowEdge.length - 1];
+  ok(
+    bowEdge.every(
+      (p) => Math.abs(xTransom(bowT, p.pos[2]) - p.pos[0]) < 1e-6 * L,
+    ),
+    "every point of the bow transom's edge lies on its plane",
+  );
+  ok(
+    Math.abs(both.trimZ(head.pos[0]) - head.pos[2]) < 1e-6 * L &&
+      Math.abs(foot.pos[1]) < 1e-9 &&
+      head.pos[2] > foot.pos[2],
+    "the bow edge runs from its head on the sheer down to its foot on the centerline",
+  );
+  ok(
+    s.hullSheer[s.hullSheer.length - 1] === head &&
+      s.hullCenterline[s.hullCenterline.length - 1] === foot,
+    "the sheer and the centerline end on the bow transom's head and foot",
+  );
+  ok(
+    s.hullSheer[0] === s.hullTransom[0] &&
+      s.hullCenterline[0] === s.hullTransom[s.hullTransom.length - 1],
+    "and start on the stern transom's",
+  );
+  const kept = s.columns.flatMap((c) => c.pts);
+  ok(
+    kept.every((p) => xTransom(bowT, p.pos[2]) - p.pos[0] > -1e-6 * L),
+    "no kept sample lies forward of the bow transom",
+  );
+  ok(
+    forwardLimit(both) < forwardLimit(assemble(d)) &&
+      both.plan.at(forwardLimit(both))[0] <= bowT[0].x + 1e-6 * L,
+    "the hull now ends before where the open bow did, at the bow transom",
+  );
+  // every step of the bow edge is an edge of the skin, as the other boundary curves are
+  const edges = new Map<unknown, Set<unknown>>();
+  for (const cell of [...s.hullQuads, ...s.hullTris])
+    for (let j = 0; j < cell.length; j++) {
+      const a = cell[j],
+        b = cell[(j + 1) % cell.length];
+      (edges.get(a) ?? edges.set(a, new Set()).get(a)!).add(b);
+      (edges.get(b) ?? edges.set(b, new Set()).get(b)!).add(a);
+    }
+  let stray = 0;
+  for (let j = 1; j < bowEdge.length; j++)
+    if (!edges.get(bowEdge[j - 1])?.has(bowEdge[j])) stray++;
+  ok(
+    stray === 0,
+    `every step of hullBowTransom is an edge of the skin (${stray} are not)`,
+  );
+  // columns the bow transom never reaches are exactly the open bow's
+  const sd = computeHullSampling(assemble(d), 180, 16);
+  let same = true;
+  for (let i = 0; i < s.columns.length; i++) {
+    const a = s.columns[i].pts,
+      b = sd.columns[i].pts;
+    if (!a.length || s.uParams[i] > 0.8) continue;
+    if (a.length !== b.length) same = false;
+    else
+      for (let k = 0; k < a.length; k++)
+        if (
+          Math.hypot(
+            a[k].pos[0] - b[k].pos[0],
+            a[k].pos[1] - b[k].pos[1],
+            a[k].pos[2] - b[k].pos[2],
+          ) >
+          1e-9 * L
+        )
+          same = false;
+  }
+  ok(same, "columns the bow transom does not reach are unchanged by it");
+
+  // and with no stern transom: no stern cut, and the hull runs from the plan's start
+  const open = assemble({ ...d, transom: null }),
+    so = computeHullSampling(open, 180, 16);
+  ok(
+    so.hullTransom.length === 0 &&
+      so.sheetTransom.length === 0 &&
+      so.hullTransomLeftover.length === 0,
+    "with no stern transom there is no stern cut at all",
+  );
+  ok(aftLimit(open) === 0, "the open hull runs from the plan's start");
+  ok(so.columns[0].pts.length > 1, "its first column is a whole section");
+  ok(
+    !sweptSection(open, 0, 8, true).empty &&
+      sweptSection(assemble(d), 0, 8, true).empty,
+    "the regularized path agrees: the section at u = 0 exists only without the stern transom",
+  );
+  ok(
+    so.hullSheer[0].u === 0 && so.hullCenterline[0].u === 0,
+    "the sheer and centerline edges start at the plan's start",
+  );
 }
 
 console.log(fails ? `\n${fails} FAILED` : "\nall passed");

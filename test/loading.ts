@@ -102,7 +102,7 @@ const metresHull: HullState = {
     x: p.x / 1000,
     z: p.z / 1000,
   })),
-  transom: state.transom.map((p) => ({ x: p.x / 1000, z: p.z / 1000 })),
+  transom: state.transom!.map((p) => ({ x: p.x / 1000, z: p.z / 1000 })),
   stations: state.stations.map((st) => ({
     ...st,
     points: st.points.map((p) => ({ ...p, n: p.n / 1000, z: p.z / 1000 })),

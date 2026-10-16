@@ -21,7 +21,7 @@ interface ExportControlProps {
 
 const SURFACES: { key: keyof SurfaceToggles; label: string }[] = [
   { key: "hull", label: "Hull skin" },
-  { key: "transom", label: "Transom closure" },
+  { key: "transom", label: "Transom closures" },
   { key: "deck", label: "Deck cap" },
 ];
 

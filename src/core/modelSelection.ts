@@ -1,15 +1,22 @@
+import type { TransomSide } from "./hull";
 import type { Model } from "./model";
 
 // What a click selected. "station" is a point of a station's section — `si` says which station, `idx` which
-// point of it. (Version 1 also had a "weight" target, for a control point of the template-blend curve; v2
-// has no blend, so a station's position is edited as the station itself.)
+// point of it. "transom" is a point of one of the two transoms — `side` says which (the stern's, when
+// unsaid). (Version 1 also had a "weight" target, for a control point of the template-blend curve; v2 has no
+// blend, so a station's position is edited as the station itself.)
 export type ModelSelectionTarget = "plan" | "trim" | "transom" | "station";
 
 export type ModelSelection = {
   tgt: ModelSelectionTarget;
   idx: number;
   si?: number; // which station, for a "station" selection
+  side?: TransomSide; // which transom, for a "transom" selection
 } | null;
+
+/** The transom a selection names — the stern's unless it says otherwise. */
+export const selSide = (s: { side?: TransomSide }): TransomSide =>
+  s.side ?? "stern";
 
 export type OnModelSelect = (selection: ModelSelection) => void;
 
@@ -25,17 +32,20 @@ export function selStationIdx(
     : null;
 }
 
-// is the given point the current selection? (for a station point, `si` must match too)
+// is the given point the current selection? (for a station point, `si` must match too; for a transom point,
+// `side`)
 export function isSelected(
   selection: ModelSelection,
   tgt: ModelSelectionTarget,
   idx: number,
   si?: number,
+  side?: TransomSide,
 ): boolean {
   return (
     !!selection &&
     selection.tgt === tgt &&
     selection.idx === idx &&
-    (si === undefined || selection.si === si)
+    (si === undefined || selection.si === si) &&
+    (side === undefined || selSide(selection) === side)
   );
 }

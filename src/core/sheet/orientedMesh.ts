@@ -114,7 +114,11 @@ export function orientedHullTriangles(sampling: HullSampling): CutTriangle[] {
       if (boundary.has(key)) boundary.delete(key);
       else boundary.set(key, { a, b });
     }
-  for (const edge of [sampling.hullSheer, sampling.hullTransom])
+  for (const edge of [
+    sampling.hullSheer,
+    sampling.hullTransom,
+    sampling.hullBowTransom,
+  ])
     for (let i = 1; i < edge.length; i++) {
       const p = edge[i - 1].pos,
         q = edge[i].pos;

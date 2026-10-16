@@ -66,8 +66,10 @@ export interface Station {
   points: StationPoint[]; // all stations have the same number of points S ≥ 2
 }
 
-// The transom: a trimmed plane at the stern given by two profile points, top and bottom. The hull keeps the
-// forward side; the cut is a solid face.
+// A transom: a trimmed plane closing one end of the hull, given by two profile points, top and bottom. The
+// hull keeps the side toward its middle — forward of the stern transom, aft of the bow one — and the cut is a
+// solid face. Either end may have none (null), in which case the swept sheet simply runs out to the plan's
+// end there.
 export interface TransomPoint {
   x: number;
   z: number;
@@ -81,7 +83,8 @@ export interface HullDocument {
   deckTrimDeg: number;
   sheerPlan: PlanPoint[]; // ≥ 2 points
   sheerTrim: TrimPoint[]; // ≥ 2 points
-  transom: TransomPoint[]; // = 2 points
+  transom: TransomPoint[] | null; // the STERN transom: = 2 points, or null for an open stern
+  bowTransom?: TransomPoint[] | null; // = 2 points, or null / absent (older version 2 documents) for none
   stations: Station[]; // K ≥ 1 stations
 }
 
