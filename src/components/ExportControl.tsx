@@ -83,7 +83,9 @@ export function ExportControl({
           ? { format, surfaces: { ...surfaces } }
           : format === "hydrostatics"
             ? { format, coverage, fine }
-            : { format };
+            : format === "marine-geometry"
+              ? { format, fine }
+              : { format };
       jobRef.current = startExportJob(
         { source, options, generatedAt: new Date().toISOString() },
         (response) => {
@@ -170,6 +172,9 @@ export function ExportControl({
                   <option value="stl">Triangle mesh (.stl)</option>
                 </optgroup>
                 <optgroup label="Analysis data">
+                  <option value="marine-geometry">
+                    Marine geometry (.marine-geometry.json)
+                  </option>
                   <option value="hydrostatics">
                     Hydrostatic table (.hydrostatics.json)
                   </option>
@@ -219,6 +224,24 @@ export function ExportControl({
                   <p className="export-error">Select at least one surface.</p>
                 )}
               </>
+            )}
+            {format === "marine-geometry" && (
+              <div className="export-options">
+                <p>
+                  Chartroom v0.2.0's experimental marine-geometry v1 for weight
+                  studies. Includes physical shell/transom regions and disclosed
+                  idealized sheer and, where needed, aft closure caps. No named
+                  geometry or weight book.
+                </p>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={fine}
+                    onChange={(e) => setFine(e.target.checked)}
+                  />{" "}
+                  Fine mesh
+                </label>
+              </div>
             )}
             {format === "hydrostatics" && (
               <>

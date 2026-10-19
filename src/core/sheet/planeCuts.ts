@@ -11,6 +11,8 @@ import {
 } from "./sectionMeasures";
 
 export interface CutTriangle {
+  /** Producer selection identity, retained separately from the measuring skin flag. */
+  readonly surface?: "shell" | "transom" | "sheer-cap" | "aft-cap";
   readonly points: readonly [Vec3, Vec3, Vec3];
   readonly skin: boolean;
 }

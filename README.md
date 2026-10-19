@@ -659,6 +659,31 @@ and does not invent downflooding limits or include loading CG/density. See
 [the export guide](docs/hydrostatic-export.md) and
 [the format contract](docs/hydrostatic-table.md) for conventions and limitations.
 The format contract and schema are maintained in
-[Chartroom](https://github.com/risingtideresearch/chartroom), pinned to `v0.1.0`
-in Camber's dev dependencies. Run `npm run test:hydrostatic-export` to check the
+[Chartroom](https://github.com/risingtideresearch/chartroom), pinned to `v0.2.0`
+in Camber's dev dependencies. The exporter uses Chartroom's TypeScript
+contract directly. Run `npm run test:hydrostatic-export` to check the
 exporter against the installed shared schema and independent numerical fixtures.
+
+### Portable marine geometry for weight studies
+
+The shared Export dialog now includes **Marine geometry (.marine-geometry.json)**.
+It exports the complete trimmed hull in Chartroom v0.2.0's experimental
+marine-geometry v1 contract:
+metres, x forward / y port / z up, with body-fixed vertices and a separate design
+waterplane hint. Physical shell/transom regions are distinct from the disclosed
+idealized sheer cap used for the closed analysis envelope. Where the swept sheet
+ends forward of the transom plane, a separate idealized aft cap closes its natural
+aft section; it is not labeled as a physical transom. Neither weight books
+nor construction stations/named reference geometry are exported.
+
+Standard resolution is 80 longitudinal sections / 6 girth subdivisions per span;
+Fine uses 240 / 12. Sampling is captured independently of viewport settings.
+Compare resolutions for the intended estimate; schema conformance is not an
+accuracy certificate. Geometry can be opened or replaced in the standalone
+`weight-study` app without giving it control over the source hull.
+
+The contract types and JSON Schema come directly from the pinned
+[Chartroom v0.2.0 release](https://github.com/risingtideresearch/chartroom/tree/v0.2.0/formats/marine-geometry/v1),
+not a vendored snapshot. The package release is v0.2.0; the exported format version
+remains 1. `npm run test:marine-geometry-export` checks schema, region partition,
+orientation, units, nonmutation and comparisons with independent sweep measures.
