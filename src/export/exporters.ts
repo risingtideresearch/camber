@@ -2,6 +2,7 @@ import {
   buildHydrostaticTable,
   type HydrostaticExportOptions,
 } from "../core/hydrostaticExport";
+import { buildMarineGeometry } from "../core/marineGeometryExport";
 import { parseHullState } from "../core/json";
 import { assemble } from "../core/runtime";
 import { buildStep } from "../core/step";
@@ -63,6 +64,19 @@ export function buildExport(
         text: buildStl(model, name, options.surfaces),
         mime: "model/stl",
       };
+    case "marine-geometry": {
+      const geometry = buildMarineGeometry(model, {
+        numSections: options.fine ? 240 : 80,
+        girthSteps: options.fine ? 12 : 6,
+        generatedAt,
+        modelId: source.modelId,
+      });
+      return {
+        filename: `${name}.marine-geometry.json`,
+        text: JSON.stringify(geometry, null, 2),
+        mime: "application/json",
+      };
+    }
     case "hydrostatics": {
       const table = buildHydrostaticTable(
         model,

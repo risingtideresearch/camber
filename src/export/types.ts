@@ -1,9 +1,11 @@
 import type { SurfaceToggles } from "../core/hullGeometry";
 
-export type ExportFormat = "json" | "step" | "stl" | "hydrostatics";
+export type ExportFormat =
+  "json" | "step" | "stl" | "hydrostatics" | "marine-geometry";
 export type HydrostaticCoverage = "upright" | "fixed" | "grid";
 export type ExportOptions =
   | { format: "json" | "step" }
+  | { format: "marine-geometry"; fine: boolean }
   | { format: "stl"; surfaces: SurfaceToggles }
   | {
       format: "hydrostatics";

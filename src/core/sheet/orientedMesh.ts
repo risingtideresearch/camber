@@ -89,9 +89,15 @@ export function validateOrientedMesh(triangles: readonly CutTriangle[]): void {
  */
 export function orientedHullTriangles(sampling: HullSampling): CutTriangle[] {
   let triangles: CutTriangle[] = [];
-  const add = (a: Vec3, b: Vec3, c: Vec3, skin: boolean) => {
+  const add = (
+    a: Vec3,
+    b: Vec3,
+    c: Vec3,
+    skin: boolean,
+    surface: CutTriangle["surface"] = "shell",
+  ) => {
     if (Math.hypot(...V.cross(V.sub(b, a), V.sub(c, a))) > 1e-16)
-      triangles.push({ points: [a, b, c], skin });
+      triangles.push({ points: [a, b, c], skin, surface });
   };
   const skin = (a: Vec3, b: Vec3, c: Vec3) => {
     add(a, b, c, true);
@@ -114,7 +120,10 @@ export function orientedHullTriangles(sampling: HullSampling): CutTriangle[] {
       if (boundary.has(key)) boundary.delete(key);
       else boundary.set(key, { a, b });
     }
-  for (const edge of [sampling.hullSheer, sampling.hullTransom])
+  for (const [surface, edge] of [
+    ["sheer-cap", sampling.hullSheer],
+    ["transom", sampling.hullTransom],
+  ] as const)
     for (let i = 1; i < edge.length; i++) {
       const p = edge[i - 1].pos,
         q = edge[i].pos;
@@ -126,8 +135,29 @@ export function orientedHullTriangles(sampling: HullSampling): CutTriangle[] {
           "Hull closure does not follow a unique skin boundary edge",
         );
       const { a, b } = incident;
-      add(b, a, mirror(a), false);
-      add(b, mirror(a), mirror(b), false);
+      add(b, a, mirror(a), false, surface);
+      add(b, mirror(a), mirror(b), false, surface);
+      boundary.delete(edgeKey(vertexKey(a), vertexKey(b)));
+      boundary.delete(edgeKey(vertexKey(mirror(a)), vertexKey(mirror(b))));
+    }
+  // The transom plane can lie entirely aft of the swept sheet. In that case
+  // its contour is empty and the hull ends at the natural u=0 section instead.
+  // Close only that known parameter boundary, not arbitrary holes in the mesh.
+  // It is an idealized analysis cap, not the authored physical transom.
+  const aftVertices = new Set<string>();
+  for (const face of [...sampling.hullQuads, ...sampling.hullTris])
+    for (const sample of face)
+      if (sample.u === 0) aftVertices.add(vertexKey(sample.pos));
+  for (const { a, b } of boundary.values())
+    if (
+      a[1] >= 0 &&
+      b[1] >= 0 &&
+      (a[1] !== 0 || b[1] !== 0) &&
+      aftVertices.has(vertexKey(a)) &&
+      aftVertices.has(vertexKey(b))
+    ) {
+      add(b, a, mirror(a), false, "aft-cap");
+      add(b, mirror(a), mirror(b), false, "aft-cap");
     }
   boundary.clear();
   validateOrientedMesh(triangles);
@@ -143,9 +173,9 @@ export function orientedHullTriangles(sampling: HullSampling): CutTriangle[] {
   if (!Number.isFinite(sixVolume) || sixVolume === 0)
     throw new Error("Oriented hull has no finite enclosed volume");
   if (sixVolume < 0)
-    triangles = triangles.map(({ points: [a, b, c], skin }) => ({
+    triangles = triangles.map(({ points: [a, b, c], ...metadata }) => ({
       points: [a, c, b],
-      skin,
+      ...metadata,
     }));
   return triangles;
 }

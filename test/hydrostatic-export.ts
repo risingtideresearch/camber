@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import Ajv from "ajv";
+import type { HydrostaticTable } from "@risingtideresearch/chartroom/formats/hydrostatic-table/v1";
 import {
   buildHydrostaticTable,
   buildHydrostaticTableJson,
@@ -25,7 +26,6 @@ import {
   prepareBuoyancySweep,
   stationGeometry,
 } from "../src/core/sweep";
-import type { HydrostaticTable } from "../src/core/hydrostaticTable";
 
 const require = createRequire(import.meta.url);
 const contract = "@risingtideresearch/chartroom/formats/hydrostatic-table/v1";
@@ -64,6 +64,8 @@ function check(table: HydrostaticTable) {
         assert.ok(s.volumeM3 >= row.samples[j - 1].volumeM3);
       }
       if (s.waterplane) {
+        assert.ok(s.waterplane.centroidM);
+        assert.ok(s.waterplane.secondMomentsM4);
         const p = row.heelDeg * RAD,
           t = row.trimDeg * RAD;
         const n = [
@@ -158,10 +160,14 @@ const upright = table.table.rows.find(
 const design = upright.samples.find((s) => s.waterplaneOffsetM === -1)!;
 near(design.volumeM3, 8);
 design.buoyancyCenterM!.forEach((v, i) => near(v, [2, 0, -1.5][i]));
-near(design.waterplane!.areaM2, 8);
-near(design.waterplane!.secondMomentsM4.xx, 8 * BOX_VARIANCE_X);
-near(design.waterplane!.secondMomentsM4.xx, 32 / 3, 3e-4); // converges to the continuous box
-near(design.waterplane!.secondMomentsM4.yy, 8 / 3);
+assert.ok(design.waterplane);
+assert.ok(design.waterplane.secondMomentsM4);
+assert.ok(design.waterplane.secondMomentsM4.xx !== undefined);
+assert.ok(design.waterplane.secondMomentsM4.yy !== undefined);
+near(design.waterplane.areaM2, 8);
+near(design.waterplane.secondMomentsM4.xx, 8 * BOX_VARIANCE_X);
+near(design.waterplane.secondMomentsM4.xx, 32 / 3, 3e-4); // converges to the continuous box
+near(design.waterplane.secondMomentsM4.yy, 8 / 3);
 assert.deepEqual(table.referenceState, {
   heelDeg: 0,
   trimDeg: 0,
@@ -169,7 +175,7 @@ assert.deepEqual(table.referenceState, {
 });
 assert.ok(table.immersionMarkers![0].pointsM.some((p) => p[1] === -1));
 assert.ok(table.immersionMarkers![0].pointsM.some((p) => p[1] === 1));
-assert.ok(table.notes.some((n) => n.includes("downflooding")));
+assert.ok(table.notes!.some((n) => n.includes("downflooding")));
 assert.equal("wettedAreaM2" in design, false);
 // Known volume does not imply a measurable waterplane, especially with a loaded
 // deck cap. Do not serialize null or a made-up zero moment for those states.
@@ -206,9 +212,12 @@ for (const [i, row] of table.table.rows.entries())
       near(converted.buoyancyCenterM![k], v),
     );
     if (s.waterplane) {
-      near(converted.waterplane!.areaM2, s.waterplane.areaM2);
+      assert.ok(converted.waterplane);
+      assert.ok(converted.waterplane.secondMomentsM4?.yy !== undefined);
+      assert.ok(s.waterplane.secondMomentsM4?.yy !== undefined);
+      near(converted.waterplane.areaM2, s.waterplane.areaM2);
       near(
-        converted.waterplane!.secondMomentsM4.yy,
+        converted.waterplane.secondMomentsM4.yy,
         s.waterplane.secondMomentsM4.yy,
       );
     }
@@ -396,7 +405,7 @@ assert.deepEqual(updates, [
   [3, 4],
   [4, 4],
 ]);
-assert.equal(real.source.generatedAt, "2026-01-01T00:00:00.000Z");
+assert.equal(real.source!.generatedAt, "2026-01-01T00:00:00.000Z");
 assert.equal("density" in real, false);
 assert.equal("cg" in real, false);
 assert.equal("mesh" in real, false);

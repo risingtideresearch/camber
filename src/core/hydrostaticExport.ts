@@ -4,10 +4,10 @@ import { computeHullSampling, type HullSampling } from "./mesh";
 import type { Model } from "./model";
 import { heightSpan, stationGeometry } from "./sweep";
 import type {
-  HydrostaticPointM,
-  HydrostaticSample,
+  PointM,
+  Sample,
   HydrostaticTable,
-} from "./hydrostaticTable";
+} from "@risingtideresearch/chartroom/formats/hydrostatic-table/v1";
 
 const RAD = Math.PI / 180;
 export interface HydrostaticExportOptions {
@@ -88,7 +88,7 @@ export function buildHydrostaticTable(
       "Hull does not provide enough closed sections to export hydrostatics",
     );
   const metres = unitScale(model.unit, "m");
-  const point = (x: number, y: number, z: number): HydrostaticPointM => [
+  const point = (x: number, y: number, z: number): PointM => [
     x * metres,
     y === 0 ? 0 : -y * metres,
     z * metres,
@@ -140,7 +140,7 @@ export function buildHydrostaticTable(
       }
       const sortedOffsets = [...new Set(offsets)].sort((a, b) => a - b);
       const cuts = sweepRow(heel, sortedOffsets);
-      const samples: HydrostaticSample[] = [];
+      const samples: Sample[] = [];
       for (const [i, h] of sortedOffsets.entries()) {
         const c = cuts[i];
         if (
@@ -152,10 +152,14 @@ export function buildHydrostaticTable(
           throw new Error(
             `Invalid or decreasing volume at heel ${heelDeg}°, trim ${trimDeg}°; check hull geometry`,
           );
-        const sample: HydrostaticSample = {
+        const sample: Sample = {
           waterplaneOffsetM: h * metres,
-          volumeM3: c.vol * metres ** 3,
-          buoyancyCenterM: c.vol > 0 ? point(c.xB, c.yB, c.zB) : null,
+          ...(c.vol > 0
+            ? {
+                volumeM3: c.vol * metres ** 3,
+                buoyancyCenterM: point(c.xB, c.yB, c.zB),
+              }
+            : { volumeM3: 0, buoyancyCenterM: null }),
         };
         // The current sweep's waterplane is not trustworthy for cap-loaded cuts.
         // Omit it (unknown), not null (physically no free waterplane). xy is not
@@ -187,8 +191,8 @@ export function buildHydrostaticTable(
           (sample.waterplane &&
             [
               sample.waterplane.areaM2,
-              ...sample.waterplane.centroidM,
-              ...Object.values(sample.waterplane.secondMomentsM4),
+              ...(sample.waterplane.centroidM ?? []),
+              ...Object.values(sample.waterplane.secondMomentsM4 ?? {}),
             ].some((v) => !Number.isFinite(v)))
         )
           throw new Error(
